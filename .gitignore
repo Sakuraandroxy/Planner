@@ -1,0 +1,17 @@
+# Planning / internal (not part of the release)
+_planning/
+
+# OS / editor cruft
+.DS_Store
+.vscode/
+.codex/
+.claude/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+
+# Logs / outputs
+*.log

@@ -1,0 +1,15 @@
+[submodule "real-world-code/self_built_uav/src/NavDP"]
+	path = real-world-code/self_built_uav/NavDP
+	url = https://github.com/InternRobotics/NavDP.git
+[submodule "real-world-code/self_built_uav/src/realsense"]
+	path = real-world-code/self_built_uav/realsense
+	url = https://github.com/realsenseai/realsense-ros.git
+[submodule "real-world-code/self_built_uav/src/livox_ros_driver2"]
+	path = real-world-code/self_built_uav/livox_ros_driver2
+	url = https://github.com/Livox-SDK/livox_ros_driver2.git
+[submodule "real-world-code/self_built_uav/src/nlink_parser"]
+	path = real-world-code/self_built_uav/nlink_parser
+	url = https://github.com/nooploop-dev/nlink_parser.git
+[submodule "real-world-code/self_built_uav/FAST_LIO"]
+	path = real-world-code/self_built_uav/FAST_LIO
+	url = https://github.com/hku-mars/FAST_LIO.git

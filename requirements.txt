@@ -1,0 +1,21 @@
+﻿# ============================================================
+# Uni-LaViRA AirSim Planner — 环境依赖
+# 使用 Conda 创建新环境后执行:
+#   conda create -n airsim python=3.10
+#   conda activate airsim
+#   pip install -r requirements.txt
+# ============================================================
+
+# AirSim 客户端（通过 msgpack-rpc 与 AirSimNH.exe 通信）
+airsim>=1.8.1
+msgpack-rpc-python>=0.4.1
+
+# VLM 规划器（调用 OpenAI 兼容 API）
+openai>=1.0.0
+
+# 图像处理 & 数值计算
+Pillow>=10.0.0
+numpy>=1.24.0
+
+# Web 仪表盘
+Flask>=3.0.0

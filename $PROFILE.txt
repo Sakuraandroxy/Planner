@@ -1,0 +1,17 @@
+# ============================================
+# VLM Planner 环境变量配置
+# 设置后打开新终端直接运行 planner_web_app.py 即可
+# 切换模式：改 PLANNER_MODE=api 或 =local 即可
+# ============================================
+
+# 切换为 api 模式（使用远程 API），改为 local 则使用本地 llama.cpp
+$env:PLANNER_MODE="api"
+
+# API 地址和 Key（改 PLANNER_MODE=api 时生效）
+$env:PLANNER_BASE_URL="https://api.xiaomimimo.com/v1"
+$env:PLANNER_API_KEY="sk-c0z8xb2q04x90u29ouf6vjaya8kcr79byq7jbnw2xp624fst"
+$env:PLANNER_MODEL_NAME="mimo-v2.5"
+$env:task="向前飞到红色方块上方"
+# 规划器参数
+$env:PLANNER_CANDIDATE_COUNT=5
+$env:PLANNER_TEMPERATURE=0.8

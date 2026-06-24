@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Uni-LaViRA Dashboard</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <!-- Top Bar -->
+  <div class="topbar">
+    <div class="logo">Uni<span>-LaViRA</span></div>
+      <div class="model-badge" id="sModel"></div>
+    <div class="sep"></div>
+    <div class="task-wrap">
+      <label>Task</label>
+      <input type="text" id="taskInput" placeholder="Enter task..." spellcheck="false"/>
+      <button id="taskBtn" onclick="updateTask()">Update</button>
+    </div>
+    <div class="sep"></div>
+    <div class="badges">
+      <span class="stat">Step: <strong id="sStep">0/0</strong></span>
+      <span class="stat">Status: <span class="badge badge-starting" id="sStatus">starting</span></span>
+    </div>
+  </div>
+
+  <!-- Main -->
+  <div class="main">
+    <!-- Left: Camera -->
+    <div class="viewport">
+      <div class="cam-wrap">
+        <span class="cam-placeholder" id="camPlaceholder">Waiting for drone...</span>
+        <img id="camImage" style="display:none" alt="Drone camera feed"/>
+        
+      </div>
+    </div>
+
+    <!-- Right Panel -->
+    <div class="right-panel">
+<!-- Scene Analysis -->
+      <div class="card">
+        <div class="card-header">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          Scene
+        </div>
+        <div class="card-body"><div class="scene-text" id="sScene">-</div></div>
+      </div>
+
+      <!-- Depth -->
+      <div class="card" style="flex-shrink:0">
+        <div class="card-header">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>
+          Depth
+        </div>
+        <div class="card-body" style="padding:4px 8px">
+          <div id="depthPlaceholder" class="ph-muted" style="padding:8px">depth waiting...</div>
+          <img id="depthImage" style="width:100%;display:none;border-radius:4px" alt="Depth map"/>
+        </div>
+      </div>
+
+      <!-- VLM Reasoning -->
+      <div class="card" style="min-height:100px">
+        <div class="card-header">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          VLM Reasoning
+        </div>
+        <div class="card-body">
+          <div class="reasoning-box" id="sReasoning"><span class="reasoning-placeholder">Waiting for VLM...</span></div>
+        </div>
+      </div>
+
+      <!-- Candidates -->
+      <div class="card" style="min-height:100px">
+        <div class="card-header">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+          Trajectory Candidates
+        </div>
+        <div class="card-body">
+          <div class="candidates" id="sCandidates"><span style="color:var(--text-muted);font-size:11px;">Waiting for candidates...</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script src="/app.js"></script>
+</body>
+</html>
