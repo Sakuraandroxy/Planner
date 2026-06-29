@@ -55,6 +55,57 @@ class AirSimClient:
             return None
         return Image.open(io.BytesIO(bytes(responses[0].image_data_uint8)))
 
+    def get_scene_and_depth_meters(self):
+        """Return RGB frame and raw DepthPerspective meters from one AirSim RPC."""
+        responses = self.client.simGetImages([
+            airsim.ImageRequest("front_center", airsim.ImageType.Scene, False, True),
+            airsim.ImageRequest("front_center", airsim.ImageType.DepthPerspective, True, False),
+        ])
+        frame = None
+        depth = None
+        if responses and len(responses) > 0 and responses[0].image_data_uint8:
+            frame = Image.open(io.BytesIO(bytes(responses[0].image_data_uint8)))
+        if responses and len(responses) > 1 and responses[1].image_data_float:
+            r = responses[1]
+            depth = np.array(r.image_data_float, dtype=np.float32).reshape(r.height, r.width)
+        return frame, depth
+
+    def depth_meters_to_image(self, depth_meters, preview_width: int = 256):
+        """Convert raw meter depth matrix to an 8-bit preview image."""
+        if depth_meters is None:
+            return None
+        MAX_DEPTH = 100.0
+        depth = np.clip(depth_meters, 0, MAX_DEPTH)
+        depth_8bit = (depth / MAX_DEPTH * 255).astype(np.uint8)
+        img = Image.fromarray(depth_8bit, mode="L")
+        if preview_width and img.width > preview_width:
+            preview_height = max(1, int(img.height * preview_width / img.width))
+            img = img.resize((preview_width, preview_height), Image.Resampling.BILINEAR)
+        return img
+
+    def depth_meters_to_stats(self, depth_meters):
+        """Compute scene-wide and center depth statistics from one depth matrix."""
+        if depth_meters is None:
+            return None
+        all_valid = depth_meters[(depth_meters > 0.1) & (depth_meters < 1000.0)]
+        if len(all_valid) == 0:
+            return None
+        scene_min = float(np.min(all_valid))
+        scene_max = float(np.max(all_valid))
+        h, w = depth_meters.shape
+        cy, cx = h // 2, w // 2
+        half_h, half_w = h // 10, w // 10
+        region = depth_meters[cy-half_h:cy+half_h, cx-half_w:cx+half_w]
+        valid = region[(region > 0.1) & (region < 1000.0)]
+        center_min = float(np.min(valid)) if len(valid) > 0 else None
+        center_avg = float(np.mean(valid)) if len(valid) > 0 else None
+        return {
+            "scene_min": scene_min,
+            "scene_max": scene_max,
+            "center_min": center_min,
+            "center_avg": center_avg,
+        }
+
     def get_depth_image(self, preview_width: int = 256):
         """Return depth as 8-bit grayscale PNG.
         DepthPerspective returns actual meters (float32).
@@ -70,14 +121,7 @@ class AirSimClient:
             return None
         r = responses[0]
         depth = np.array(r.image_data_float, dtype=np.float32).reshape(r.height, r.width)
-        MAX_DEPTH = 100.0
-        depth = np.clip(depth, 0, MAX_DEPTH)
-        depth_8bit = (depth / MAX_DEPTH * 255).astype(np.uint8)
-        img = Image.fromarray(depth_8bit, mode="L")
-        if preview_width and img.width > preview_width:
-            preview_height = max(1, int(img.height * preview_width / img.width))
-            img = img.resize((preview_width, preview_height), Image.Resampling.BILINEAR)
-        return img
+        return self.depth_meters_to_image(depth, preview_width=preview_width)
 
     def get_depth_meters(self):
         """Return raw DepthPerspective meters as a float32 array."""
@@ -152,24 +196,7 @@ class AirSimClient:
             return None
         r = responses[0]
         depth = np.array(r.image_data_float, dtype=np.float32).reshape(r.height, r.width)
-        all_valid = depth[(depth > 0.1) & (depth < 1000.0)]
-        if len(all_valid) == 0:
-            return None
-        scene_min = float(np.min(all_valid))
-        scene_max = float(np.max(all_valid))
-        h, w = depth.shape
-        cy, cx = h // 2, w // 2
-        half_h, half_w = h // 10, w // 10
-        region = depth[cy-half_h:cy+half_h, cx-half_w:cx+half_w]
-        valid = region[(region > 0.1) & (region < 1000.0)]
-        center_min = float(np.min(valid)) if len(valid) > 0 else None
-        center_avg = float(np.mean(valid)) if len(valid) > 0 else None
-        return {
-            "scene_min": scene_min,
-            "scene_max": scene_max,
-            "center_min": center_min,
-            "center_avg": center_avg,
-        }
+        return self.depth_meters_to_stats(depth)
 
     def check_collision(self):
         return self.client.simGetCollisionInfo().has_collided

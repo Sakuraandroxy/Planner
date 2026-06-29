@@ -28,6 +28,7 @@ class ResponseParser:
         trajectories = []
         for i, cand in enumerate(candidate_dicts if isinstance(candidate_dicts, list) else []):
             actions = self._limit_actions(cand.get("actions", []), config, target_visible)
+            actions = actions[:getattr(config, "max_trajectory_length", 5)]
             scale = cand.get("scale", 1.0)
             clean_delta = compute_delta(actions, config, scale=scale)
             noisy_delta = add_noise(clean_delta, config)

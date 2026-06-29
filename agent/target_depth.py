@@ -12,19 +12,18 @@ TARGET_BBOX_PROMPT = """请观察这张RGB图，定位导航任务目标。
 任务目标：{task_description}
 当前图片尺寸：宽 {image_width} 像素，高 {image_height} 像素。
 
-必须直接返回一行JSON对象，包含这些字段：visible、bbox_norm、confidence、target、candidates。
+必须直接返回一行JSON对象，只包含这些字段：visible、bbox_norm、confidence、target。
 
 规则：
 1. visible 是 true 或 false。
 2. bbox_norm 是4个数字组成的数组，范围 0.0 到 1.0，顺序是左、上、右、下。
 3. confidence 是0.0到1.0之间的数字。
 4. target 是目标名字符串，例如 car。
-5. candidates 是候选目标数组；每个候选对象包含 bbox_norm、confidence、target。
-6. 如果画面中有多个同类目标，把所有候选都放入 candidates。
-7. 如果任务包含“较远/远处/远的/far”，最终 bbox_norm 选择视觉上更远的目标，不要选择最近目标。
-8. 如果目标不可见，输出 visible=false，bbox_norm=null，confidence=0.0，target=""，candidates=[]。
-9. 禁止复述本提示词，禁止输出 x1、y1、x2、y2，禁止输出解释、Markdown、分析过程或动作规划。
-10. 如果无法精确计算坐标，也必须基于视觉估计给出数字 bbox_norm，不要解释原因。"""
+5. 如果画面中有多个同类目标，必须根据任务目标直接选择最终要导航的那个目标框，不要输出候选框列表。
+6. 如果任务包含“较远/远处/远的/far”，bbox_norm 直接选择视觉上更远的目标，不要选择最近目标。
+7. 如果目标不可见，输出 visible=false，bbox_norm=null，confidence=0.0，target=""。
+8. 禁止输出 candidates 字段，禁止复述本提示词，禁止输出 x1、y1、x2、y2，禁止输出解释、Markdown、分析过程或动作规划。
+9. 如果无法精确计算坐标，也必须基于视觉估计给出数字 bbox_norm，不要解释原因。"""
 
 TARGET_BBOX_SYSTEM_PROMPT = """你是目标检测器。根据图片输出真实目标框JSON。
 只输出一行JSON对象；禁止思考过程、解释、Markdown、动作规划、占位符。"""
@@ -213,13 +212,21 @@ def estimate_depth_in_bbox(
     center_valid = center_region[
         (center_region > min_depth) & (center_region < max_depth) & np.isfinite(center_region)
     ]
+    expanded_region = crop_expanded_bbox(depth_meters, [x1, y1, x2, y2], scale=2.5)
+    expanded_valid = expanded_region[
+        (expanded_region > min_depth) & (expanded_region < max_depth) & np.isfinite(expanded_region)
+    ]
 
     estimate.depth_median = float(np.median(valid))
     estimate.depth_min = float(np.min(valid))
     estimate.depth_mean = float(np.mean(valid))
+    robust_depths = [estimate.depth_median]
     if center_valid.size > 0:
         estimate.depth_center_median = float(np.median(center_valid))
-        estimate.depth_median = estimate.depth_center_median
+        robust_depths.append(estimate.depth_center_median)
+    if expanded_valid.size >= valid.size:
+        robust_depths.append(float(np.percentile(expanded_valid, 20)))
+    estimate.depth_median = float(min(robust_depths))
     estimate.valid_pixel_count = int(valid.size)
     return estimate
 
@@ -232,6 +239,23 @@ def crop_center_region(region: np.ndarray, ratio: float = 0.5) -> np.ndarray:
     left = max(0, (width - crop_width) // 2)
     top = max(0, (height - crop_height) // 2)
     return region[top:top + crop_height, left:left + crop_width]
+
+
+def crop_expanded_bbox(depth_meters: np.ndarray, bbox: list[int], scale: float = 2.5) -> np.ndarray:
+    """Crop an expanded bbox to catch small distant objects missed by low-res depth."""
+    x1, y1, x2, y2 = bbox
+    height, width = depth_meters.shape
+    box_width = max(1, x2 - x1)
+    box_height = max(1, y2 - y1)
+    cx = (x1 + x2) / 2
+    cy = (y1 + y2) / 2
+    expanded_width = box_width * scale
+    expanded_height = box_height * scale
+    left = int(max(0, round(cx - expanded_width / 2)))
+    right = int(min(width, round(cx + expanded_width / 2)))
+    top = int(max(0, round(cy - expanded_height / 2)))
+    bottom = int(min(height, round(cy + expanded_height / 2)))
+    return depth_meters[top:bottom, left:right]
 
 
 def scale_bbox_to_depth(

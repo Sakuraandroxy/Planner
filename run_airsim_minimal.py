@@ -28,11 +28,54 @@ _script_dir = os.path.dirname(os.path.abspath(__file__))
 if _script_dir not in sys.path:
     sys.path.insert(0, _script_dir)
 
-_dotenv_path = os.path.join(_script_dir, 'planner', '.env')
-load_dotenv(_dotenv_path)
+if not load_dotenv(os.path.join(_script_dir, '.env')):
+    load_dotenv(os.path.join(_script_dir, 'planner', '.env'))
 
 from planner import VLMPlanner, PlannerConfig
 from typing import List, Dict
+
+
+def _fmt_seconds(value):
+    return f"{float(value or 0.0):.2f}s"
+
+
+def _usage_summary(usage):
+    if not isinstance(usage, dict) or not usage:
+        return "tokens=n/a"
+    parts = []
+    for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        if key in usage and usage[key] is not None:
+            parts.append(f"{key}={usage[key]}")
+    details = usage.get("completion_tokens_details")
+    if isinstance(details, dict) and details.get("reasoning_tokens") is not None:
+        parts.append(f"reasoning_tokens={details['reasoning_tokens']}")
+    return " ".join(parts) if parts else "tokens=n/a"
+
+
+def print_step_timing(step, timing, planner_timing):
+    planner_timing = planner_timing or {}
+    reasoning_tokens = 0
+    thinking_type = "unknown"
+    reasoning_effort = "unknown"
+    for call in planner_timing.get("vlm_calls", []):
+        thinking_type = call.get("thinking_type", thinking_type)
+        reasoning_effort = call.get("reasoning_effort", reasoning_effort)
+        usage = call.get("usage")
+        details = usage.get("completion_tokens_details") if isinstance(usage, dict) else None
+        if isinstance(details, dict):
+            reasoning_tokens += int(details.get("reasoning_tokens") or 0)
+    print(
+        f"[TIMING Step {step}] "
+        f"total={_fmt_seconds(timing.get('total'))} "
+        f"capture={_fmt_seconds(timing.get('capture'))} "
+        f"bbox_api={_fmt_seconds(planner_timing.get('target_bbox_api'))} "
+        f"planning_api={_fmt_seconds(planner_timing.get('planning_api'))} "
+        f"vlm_total={_fmt_seconds(timing.get('vlm_total'))} "
+        f"execute={_fmt_seconds(timing.get('execute'))} "
+        f"thinking={thinking_type} "
+        f"effort={reasoning_effort} "
+        f"reasoning_tokens={reasoning_tokens}"
+    )
 
 
 # ========== 工具函数 ==========
@@ -127,8 +170,8 @@ class ConversationHistory:
 # ========== 主循环 ==========
 
 def main():
-    task = os.environ.get("task", "fly forward and explore")
-    max_steps = int(os.environ.get("max_steps", "20"))
+    task = os.environ.get("TASK", os.environ.get("task", "fly forward and explore"))
+    max_steps = int(os.environ.get("MAX_STEPS", os.environ.get("max_steps", "20")))
 
     cfg = PlannerConfig(
         base_url=os.environ.get("PLANNER_BASE_URL", "http://localhost:8000/v1"),
@@ -136,12 +179,19 @@ def main():
         model_name=os.environ.get("PLANNER_MODEL_NAME", "gpt-4o"),
         candidate_count=int(os.environ.get("PLANNER_CANDIDATE_COUNT", "3")),
         temperature=float(os.environ.get("PLANNER_TEMPERATURE", "0.8")),
+        thinking_mode=os.environ.get("PLANNER_THINKING_MODE", "disabled").lower(),
+        reasoning_effort=os.environ.get("PLANNER_REASONING_EFFORT", "default").lower(),
+        enable_thinking=os.environ.get("PLANNER_ENABLE_THINKING", "default").lower(),
     )
     planner = VLMPlanner(cfg)
     history = ConversationHistory(max_steps=5)
 
     print(f"[Planner] model: {cfg.model_name}")
     print(f"[Planner] URL: {cfg.base_url}")
+    print(f"[VLM API] {planner.vlm.describe_api_mode()}")
+    print(f"[VLM API] thinking_mode={cfg.thinking_mode}")
+    print(f"[VLM API] reasoning_effort={cfg.reasoning_effort}")
+    print(f"[VLM API] enable_thinking={cfg.enable_thinking}")
     print(f"[Task] {task}")
 
     print("[AirSim] connecting...")
@@ -161,25 +211,35 @@ def main():
         print(f"\n{'='*60}")
         print(f"  Step {step}/{max_steps}")
         print(f"{'='*60}")
+        step_started = time.perf_counter()
+        timing = {}
 
         # 获取当前帧
+        capture_started = time.perf_counter()
         frame = get_drone_image(client)
+        timing["capture"] = time.perf_counter() - capture_started
         if frame is None:
             print("[ERROR] no image, skip")
+            timing["total"] = time.perf_counter() - step_started
+            print_step_timing(step, timing, planner.last_timing)
             time.sleep(1)
             continue
 
         # 碰撞检测
+        collision_started = time.perf_counter()
         collided = check_collision(client)
+        timing["collision"] = time.perf_counter() - collision_started
         if collided:
             print("[!] 碰撞检测到了！")
 
         # 调用 VLM（传入上下文历史）
         print("[VLM] 思考中...")
+        vlm_started = time.perf_counter()
         trajectories, scene_analysis, raw_json, reasoning, reasoning_summary, task_done, selected_idx, raw_candidates = planner.generate_candidates(
             frame, task, k=cfg.candidate_count,
             conversation_history=history.get_messages()
         )
+        timing["vlm_total"] = time.perf_counter() - vlm_started
 
         # 打印思考过程
         if reasoning:
@@ -196,6 +256,8 @@ def main():
 
         if not trajectories:
             print("[WARN] no valid trajectory, hover")
+            timing["total"] = time.perf_counter() - step_started
+            print_step_timing(step, timing, planner.last_timing)
             time.sleep(2)
             continue
 
@@ -218,9 +280,11 @@ def main():
         waypoints = actions_to_waypoints(actions, pos, yaw, cfg)
         print(f"[Waypoints] {waypoints}")
 
+        execute_started = time.perf_counter()
         for wp in waypoints:
             client.moveToPositionAsync(wp[0], wp[1], wp[2], velocity=0.5).join()
             time.sleep(0.5)
+        timing["execute"] = time.perf_counter() - execute_started
 
         # 记录执行后位置
         new_pos, new_yaw = get_vehicle_pose(client)
@@ -231,6 +295,8 @@ def main():
 
         # 写入上下文历史
         history.add_step(step, actions, old_pos, new_pos, new_yaw, col_after)
+        timing["total"] = time.perf_counter() - step_started
+        print_step_timing(step, timing, planner.last_timing)
 
         time.sleep(1.0)
 

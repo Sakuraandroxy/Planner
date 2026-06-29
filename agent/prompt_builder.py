@@ -34,7 +34,7 @@ class PromptBuilder:
     def _format_depth_info(self, depth_data) -> str:
         """Format numeric depth hints captured from AirSim."""
         if not depth_data:
-            return "深度提示：未获取到有效目标深度统计，第二张深度热力图仅作空间结构参考。"
+            return "深度提示：未获取到有效目标深度统计，请保守行动并优先小步观察。"
         if isinstance(depth_data, dict):
             parts = []
             target_visible = depth_data.get("target_visible")
@@ -71,24 +71,33 @@ class PromptBuilder:
                 if value is not None:
                     parts.append(f"{label}={float(value):.2f}m")
             if parts:
-                return "深度提示：" + "，".join(parts) + "。目标精确深度以程序计算的目标深度为准，第二张深度热力图仅作辅助参考。"
+                return "深度提示：" + "，".join(parts) + "。目标精确深度以程序计算的目标深度为准。"
         try:
-            return f"深度提示：画面中心深度={float(depth_data):.2f}m。未获取到目标bbox深度，第二张深度热力图仅作辅助参考。"
+            return f"深度提示：画面中心深度={float(depth_data):.2f}m。未获取到目标bbox深度，请保守行动并优先小步观察。"
         except (TypeError, ValueError):
-            return "深度提示：未获取到有效目标深度统计，第二张深度热力图仅作辅助参考。"
+            return "深度提示：未获取到有效目标深度统计，请保守行动并优先小步观察。"
 
     def build_system_prompt(self, task_description: str, k: int,
                              depth_info_str: str = "未知") -> str:
         template = PLANNER_SYSTEM_PROMPT_VALUE_MODE if self.action_mode == "value" else PLANNER_SYSTEM_PROMPT
-        return template.format(
+        prompt = template.format(
             horizontal_step=self.config.horizontal_step,
             vertical_step=self.config.vertical_step,
             yaw_step_deg=self.config.yaw_step_deg,
             max_forward_step=self.config.max_forward_step,
             max_tracking_yaw_step_deg=self.config.max_tracking_yaw_step_deg,
+            max_trajectory_length=self.config.max_trajectory_length,
             task_description=task_description,
             k=k,
             depth_info=depth_info_str,
+        )
+        return (
+            prompt
+            + "\n输出限制：只输出一个合法 JSON 对象，不要 Markdown，不要额外解释；"
+              "scene_analysis、reasoning_summary 和 reason 必须简短。"
+              "如果程序给出的目标深度明显大于单次最大前进距离，优先在同一候选轨迹中使用多个连续 forward 分段接近，"
+              f"而不是只输出一个 forward；但每条轨迹最多 {self.config.max_trajectory_length} 个动作，"
+              "每个 forward 仍必须满足单次最大前进距离限制。\n"
         )
 
     def build_user_content(self, base64_image: str, depth_base64: str,
@@ -108,6 +117,7 @@ class PromptBuilder:
             "type": "text",
             "text": inst_prompt.format(
                 task_description=task_description, k=k,
+                max_trajectory_length=self.config.max_trajectory_length,
                 depth_info=depth_info_str)
         })
         return content

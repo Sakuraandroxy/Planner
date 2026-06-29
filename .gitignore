@@ -12,6 +12,13 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .env
+**/.env
+
+# Local shell profiles / secrets
+$PROFILE.txt
 
 # Logs / outputs
 *.log
+AVLN/*
+*.pdf
+*.doc
