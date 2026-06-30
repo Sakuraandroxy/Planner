@@ -1,5 +1,5 @@
 """Parses VLM JSON response into structured trajectory data."""
-import json, re
+import json, math, re
 from planner.trajectory import Trajectory, Delta, compute_delta, add_noise, parse_action
 
 
@@ -53,9 +53,14 @@ class ResponseParser:
             except (TypeError, ValueError):
                 limited.append(action)
                 continue
-            if name == "forward" and value >= config.max_forward_step:
+            if name == "forward" and math.isfinite(float(config.max_forward_step)) and value >= config.max_forward_step:
                 limited.append(f"forward {config.max_forward_step:g}")
-            elif name in ("left", "right") and clamp_yaw and value > config.max_tracking_yaw_step_deg:
+            elif (
+                name in ("left", "right")
+                and clamp_yaw
+                and math.isfinite(float(config.max_tracking_yaw_step_deg))
+                and value > config.max_tracking_yaw_step_deg
+            ):
                 limited.append(f"{name} {config.max_tracking_yaw_step_deg:g}")
             else:
                 limited.append(action)

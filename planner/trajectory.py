@@ -50,11 +50,14 @@ def parse_action(action_str, config=None, scale=1.0):
     if " " in action_str:
         name, val_str = action_str.split(" ", 1)
         val = float(val_str)
-        if name == AtomicAction.FORWARD.value:
+        if name == AtomicAction.FORWARD.value and math.isfinite(float(config.max_forward_step)):
             val = min(val, config.max_forward_step)
         return name, val
+    forward_step = config.horizontal_step * scale
+    if math.isfinite(float(config.max_forward_step)):
+        forward_step = min(forward_step, config.max_forward_step)
     step_map = {
-        "forward": min(config.horizontal_step * scale, config.max_forward_step),
+        "forward": forward_step,
         "backward": config.horizontal_step * scale,
         "up": config.vertical_step * scale,
         "down": config.vertical_step * scale,

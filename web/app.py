@@ -21,7 +21,17 @@ def create_app(state):
         from flask import request
         data = request.get_json(force=True)
         if data and "task" in data:
-            state.update(task=data["task"])
+            state.update(
+                task=data["task"],
+                step=0,
+                task_done=False,
+                reasoning="",
+                reasoning_summary="",
+                scene_analysis="",
+                candidates=[],
+                selected_actions=[],
+                error="",
+            )
             return {"status": "ok", "task": data["task"]}
         return {"status": "error"}, 400
 

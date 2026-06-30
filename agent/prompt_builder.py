@@ -1,4 +1,4 @@
-﻿"""Builds system + user messages for the VLM using prompt templates."""
+"""Builds system + user messages for the VLM using prompt templates."""
 import base64, io
 from PIL import Image
 import numpy as np
@@ -70,6 +70,21 @@ class PromptBuilder:
                 value = depth_data.get(key)
                 if value is not None:
                     parts.append(f"{label}={float(value):.2f}m")
+            scene_objects = depth_data.get("scene_objects") or []
+            if scene_objects:
+                object_parts = []
+                for obj in scene_objects[:8]:
+                    depth = obj.get("depth_median")
+                    depth_text = "未知" if depth is None else f"{float(depth):.2f}m"
+                    object_parts.append(
+                        f"{obj.get('id')} role={obj.get('role')} name={obj.get('name')} "
+                        f"位置={obj.get('position')} bbox={obj.get('bbox')} 深度={depth_text} "
+                        f"说明={obj.get('description')}"
+                    )
+                parts.append(
+                    "场景物体与障碍物深度列表：" + "；".join(object_parts)
+                    + "。规划时必须根据这些物体的位置和深度避开障碍物，同时完成任务目标"
+                )
             if parts:
                 return "深度提示：" + "，".join(parts) + "。目标精确深度以程序计算的目标深度为准。"
         try:
@@ -87,17 +102,19 @@ class PromptBuilder:
             max_forward_step=self.config.max_forward_step,
             max_tracking_yaw_step_deg=self.config.max_tracking_yaw_step_deg,
             max_trajectory_length=self.config.max_trajectory_length,
+            arrival_depth=getattr(self.config, "context_arrival_depth", 5.0),
             task_description=task_description,
             k=k,
             depth_info=depth_info_str,
         )
         return (
             prompt
-            + "\n输出限制：只输出一个合法 JSON 对象，不要 Markdown，不要额外解释；"
-              "scene_analysis、reasoning_summary 和 reason 必须简短。"
-              "如果程序给出的目标深度明显大于单次最大前进距离，优先在同一候选轨迹中使用多个连续 forward 分段接近，"
-              f"而不是只输出一个 forward；但每条轨迹最多 {self.config.max_trajectory_length} 个动作，"
-              "每个 forward 仍必须满足单次最大前进距离限制。\n"
+            + "\n补充限制：只输出JSON，不要Markdown；轨迹必须使用深度提示中的目标/障碍物位置和深度；"
+              f"任务是旁边/附近/接近时，可用 {getattr(self.config, 'context_arrival_depth', 5.0)}m 到达半径判断完成；"
+              "任务是上方/上面/顶部/侧方/绕行时，必须到对应相对位置后才 done=true；"
+              "当前帧有目标bbox和深度时必须基于当前目标规划；"
+              "只有深度提示明确写着当前RGB未可靠发现目标时才只允许原地旋转搜索；"
+              "相邻动作必须不同类型，连续同类动作必须合并。\n"
         )
 
     def build_user_content(self, base64_image: str, depth_base64: str,
@@ -127,6 +144,27 @@ class PromptBuilder:
                        center_depth=None) -> list:
         """Build the full messages list for the VLM API call."""
         base64_image = self.encode_image(current_frame)
+        depth_base64 = self.encode_image(depth_frame) if depth_frame is not None else None
+        depth_info_str = self._format_depth_info(center_depth)
+
+        sys_prompt = self.build_system_prompt(task_description, k, depth_info_str)
+        messages = [{"role": "system", "content": sys_prompt}]
+
+        if conversation_history:
+            messages.extend(conversation_history)
+
+        user_content = self.build_user_content(base64_image, depth_base64,
+                                                task_description, k, depth_info_str)
+        messages.append({"role": "user", "content": user_content})
+        return messages
+    def build_messages_encoded(self, base64_image: str, task_description: str, k: int,
+                                conversation_history=None, depth_frame=None,
+                                center_depth=None) -> list:
+        """Same as build_messages but reuses an already-encoded RGB image.
+
+        This avoids encoding the same frame twice when the caller has already
+        encoded it (e.g. in estimate_target_depth).
+        """
         depth_base64 = self.encode_image(depth_frame) if depth_frame is not None else None
         depth_info_str = self._format_depth_info(center_depth)
 

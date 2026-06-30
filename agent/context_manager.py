@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+import math
+
 import numpy as np
 
 from planner.trajectory import parse_action
@@ -60,6 +62,8 @@ class TargetMemory:
     last_seen_yaw: Optional[float] = None
     target_bearing_deg: Optional[float] = None
     target_world_yaw: Optional[float] = None
+    target_world_pos: Optional[List[float]] = None
+    target_world_pos_step: int = 0
     bbox_area_ratio: Optional[float] = None
     accumulated_forward_at_last_seen: float = 0.0
     last_seen_pose: Optional[List[float]] = None
@@ -136,6 +140,7 @@ class ContextManager:
             f"yaw={yaw_deg:.1f}deg; collided={bool(collided)}; "
             f"target_state={self.task.current_state.value}; "
             f"target_depth={self._fmt(self.target.depth_median)}; "
+            f"target_world_pos={self._fmt_pos(self.target.target_world_pos)}; "
             f"lost_streak={self.target.lost_streak}; "
             f"acc_forward={self.task.accumulated_forward_distance:.2f}m."
         )
@@ -169,6 +174,7 @@ class ContextManager:
             f"bbox={self.target.bbox}, depth={self._fmt(self.target.depth_median)}, "
             f"bearing={self._fmt_deg(self.target.target_bearing_deg)}, "
             f"world_yaw={self._fmt_deg(self.target.target_world_yaw)}, "
+            f"world_pos={self._fmt_pos(self.target.target_world_pos)}, "
             f"visible_streak={self.target.visible_streak}, "
             f"lost_streak={self.target.lost_streak}, "
             f"last_seen_step={self.target.last_seen_step}"
@@ -201,8 +207,9 @@ class ContextManager:
         return [{"role": "user", "content": content}]
 
     def annotate_estimate_geometry(self, estimate: Optional[Dict[str, Any]],
-                                   image_size=None, yaw_deg: Optional[float] = None):
-        """Add bearing/world-yaw/bbox-area fields to a target estimate."""
+                                   image_size=None, yaw_deg: Optional[float] = None,
+                                   pose=None):
+        """Add bearing/world-yaw/world-position/bbox-area fields to a target estimate."""
         if not estimate or not estimate.get("target_visible"):
             return estimate
         bbox = estimate.get("target_bbox")
@@ -219,8 +226,31 @@ class ContextManager:
         estimate["target_center_norm"] = [float(center_x), float(center_y)]
         estimate["target_bbox_area_ratio"] = float(area)
         if yaw_deg is not None:
-            estimate["target_world_yaw"] = self._normalize_angle(float(yaw_deg) + float(bearing))
+            world_yaw = self._normalize_angle(float(yaw_deg) + float(bearing))
+            estimate["target_world_yaw"] = world_yaw
+            depth = estimate.get("target_depth_median")
+            if pose is not None and depth is not None:
+                estimate["target_world_pos"] = self.estimate_target_world_position(
+                    pose, world_yaw, float(depth)
+                )
         return estimate
+
+    def estimate_target_world_position(self, pose, world_yaw_deg: float,
+                                       depth_m: float) -> Optional[List[float]]:
+        """Estimate target XY world position from drone pose, target yaw and depth."""
+        if pose is None or depth_m is None:
+            return None
+        try:
+            x, y, z = float(pose[0]), float(pose[1]), float(pose[2])
+            depth = max(0.0, float(depth_m))
+            yaw_rad = math.radians(float(world_yaw_deg))
+            return [
+                x + depth * math.cos(yaw_rad),
+                y + depth * math.sin(yaw_rad),
+                z,
+            ]
+        except Exception:
+            return None
 
     def update_obstacle_memory(self, depth_meters, image_size=None, target_bbox=None):
         """Update local depth-channel safety from the latest raw depth matrix."""
@@ -332,92 +362,49 @@ class ContextManager:
             return decision
 
         expected_depth = self.expected_target_depth()
-        arrival_expected = self.is_arrival_depth(expected_depth)
 
         if not visible:
             self.mark_suspicious_detection(step_num, pose, yaw_deg, estimate=None)
-            status = ObservationStatus.NEAR_GOAL_CONFIRM if arrival_expected else ObservationStatus.LOST_OR_OCCLUDED
-            recovery_action = None if arrival_expected else self.build_recovery_actions(yaw_deg)
             decision = ObservationDecision(
-                status=status,
+                status=ObservationStatus.LOST_OR_OCCLUDED,
                 accepted=False,
                 allow_local_forward=False,
-                allow_auto_done=arrival_expected and self.can_auto_complete_by_depth(task_description),
-                should_call_planning_api=not recovery_action,
-                recovery_action=recovery_action,
-                reason="target not visible; local forward blocked",
+                allow_auto_done=False,
+                should_call_planning_api=False,
+                recovery_action=self.build_recovery_actions(yaw_deg, current_pose=pose),
+                reason="target not visible; context recovery required",
                 expected_depth=expected_depth,
             )
             self.last_decision = decision
             return decision
 
         class_match = self._class_matches(estimate.get("target_name"))
-        direction_ok = self._direction_consistent(estimate)
-        expected_error = abs(current_depth - expected_depth)
-        tolerance = self._expected_depth_tolerance()
-        depth_ok = expected_error <= tolerance
-        soft_depth_ok = expected_error <= tolerance * float(
-            getattr(self.config, "context_expected_depth_soft_multiplier", 1.8)
-        )
-        hard_bad_depth = expected_error > tolerance * float(
-            getattr(self.config, "context_expected_depth_hard_multiplier", 2.5)
-        )
         near_current = self.is_arrival_depth(current_depth)
 
-        if arrival_expected:
-            if self.can_auto_complete_by_depth(task_description):
-                if class_match and (near_current or depth_ok or direction_ok):
-                    if near_current:
-                        self.update_target_from_estimate(estimate, step_num, pose, yaw_deg, source="bbox_api")
-                    decision = ObservationDecision(
-                        status=ObservationStatus.NEAR_GOAL_CONFIRM,
-                        accepted=near_current,
-                        allow_local_forward=False,
-                        allow_auto_done=True,
-                        should_call_planning_api=False,
-                        reason="expected target depth is inside arrival radius",
-                        target_depth=current_depth,
-                        expected_depth=expected_depth,
-                    )
-                    self.last_decision = decision
-                    return decision
-            if class_match and near_current and (depth_ok or direction_ok):
-                self.update_target_from_estimate(estimate, step_num, pose, yaw_deg, source="bbox_api")
+        if class_match:
+            if not self.should_accept_detection(estimate, step_num):
+                self.mark_suspicious_detection(step_num, pose, yaw_deg, estimate=estimate)
                 decision = ObservationDecision(
-                    status=ObservationStatus.NEAR_GOAL_CONFIRM,
-                    accepted=True,
-                    allow_local_forward=False,
-                    allow_auto_done=False,
-                    should_call_planning_api=True,
-                    reason="near target but task relation needs planning confirmation",
-                    target_depth=current_depth,
-                    expected_depth=expected_depth,
-                )
-            else:
-                self.record_scan_candidate(estimate, step_num, yaw_deg, suspicious=True)
-                decision = ObservationDecision(
-                    status=ObservationStatus.NEAR_GOAL_CONFIRM,
+                    status=ObservationStatus.LOST_OR_OCCLUDED,
                     accepted=False,
                     allow_local_forward=False,
                     allow_auto_done=False,
-                    should_call_planning_api=True,
-                    reason="near-goal phase rejects far/inconsistent observation",
+                    should_call_planning_api=False,
+                    recovery_action=self.build_recovery_actions(yaw_deg, current_pose=pose),
+                    reason="current same-class detection does not match locked target memory; context recovery required",
                     target_depth=current_depth,
                     expected_depth=expected_depth,
                 )
-            self.last_decision = decision
-            return decision
-
-        same_target = class_match and (depth_ok or (direction_ok and soft_depth_ok)) and not hard_bad_depth
-        if same_target:
+                self.last_decision = decision
+                return decision
             self.update_target_from_estimate(estimate, step_num, pose, yaw_deg, source="bbox_api")
             decision = ObservationDecision(
-                status=ObservationStatus.TRACKING,
+                status=ObservationStatus.NEAR_GOAL_CONFIRM if near_current else ObservationStatus.TRACKING,
                 accepted=True,
-                allow_local_forward=not near_current,
-                allow_auto_done=near_current and self.can_auto_complete_by_depth(task_description),
-                should_call_planning_api=False,
-                reason="observation matches locked target",
+                allow_local_forward=False,
+                allow_auto_done=False,
+                should_call_planning_api=True,
+                reason="current target visible; planner API required",
                 target_depth=current_depth,
                 expected_depth=expected_depth,
             )
@@ -425,15 +412,14 @@ class ContextManager:
             return decision
 
         self.mark_suspicious_detection(step_num, pose, yaw_deg, estimate=estimate)
-        recovery_action = self.build_recovery_actions(yaw_deg)
         decision = ObservationDecision(
             status=ObservationStatus.LOST_OR_OCCLUDED,
             accepted=False,
             allow_local_forward=False,
             allow_auto_done=False,
-            should_call_planning_api=not recovery_action,
-            recovery_action=recovery_action,
-            reason="observation does not match locked target; local forward blocked",
+            should_call_planning_api=False,
+            recovery_action=self.build_recovery_actions(yaw_deg, current_pose=pose),
+            reason="current detection class differs from locked target; context recovery required",
             target_depth=current_depth,
             expected_depth=expected_depth,
         )
@@ -453,8 +439,6 @@ class ContextManager:
         if old_depth is None or new_depth is None:
             return True
         class_match = self._class_matches(estimate.get("target_name"))
-        if class_match and self.is_arrival_depth(new_depth):
-            return True
 
         expected_depth = self.expected_target_depth()
         expected_error = abs(float(new_depth) - float(expected_depth))
@@ -494,6 +478,10 @@ class ContextManager:
             self.target.last_seen_yaw = yaw_deg
             self.target.target_bearing_deg = estimate.get("target_bearing_deg", self.target.target_bearing_deg)
             self.target.target_world_yaw = estimate.get("target_world_yaw", self.target.target_world_yaw)
+            new_world_pos = estimate.get("target_world_pos")
+            if new_world_pos is not None:
+                self.target.target_world_pos = self._smooth_world_pos(new_world_pos)
+                self.target.target_world_pos_step = step_num
             self.target.bbox_area_ratio = estimate.get("target_bbox_area_ratio", self.target.bbox_area_ratio)
             self.target.accumulated_forward_at_last_seen = self.task.accumulated_forward_distance
             self.target.last_seen_pose = list(pose) if pose is not None else None
@@ -544,6 +532,7 @@ class ContextManager:
             "depth": estimate.get("target_depth_median"),
             "bearing": estimate.get("target_bearing_deg"),
             "world_yaw": estimate.get("target_world_yaw"),
+            "world_pos": estimate.get("target_world_pos"),
             "bbox_area_ratio": estimate.get("target_bbox_area_ratio"),
             "confidence": estimate.get("target_confidence", 0.0),
             "score": self.score_candidate(estimate),
@@ -598,7 +587,36 @@ class ContextManager:
             return True
         if not target_name:
             return True
-        return str(target_name).strip().lower() == str(self.target.target_class).strip().lower()
+        return self._normalize_target_class(target_name) == self._normalize_target_class(self.target.target_class)
+
+    @staticmethod
+    def _normalize_target_class(name: Optional[str]) -> str:
+        """Normalize common multilingual/synonym target names for tracking."""
+        text = str(name or "").strip().lower()
+        text = text.replace("_", " ").replace("-", " ")
+        compact = "".join(text.split())
+        if not compact:
+            return ""
+        alias_groups = {
+            "pole": (
+                "pole", "telephonepole", "powerpole", "utilitypole", "electricpole",
+                "streetpole", "lightpole", "lampost", "lamppost",
+                "电线杆", "电杆", "杆子", "线杆", "路灯杆", "灯杆",
+            ),
+            "car": (
+                "car", "vehicle", "automobile", "sedan", "suv", "truck",
+                "汽车", "车辆", "小车", "轿车", "红色汽车", "蓝色汽车",
+            ),
+            "house": (
+                "house", "home", "building", "residence", "住宅", "房屋", "房子", "建筑",
+            ),
+            "tree": ("tree", "trees", "树", "树木"),
+            "road": ("road", "street", "道路", "街道", "路"),
+        }
+        for canonical, aliases in alias_groups.items():
+            if compact in aliases or any(alias in compact for alias in aliases if len(alias) >= 2):
+                return canonical
+        return compact
 
     def _direction_consistent(self, estimate: Dict[str, Any]) -> bool:
         if self.target.target_world_yaw is None or estimate.get("target_world_yaw") is None:
@@ -643,8 +661,8 @@ class ContextManager:
             remaining -= value
         return actions
 
-    def build_recovery_actions(self, current_yaw: Optional[float]) -> List[str]:
-        """Return a fan-scan yaw action around the historical target world direction."""
+    def build_recovery_actions(self, current_yaw: Optional[float], current_pose=None) -> List[str]:
+        """Return a yaw action toward target world position, then fan-scan around it."""
         if not self.context_enabled or not self.recovery_enabled:
             return []
         if not self.target.has_target:
@@ -652,7 +670,7 @@ class ContextManager:
         if self.target.lost_streak <= 0 or self.target.lost_streak > self.max_lost_before_redetect:
             return []
         step = float(getattr(self.config, "context_search_yaw_step_deg", 15.0))
-        anchor_yaw = self._relocalization_anchor_yaw()
+        anchor_yaw = self._relocalization_anchor_yaw(current_pose)
         if current_yaw is None or anchor_yaw is None:
             return [f"left {round(step, 2)}"]
 
@@ -665,6 +683,19 @@ class ContextManager:
                 value = min(step, abs(diff))
                 return [f"right {round(value, 2)}"] if diff > 0 else [f"left {round(value, 2)}"]
         return [f"left {round(step, 2)}"]
+
+    def build_search_variant_actions(self, index: int) -> List[str]:
+        """Candidate display variants for recovery; all are in-place rotations."""
+        step = float(getattr(self.config, "context_search_yaw_step_deg", 15.0))
+        values = [
+            ("left", step),
+            ("right", step),
+            ("left", step * 2),
+            ("right", step * 2),
+            ("left", step * 3),
+        ]
+        direction, value = values[index % len(values)]
+        return [f"{direction} {round(value, 2)}"]
 
     def can_auto_complete_by_depth(self, task_description: str) -> bool:
         """Only near/beside/approach goals can be completed by distance alone."""
@@ -689,9 +720,17 @@ class ContextManager:
         threshold = float(getattr(self.config, "context_arrival_depth", 5.0))
         return float(target_depth) <= threshold
 
-    def _relocalization_anchor_yaw(self) -> Optional[float]:
+    def _relocalization_anchor_yaw(self, current_pose=None) -> Optional[float]:
         best = self.search.best_seen_target
         min_score = float(getattr(self.config, "context_candidate_anchor_min_score", 0.55))
+        if best and best.get("world_pos") is not None and float(best.get("score") or 0.0) >= min_score:
+            yaw = self._yaw_from_pose_to_world_pos(current_pose, best.get("world_pos"))
+            if yaw is not None:
+                return yaw
+        if self.target.target_world_pos is not None:
+            yaw = self._yaw_from_pose_to_world_pos(current_pose, self.target.target_world_pos)
+            if yaw is not None:
+                return yaw
         if best and best.get("world_yaw") is not None and float(best.get("score") or 0.0) >= min_score:
             return float(best["world_yaw"])
         if self.target.target_world_yaw is not None:
@@ -699,6 +738,40 @@ class ContextManager:
         if self.target.last_seen_yaw is not None:
             return float(self.target.last_seen_yaw)
         return None
+
+    def _yaw_from_pose_to_world_pos(self, current_pose, world_pos) -> Optional[float]:
+        if current_pose is None or world_pos is None:
+            return None
+        try:
+            dx = float(world_pos[0]) - float(current_pose[0])
+            dy = float(world_pos[1]) - float(current_pose[1])
+            if abs(dx) < 1e-3 and abs(dy) < 1e-3:
+                return None
+            return self._normalize_angle(math.degrees(math.atan2(dy, dx)))
+        except Exception:
+            return None
+
+    def _smooth_world_pos(self, new_pos) -> Optional[List[float]]:
+        if new_pos is None:
+            return self.target.target_world_pos
+        try:
+            new_values = [
+                float(new_pos[0]),
+                float(new_pos[1]),
+                float(new_pos[2]) if len(new_pos) > 2 else 0.0,
+            ]
+        except Exception:
+            return self.target.target_world_pos
+        old = self.target.target_world_pos
+        if old is None:
+            return new_values
+        alpha = float(getattr(self.config, "context_world_pos_update_alpha", 0.35))
+        alpha = max(0.0, min(1.0, alpha))
+        return [
+            float(old[0]) * (1.0 - alpha) + new_values[0] * alpha,
+            float(old[1]) * (1.0 - alpha) + new_values[1] * alpha,
+            float(old[2]) * (1.0 - alpha) + new_values[2] * alpha,
+        ]
 
     @staticmethod
     def _fan_scan_offsets(step: float) -> List[float]:
@@ -750,6 +823,15 @@ class ContextManager:
     @staticmethod
     def _normalize_angle(angle: float) -> float:
         return (angle + 180.0) % 360.0 - 180.0
+
+    @staticmethod
+    def _fmt_pos(value) -> str:
+        if value is None:
+            return "None"
+        try:
+            return f"({float(value[0]):.2f},{float(value[1]):.2f},{float(value[2]):.2f})"
+        except Exception:
+            return str(value)
 
     @staticmethod
     def _fmt(value: Optional[float]) -> str:
