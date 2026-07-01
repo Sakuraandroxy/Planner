@@ -1,38 +1,73 @@
-﻿# Uni-LaViRA AirSim Web Planner
+# Uni-LaViRA AirSim Web Planner
 
-这是一个基于 **AirSim + Web Dashboard + 多模态大模型（MLLM/VLM）** 的无人机闭环导航原型。系统接收自然语言任务，实时采集无人机第一人称 RGB 图和深度信息，调用 OpenAI 兼容接口生成候选轨迹，并将动作转换为 AirSim 控制指令执行。
+这是一个基于 **AirSim + Web Dashboard + 多模态大模型（VLM）** 的无人机闭环导航原型。系统接收中文自然语言任务，采集 AirSim 第一人称 RGB 图和深度矩阵，通过 OpenAI 兼容接口完成任务解析、目标检测和候选轨迹生成，并把动作转换为 AirSim 航点执行。
 
-当前项目重点是 **AirSim 空中导航闭环**，不是原始 Uni-LaViRA 全量论文仓库结构。
+当前仓库重点是 **AirSim 空中导航闭环实验系统**，不是原始 Uni-LaViRA 全量论文仓库。
 
-## 核心能力
+## 当前核心能力
 
-- **Web 交互**：在浏览器中输入任务、查看 RGB 画面、深度图、候选轨迹、推理摘要和执行状态。
-- **VLM 规划**：通过 OpenAI 兼容 API 调用多模态模型，根据当前图像和任务生成候选动作。
-- **目标深度估计**：VLM 负责定位目标 bbox，Python 从 AirSim `DepthPerspective` 原始深度矩阵中计算目标深度。
-- **闭环执行**：每轮执行后重新观察、重新规划，避免一次性飞远。
-- **安全约束**：限制单次最大前进距离和目标可见时的最大旋转角，降低飞过目标或偏离目标的风险。
-- **调试可视化**：前端实时展示状态，后端打印目标 bbox、深度采样、候选动作和航点。
+- **Web 闭环控制**：浏览器输入任务，实时查看 RGB、深度预览、候选轨迹、执行状态和推理摘要。
+- **VLM 任务解析**：任务开始时先调用一次纯文本 VLM，将自然语言任务拆成 `action / detect / target` 阶段。
+- **分阶段任务管理**：固定动作阶段直接执行；检测阶段只锁定目标；目标阶段才进入 bbox + planner 闭环。
+- **两阶段 VLM 调用**：第一阶段 VLM 输出目标/障碍物 bbox；第二阶段 VLM 基于 bbox 深度生成候选轨迹。
+- **目标深度计算**：VLM 只负责框选目标，Python 从 AirSim `DepthPerspective` 原始深度矩阵中计算目标深度。
+- **场景物体深度**：可同时检测目标、障碍物和参考物，打印并注入其 bbox 与深度，辅助规划绕障。
+- **目标实例锁定**：首次发现目标后锁定类别和世界坐标，减少同类目标误切换。
+- **轻量上下文管理**：只保留目标记忆和状态机，不负责重定位、局部前进或到达判断。
+- **四向环视重定位**：目标丢失后独立触发 4 视角环视，重新寻找最可能的锁定目标。
+- **本地/远程 VLM 兼容**：支持云端 API，也支持内网 vLLM 部署的 `Qwen3-VL-4B-Instruct`。
+
+## 系统流程
+
+```text
+用户任务
+  ↓
+TaskParser（纯文本 VLM，拆分阶段）
+  ↓
+TaskManager（按阶段执行）
+  ├── action 阶段：直接执行动作，不调 planner
+  ├── detect 阶段：bbox API 锁定目标，不调 planner
+  └── target 阶段：
+        AirSim RGB + Depth
+          ↓
+        bbox / scene objects API
+          ↓
+        Python 计算目标和障碍物深度
+          ↓
+        ContextManager + TargetIdentity
+          ↓
+        planner API 生成候选轨迹
+          ↓
+        解析 JSON → AirSim 航点执行
+          ↓
+        若目标丢失 → Relocalizer 四向环视
+```
 
 ## 项目结构
 
 | 路径 | 作用 |
 |---|---|
-| `run_airsim_web.py` | 主入口：连接 AirSim、启动 Web、运行闭环规划与执行 |
+| `run_airsim_web.py` | 主入口：连接 AirSim、启动 Web、运行闭环任务 |
 | `run_airsim_minimal.py` | 命令行版最小闭环运行脚本 |
-| `sim/airsim_client.py` | AirSim RPC 封装：图像、深度、位姿、起飞、移动、碰撞检测 |
-| `sim/frame_capturer.py` | 后台线程：持续抓取 RGB 和深度预览给前端 |
-| `sim/action_executor.py` | 将 VLM 动作序列转换为 AirSim 航点并执行 |
-| `agent/planner.py` | VLM 规划编排：目标深度估计、构造 prompt、调用模型、解析结果 |
+| `sim/airsim_client.py` | AirSim RPC 封装：RGB、Depth、位姿、移动、碰撞检测 |
+| `sim/frame_capturer.py` | 后台抓帧线程：为前端提供 RGB 和深度预览 |
+| `sim/action_executor.py` | 将 `forward/left/right/up/down` 转换为 AirSim 航点并执行 |
+| `agent/task_parser.py` | 纯文本 VLM 任务解析：拆分多阶段任务 |
+| `agent/task_manager.py` | 阶段管理：`action / detect / target` |
+| `agent/planner.py` | VLM 调用编排：bbox、深度计算、prompt、planner、解析 |
+| `agent/target_depth.py` | bbox 解析、目标选择、bbox 到深度图映射、深度统计 |
+| `agent/target_identity.py` | 目标实例锁定，防止追错同类目标 |
+| `agent/context_manager.py` | 轻量上下文：目标记忆 + 状态机 |
+| `agent/relocalizer.py` | 目标丢失后的四向环视重定位 |
+| `agent/prompt_builder.py` | 图片编码、深度提示格式化、planner 消息构造 |
+| `agent/response_parser.py` | 解析 VLM JSON，并裁剪/规范动作 |
 | `agent/vlm_client.py` | OpenAI 兼容 Chat Completions API 客户端 |
-| `agent/prompt_builder.py` | 图片编码、深度提示格式化、消息构造 |
-| `agent/response_parser.py` | 解析 VLM JSON，裁剪不安全动作 |
-| `agent/target_depth.py` | 目标 bbox 解析、多候选选择、bbox 内深度统计 |
-| `planner/config.py` | Planner 配置项和默认参数 |
+| `planner/config.py` | Planner 配置和默认参数 |
 | `planner/prompt_templates.py` | 中文规划提示词模板 |
-| `planner/trajectory.py` | 动作解析、位移计算、噪声模拟 |
-| `web/` | Flask 后端、共享状态、Web 前端页面 |
-| `本周工作.md` | 当前阶段工作汇报 |
-| `深度图转换逻辑.md` | 深度图和目标深度估计方案说明 |
+| `planner/trajectory.py` | 动作解析、航点计算、噪声模拟 |
+| `web/` | Flask 后端与 Web Dashboard |
+| `本地部署.md` | vLLM + Qwen3-VL 本地部署记录 |
+| `本周周报7-1.md` | 当前阶段汇报材料 |
 
 ## 环境准备
 
@@ -47,7 +82,7 @@ pip install -r requirements.txt
 主要依赖：
 
 - `airsim`：连接 AirSim / Unreal 仿真器
-- `openai`：调用 OpenAI 兼容 MLLM API
+- `openai`：调用 OpenAI 兼容 VLM API
 - `Flask`：Web Dashboard
 - `Pillow` / `numpy`：图像和深度矩阵处理
 
@@ -59,7 +94,7 @@ AirSim 配置文件通常位于：
 C:\Users\<用户名>\Documents\AirSim\settings.json
 ```
 
-推荐配置：RGB 保持高清，`DepthPerspective` 不要开到 1080p float，否则 AirSim RPC 可能长时间卡住。建议先使用 `640x360` 深度矩阵：
+推荐设置：RGB 保持高清，深度矩阵使用较低分辨率，避免 AirSim RPC 传输过慢。
 
 ```json
 {
@@ -91,35 +126,65 @@ C:\Users\<用户名>\Documents\AirSim\settings.json
 - `ImageType: 0` = RGB 场景图（Scene）
 - `ImageType: 2` = 原始深度矩阵（DepthPerspective）
 - 修改 `settings.json` 后必须重启 AirSim / Unreal 场景
-- 如果将 `DepthPerspective` 设置为 `1920x1080`，float 深度矩阵可能通过 RPC 传输过慢，导致深度帧一直为空
+- 不建议直接把 `DepthPerspective` 开到 `1920x1080`，float 深度矩阵通过 RPC 传输会明显变慢
 
-## API 配置
+## API 与配置
 
-项目会读取系统环境变量，并自动加载项目根目录的 `.env`。首次使用时复制模板：
+项目读取系统环境变量，并自动加载项目根目录 `.env`。首次使用可复制模板：
 
 ```bash
 copy .env.example .env
 ```
 
-然后在 `.env` 中填写自己的 API 地址、Key 和模型名。`.env` 已加入 `.gitignore`，不要提交真实 API key。
+`.env` 和 `planner/.env` 不应提交真实 API key。
 
-常用规划参数：
+### 常用 VLM 参数
 
 | 环境变量 | 默认值 | 说明 |
 |---|---:|---|
+| `PLANNER_BASE_URL` | `http://localhost:8000/v1` | OpenAI 兼容 API 地址 |
+| `PLANNER_API_KEY` | `no-key` | API key；本地 vLLM 可随意填 |
+| `PLANNER_MODEL_NAME` | `gpt-4o` | 模型名或本地模型路径 |
+| `PLANNER_THINKING_MODE` | `disabled` | 是否关闭 MiMo 思考模式 |
+| `PLANNER_REASONING_EFFORT` | `default` | 支持该参数的模型可设为 `low` |
+| `PLANNER_ENABLE_THINKING` | `default` | 支持该参数的模型可设为 `false` |
+| `PLANNER_WARMUP_ENABLED` | `1` | 启动后是否发送一次预热请求 |
+
+### 常用规划参数
+
+| 环境变量 | 默认值 | 说明 |
+|---|---:|---|
+| `PLANNER_TASK_MANAGER_ENABLED` | `1` | 是否启用任务解析和阶段管理 |
 | `PLANNER_CANDIDATE_COUNT` | `5` | 每轮候选轨迹数量 |
 | `PLANNER_MAX_TRAJECTORY_LENGTH` | `5` | 每条候选轨迹最多动作数 |
-| `PLANNER_ACTION_MODE` | `atomic` | `atomic` 输出离散动作；`value` 输出带数值动作 |
-| `PLANNER_MAX_FORWARD_STEP` | `10.0` | 单次最大前进距离，防止一次飞太远 |
-| `PLANNER_MAX_TRACKING_YAW_STEP_DEG` | `10.0` | 目标可见时单次最大旋转角 |
-| `PLANNER_TARGET_DEPTH_ENABLED` | `1` | 是否启用目标 bbox 深度估计 |
+| `PLANNER_ACTION_MODE` | `atomic` | `atomic` 或 `value`；当前推荐 `value` |
+| `PLANNER_MAX_FORWARD_STEP` | `inf` | 单次 forward 上限；设数值可强制限速 |
+| `PLANNER_MAX_TRACKING_YAW_STEP_DEG` | `inf` | 目标可见时 yaw 上限 |
+| `PLANNER_APPROACH_STOP_MARGIN` | `1.0` | 接近目标时的停止余量；不要和到达半径混用 |
+| `PLANNER_CONTEXT_ARRIVAL_DEPTH` | `5.0` | 到达半径，只用于 prompt 判断 `done=true/false` |
 | `PLANNER_VELOCITY` | `0.5` | AirSim 移动速度 |
-| `PLANNER_CAPTURE_INTERVAL` | `0.1` | 前端抓帧间隔 |
-| `PLANNER_DEPTH_PREVIEW_INTERVAL` | `2.0` | 前端深度图低频刷新间隔 |
-| `PLANNER_MAX_TOKENS` | `8192` | 规划模型最大输出 token |
+| `PLANNER_MAX_TOKENS` | `8192` | planner API 最大输出 token |
+| `PLANNER_TASK_PARSER_MAX_TOKENS` | `2048` | 任务解析 API 最大输出 token |
 | `PLANNER_TEMPERATURE` | `0.8` | 模型采样温度 |
 | `WEB_PORT` | `5000` | Web 服务端口 |
 | `MAX_STEPS` | `20` | 单个任务最大闭环步数 |
+
+### 感知与记忆参数
+
+| 环境变量 | 默认值 | 说明 |
+|---|---:|---|
+| `PLANNER_TARGET_DEPTH_ENABLED` | `1` | 是否启用目标 bbox 深度估计 |
+| `PLANNER_SCENE_OBSTACLE_PLANNING_ENABLED` | `1` | 是否检测目标、障碍物和参考物并计算深度 |
+| `PLANNER_CONTEXT_ENABLED` | `0` | 是否把轻量目标记忆注入 planner prompt |
+| `PLANNER_CONTEXT_MAX_STEPS` | `5` | 注入历史执行摘要的步数 |
+| `PLANNER_CONTEXT_CAMERA_FOV_DEG` | `90.0` | bbox 中心转方位角时使用的水平 FOV |
+| `PLANNER_CONTEXT_WORLD_POS_UPDATE_ALPHA` | `0.35` | 目标世界坐标平滑系数 |
+| `PLANNER_TARGET_IDENTITY_ENABLED` | `1` | 是否锁定首次目标实例 |
+| `PLANNER_TARGET_IDENTITY_WORLD_TOLERANCE_ABS` | `15.0` | 目标实例世界坐标匹配半径下限 |
+| `PLANNER_TARGET_IDENTITY_WORLD_TOLERANCE_RATIO` | `0.35` | 根据深度放大的匹配半径比例 |
+| `PLANNER_RELOCALIZER_ENABLED` | `1` | 目标丢失后是否启用四向环视 |
+| `PLANNER_RELOCALIZER_VIEW_COUNT` | `4` | 环视视角数量 |
+| `PLANNER_RELOCALIZER_YAW_STEP_DEG` | `90.0` | 环视每次旋转角 |
 
 ## 运行方式
 
@@ -137,79 +202,137 @@ python run_airsim_web.py
 http://localhost:5000
 ```
 
-5. 在页面输入任务，例如：
+5. 输入任务，例如：
 
 ```text
-飞到较远汽车旁
-前进 10 米
-靠近红色汽车
+飞到红色汽车旁
+右转，找到第一辆车，飞到第一辆车旁边
+飞到前方三岔路口，左转，找到一辆红色汽车，靠近它
 ```
 
-## 运行流程
+## 任务阶段类型
+
+TaskParser 会把任务拆成以下三类阶段：
+
+| 类型 | 含义 | 示例 | 是否调用 planner |
+|---|---|---|---|
+| `action` | 固定动作，不需要视觉判断 | `右转90度`、`前进10m` | 否，直接执行 |
+| `detect` | 只要求找到并锁定目标 | `找到红色汽车` | 否，只调用 bbox |
+| `target` | 围绕目标或语义区域完成导航 | `飞到汽车旁`、`飞到三岔路口` | 是 |
+
+阶段执行日志示例：
 
 ```text
-Web 输入任务
-  -> AirSim 获取 RGB / DepthPerspective / 位姿
-  -> VLM 定位目标 bbox
-  -> Python 从原始深度矩阵计算目标深度
-  -> VLM 生成候选轨迹 JSON
-  -> 解析并裁剪不安全动作
-  -> 转换为 AirSim 航点
-  -> 执行动作
-  -> 下一帧重新观察并规划
+[TASK PARSER] parsed 3 stages in 3.80s
+[TASK] 任务阶段：→1:右转 | ·2:找到第一辆车 | ·3:飞到第一辆车旁边
+[TASK] stage 1/3 mode=action: 右转
+[Step 1/20] DIRECT actions=['right 90']
 ```
+
+## 上下文、目标锁定与重定位
+
+### ContextManager
+
+当前上下文模块只保留两个必要功能：
+
+- **目标记忆**：记录目标类别、bbox、深度、朝向和世界坐标。
+- **状态机**：区分目标刚锁定、稳定跟踪、目标丢失和尚未锁定。
+
+状态如下：
+
+| 状态 | 作用 |
+|---|---|
+| `INIT_DETECT` | 首次可靠检测到目标，建立目标记忆 |
+| `TRACKING` | 当前帧仍能看到锁定目标，正常规划 |
+| `LOST_OR_OCCLUDED` | 当前帧看不到目标或检测不像原目标，避免追错同类目标 |
+| `REDETECT` | 尚未形成目标记忆，需要继续检测 |
+
+重定位、自动前进、到达判断都不属于 ContextManager。
+
+### TargetIdentity
+
+`TargetIdentityManager` 负责锁定首次目标实例。后续如果 VLM 检测到同类目标，但世界坐标与锁定目标差距过大，会拒绝该目标，防止“红车 A”切换成“红车 B”。
+
+### Relocalizer
+
+目标丢失时，普通 planner 不继续盲目前进，而是触发独立四向环视：
+
+```text
+[RELOCALIZE] target missing; scanning 4 views...
+[RELOCALIZE] found view=2 yaw=159.3 conf=0.92 depth=7.76 world_pos=[...]
+```
+
+Relocalizer 只负责重新找目标候选，不直接决定最终轨迹。
 
 ## VLM 输出格式
 
-规划模型应返回 JSON，核心字段包括：
+planner API 应返回合法 JSON：
 
 ```json
 {
   "selected_index": 0,
   "done": false,
-  "scene_analysis": "一句话场景描述",
-  "reasoning_summary": "目标、场景、深度、策略、候选轨迹和选择理由",
+  "scene_analysis": "当前目标在前方，右侧有障碍物",
+  "reasoning_summary": "目标深度较远，路径基本可通行，选择单步较长前进",
   "candidates": [
     {
-      "actions": ["forward 10", "left 5"],
-      "reason": "先向目标方向安全前进，再小角度修正",
+      "actions": ["forward 30"],
+      "reason": "目标在前方较远且道路可通行",
       "scale": 1.0
     }
   ]
 }
 ```
 
-前端候选卡片只显示动作和位移，完整候选原因与最终选择原因显示在 `Reasoning` 区域。
+注意：
+
+- `actions` 必须是字符串数组，例如 `["forward 30"]`
+- 禁止输出对象动作，例如 `{"action": "forward", "value": 30}`
+- `done=true` 只表示当前阶段完成
+- 到达半径只用于判断 `done`，不能用 `target_depth - arrival_radius` 计算前进距离
+- 接近目标时应使用 `PLANNER_APPROACH_STOP_MARGIN` 作为停止余量
 
 ## 深度估计说明
 
-当前深度方案不是让模型直接读深度图，而是：
+当前不是让 VLM 直接读深度图，而是：
 
-1. VLM 根据 RGB 图输出目标 `bbox_norm`。
-2. 程序把 bbox 映射到 AirSim `DepthPerspective` 矩阵。
-3. 在 bbox 区域中计算目标深度统计。
-4. 将目标深度以文本形式注入规划 prompt。
+1. VLM 根据 RGB 图输出目标和场景物体 bbox。
+2. 程序把 RGB bbox 映射到 AirSim `DepthPerspective` 矩阵。
+3. 在 bbox 区域内计算深度中位数、均值等统计。
+4. 将目标、障碍物、参考物的深度以文本形式注入 planner prompt。
 
-调试日志示例：
+日志示例：
 
 ```text
 [TARGET DEPTH] image_size=(1920, 1080) depth_shape=(360, 640)
-[TARGET DEPTH] candidates: target=car raw_bbox=... rgb_bbox=... depth_bbox=... median=...
-[TARGET DEPTH] chosen: target=car rgb_bbox=... depth_bbox=... median=...
+[TARGET DEPTH] target=car rgb_bbox=[979, 529, 1037, 572] depth_bbox=[326, 176, 346, 191] median=38.375
+[SCENE OBJECTS] obj1:target:car:画面中央偏右 depth=38.375; obj2:obstacle:tree:左前方 depth=7.60
 ```
 
-如果 `depth_shape` 仍是 `(144, 256)`，说明 AirSim 深度配置没有生效或场景未重启。
+## 本地 VLM 部署
 
-## 安全约束
+当前支持在同一内网服务器上运行 VLM，在本机运行 AirSim 规划器。推荐流程见：
 
-系统同时依赖 prompt 和程序硬限制：
+```text
+本地部署.md
+```
 
-- 单次 `forward` 不超过 `PLANNER_MAX_FORWARD_STEP`
-- 目标可见时 `left/right` 不超过 `PLANNER_MAX_TRACKING_YAW_STEP_DEG`
-- 只有目标不可见时才允许大角度旋转搜索
-- VLM 输出超限动作时，`response_parser.py` 会在执行前裁剪
+示例服务端命令：
 
-这可以避免深度估计偏大时无人机一次性飞远，也可以避免目标可见时大角度旋转导致偏离目标。
+```bash
+CUDA_VISIBLE_DEVICES=0,1 vllm serve /data/sakura/models/Qwen3-VL-4B-Instruct \
+  --host 0.0.0.0 --port 8000 \
+  --max-model-len 8192 \
+  --tensor-parallel-size 2
+```
+
+本机 `.env` 示例：
+
+```bash
+PLANNER_BASE_URL=http://<服务器IP>:8000/v1
+PLANNER_API_KEY=111
+PLANNER_MODEL_NAME=/data/sakura/models/Qwen3-VL-4B-Instruct
+```
 
 ## Web 调试接口
 
@@ -226,82 +349,63 @@ Web 输入任务
 ```json
 {
   "frame_version": 1,
-  "depth_version": 0,
-  "depth_bytes": 0,
+  "depth_version": 1,
+  "depth_bytes": 12345,
   "status": "waiting_task"
 }
 ```
 
-含义：
-
-- `frame_version > 0`：RGB 已正常采集
-- `depth_version > 0` 且 `depth_bytes > 0`：深度预览已正常生成
-- `depth_version = 0` 且 `depth_bytes = 0`：AirSim 没有返回可用 DepthPerspective
-
 ## 常见问题
 
-### 1. RGB 有画面，但深度图一直是 `bytes=0`
-
-先看终端是否有：
-
-```text
-[FrameCapturer] empty_depth_response: width=... height=... floats=0
-```
+### RGB 有画面，但深度图一直为空
 
 常见原因：
 
 - `settings.json` 没有被 AirSim 重新加载
-- `DepthPerspective` 分辨率设置过高导致 RPC 卡住
+- `DepthPerspective` 分辨率过高导致 RPC 卡住
 - 相机名或场景配置不匹配
 
-建议将 `ImageType: 2` 设置为 `640x360`，重启 AirSim 后再试。
+建议把 `ImageType: 2` 设置为 `640x360`，重启 AirSim 后再试。
 
-### 2. 远处目标深度偏大或偏小
+### 模型报最大上下文长度错误
 
-远处目标 bbox 映射到低分辨率深度矩阵后可能只有少量像素，容易采到背景。建议：
+如果本地 vLLM 报类似：
 
-- 将 `DepthPerspective` 提高到 `640x360` 或 `1280x720`
-- 不建议直接使用 `1920x1080` float 深度矩阵
-- 查看 `[TARGET DEPTH]` 日志中的 `depth_bbox`、`median/min/mean`
-
-### 3. 模型输出 JSON 不稳定
-
-系统已有基础容错和重试，但仍建议：
-
-- 使用支持图像输入和结构化输出能力较好的模型
-- 保持 `PLANNER_CANDIDATE_COUNT=5`
-- 查看终端 `[VLM RAW]` 或 `[TARGET DEPTH] raw bbox response`
-
-### 4. 无人机一次飞太远
-
-设置：
-
-```bash
-set PLANNER_MAX_FORWARD_STEP=10
+```text
+maximum context length is 8192 tokens
 ```
 
-即使模型输出 `forward 100`，程序也会裁剪到安全上限。
+通常是 `PLANNER_MAX_TOKENS` 设置过大。降低为 `1024~2048`，或增大 vLLM 启动参数 `--max-model-len`。
 
-### 5. 目标可见时旋转角过大
+### VLM 输出动作格式错误
 
-设置：
+当前 prompt 已要求：
 
-```bash
-set PLANNER_MAX_TRACKING_YAW_STEP_DEG=10
+```json
+"actions": ["forward 30"]
 ```
 
-目标可见时，程序会把 `left/right` 裁剪到该范围内；目标不可见时保留大角度搜索能力。
+如果模型输出对象动作，`response_parser.py` 可能无法解析。建议降低温度或更换结构化输出更稳定的模型。
 
-## 当前限制与后续计划
+### 目标接近后仍继续小步前进
 
-当前系统仍是研究原型，主要限制包括：
+注意区分两个参数：
 
-- 目标跟踪还未形成完整状态机，单帧 VLM 可能误切换目标
-- 远目标深度受深度图分辨率和 bbox 精度影响
-- 任务完成判断仍需结合历史目标深度、累计前进距离和多帧确认
-- AirSim 高分辨率 float 深度矩阵通过 RPC 传输较慢，不适合直接开到 1080p
+- `PLANNER_CONTEXT_ARRIVAL_DEPTH`：到达半径，只用于判断 `done`
+- `PLANNER_APPROACH_STOP_MARGIN`：接近停止余量，用于提示 planner 不要过度保守
 
-后续建议实现 `TargetTracker`，维护 `SEARCHING / TRACKING / NEAR_TARGET / ARRIVED / LOST_TARGET` 状态，避免到达目标附近后因单帧看不到目标而追逐假目标。
+如果仍然输出过小步长，后续应将距离控制进一步下沉到程序侧，而不是继续依赖 prompt。
+
+### AirSim 取图较慢
+
+当前系统每步通过 Python AirSim RPC 主动获取 RGB 和 Depth，再做图像转换和 base64 编码，因此 `capture` 可能达到数秒。后续可参考连续传感器流/帧缓存方式，只取最新帧，减少同步等待。
+
+## 当前限制与后续方向
+
+- VLM 直接生成轨迹仍不够稳定，后续应让 VLM 更多承担目标检测和语义定位。
+- 轨迹规划应逐步转向本地几何规划器，参考 OnFly 的目标定位 + 本地规划思路。
+- 当前多候选轨迹是优势，后续可由本地规划器生成多条可行轨迹，再用规则或打分器选择。
+- AirSim 当前取图链路仍偏慢，后续考虑持续帧缓存和 RGB/Depth 更紧凑的数据流。
 
 ## 许可证
 
