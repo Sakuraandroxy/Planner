@@ -37,6 +37,11 @@ class PromptBuilder:
             return "深度提示：未获取到有效目标深度统计，请保守行动并优先小步观察。"
         if isinstance(depth_data, dict):
             parts = []
+            context_status = depth_data.get("context_status")
+            if context_status:
+                parts.append(
+                    f"上下文状态={context_status}，到达半径={float(getattr(self.config, 'context_arrival_depth', 5.0)):.2f}m"
+                )
             target_visible = depth_data.get("target_visible")
             if target_visible:
                 bbox = depth_data.get("target_bbox")
@@ -103,6 +108,7 @@ class PromptBuilder:
             max_tracking_yaw_step_deg=self.config.max_tracking_yaw_step_deg,
             max_trajectory_length=self.config.max_trajectory_length,
             arrival_depth=getattr(self.config, "context_arrival_depth", 5.0),
+            approach_stop_margin=getattr(self.config, "approach_stop_margin", 1.0),
             task_description=task_description,
             k=k,
             depth_info=depth_info_str,
@@ -110,8 +116,13 @@ class PromptBuilder:
         return (
             prompt
             + "\n补充限制：只输出JSON，不要Markdown；轨迹必须使用深度提示中的目标/障碍物位置和深度；"
-              f"任务是旁边/附近/接近时，可用 {getattr(self.config, 'context_arrival_depth', 5.0)}m 到达半径判断完成；"
-              "任务是上方/上面/顶部/侧方/绕行时，必须到对应相对位置后才 done=true；"
+              f"任务是旁边/附近/接近/靠近时，可用 {getattr(self.config, 'context_arrival_depth', 5.0)}m 到达半径判断完成；"
+              "到达半径只用于判断done=true/false，禁止把到达半径从目标深度中减去来生成forward距离；"
+              "如果当前目标深度大于到达半径，说明任务尚未完成，应规划尽可能少步数接近目标；"
+              f"动作距离应根据目标深度、障碍物深度和接近停止余量{getattr(self.config, 'approach_stop_margin', 1.0)}m决定，而不是target_depth-arrival_radius；"
+              f"例如target_depth=41m、arrival_radius=5m、approach_stop_margin={getattr(self.config, 'approach_stop_margin', 1.0)}m时，不能因为半径为5m就输出forward 36；若路径安全，应接近输出forward 40；"
+              "任务是上方/上面/顶部/侧方/后方/绕行/穿过时，必须到对应相对位置后才 done=true；"
+              "未完成时在安全可通行、不越过目标、不切换目标实例的前提下，用尽可能少的动作完成任务，安全时优先单个较大的forward；"
               "当前帧有目标bbox和深度时必须基于当前目标规划；"
               "只有深度提示明确写着当前RGB未可靠发现目标时才只允许原地旋转搜索；"
               "相邻动作必须不同类型，连续同类动作必须合并。\n"

@@ -1,7 +1,7 @@
 ﻿#!/usr/bin/env python3
 """run_airsim_web.py — Thin entry point. Orchestrates all modules."""
 # AirSim settings example: notepad "C:\Users\86136\Documents\AirSim\settings.json"
-import os, sys, math, time, threading, io
+import os, sys, math, time, threading, io, base64
 from io import BytesIO
 
 _script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -30,6 +30,8 @@ from sim.airsim_client import AirSimClient
 from sim.action_executor import ActionExecutor, actions_to_waypoints
 from agent.planner import Planner
 from agent.relocalizer import Relocalizer
+from agent.task_parser import TaskParser
+from agent.task_manager import TaskManager
 from web.shared_state import SharedState
 from web.app import create_app
 from planner.config import PlannerConfig
@@ -104,6 +106,16 @@ def capture_scene_depth(client: AirSimClient, state: SharedState = None):
     frame, depth_meters = client.get_scene_and_depth_meters()
     capture_time = time.perf_counter() - started
 
+    encode_started = time.perf_counter()
+    rgb_png_bytes = None
+    rgb_base64 = None
+    if frame is not None:
+        rgb_buffer = BytesIO()
+        frame.save(rgb_buffer, format="PNG")
+        rgb_png_bytes = rgb_buffer.getvalue()
+        rgb_base64 = base64.b64encode(rgb_png_bytes).decode("utf-8")
+    encode_time = time.perf_counter() - encode_started
+
     preview_started = time.perf_counter()
     depth_frame_display = client.depth_meters_to_image(depth_meters)
     preview_time = time.perf_counter() - preview_started
@@ -115,7 +127,7 @@ def capture_scene_depth(client: AirSimClient, state: SharedState = None):
     frontend_time = 0.0
     if state is not None:
         frontend_started = time.perf_counter()
-        push_frame_to_frontend(state, frame, depth_frame_display)
+        push_frame_to_frontend(state, frame, depth_frame_display, rgb_png_bytes=rgb_png_bytes)
         frontend_time = time.perf_counter() - frontend_started
 
     return {
@@ -123,19 +135,23 @@ def capture_scene_depth(client: AirSimClient, state: SharedState = None):
         "depth_meters": depth_meters,
         "depth_frame_display": depth_frame_display,
         "depth_data": depth_data,
+        "rgb_base64": rgb_base64,
         "captured_at": time.monotonic(),
         "capture_time": capture_time,
+        "rgb_encode_time": encode_time,
         "preview_time": preview_time,
         "stats_time": stats_time,
         "frontend_time": frontend_time,
     }
 
 
-def push_frame_to_frontend(state: SharedState, frame, depth_frame_display):
+def push_frame_to_frontend(state: SharedState, frame, depth_frame_display, rgb_png_bytes=None):
     if frame is not None:
-        buf = BytesIO()
-        frame.save(buf, format="PNG")
-        state.set_frame(buf.getvalue())
+        if rgb_png_bytes is None:
+            buf = BytesIO()
+            frame.save(buf, format="PNG")
+            rgb_png_bytes = buf.getvalue()
+        state.set_frame(rgb_png_bytes)
     if depth_frame_display is not None:
         bd = BytesIO()
         depth_frame_display.save(bd, format="PNG")
@@ -178,9 +194,13 @@ def main_loop(state: SharedState, planner: Planner, initial_task: str,
 
         executor = ActionExecutor(client, cfg)
         relocalizer = Relocalizer(client, planner.vlm, planner.prompter, cfg)
+        task_manager = TaskManager(enabled=getattr(cfg, "task_manager_enabled", True))
+        task_parser = TaskParser(planner.vlm, max_tokens=getattr(cfg, "task_parser_max_tokens", 2048))
         step = 0
         active_steps = 0
         last_task = ""
+        last_stage_index = -1
+        last_stage_target_key = ""
 
         while True:
             cur_task = state.task or initial_task
@@ -191,10 +211,27 @@ def main_loop(state: SharedState, planner: Planner, initial_task: str,
                 continue
             cur_task = cur_task.strip()
             if cur_task != last_task:
-                last_task = cur_task
                 step = 0
                 active_steps = 0
+                last_stage_index = -1
+                last_stage_target_key = ""
+                if getattr(cfg, "task_manager_enabled", True):
+                    try:
+                        print("[TASK PARSER] parsing task with VLM...")
+                        parsed_stages = task_parser.parse(cur_task)
+                        task_manager.start_with_stages(cur_task, parsed_stages)
+                        parse_elapsed = task_parser.last_timing.get("elapsed", 0.0)
+                        print(f"[TASK PARSER] parsed {len(parsed_stages)} stages in {parse_elapsed:.2f}s")
+                    except Exception as exc:
+                        print(f"[TASK PARSER ERROR] {exc}")
+                        state.update(status="planning", error=f"task parser failed: {exc}")
+                        time.sleep(2)
+                        continue
+                else:
+                    task_manager.reset()
+                last_task = cur_task
                 planner.clear_context()
+                print(f"[TASK] {task_manager.summary()}")
                 state.update(
                     step=0,
                     task_done=False,
@@ -212,6 +249,7 @@ def main_loop(state: SharedState, planner: Planner, initial_task: str,
                 state.update(status="done")
                 state.update(task="")
                 last_task = ""
+                task_manager.reset()
                 step = 0
                 active_steps = 0
                 continue
@@ -219,6 +257,61 @@ def main_loop(state: SharedState, planner: Planner, initial_task: str,
             state.update(step=step, status="planning", error="")
             step_started = time.perf_counter()
             step_timing = {}
+            current_stage = task_manager.current_stage()
+            stage_task = task_manager.current_prompt() if current_stage else cur_task
+            stage_requires_target = current_stage.requires_target if current_stage else True
+            stage_allow_relocalize = current_stage.allow_relocalize if current_stage else True
+            stage_target_key = current_stage.target_query if current_stage else ""
+
+            if current_stage and current_stage.index != last_stage_index:
+                print(f"[TASK] stage {current_stage.index + 1}/{len(task_manager.stages)} "
+                      f"mode={current_stage.mode}: {current_stage.instruction}")
+                if (
+                    current_stage.requires_target
+                    and stage_target_key
+                    and last_stage_target_key
+                    and stage_target_key != last_stage_target_key
+                ):
+                    planner.identity.clear()
+                if current_stage.requires_target and stage_target_key:
+                    last_stage_target_key = stage_target_key
+                last_stage_index = current_stage.index
+
+            if current_stage and current_stage.is_direct_action:
+                actions = list(current_stage.actions)
+                state.update(
+                    status="executing",
+                    reasoning_summary=task_manager.summary() + f"\n\n直接动作阶段：执行 {actions}",
+                    scene_analysis="当前阶段是固定动作，不调用VLM和bbox。",
+                    candidates=[{"actions": actions, "reason": "固定动作阶段", "delta": {}}],
+                    selected_actions=actions,
+                )
+                pos_before, yaw_before = client.get_pose()
+                collided = client.check_collision()
+                state.update(pose=pos_before, yaw=yaw_before, collided=collided)
+                print(f"[Step {step}/{max_steps}] DIRECT actions={actions}")
+                waypoint_started = time.perf_counter()
+                waypoints = actions_to_waypoints(actions, pos_before, yaw_before, cfg)
+                step_timing["waypoint"] = time.perf_counter() - waypoint_started
+                print(f"  actions={actions}  wps={waypoints}")
+                execute_started = time.perf_counter()
+                pos_final, yaw_final, col = executor.execute(actions)
+                step_timing["execute"] = time.perf_counter() - execute_started
+                state.update(pose=pos_final, yaw=yaw_final, collided=col)
+                planner.record_step(step, actions, pos_before, pos_final, yaw_final, col)
+                task_manager.complete_current("direct action executed")
+                print(f"[TASK] completed stage; {task_manager.summary()}")
+                if task_manager.is_done():
+                    state.update(status="done", task_done=True, task="", step=0)
+                    last_task = ""
+                    task_manager.reset()
+                    planner.clear_context()
+                else:
+                    state.update(status="planning", task_done=False)
+                step_timing["step_total"] = time.perf_counter() - step_started
+                print_step_timing(step, max_steps, step_timing, planner.last_timing)
+                time.sleep(cfg.capture_interval)
+                continue
 
             # Capture RGB + depth. Step 1 may reuse the startup/idle cache; later
             # steps always capture fresh frames because the drone has moved.
@@ -240,9 +333,26 @@ def main_loop(state: SharedState, planner: Planner, initial_task: str,
             frame = capture["frame"]
             depth_meters = capture["depth_meters"]
             depth_data = capture["depth_data"]
+            rgb_base64 = capture.get("rgb_base64")
             step_timing["depth_preview"] = capture["preview_time"]
             step_timing["depth_stats"] = capture["stats_time"]
             step_timing["frontend_push"] = capture["frontend_time"]
+
+            if frame is None or not rgb_base64:
+                print("[Capture] missing RGB/base64 before VLM; recapturing from AirSim...")
+                capture = capture_scene_depth(client, state)
+                frame_cache = capture
+                step_timing["capture_rpc"] = step_timing.get("capture_rpc", 0.0) + capture["capture_time"]
+                step_timing["capture_cache_age"] = 0.0
+                frame = capture["frame"]
+                depth_meters = capture["depth_meters"]
+                depth_data = capture["depth_data"]
+                rgb_base64 = capture.get("rgb_base64")
+                step_timing["depth_preview"] = capture["preview_time"]
+                step_timing["depth_stats"] = capture["stats_time"]
+                step_timing["frontend_push"] = capture["frontend_time"]
+                if frame is None or not rgb_base64:
+                    raise RuntimeError("AirSim capture did not provide an RGB frame/base64 image")
 
             # Check collision
             pose_started = time.perf_counter()
@@ -259,7 +369,7 @@ def main_loop(state: SharedState, planner: Planner, initial_task: str,
                 trajectories, scene_analysis, _, reasoning, reasoning_summary, task_done, selected_idx, raw_candidates = \
                     planner.generate_candidates(
                         frame,
-                        cur_task,
+                        stage_task,
                         k=cfg.candidate_count,
                         depth_frame=None,
                         center_depth=depth_data,
@@ -267,6 +377,11 @@ def main_loop(state: SharedState, planner: Planner, initial_task: str,
                         step_num=step,
                         pose=pos,
                         yaw_deg=yaw,
+                        task_key=cur_task,
+                        target_depth_enabled=stage_requires_target,
+                        allow_relocalize=stage_allow_relocalize,
+                        encoded_rgb=rgb_base64,
+                        detect_only=bool(current_stage and current_stage.mode == "detect"),
                     )
                 step_timing["vlm_total"] = time.perf_counter() - vlm_started
             except Exception as e:
@@ -302,30 +417,46 @@ def main_loop(state: SharedState, planner: Planner, initial_task: str,
                 reasoning_summary = (reasoning_summary + "\n\n" if reasoning_summary else "") + "\n".join(candidate_summary)
             state.update(
                 reasoning=reasoning or "",
-                reasoning_summary=reasoning_summary or "",
+                reasoning_summary=((task_manager.summary() + "\n\n") if current_stage else "") + (reasoning_summary or ""),
                 scene_analysis=scene_analysis,
                 candidates=cand_list,
             )
 
             # Case 1: done + no actions — immediate stop
             if task_done and not trajectories:
-                print(f"[DONE] Task completed at step {step} — no movement needed")
-                try:
-                    final_capture = capture_scene_depth(client, state)
-                    frame_cache = final_capture
-                except Exception as exc:
-                    print(f"[Capture] final frame skipped: {exc}")
                 step_timing["step_total"] = time.perf_counter() - step_started
                 print_step_timing(step, max_steps, step_timing, planner.last_timing)
-                state.update(status="done", task_done=True, step=0)
-                state.update(task="")
-                last_task = ""
-                planner.clear_context()
+                if current_stage:
+                    task_manager.complete_current("VLM reported done")
+                    print(f"[TASK] completed stage; {task_manager.summary()}")
+                if current_stage and not task_manager.is_done():
+                    state.update(
+                        status="planning",
+                        task_done=False,
+                        selected_actions=[],
+                        reasoning_summary=task_manager.summary() + "\n\n当前阶段完成，进入下一阶段。",
+                    )
+                else:
+                    print(f"[DONE] Task completed at step {step} — no movement needed")
+                    try:
+                        final_capture = capture_scene_depth(client, state)
+                        frame_cache = final_capture
+                    except Exception as exc:
+                        print(f"[Capture] final frame skipped: {exc}")
+                    state.update(status="done", task_done=True, step=0)
+                    state.update(task="")
+                    last_task = ""
+                    task_manager.reset()
+                    planner.clear_context()
                 time.sleep(2)
                 continue
 
             if not trajectories:
-                if getattr(planner, "last_target_missing", False) and getattr(cfg, "relocalizer_enabled", True):
+                if (
+                    stage_allow_relocalize
+                    and getattr(planner, "last_target_missing", False)
+                    and getattr(cfg, "relocalizer_enabled", True)
+                ):
                     locked_distance = planner.identity.distance_to_locked_target(pos)
                     last_target_depth = getattr(planner, "last_target_depth", None)
                     identity_rejected = bool(
@@ -350,6 +481,7 @@ def main_loop(state: SharedState, planner: Planner, initial_task: str,
                             selected_actions=[],
                         )
                         last_task = ""
+                        task_manager.reset()
                         step = 0
                         active_steps = 0
                         planner.clear_context()
@@ -365,7 +497,7 @@ def main_loop(state: SharedState, planner: Planner, initial_task: str,
                     state.update(status="relocalizing")
                     try:
                         locked_world_pos = planner.identity.lock.world_pos
-                        result = relocalizer.run(cur_task, locked_world_pos=locked_world_pos)
+                        result = relocalizer.run(stage_task, locked_world_pos=locked_world_pos)
                         step_timing["relocalize"] = time.perf_counter() - relocalize_started
                         if result.found and result.target_yaw is not None:
                             candidate_count = len(result.candidates or [])
@@ -405,6 +537,7 @@ def main_loop(state: SharedState, planner: Planner, initial_task: str,
                                 selected_actions=[],
                             )
                             last_task = ""
+                            task_manager.reset()
                             step = 0
                             active_steps = 0
                             planner.clear_context()
@@ -444,16 +577,27 @@ def main_loop(state: SharedState, planner: Planner, initial_task: str,
 
             # Case 2: done after executing actions
             if task_done:
-                print(f"[DONE] Actions executed, task complete at step {step}")
-                try:
-                    final_capture = capture_scene_depth(client, state)
-                    frame_cache = final_capture
-                except Exception as exc:
-                    print(f"[Capture] final frame skipped: {exc}")
-                state.update(status="done", task_done=True, step=0)
-                state.update(task="")
-                last_task = ""
-                planner.clear_context()
+                if current_stage:
+                    task_manager.complete_current("actions executed and VLM reported done")
+                    print(f"[TASK] completed stage; {task_manager.summary()}")
+                if current_stage and not task_manager.is_done():
+                    state.update(
+                        status="planning",
+                        task_done=False,
+                        reasoning_summary=task_manager.summary() + "\n\n当前阶段动作执行完成，进入下一阶段。",
+                    )
+                else:
+                    print(f"[DONE] Actions executed, task complete at step {step}")
+                    try:
+                        final_capture = capture_scene_depth(client, state)
+                        frame_cache = final_capture
+                    except Exception as exc:
+                        print(f"[Capture] final frame skipped: {exc}")
+                    state.update(status="done", task_done=True, step=0)
+                    state.update(task="")
+                    last_task = ""
+                    task_manager.reset()
+                    planner.clear_context()
 
             # Collision recovery
             recovery_started = time.perf_counter()
@@ -495,43 +639,19 @@ def main():
         capture_interval=float(os.environ.get("PLANNER_CAPTURE_INTERVAL", "0.1")),
         temperature=float(os.environ.get("PLANNER_TEMPERATURE", "0.8")),
         planner_max_tokens=int(os.environ.get("PLANNER_MAX_TOKENS", "8192")),
+        task_parser_max_tokens=int(os.environ.get("PLANNER_TASK_PARSER_MAX_TOKENS", "2048")),
         thinking_mode=os.environ.get("PLANNER_THINKING_MODE", "disabled").lower(),
         reasoning_effort=os.environ.get("PLANNER_REASONING_EFFORT", "default").lower(),
         enable_thinking=os.environ.get("PLANNER_ENABLE_THINKING", "default").lower(),
         action_mode=os.environ.get("PLANNER_ACTION_MODE", "atomic"),
+        task_manager_enabled=os.environ.get("PLANNER_TASK_MANAGER_ENABLED", "1").lower() not in ("0", "false", "no"),
         target_depth_enabled=os.environ.get("PLANNER_TARGET_DEPTH_ENABLED", "1").lower() not in ("0", "false", "no"),
         scene_obstacle_planning_enabled=os.environ.get("PLANNER_SCENE_OBSTACLE_PLANNING_ENABLED", "1").lower() not in ("0", "false", "no"),
         context_enabled=os.environ.get("PLANNER_CONTEXT_ENABLED", "0").lower() not in ("0", "false", "no"),
-        context_reuse_bbox_enabled=os.environ.get("PLANNER_CONTEXT_REUSE_BBOX_ENABLED", "0").lower() not in ("0", "false", "no"),
-        context_local_forward_enabled=os.environ.get("PLANNER_CONTEXT_LOCAL_FORWARD_ENABLED", "0").lower() not in ("0", "false", "no"),
-        context_recovery_enabled=os.environ.get("PLANNER_CONTEXT_RECOVERY_ENABLED", "0").lower() not in ("0", "false", "no"),
         context_max_steps=int(os.environ.get("PLANNER_CONTEXT_MAX_STEPS", "5")),
-        context_bbox_reuse_max_steps=int(os.environ.get("PLANNER_CONTEXT_BBOX_REUSE_MAX_STEPS", "1")),
-        context_bbox_reuse_max_forward=float(os.environ.get("PLANNER_CONTEXT_BBOX_REUSE_MAX_FORWARD", "2.0")),
-        context_depth_jump_ratio=float(os.environ.get("PLANNER_CONTEXT_DEPTH_JUMP_RATIO", "1.5")),
-        context_switch_depth_ratio=float(os.environ.get("PLANNER_CONTEXT_SWITCH_DEPTH_RATIO", "0.6")),
-        context_switch_guard_steps=int(os.environ.get("PLANNER_CONTEXT_SWITCH_GUARD_STEPS", "3")),
-        context_max_lost_before_redetect=int(os.environ.get("PLANNER_CONTEXT_MAX_LOST_BEFORE_REDETECT", "2")),
-        context_local_forward_min_depth=float(os.environ.get("PLANNER_CONTEXT_LOCAL_FORWARD_MIN_DEPTH", "20.0")),
-        context_local_forward_min_action=float(os.environ.get("PLANNER_CONTEXT_LOCAL_FORWARD_MIN_ACTION", "2.0")),
-        context_goal_safety_margin=float(os.environ.get("PLANNER_CONTEXT_GOAL_SAFETY_MARGIN", "2.0")),
-        context_obstacle_min_safe_depth=float(os.environ.get("PLANNER_CONTEXT_OBSTACLE_MIN_SAFE_DEPTH", "4.0")),
-        context_obstacle_safety_margin=float(os.environ.get("PLANNER_CONTEXT_OBSTACLE_SAFETY_MARGIN", "2.0")),
-        context_search_yaw_step_deg=float(os.environ.get("PLANNER_CONTEXT_SEARCH_YAW_STEP_DEG", "15.0")),
         context_arrival_depth=float(os.environ.get("PLANNER_CONTEXT_ARRIVAL_DEPTH", "5.0")),
-        context_front_corridor_half_width=float(os.environ.get("PLANNER_CONTEXT_FRONT_CORRIDOR_HALF_WIDTH", "0.03")),
-        context_front_corridor_y_min=float(os.environ.get("PLANNER_CONTEXT_FRONT_CORRIDOR_Y_MIN", "0.45")),
-        context_front_corridor_y_max=float(os.environ.get("PLANNER_CONTEXT_FRONT_CORRIDOR_Y_MAX", "0.60")),
-        context_target_corridor_half_width=float(os.environ.get("PLANNER_CONTEXT_TARGET_CORRIDOR_HALF_WIDTH", "0.05")),
-        context_target_corridor_y_min=float(os.environ.get("PLANNER_CONTEXT_TARGET_CORRIDOR_Y_MIN", "0.45")),
-        context_target_corridor_y_max=float(os.environ.get("PLANNER_CONTEXT_TARGET_CORRIDOR_Y_MAX", "0.65")),
+        approach_stop_margin=float(os.environ.get("PLANNER_APPROACH_STOP_MARGIN", "1.0")),
         context_camera_fov_deg=float(os.environ.get("PLANNER_CONTEXT_CAMERA_FOV_DEG", "90.0")),
-        context_expected_depth_abs_tolerance=float(os.environ.get("PLANNER_CONTEXT_EXPECTED_DEPTH_ABS_TOLERANCE", "5.0")),
-        context_expected_depth_ratio_tolerance=float(os.environ.get("PLANNER_CONTEXT_EXPECTED_DEPTH_RATIO_TOLERANCE", "0.25")),
-        context_expected_depth_soft_multiplier=float(os.environ.get("PLANNER_CONTEXT_EXPECTED_DEPTH_SOFT_MULTIPLIER", "1.8")),
-        context_expected_depth_hard_multiplier=float(os.environ.get("PLANNER_CONTEXT_EXPECTED_DEPTH_HARD_MULTIPLIER", "2.5")),
-        context_direction_tolerance_deg=float(os.environ.get("PLANNER_CONTEXT_DIRECTION_TOLERANCE_DEG", "35.0")),
-        context_candidate_anchor_min_score=float(os.environ.get("PLANNER_CONTEXT_CANDIDATE_ANCHOR_MIN_SCORE", "0.55")),
         context_world_pos_update_alpha=float(os.environ.get("PLANNER_CONTEXT_WORLD_POS_UPDATE_ALPHA", "0.35")),
         target_identity_enabled=os.environ.get("PLANNER_TARGET_IDENTITY_ENABLED", "1").lower() not in ("0", "false", "no"),
         target_identity_world_tolerance_abs=float(os.environ.get("PLANNER_TARGET_IDENTITY_WORLD_TOLERANCE_ABS", "15.0")),
@@ -551,7 +671,9 @@ def main():
     print(f"[VLM API] thinking_mode={cfg.thinking_mode}")
     print(f"[VLM API] reasoning_effort={cfg.reasoning_effort}")
     print(f"[VLM API] enable_thinking={cfg.enable_thinking}")
-    print(f"[Context] enabled={cfg.context_enabled} reuse_bbox={cfg.context_reuse_bbox_enabled} local_forward={cfg.context_local_forward_enabled} recovery={cfg.context_recovery_enabled}")
+    print(f"[TaskManager] enabled={cfg.task_manager_enabled}")
+    print(f"[Context] enabled={cfg.context_enabled} memory=target+state")
+    print(f"[Planner] approach_stop_margin={cfg.approach_stop_margin}")
     print(f"[TargetIdentity] enabled={cfg.target_identity_enabled} tolerance_abs={cfg.target_identity_world_tolerance_abs} tolerance_ratio={cfg.target_identity_world_tolerance_ratio}")
     print(f"[Relocalizer] enabled={cfg.relocalizer_enabled} views={cfg.relocalizer_view_count} yaw_step={cfg.relocalizer_yaw_step_deg}")
     if os.environ.get("PLANNER_WARMUP_ENABLED", "1").lower() not in ("0", "false", "no"):

@@ -1,0 +1,1003 @@
+
+---PAGE 1---
+THIS PAPER HAS BEEN ACCEPTED FOR PUBLICATION AT THE IEEE ROBOTICS AND AUTOMATION LETTERS (RA-L). C⃝IEEE 1
+Robust and Efﬁcient Quadrotor Trajectory
+Generation for Fast Autonomous Flight
+Boyu Zhou, Fei Gao, Luqi Wang, Chuhao Liu and Shaojie Shen
+Abstract—In this paper, we propose a robust and efﬁcient
+quadrotor motion planning system for fast ﬂight in 3-D com-
+plex environments. We adopt a kinodynamic path searching
+method to ﬁnd a safe, kinodynamic feasible and minimum-
+time initial trajectory in the discretized control space. We
+improve the smoothness and clearance of the trajectory by a
+B-spline optimization, which incorporates gradient information
+from a Euclidean distance ﬁeld (EDF) and dynamic constraints
+efﬁciently utilizing the convex hull property of B-spline. Finally,
+by representing the ﬁnal trajectory as a non-uniform B-spline, an
+iterative time adjustment method is adopted to guarantee dynam-
+ically feasible and non-conservative trajectories. We validate our
+proposed method in various complex simulational environments.
+The competence of the method is also validated in challenging
+real-world tasks. We release our code as an open-source package1.
+Index Terms —Motion and Path Planning, Aerial Systems:
+Perception and Autonomy, Collision Avoidance
+I. I NTRODUCTION
+U
+NMANNED aerial vehicles (UA Vs) are recently involved
+in more and more applications, such as industrial in-
+spection, search-and-rescue and package delivery. To achieve
+full autonomy in these scenarios, the motion planning module
+plays an essential role in generating safe and smooth motions.
+Although plenty of works on quadrotor trajectory generation
+have been proposed, there are still two critical unsolved issues.
+Firstly, given limited time and onboard computing resources,
+no existing works guarantee to generate safe and kinodynamic
+feasible trajectory at a high success rate. However, the efﬁ-
+ciency and robustness of the trajectory generation are essential.
+In many circumstances, such as a quadrotor ﬂying at high
+speed in unknown environments, trajectories should be re-
+generated constantly in a very short time to avoid emergent
+threats. Secondly, to ensure the kinodynamic feasibility of the
+generated motions, constraints on velocity and acceleration are
+often enforced conservatively. As a result, the aggressiveness
+of the generated trajectories are often hard to be tuned to
+satisfy applications where a high ﬂight speed is preferable.
+Accepted version. To appear in the IEEE Robotics and Automation Letters.
+c⃝2019 IEEE. Personal use of this material is permitted. Permission from
+IEEE must be obtained for all other uses. This work was supported by the
+Robotics Institue, Hong Kong University of Science and Technology.
+All authors are with the Department of Electronic and Computer Engineer-
+ing, Hong Kong University of Science and Technology, Hong Kong, China.
+{bzhouai, fgaoaa, lwangax, cliuci, eeshaojie }@ust.hk
+Digital Object Identiﬁer (DOI): see top of this page.
+1Open-source implementation is available at https://github.com/
+HKUST-Aerial-Robotics/Fast-Planner.
+(a) Fast autonomous ﬂight in an un-
+known environment.
+(b) Aggressive kinodynamic replans.
+Fig. 1. Our proposed method tested on a fully autonomous quadrotor in (a),
+and on extremely challenging fast replanning with indoor external feedback
+in (b). Experimental details are given in Sect. VII. Video is available at https:
+//www.youtube.com/watch?v=GIYGAjOeeI8&feature=youtu.be
+In this paper, we propose a complete and robust online
+trajectory generation method to address these two issues sys-
+tematically. A kinodynamic path searching based on heuristic
+search and linear quadratic minimum-time control is adopted.
+It searches efﬁciently for a safe, feasible and minimum-time
+initial path in the discretized control space. The initial path
+is then reﬁned in a carefully designed B-spline optimization,
+which utilizes B-spline’s convex hull property to incorporate
+gradient information and dynamic constraints. It improves
+the initial path and converges quickly to a smooth, safe and
+dynamically feasible trajectory. Finally, the trajectory is rep-
+resented as a non-uniform B-spline, for which we investigate
+the relations between the control points of derivatives and time
+allocation. Based on the relations, an iterative time adjustment
+method is adopted to squeeze infeasible velocity and acceler-
+ation out from the proﬁles while avoiding constraining them
+conservatively.
+Compared to existing works, our proposed method is able
+to generate high-quality trajectories in cluttered environments
+in a much shorter time with a higher success rate. It can
+generate aggressive motion under the premise of dynamic
+feasibility. We show the efﬁciency and robustness of our
+method in numerous simulational complex environments. We
+also demonstrate that our method is competent even for
+challenging fast ﬂight when trajectories should be re-generated
+repeatedly in a very short time by real-world experiments. We
+summarize our contributions as follows:
+1) We propose a robust and efﬁcient systematic method,
+incorporating kinodynamic path searching, B-spline optimiza-
+tion and time adjustment, where safety, dynamic feasibility
+and aggressiveness are built from bottom-up.
+2) We present an optimization formulation based on the
+convex hull property of B-splines that delicately incorpo-
+rates gradient information and dynamic constraints, which
+arXiv:1907.01531v2  [cs.RO]  3 Jul 2019
+
+---PAGE 2---
+2 THIS PAPER HAS BEEN ACCEPTED FOR PUBLICATION AT THE IEEE ROBOTICS AND AUTOMATION LETTERS (RA-L). C⃝IEEE
+converges quickly to generate smooth, safe and dynamically
+feasible trajectories.
+3) We investigate the relations between the control points of
+derivatives and the time allocation of non-uniform B-splines.
+A time adjustment method based on the relations is applied to
+guarantee feasible and non-conservative motion.
+4) We present extensive simulation and real-world evalua-
+tion of our proposed method. The source code is released as
+a ros-package.
+II. R ELATED WORK
+1) Hard-constrained methods: The problems of trajectory
+generation have been addressed by some work recently. Hard-
+constrained methods are pioneered by minimum-snap trajec-
+tory generation [1], in which trajectories are represented as
+piecewise polynomials and generated by solving a quadratic
+programming(QP) problem. [2] shows that minimum snap
+trajectories can be obtained in closed form, in which the safety
+of the trajectories is ensured by iteratively adding intermediate
+waypoints. Works [3]–[7] generate trajectories in a two-step
+pipeline. Free space represented by a sequence of cubes [3, 8],
+spheres [4, 9] or polyhedrons [5] is ﬁrstly extracted, which
+is followed by convex optimization, which generates smooth
+trajectory within the feasible space. [6, 7] proposed a B-spline-
+based kinodynamic search to ﬁnd an initial trajectory which
+is then reﬁned by an elastic band optimization approach. The
+use of uniform B-spline ensures dynamic feasibility but could
+generate conservative motion. One common drawback of these
+methods is that the time allocation of the trajectory is given
+by naive heuristics. However, a poorly chosen time allocation
+signiﬁcantly reduce the quality of the trajectory. Besides, a fea-
+sible solution can only be obtained by iteratively adding more
+constraints and solving the quadratic programming problem,
+which is undesirable for real-time application. To address these
+problems, [8] proposed a method to search for a path with
+well-allocated time and guarantee the safety and kinodynamic
+feasibility of trajectory through optimization. Hard-constrained
+methods ensure global optimality by the convex formulation.
+However, distance to obstacles in the free space is ignored,
+which often results in trajectories being close to obstacles.
+Besides, the kinodynamic constraints are conservative, making
+the trajectory’s speed deﬁcient for fast ﬂight.
+2) Soft-constrained methods: There are also methods for-
+mulating trajectory generation as a non-linear optimization
+problem that takes smoothness and safety into account. [10]
+generates discrete-time trajectories by minimizing its smooth-
+ness and collision costs using gradient descent methods. [11]
+has similar problem formulation, but the optimization is solved
+by a gradient-free sampling method. [12] extended them to
+continuous-time polynomial trajectories. Since the time pa-
+rameterization is continuous, it avoids numeric differentiation
+errors and is more accurate to represent the motions of
+quadrotors. However, it suffers from a low success rate. To
+solve this problem, [13] ﬁnds a collision-free initial path ﬁrstly
+using an informed sampling-based path searching method.
+This path serves as a higher quality initial guess of non-linear
+optimization and thus improve the success rate. In [14], the
+trajectory is parameterized as a uniform B-spline. Since a B-
+spline is continuous by nature, there is no need to enforce
+Fig. 2. An illustration of the mechanism of the kinodynamic path searching.
+Red curves indicate the motion primitives generated by Equ.3. The purple
+curve is the analytic expansion explained in Sect. III-C.
+continuity explicitly, which reduce the number of constraints.
+It is also particularly useful for local replanning thanks to its
+property of locality. Soft-constrained methods utilize gradient
+information to push trajectory far from obstacles, but suffer
+from local minima and having no strong guarantee of success
+rate and kinodynamic feasibility. Our optimization method
+also utilizes gradient information to improve the safety of
+the trajectory. However, unlike previous methods in which
+computational expensive line integrals along the trajectory are
+calculated, the formulation is redesigned to be simpler based
+on the convex hull property of B-spline. It greatly improves
+the computation efﬁciency as well as the convergent rate.
+III. K INODYNAMIC PATH SEARCHING
+Our front-end kinodynamic path searching module is orig-
+inated from the hybrid-state A* search ﬁrst proposed for au-
+tonomous vehicle [15]. It searches for a safe and kinodynamic
+feasible trajectory that is minimal with respect to time duration
+and control cost in a voxel grid map. As shown in Alg.1
+and in Fig.2, the searching loop is similar to the standard
+A* algorithm, where P and C refer to the open and closed
+set. Instead of straight lines, motion primitives respecting the
+quadrotor dynamic are used as graph edge. A structure Node is
+used to record a primitive, the voxel the primitives ends in and
+thegc andfc cost (Sect. III-B). Primitives Expand() the voxel
+grid map iteratively and those ending up in the same voxel
+except the one with the smallestfc are pruned (Prune()). Then
+CheckFeasible() checks the safety and dynamic feasibility
+of the remained primitives. This process continues until any
+primitive reach goal or the AnalyticExpand() (Sect. III-C)
+succeeds.
+A. Primitives Generation
+We ﬁrst discuss the generation of motion primitives used
+in Expand(). The differential ﬂatness of quadrotor systems
+allows us to represent the trajectory by three independent 1-D
+time-parameterized polynomial functions [1]:
+p(t) := [px(t),py(t),pz(t)]⊤, p µ(t) =
+K∑
+k=0
+aktk (1)
+where µ ∈ {x,y,z }. From the view of quadrotor systems,
+it corresponds to a linear time-invariant (LTI) system. Let
+
+---PAGE 3---
+ZHOU et al. : ROBUST AND EFFICIENT QUADROTOR TRAJECTORY GENERATION 3
+Algorithm 1: Kinodynamic Path Searching
+1 Initialize();
+2 while ¬ P.empty() do
+3 nc ← P .pop(), C.insert(nc) ;
+4 if ReachGoal(nc) ∨ AnalyticExpand(nc) then
+5 return RetrievePath();
+6 primitives ← Expand(nc);
+7 nodes ← Prune(primitives);
+8 forni in nodes do
+9 if ¬ C.contain(ni) ∧ CheckFeasible(ni) then
+10 gtemp ←nc.gc + EdgeCost(ni) ;
+11 if ¬ P.contain(ni) then
+12 P.add(ni);
+13 else if gtemp ≥ni.gc then
+14 continue;
+15 ni.parent ←nc, ni.gc ←gtemp;
+16 ni.fc ←ni.gc + Heuristic(ni);
+x(t) := [p(t)⊤, ˙p(t)⊤, · · ·, p(n−1)(t)⊤]⊤ ∈ X ⊂ R3n be the
+state vector. Let u(t) := p(n)(t) ∈ U := [ −umax,u max]3 ⊂
+R3 be the control input. The state space model can be deﬁned
+as:
+˙x = Ax + Bu (2)
+A =
+
+
+0 I 3 0 · · · 0
+0 0 I 3 · · · 0
+... ... ... ... ...
+0 · · · · · · 0 I 3
+0 · · · · · · 0 0
+
+
+, B =
+
+
+0
+0
+...
+0
+I3
+
+
+The complete solution for the state equation is expressed as:
+x(t) =eAtx(0) +
+∫ t
+0
+eA(t−τ )Bu(τ) dτ (3)
+which gives the trajectory of the quadrotor system whose
+initial state is x(0) and control input is u(t).
+In Expand(), given the current state of the quadrotor, a set
+of discretized control inputs UD ⊂ U is applied for duration
+τ. In practice, we select n = 2, which corresponds to a double
+integrator. Each axis [−umax,umax] is discretized uniformly
+as {−umax, −r−1
+r umax, · · ·, r−1
+r umax, umax}, which results
+in (2r + 1)3 primitives.
+B. Actual Cost and Heuristic Cost
+As we aim to ﬁnd a trajectory that is optimal in time and
+control cost, we deﬁne the cost of a trajectory as:
+J (T ) =
+∫ T
+0
+∥u(t)∥2dt +ρT (4)
+Under this deﬁnition, EdgeCost() calculates the cost of a mo-
+tion primitive generated with the discretized input u(t) = ud
+and duration τ as ec = (∥ud∥2 +ρ)τ.
+Following the terminology of A*, we usegc to represent the
+actual cost of an optimal path from the start state xs to the
+current state xc. Let this optimal path consists of J primitives,
+gc is calculated as: gc =∑J
+j=1(∥udj∥2 +ρ)τ.
+An admissible and informative heuristic is essential to speed
+up the searching as in A*. Hence, we also design aHeuristic().
+We compute a closed form trajectory that minimizes J (T )
+from xc to the goal state xg by applying the Pontryagins
+minimum principle [16]:
+p∗
+µ(t) = 1
+6αµt3 + 1
+2βµt2 +vµc +pµc (5)
+[αµ
+βµ
+]
+= 1
+T 3
+[−12 6 T
+6T −2T 2
+][pµg −pµc −vµcT
+vµg −vµc
+]
+J∗(T ) =
+∑
+µ∈{x,y,z}
+(1
+3α2
+µT 3 +αµβµT 2 +β2
+µT )
+where pµc,vµc,pµg,vµg are the current and goal position and
+velocity. J∗(T ) is the cost deﬁned by Equ.4. To ﬁnd the
+optimal time T that minimize the cost, we substitute αµ,βµ
+into J∗(T ) and ﬁnd the roots of ∂J∗(T )
+∂T = 0. The root making
+a minimum costmin J∗ and feasible trajectory is selected and
+denoted as Th. We use J∗(Th) as the heuristic hc. Finally,fc
+is deﬁned as: fc =gc +hc =gc + J∗(Th).
+C. Analytic Expansion
+Due to the discretized control input, it is difﬁcult to have
+a primitive end exactly in the goal state. To compensate for
+it and also to speed up the searching, we induce an analytic
+expansion scheme. When a node is popped from the open
+set, a trajectory from xc to xg is computed using the same
+approach in Sect. III-B. If it passes the safety and dynamic
+feasibility check, the searching is terminated in advance. This
+strategy is effective for improving efﬁciency especially in
+sparse environments, since it has a higher success rate and
+terminates the searching earlier.
+D. Optimality and Completeness
+Theoretically, we can not guarantee the optimality and
+completeness of the path searching. However, the practical per-
+formance is satisfactory. For the optimality, evaluation (Sect.
+VII-A1) shows that the sacriﬁce of optimality is acceptable
+and adjustable. Besides, provided the initial path lies near the
+optimum, our optimization (Sect. IV) will ﬁnd that optimum.
+For the completeness, evaluation (Sect. VII-A1) indicates that
+in practice it can ﬁnd a feasible solution in most case. Also, our
+method can be extended to support variable-duration primitives
+and a variable-resolution voxel grid as described by [15] to
+make stronger completeness guarantees.
+IV. B- SPLINE TRAJECTORY OPTIMIZATION
+As mentioned in Sect. III-D, the path produced by the path
+searching can be suboptimal. In addition, this path is often
+close to obstacle since distance information in the free space
+is ignored (Fig. 5). Therefore, we improve the smoothness and
+clearance of the path in the proposed B-spline optimization.
+The convex hull property of uniform B-splines are utilized to
+incorporate gradient information from the Euclidean distance
+ﬁeld and dynamic constraints, for which it converges within a
+very short duration to generate smooth, safe and dynamically
+feasible trajectories.
+
+---PAGE 4---
+4 THIS PAPER HAS BEEN ACCEPTED FOR PUBLICATION AT THE IEEE ROBOTICS AND AUTOMATION LETTERS (RA-L). C⃝IEEE
+(a)
+ (b)
+Fig. 3. a) A trajectory is represented by a B-spline ( pb = 3). Each segment
+is bounded by the corresponding convex hull of the control points (example
+convex hulls and segments are shown in green and orange). b) The ﬁrst order
+derivative (velocity) is also a B-spline, thus it has the same property. The
+control points of the derivatives can be calculated by Equ.7.
+Fig. 4. Illustration of ensuring that a convex hull of the B-spline ( pb = 3)
+is collision-free.
+A. Uniform B-splines
+A B-spline is a piecewise polynomial uniquely deter-
+mined by its degree pb, a set of N + 1 control points
+{Q0, Q1, · · ·, QN } and a knot vector [t0,t 1, · · ·,tM], in
+which Qi ∈ R3, tm ∈ R and M = N +pb + 1. A B-spline
+trajectory is parameterized by time t, where t ∈ [tpb,tM−pb].
+For a uniform B-spline, each knot span ∆tm =tm+1 −tm
+has identical value ∆t. To evaluate the position at time
+t ∈ [tm,tm+1) ⊂ [tpb,tM−pb], we ﬁrst normalize t as
+s(t) = (t −tm)/∆t. Then the position can be evaluated using
+the matrix representation [17]:
+p(s(t)) = s(t)⊤Mpb+1qm (6)
+s(t) =
+[1 s(t) s2(t) · · · spb(t)]⊤
+qm =
+[Qm−pb Qm−pb+1 Qm−pb+2 · · · Qm
+]⊤
+here Mpb+1 is a constant matrix determined by pb. In our
+implementation,pb is set as 3. The evaluation of the derivatives
+is exactly the same, since the derivative of a B-spline is also
+a B-spline.
+The convex hull property of B-splines (Fig.3) is essen-
+tial for designing our optimization formulation. We show in
+Sect.IV-B that it is extremely useful for ensuring the dynamic
+feasibility and safety of the entire trajectory.
+B. Convex Hull Property
+The convex hull property (Fig.3) is used extensively in our
+method to ensure both dynamic feasibility and safety.
+For the dynamic feasibility, it sufﬁces to constrain all
+velocity and acceleration control points {V0, V1, · · ·, VN−1}
+and {A0, A1, · · ·, AN−2} so that Vi ∈ [−vmax,v max]3 and
+Ai ∈ [−amax,a max]3. Vi and Ai are calculated by Equ.7,
+where ∆t is the knot span:
+Vi = 1
+∆t(Qi+1 − Qi), Ai = 1
+∆t(Vi+1 − Vi) (7)
+For the safety of the B-spline, we need to ensure that all
+its convex hulls are collision-free. Equivalently, we need to
+ensure that dh > 0, where dh is the distance between any
+one occupied voxel and any one point Qh in the convex hull
+(Fig.4). By the triangle inequality, we have dh > dc −rh,
+wheredc is the distance between the voxel and any one control
+point. We also have rh ≤r12 +r23 +r34, since Qh is inside
+the convex hull. Combining them, dh >d c −(r12 +r23 +r34)
+is always valid. Therefore, if we ensure:
+dc > 0, r j,j+1 <d c/3 ( j ∈ {1, 2, 3}) (8)
+then the convex hull is guaranteed to be collision-free.
+C. Problem F ormulation
+For a pb degree B-spline trajectory deﬁned by N + 1
+control points {Q0, Q1, · · ·, QN }, we optimize the subset of
+N + 1 − 2pb control points {Qpb, Qpb+1, · · ·, QN−pb }. The
+ﬁrst and last pb control points should not be changed because
+they determine the boundary state. The overall cost function
+is deﬁned as:
+ftotal =λ1fs +λ2fc +λ3(fv +fa) (9)
+where fs and fc are smoothness and collision cost. fv and
+fa are soft limits on velocity and acceleration. λ1,λ 2 and λ3
+trade off the smoothness, safety and dynamic feasibility.
+We deﬁne the smoothness costfs by a function that captures
+the geometric information of the trajectory and does not
+depend on time allocation, unlike many recent works that use
+integral of the squared snap or jerk. The reason is that after
+optimization the time allocation may be adjusted (Sect. V).
+This will change the derivatives of the trajectory and make
+the optimized snap (jerk) less meaningful. We use an elastic
+band cost function 2 [18, 19]:
+fs =
+N−pb+1∑
+i=pb−1
+∥ (Qi+1 − Qi)  
+Fi+1,i
++ ( Qi−1 − Qi)  
+Fi−1,i
+∥2 (10)
+From a physical standpoint, this formulation view a trajectory
+as an elastic band, where each term Fi+1,i = Qi+1 − Qi
+and Fi−1,i = Qi−1 − Qi is the joint force of two springs
+connecting the nodes Qi+1, Qi and Qi−1, Qi respectively. If
+all terms equal to zero, all the control points would uniformly
+distribute in a straight line, which is ideally smooth.
+Similarly, the collision cost is formulated as the repulsive
+force of the obstacles acting on each control point:
+fc =
+N−pb∑
+i=pb
+Fc(d(Qi)) (11)
+2The control points Qpb−2, Qpb−1, QN −pb+1 and QN −pb+2 are not
+optimized but needed to evaluate the overall smoothness. Similarly, some of
+them are included in Equ.14 as constant values to evaluate the derivatives.
+
+---PAGE 5---
+ZHOU et al. : ROBUST AND EFFICIENT QUADROTOR TRAJECTORY GENERATION 5
+Fig. 5. Using gradient-based numeric optimization to deform the trajectory.
+The red and the green curves are the initial path and the B-spline after the
+optimization. Yellow dots stand for the control points of the B-spline. The
+initial path is close to the obstacles since distance information is ignored,
+while the B-spline is pushed away by the gradient-based optimization.
+where d(Qi) is the distance between Qi and the closet
+obstacle. Fc is a differentiable potential cost function with
+dthr specifying the threshold of obstacle clearance:
+Fc(d(Qi)) =
+{ (d(Qi) −dthr)2 d(Qi) ≤dthr
+0 d(Qi)>d thr
+(12)
+As shown in Sect.IV-B, Equ.8 must be satisﬁed so that
+the trajectory is collision-free. Since the collision cost pushes
+the control points away from obstacles, dc > 0 is apparent.
+Also, rj,j+1 are tunable parameters depend solely on the
+parameterization of the B-spline. In practice, as long as we
+select rj,j+1, (j ∈ {0, 1, · · ·,N }) that are signiﬁcantly small
+(in our implementation rj,j+1 < 0.2), the trajectory is safe
+in most cases. This may be invalid in extreme cases, for
+instance, the environment is very cluttered. Even so, we can re-
+parameterize the B-spline to select smaller rj,j+1, after which
+Equ.8 will still be satisﬁed.
+We penalize velocity or acceleration along the trajectory
+exceeding maximum allowable value vmax and amax with a
+cost similar to Equ.12. The penalty for 1-D velocity vµ is:
+Fv(vµ) =
+{ (v2
+µ −v2
+max)2 v2
+µ >v 2
+max
+0 v2
+µ ≤v2
+max
+(13)
+where µ ∈ {x,y,z }. The acceleration penalty has identical
+form. Applying the convex hull property (Fig. 3), we deﬁne
+fv and fa so that infeasible velocity and acceleration control
+points are penalized:
+fv =
+∑
+µ∈
+{x,y,z}
+N−pb∑
+i=pb−1
+Fv(Viµ), f a =
+∑
+µ∈
+{x,y,z}
+N−pb∑
+i=pb−2
+Fa(Aiµ)
+(14)
+V. T IME ADJUSTMENT
+Although we constrain kinodynamic feasibility in the path
+searching and optimization, sometimes we get infeasible tra-
+jectories. The basic reason is that gradient information tends
+to lengthen the overall trajectory while pushing it far from
+obstacles. Consequently, the quadrotor has to ﬂy more ag-
+gressively in order to travel longer distance within the same
+time, which unavoidably causes over aggressive motion if the
+original motion is already near to the physical limits.
+To guarantee dynamic feasibility, we adopt a time adjust-
+ment method based on the relations between the derivatives
+control points and the time allocation (knot spans) of the non-
+uniform B-spline. Thanks to the relations, we can change
+the ﬂight aggressiveness as we expected by adjusting the
+associated time allocation. Thus dynamic feasibility can be
+ensured without over-conservative constraints.
+We ﬁrst introduce the mathematic fundament of the time
+adjustment. Then the Alg. 2 is presented to tackle over-
+aggressive trajectories.
+A. Non-uniform B-spline
+Non-uniform B-spline is a more general kind of B-spline.
+The only difference to uniform B-spline is that each of its
+knot span ∆tm = tm+1 −tm is independent to others. The
+control points of a non-uniform B-spline’s ﬁrst and second
+order derivatives V
+′
+i and A
+′
+i can be computed by:
+V
+′
+i = pb(Qi+1 − Qi)
+ti+pb+1 −ti+1
+, A
+′
+i = (pb − 1)(V
+′
+i+1 − V
+′
+i)
+ti+pb+1 −ti+2
+(15)
+By the convex hull property (Fig.3), to enforce the dynamic
+feasibility of a trajectory represented by a non-uniform B-
+spline, it sufﬁces to enforce all control points of the ﬁrst and
+second order derivatives within the feasible domain. We show
+that this can be achieved by changing the corresponding knot
+spans of the infeasible control points in Sect. V-B.
+B. Knot Spans Adjustment
+Let V
+′
+i = [V
+′
+i,x,V
+′
+i,y,V
+′
+i,z]⊤ be an infeasible control point
+of velocity. Let V
+′
+i,µ be the largest infeasible component and
+| V
+′
+i,µ |= vm. From Equ.15 we know that V
+′
+i,µ is inﬂuenced
+by the duration ti+pb+1 −ti+1. If we change this duration to
+ˆti+pb+1 − ˆti+1 =µv(ti+pb+1 −ti+1), then V
+′
+i,µ changes to:
+ˆVi,µ = pb
+ˆti+pb+1 − ˆti+1
+(Qi+1,µ −Qi,µ) (16)
+= 1
+µv
+pb
+ti+pb+1 −ti+1
+(Qi+1,µ −Qi,µ) = 1
+µv
+V
+′
+i,µ
+Therefore, if we set µv = vm
+vmax
+, then the velocity is feasible,
+because | ˆVi,µ |= vmax
+vm
+|V
+′
+i,µ |=vmax ∈ [−vmax,vmax].
+The enforcement of acceleration feasibility is similar 3. We
+know thatA
+′
+i,µ is actually inﬂuenced byti+pb+2 −ti+1 since it
+is coupled withV
+′
+i,µ andV
+′
+i+1,µ. We change ∆tm =tm+1−tm
+to ∆ˆtm =µa∆tm for m ∈ {i + 1,i + 2, · · ·,i +pb + 1} and
+we get:
+ˆAi,µ = pb − 1
+ˆti+pb+1 − ˆti+2
+( ˆVi+1,µ − ˆVi,µ) (17)
+= 1
+µa
+pb − 1
+ti+pb+1 −ti+2
+( 1
+µa
+V
+′
+i+1,µ − 1
+µa
+V
+′
+i,µ)
+= 1
+µ2a
+pb − 1
+ti+pb+1 −ti+2
+(V
+′
+i+1,µ −V
+′
+i,µ) = 1
+µ2a
+A
+′
+i,µ
+Similarly, let µa = ( am
+amax
+)
+1
+2 , then | ˆAi,µ |= amax
+am
+| A
+′
+i,µ |=
+amax ∈ [−amax,amax].
+3We use the same notation as those in the last paragraph and do not deﬁne
+them explicitly for brevity.
+
+---PAGE 6---
+6 THIS PAPER HAS BEEN ACCEPTED FOR PUBLICATION AT THE IEEE ROBOTICS AND AUTOMATION LETTERS (RA-L). C⃝IEEE
+(a) Quadrotor platform used in the
+autonomous ﬂight experiment.
+(b) Quadrotor platform used in the
+aggressive replanning experiment.
+Fig. 6. Quadrotor Platforms used in fully autonomous ﬂight in (a), and
+aggressive kinodynamic replanning in (b).
+C. Iterative Time Adjustment
+Algorithm 2: Iterative Time Adjustment
+1 repeat
+2 V, A = ﬁndInfeasible();
+3 for V
+′
+i in V do
+4 vm ← maxµ∈{x,y,z} |V
+′
+i,µ |;
+5 µ
+′
+v ← min{αv, vm
+vmax
+};
+6 AdjustKnotSpansVel(V
+′
+i, µ
+′
+v);
+7 for A
+′
+i in A do
+8 am ← maxµ∈{x,y,z} |A
+′
+i,µ |;
+9 µ
+′
+a ← min{αa, ( am
+amax
+)
+1
+2 };
+10 AdjustKnotSpansAcc(A
+′
+i, µ
+′
+a);
+11 until V.empty() ∧ A.empty();
+Based on the derivation in Sect.V-B, Alg. 2 is adopted to
+enforce dynamic feasibility. It iteratively ﬁnds the infeasible
+velocity and acceleration control points V and A of the
+trajectory (Line 2) and adjust the corresponding knot spans
+(Lines 3-10). Because a knot span ∆tm inﬂuences a few
+control points and vice versa, bounding µ
+′
+v and µ
+′
+a with two
+constantαv andαa slightly larger than 1 (Line 5, 9) prevents
+any time span from being extended excessively.
+VI. I MPLEMENTATION DETAILS
+A. Experiment Settings
+The motion planning method proposed in this paper is
+implemented in C++11 with a general non-linear optimization
+solver NLopt 4. We set r = 2,τ = 0.5 for the path searching,
+λ1 = 10.0,λ 2 = 0.8,λ 3 = 0.01 for the optimization and
+αa = αv = 1.1 for the time adjustment in all experiments.
+We present two sets of real-world experiments to validate our
+proposed planning method.
+Firstly, we conduct fast autonomous ﬂight experiments in
+unknown cluttered environments (Sect.VII-B). We use a self-
+developed quadrotor platform (Fig. 6(a)) equipped with a
+Velodyne VLP-16 3-D LiDAR. LOAM [20] is adopted to
+estimate the pose of the quadrotor and generate a dense point
+cloud map. To obtain high-rate state estimation for feedback
+control, we fused the laser-based estimation with IMU and
+4https://nlopt.readthedocs.io/en/latest/
+Fig. 7. The local planning strategy for a limited sensing range. The red curve
+and the yellow curve are the trajectories before and after the optimization.
+Opaque and transparent obstacles are known and unknown ones.
+sonar measurements by the extended Kalman ﬁlter (EKF). All
+modules including motion planning, state estimation, mapping
+and control run on a dual-core 3.00 GHz Intel i7-5500U
+processor, which has 8 GB RAM and 256 GB SSD.
+Then, in Sect.VII-C, we focus on testing the fast-replanning
+capability of our proposed method in aggressive ﬂight, for
+which we use a more light-weight and agile quadrotor platform
+(Fig. 6(b)). To eliminate uncertainties introduced by onboard
+sensings, accurate pose feedback is provided by the motion
+capture system OptiTrack5 and the map of the environment
+is pre-built. The motion planning and control modules run
+onboard on an Nvidia TX2 computer.
+B. Re-planning Strategy
+1) Receding-horizon Local Planning: When the quadrotor
+ﬂies in an unknown environment, it has to re-plan its trajectory
+frequently due to the limited sensing range. To improve
+efﬁciency, we adopt a receding-horizon planning scheme,
+in which trajectories are generated only within the known
+space (Fig.7). The path searching is terminated once a motion
+primitive ends outside this range and is followed by the
+optimization and time adjustment. Planning in the unknown
+space is often useless, thus such efforts can be saved.
+2) Re-planning Triggering Mechanism: The re-planning is
+triggered in two situations. Firstly, it is triggered if the current
+trajectory collides with newly emergent obstacles 6, which
+ensures that a new safe trajectory is available as soon as any
+collision is detected. Secondly, the planner is called at ﬁxed
+intervals of time. It updates the trajectory periodically using
+the most up-to-date environmental information.
+C. Euclidean Distance Field
+We maintain an EDF of the voxel grid map for our optimiza-
+tion, which is computed by an efﬁcient O(n) algorithm [21],
+where n = N 3 is the number of updated voxel grids. To
+compensate for the discretized error of the EDF introduced
+by the voxel grid map and beneﬁt the numeric optimization,
+trilinear interpolation is used to improve the accuracy of the
+distance and gradient information [14]. Global update of the
+EDF is very costly and can block the planning module that is
+crucial for fast autonomous ﬂight. To address this issue, we
+only update the voxel grids within the sensing range using an
+incremental update strategy [22].
+5https://optitrack.com/
+6The collision checking is conducted in the conﬁguration space (C-space),
+where the quadrotor is modeled as a point and obstacles are inﬂated by a
+radius. The computation cost of such checking is negligible.
+
+---PAGE 7---
+ZHOU et al. : ROBUST AND EFFICIENT QUADROTOR TRAJECTORY GENERATION 7
+TABLE I
+COMPARISON OF PATH SEARCHING
+Comp.
+Time(s)
+Traj.
+Time(s)
+Ctrl.
+Cost(m2/s3)
+Succ.
+Rate(%)
+method [23]
+Mean 0.0592 8.439 11.42
+100.0Max 0.8740 20.000 28.00
+Std 0.1060 2.970 4.07
+Proposed
+(Res.= 0.04m)
+Mean 0.0047 7.719 14.42
+100.0Max 0.1837 10.500 24.50
+Std 0.0113 0.909 3.60
+Proposed
+(Res.= 0.2m)
+Mean 0.0018 7.696 15.08
+100.0Max 0.0287 10.500 27.50
+Std 0.0017 0.917 3.78
+Proposed
+(Res.= 1.0m)
+Mean 0.0017 7.645 16.20
+77.8Max 0.0059 15.500 56.00
+Std 0.0007 1.295 6.21
+TABLE II
+COMPARISON OF TRAJECTORY OPTIMIZATION
+Integral of Jerk 2 (m2/s5) Comp.
+Time(s)Mean Max Std
+Previous [13] 43.913 181.495 18.394 0.010
+Proposed 35.932 131.913 13.118 0.001
+VII. R ESULTS
+A. Analysis and Comparisons
+1) Comparison of Path Searching: We compare our path
+searching with method [23], both of which use the time-
+optimal control formulation to generate primitives. The com-
+parison is done on a 40 × 40 × 5m map randomly deployed
+with 100 obstacles and the maximum velocity and acceleration
+limits are set as 3m/s and 2m/s2 respectively. Since the
+resolution of voxel grids is a critical factor for the performance
+of our proposed method, different resolutions are used for
+comprehensive evaluation (Tab.I, column 1, rows 3-5). For a
+fair comparison, we use the open source implementation of
+[23]. Results are listed in Tab.I.
+As is shown in statics, both methods generate kinodynamic
+feasible trajectories. Our method is faster with one order of
+magnitude and tends to generate a path with a shorter duration.
+However, the control cost for it is slightly higher. As the voxel
+girds get coarser, the efﬁciency of our method increases at
+the expense of higher control cost and lower success rate.
+This trend is expected because pruning primitives with coarser
+voxel grids results in lower searching complexity, whereas
+more feasible (and maybe superior) paths are lost.
+2) Comparison of Optimization: For the back-end tra-
+jectory optimization, we conduct a comparison against our
+previous work [13]. Both of our previous method and the
+proposed method utilize the EDF for non-linear optimization.
+For fairness, we use the same path given by our path searching
+as the initial value. Firstly, we compare the costs of the
+objective function with respect to time for both methods
+(Fig. 8(a)). Obviously, the cost of the proposed method drops
+rapidly within the ﬁrst few milliseconds, while the other one
+decreases much slower. Secondly, comparison of smoothness
+(integral of the squared jerk) is conducted as shown in Fig.8(b)
+and Tab.II. Even though less time is given for the proposed
+method, the resulting trajectories are smoother.
+(a) The convergent performance is compared through the cost proﬁles
+of the objective function. The cost of the proposed method decreases
+rapidly to zero within 3ms, while the other takes a signiﬁcantly
+longer time. The cost for both methods are normalized to [0,1] for
+comparison. Computation time is limited to 30ms for both.
+(b) Trajectories generated by the proposed (red) and previous (blue)
+method. Note that computation time for the proposed method is only
+1ms, while that for the previous method is 10ms.
+Fig. 8. Comparing our proposed optimization method with gradient-based
+optimization method [13] in random cluttered environments.
+(a) The environment setup of the
+autonomous ﬂight experiment.
+(b) Flight 1, bypassing a vertical
+wall.
+(c) Flight 2, avoiding vertical ob-
+stacles.
+(d) Flight 3, ﬂying through a nar-
+row hole.
+Fig. 9. Fully autonomous ﬂight in an unknown cluttered environment.
+Only the colored map is known by the motion planning module. In this
+conﬁned environment, the maximum and average speed of ﬂight 1-3 reach
+up to 1.7m/s and 1.3m/s2 respectively.
+B. Onboard Autonomous Flight
+We conducted fully autonomous fast ﬂight experiments in
+a challenging unknown environment (Fig. 9(a)). To further
+challenge our method, we prune the global map using a sphere
+with a radius of 5 m that centered on the quadrotor and
+only use the map within this sphere for trajectory generation
+(Fig.9(b)-9(d)) which is much smaller than our real perception
+range. The unstructured environment, limited perception range
+as well as the high ﬂying speed pose a challenge to the
+motion planning module, as it should re-generate trajectory
+continually and rapidly upon sudden appearing of new threats.
+We refer the readers to the video attachment for more detailed
+information.
+
+---PAGE 8---
+8 THIS PAPER HAS BEEN ACCEPTED FOR PUBLICATION AT THE IEEE ROBOTICS AND AUTOMATION LETTERS (RA-L). C⃝IEEE
+Fig. 10. Aggressive ﬂight test. The goals are changed arbitrarily and new
+trajectories are replanned during the aggressive ﬂight.
+C. Aggressive Flight
+The aggressive ﬂight experiment is done in the environment
+depicted in Fig. 10. In the experiment, the goals of the
+quadrotor are changed constantly and arbitrarily by a human.
+As soon as a new goal is set, a new trajectory is re-planned and
+executed immediately. The maximum velocity and acceleration
+are set as 2.5m/s and 1.5m/s2 respectively. This task is
+challenging in several aspects. Since the ﬂight is aggressive
+and the changes in the goals are abrupt, the motion planning
+module should generate new trajectories in considerably short
+time to quickly react to the changes, so that the motion of the
+quadrotor is continuous and smooth. Also, as the environment
+is conﬁned and cluttered, it is difﬁcult to generate smooth, safe
+and dynamically feasible trajectories in a very short time. This
+experiment validates that our method can generate aggressive
+motion under the premise of feasibility. It also shows that
+our method can quickly generate a new trajectory in complex
+environments even if the goal is changed suddenly during the
+aggressive ﬂight. More details are also included in the video.
+VIII. C ONCLUSION
+In this paper, we propose a novel online motion planning
+method for quadrotor autonomous navigation. We decouple
+the online fast motion planning problem as a front-end kin-
+odynamic path searching and a back-end nonlinear trajectory
+optimization. We adopt a kinodynamic path searching to ﬁnd
+a safe, kinodynamic feasible and minimum-time initial path,
+which is further improved in smoothness and clearance by
+a gradient-based optimization. By utilizing the convex hull
+property of B-spline, we signiﬁcantly improve the efﬁciency
+and convergent rate of the optimization compared to previous
+gradient-based planning methods. Finally, by representing the
+trajectory as a non-uniform B-spline, we adjust the time
+allocation according to a given expected ﬂight aggressiveness.
+We validate our proposed method in various complex environ-
+ments and the simulation. The competence of the method is
+also validated in challenging real-world tasks.
+In the future, we plan to challenge our quadrotor system
+in extreme situations such as large-scale or dynamic environ-
+ments. Furthermore, we will extend our trajectory optimization
+method to swarm problems.
+REFERENCES
+[1] D. Mellinger and V . Kumar, “Minimum snap trajectory generation and
+control for quadrotors,” in Proc. of the IEEE Intl. Conf. on Robot. and
+Autom. (ICRA) , Shanghai, China, May 2011, pp. 2520–2525.
+[2] C. Richter, A. Bry, and N. Roy, “Polynomial trajectory planning for
+aggressive quadrotor ﬂight in dense indoor environments,” in Proc. of
+the Intl. Sym. of Robot. Research (ISRR) , Dec. 2013, pp. 649–666.
+[3] J. Chen, K. Su, and S. Shen, “Real-time safe trajectory generation for
+quadrotor ﬂight in cluttered environments,” in Proc. of the IEEE Intl.
+Conf. on Robot. and Biom. , Zhuhai, China, Aug. 2015.
+[4] F. Gao and S. Shen, “Online quadrotor trajectory generation and
+autonomous navigation on point clouds,” in Proc. of the IEEE Intl. Sym.
+on Safety, Security, and Rescue Robotics (SSRR) , lausanne, switzerland,
+2016, pp. 139–146.
+[5] S. Liu, M. Watterson, K. Mohta, K. Sun, S. Bhattacharya, C. J. Taylor,
+and V . Kumar, “Planning dynamically feasible trajectories for quadrotors
+using safe ﬂight corridors in 3-d complex environments,” IEEE Robotics
+and Automation Letters (RA-L) , pp. 1688–1695, 2017.
+[6] W. Ding, W. Gao, K. Wang, and S. Shen, “Trajectory replanning for
+quadrotors using kinodynamic search and elastic optimization,” in 2018
+IEEE International Conference on Robotics and Automation (ICRA) .
+IEEE, 2018, pp. 7595–7602.
+[7] ——, “An efﬁcient b-spline-based kinodynamic replanning framework
+for quadrotors,” arXiv preprint arXiv:1906.09785 , 2019.
+[8] F. Gao, W. Wu, Y . Lin, and S. Shen, “Online safe trajectory generation
+for quadrotors using fast marching method and bernstein basis polyno-
+mial,” in Proc. of the IEEE Intl. Conf. on Robot. and Autom. (ICRA) ,
+Brisbane, Australia, May 2018.
+[9] F. Gao, W. Wu, W. Gao, and S. Shen, “Flying on point clouds:
+Online trajectory generation and autonomous navigation for quadrotors
+in cluttered environments,” Journal of Field Robotics , 2018. [Online].
+Available: https://onlinelibrary.wiley.com/doi/abs/10.1002/rob.21842
+[10] M. Zucker, N. Ratliff, A. D. Dragan, M. Pivtoraiko, M. Klingensmith,
+C. M. Dellin, J. A. Bagnell, and S. S. Srinivasa, “Chomp: Covariant
+hamiltonian optimization for motion planning,” The International Jour-
+nal of Robotics Research , vol. 32, no. 9-10, pp. 1164–1193, 2013.
+[11] M. Kalakrishnan, S. Chitta, E. Theodorou, P. Pastor, and S. Schaal,
+“Stomp: Stochastic trajectory optimization for motion planning,” in 2011
+IEEE international conference on robotics and automation . IEEE, 2011,
+pp. 4569–4574.
+[12] H. Oleynikova, M. Burri, Z. Taylor, J. Nieto, R. Siegwart, and E. Gal-
+ceran, “Continuous-time trajectory optimization for online uav replan-
+ning,” in Proc. of the IEEE/RSJ Intl. Conf. on Intell. Robots and
+Syst.(IROS), Daejeon, Korea, Oct. 2016, pp. 5332–5339.
+[13] F. Gao, Y . Lin, and S. Shen, “Gradient-based online safe trajectory
+generation for quadrotor ﬂight in complex environments,” in Proc. of
+the IEEE/RSJ Intl. Conf. on Intell. Robots and Syst.(IROS) , Sept 2017,
+pp. 3681–3688.
+[14] V . Usenko, L. von Stumberg, A. Pangercic, and D. Cremers, “Real-
+time trajectory replanning for mavs using uniform b-splines and a
+3d circular buffer,” in 2017 IEEE/RSJ International Conference on
+Intelligent Robots and Systems (IROS) . IEEE, 2017, pp. 215–222.
+[15] D. Dolgov, S. Thrun, M. Montemerlo, and J. Diebel, “Path planning for
+autonomous vehicles in unknown semi-structured environments,” The
+International Journal of Robotics Research , vol. 29, no. 5, pp. 485–
+501, 2010.
+[16] M. W. Mueller, M. Hehn, and R. D’Andrea, “A computationally ef-
+ﬁcient motion primitive for quadrocopter trajectory generation,” IEEE
+Transactions on Robotics , vol. 31, no. 6, pp. 1294–1310, 2015.
+[17] K. Qin, “General matrix representations for b-splines,” The Visual
+Computer, vol. 16, no. 3, pp. 177–186, 2000.
+[18] S. Quinlan and O. Khatib, “Elastic bands: Connecting path planning
+and control,” in [1993] Proceedings IEEE International Conference on
+Robotics and Automation . IEEE, 1993, pp. 802–807.
+[19] Z. Zhu, E. Schmerling, and M. Pavone, “A convex optimization approach
+to smooth trajectories for motion planning with car-like robots,” in 2015
+54th IEEE Conference on Decision and Control (CDC) . IEEE, 2015,
+pp. 835–842.
+[20] J. Zhang and S. Singh, “Loam: Lidar odometry and mapping in real-
+time,” in Proc. of Robot.: Sci. and Syst. (RSS) , UCB, USA, July 2014,
+pp. 109–111.
+[21] P. F. Felzenszwalb and D. P. Huttenlocher, “Distance transforms of
+sampled functions,” Theory of computing , vol. 8, no. 1, pp. 415–428,
+2012.
+[22] T. Schouten and E. L. van den Broek, “Incremental distance transforms
+(idt),” in 2010 20th International Conference on Pattern Recognition .
+IEEE, 2010, pp. 237–240.
+[23] S. Liu, N. Atanasov, K. Mohta, and V . Kumar, “Search-based motion
+planning for quadrotors using linear quadratic minimum time control,”
+in Proc. of the IEEE/RSJ Intl. Conf. on Intell. Robots and Syst.(IROS) ,
+Sept 2017, pp. 2872–2879.

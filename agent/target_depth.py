@@ -47,11 +47,11 @@ SCENE_BBOX_PROMPT = """请观察RGB图，结合任务描述，输出导航目标
 
 规则：
 1. bbox_norm必须是0~1之间数字，顺序为[left, top, right, bottom]。
-2. target必须是任务最终要到达或寻找的对象；如果任务说电线杆/汽车/房屋等具体类别，只能选择该类别或同义词目标。
-3. 如果该任务目标类别不可见，target.visible=false，target.bbox_norm=null；禁止用树、房屋、道路等其他物体顶替目标。
+2. target必须是任务最终要到达或寻找的对象/语义地标/可通行区域；如果任务说电线杆/汽车/房屋等具体类别，只能选择该类别或同义词目标；如果任务说三岔路口、十字路口、道路尽头、路口穿越区域、空旷区域，则选择对应道路结构或可通行区域作为target。
+3. 如果该任务目标类别或语义区域不可见，target.visible=false，target.bbox_norm=null；禁止用无关树、房屋、车辆等顶替目标，但道路/路口/空旷区域任务允许把对应道路区域作为target。
 4. objects包含目标、明显障碍物、道路/路口/建筑等关键参照物；最多输出8个，优先输出会影响规划的物体。
 5. 障碍物包括树、房屋、墙、车辆、杆子、近处大型物体；道路/空旷区域可标为reference。
-6. 不要输出动作规划，不要解释原因，只输出JSON。
+6. 不要输出动作规划、任务阶段拆分，不要解释原因，只输出JSON。
 """
 
 
@@ -436,10 +436,15 @@ def scale_bbox_to_depth(
     x_scale = depth_width / image_width
     y_scale = depth_height / image_height
     x1, y1, x2, y2 = bbox
-    return normalize_bbox(
-        [x1 * x_scale, y1 * y_scale, x2 * x_scale, y2 * y_scale],
-        (depth_width, depth_height),
-    )
+    px1 = int(round(x1 * x_scale)); py1 = int(round(y1 * y_scale))
+    px2 = int(round(x2 * x_scale)); py2 = int(round(y2 * y_scale))
+    left   = max(0, min(px1, px2))
+    top    = max(0, min(py1, py2))
+    right  = min(depth_width,  max(px1, px2))
+    bottom = min(depth_height, max(py1, py2))
+    if right <= left or bottom <= top:
+        raise ValueError(f"invalid depth bbox after scaling: {bbox}")
+    return [left, top, right, bottom]
 
 
 def choose_target_estimate(estimates: list[TargetDepthEstimate], task_description: str) -> TargetDepthEstimate:

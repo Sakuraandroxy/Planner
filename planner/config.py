@@ -28,44 +28,22 @@ class PlannerConfig:
     capture_interval: float = 0.1
     temperature: float = 0.8
     planner_max_tokens: int = 8192
+    task_parser_max_tokens: int = 2048
     thinking_mode: str = "disabled"
     reasoning_effort: str = "default"
     enable_thinking: str = "default"
     seed: Optional[int] = None
+    task_manager_enabled: bool = True
 
     # 上下文管理参数
     context_enabled: bool = False
-    context_reuse_bbox_enabled: bool = False
-    context_local_forward_enabled: bool = False
-    context_recovery_enabled: bool = False
     context_max_steps: int = 5
-    context_bbox_reuse_max_steps: int = 1
-    context_bbox_reuse_max_forward: float = 2.0
-    context_depth_jump_ratio: float = 1.5
-    context_switch_depth_ratio: float = 0.6
-    context_switch_guard_steps: int = 3
-    context_max_lost_before_redetect: int = 2
-    context_local_forward_min_depth: float = 20.0
-    context_local_forward_min_action: float = 2.0
-    context_goal_safety_margin: float = 2.0
-    context_obstacle_min_safe_depth: float = 4.0
-    context_obstacle_safety_margin: float = 2.0
-    context_search_yaw_step_deg: float = 15.0
-    context_arrival_depth: float = 5.0
-    context_front_corridor_half_width: float = 0.03
-    context_front_corridor_y_min: float = 0.45
-    context_front_corridor_y_max: float = 0.60
-    context_target_corridor_half_width: float = 0.05
-    context_target_corridor_y_min: float = 0.45
-    context_target_corridor_y_max: float = 0.65
     context_camera_fov_deg: float = 90.0
-    context_expected_depth_abs_tolerance: float = 5.0
-    context_expected_depth_ratio_tolerance: float = 0.25
-    context_expected_depth_soft_multiplier: float = 1.8
-    context_expected_depth_hard_multiplier: float = 2.5
-    context_direction_tolerance_deg: float = 35.0
-    context_candidate_anchor_min_score: float = 0.55
     context_world_pos_update_alpha: float = 0.35
+
+    # 到达半径：由 planner prompt 交给 VLM 判断，不属于上下文状态机
+    context_arrival_depth: float = 5.0
+    approach_stop_margin: float = 1.0
 
     # 目标实例锁定：第一次发现任务目标后，禁止后续同类远处目标顶替
     target_identity_enabled: bool = True

@@ -24,6 +24,9 @@ RELOCALIZER_SYSTEM_PROMPT = """你是无人机目标重定位候选检测器。
 
 RELOCALIZER_USER_PROMPT = """任务目标：{task_description}
 
+参考坐标信息（单位：米）：
+{coord_hint}
+
 无人机会原地环视多个方向。图片按顺序给出：
 {view_descriptions}
 
@@ -92,7 +95,7 @@ class Relocalizer:
         self.client.rotate_to_yaw(start_yaw)
 
         response_text, reasoning_content = self.vlm.call(
-            self._build_messages(task_description, views),
+            self._build_messages(task_description, views, locked_world_pos=locked_world_pos),
             max_tokens=int(getattr(self.config, "relocalizer_max_tokens", 512)),
         )
         raw_response = response_text or reasoning_content
@@ -118,13 +121,26 @@ class Relocalizer:
             ))
         return views
 
-    def _build_messages(self, task_description: str, views: List[RelocalizeView]) -> List[Dict[str, Any]]:
+    def _build_messages(self, task_description: str, views: List[RelocalizeView],
+                            locked_world_pos: Optional[List[float]] = None) -> List[Dict[str, Any]]:
         view_descriptions = "\n".join(
             f"- view_index={view.index}: yaw={view.yaw:.1f}度"
             for view in views
         )
+        coord_parts = []
+        current_pose = views[0].pose if views and views[0].pose else None
+        if current_pose:
+            coord_parts.append(
+                f"当前无人机世界坐标 x={current_pose[0]:.2f}, y={current_pose[1]:.2f}, z={current_pose[2]:.2f}"
+            )
+        if locked_world_pos:
+            coord_parts.append(
+                f"目标锁定世界坐标 x={locked_world_pos[0]:.2f}, y={locked_world_pos[1]:.2f}, z={locked_world_pos[2]:.2f}"
+            )
+        coord_hint = "\n".join(coord_parts) if coord_parts else "无可用坐标信息"
         user_text = RELOCALIZER_USER_PROMPT.format(
             task_description=task_description,
+            coord_hint=coord_hint,
             view_descriptions=view_descriptions,
         )
         content: List[Dict[str, Any]] = [{"type": "text", "text": user_text}]

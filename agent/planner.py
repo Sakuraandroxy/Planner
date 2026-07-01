@@ -29,7 +29,12 @@ class Planner:
     def generate_candidates(self, current_frame, task_description: str,
                             k=None, conversation_history=None, depth_frame=None,
                             center_depth=None, depth_meters=None,
-                            step_num: int = 0, pose=None, yaw_deg=None):
+                            step_num: int = 0, pose=None, yaw_deg=None,
+                            task_key: str = None,
+                            target_depth_enabled: bool = None,
+                            allow_relocalize: bool = None,
+                            encoded_rgb: str = None,
+                            detect_only: bool = False):
         """Main entry point: returns
         (trajectories, scene_analysis, raw_json, reasoning_content,
          reasoning_summary, task_done, selected_index).
@@ -37,7 +42,18 @@ class Planner:
         """
         if k is None:
             k = self.config.candidate_count
-        self.context.ensure_task(task_description)
+        task_key = task_key or task_description
+        effective_target_depth_enabled = (
+            getattr(self.config, "target_depth_enabled", True)
+            if target_depth_enabled is None
+            else bool(target_depth_enabled)
+        )
+        effective_allow_relocalize = (
+            getattr(self.config, "relocalizer_enabled", True)
+            if allow_relocalize is None
+            else bool(allow_relocalize)
+        )
+        self.context.ensure_task(task_key)
 
         step_started = time.perf_counter()
         self.last_timing = {
@@ -56,6 +72,9 @@ class Planner:
         target_depth, encoded_rgb = self.estimate_target_depth(
             current_frame, task_description, depth_meters,
             step_num=step_num, pose=pose, yaw_deg=yaw_deg,
+            task_key=task_key,
+            target_depth_enabled=effective_target_depth_enabled,
+            encoded_rgb=encoded_rgb,
         )
         self.last_target_depth = target_depth
         image_size = current_frame.size if current_frame is not None else None
@@ -64,6 +83,7 @@ class Planner:
             or (
                 target_depth is None
                 and getattr(self.config, "target_depth_enabled", True)
+                and effective_target_depth_enabled
                 and current_frame is not None
                 and depth_meters is not None
             )
@@ -71,8 +91,50 @@ class Planner:
         target_bbox = target_depth.get("target_bbox") if isinstance(target_depth, dict) else None
         self.context.update_obstacle_memory(depth_meters, image_size=image_size, target_bbox=target_bbox)
         depth_context = self._merge_depth_context(center_depth, target_depth)
+        if isinstance(depth_context, dict):
+            last_decision = getattr(self.context, "last_decision", None)
+            if last_decision is not None:
+                status = getattr(last_decision, "status", None)
+                depth_context["context_status"] = getattr(status, "value", str(status))
+                depth_context["context_reason"] = getattr(last_decision, "reason", "")
+                depth_context["arrival_depth"] = float(getattr(self.config, "context_arrival_depth", 5.0))
 
-        if self.last_target_missing and getattr(self.config, "relocalizer_enabled", True):
+        if detect_only:
+            target_visible = bool(
+                isinstance(target_depth, dict)
+                and target_depth.get("target_visible")
+                and not target_depth.get("target_identity_rejected")
+            )
+            self.last_timing["planning_api"] = 0.0
+            self.last_timing["planner_total"] = time.perf_counter() - step_started
+            if target_visible:
+                target_name = target_depth.get("target_name") or target_depth.get("target") or "target"
+                target_depth_m = target_depth.get("target_depth_median")
+                depth_text = f"，depth={target_depth_m}" if target_depth_m is not None else ""
+                print(f"[DETECT] target locked; skip planner API target={target_name}{depth_text}")
+                return (
+                    [],
+                    f"检测阶段已发现并锁定目标：{target_name}{depth_text}。",
+                    "",
+                    "",
+                    "检测阶段只调用bbox/场景目标识别，不调用planner API；目标已写入身份锁和上下文，供后续阶段复用。",
+                    True,
+                    0,
+                    [],
+                )
+            print("[DETECT] target not reliably visible; skip planner API")
+            return (
+                [],
+                "检测阶段未可靠发现任务目标。",
+                "",
+                "",
+                "检测阶段只调用bbox/场景目标识别，不调用planner API；当前未锁定目标，主循环可进入重定位或等待下一帧。",
+                False,
+                0,
+                [],
+            )
+
+        if self.last_target_missing and effective_allow_relocalize:
             self.last_timing["planning_api"] = 0.0
             self.last_timing["planner_total"] = time.perf_counter() - step_started
             return (
@@ -92,7 +154,7 @@ class Planner:
 
         prompt_started = time.perf_counter()
         # Reuse the already-encoded base64 image from estimate_target_depth
-        if encoded_rgb is not None:
+        if encoded_rgb:
             messages = self.prompter.build_messages_encoded(
                 encoded_rgb, task_description, k,
                 conversation_history, depth_frame,
@@ -136,26 +198,38 @@ class Planner:
 
     def estimate_target_depth(self, current_frame, task_description: str,
                               depth_meters=None, step_num: int = 0,
-                              pose=None, yaw_deg=None):
+                              pose=None, yaw_deg=None,
+                              task_key: str = None,
+                              target_depth_enabled: bool = None,
+                              encoded_rgb: str = None):
         """Ask the MLLM for target bbox, then compute depth from raw meters.
 
         Returns (target_depth_dict, encoded_base64_image).
         The base64 image is reused by generate_candidates for the planning API.
         """
-        base64_image = None
-        if not getattr(self.config, "target_depth_enabled", True):
-            return None, None
+        base64_image = encoded_rgb
+        effective_target_depth_enabled = (
+            getattr(self.config, "target_depth_enabled", True)
+            if target_depth_enabled is None
+            else bool(target_depth_enabled)
+        )
+        if not effective_target_depth_enabled:
+            return None, base64_image
         if current_frame is None or depth_meters is None:
-            return None, None
+            return None, base64_image
         bbox_response = ""
         target_started = time.perf_counter()
         try:
             reused = self._try_reuse_target_depth(current_frame, depth_meters, step_num, pose, yaw_deg)
             if reused is not None:
-                return reused, None
+                return reused, base64_image
 
-            encode_started = time.perf_counter()
-            base64_image = self.prompter.encode_image(current_frame)
+            if base64_image:
+                self.last_timing["target_depth_encode"] = 0.0
+            else:
+                encode_started = time.perf_counter()
+                base64_image = self.prompter.encode_image(current_frame)
+                self.last_timing["target_depth_encode"] = time.perf_counter() - encode_started
             image_size = current_frame.size
             use_scene_objects = bool(getattr(self.config, "scene_obstacle_planning_enabled", True))
             messages = (
@@ -163,7 +237,6 @@ class Planner:
                 if use_scene_objects else
                 build_target_bbox_messages(base64_image, task_description, image_size)
             )
-            self.last_timing["target_depth_encode"] = time.perf_counter() - encode_started
             response_text, reasoning_content = self.vlm.call(messages, max_tokens=2048)
             bbox_call = dict(self.vlm.last_call_info)
             bbox_call["name"] = "target_bbox"
@@ -227,7 +300,7 @@ class Planner:
             chosen_dict = chosen.as_dict()
             chosen_dict["scene_objects"] = scene_objects
             self.context.annotate_estimate_geometry(chosen_dict, image_size, yaw_deg, pose)
-            identity_decision = self.identity.evaluate(chosen_dict, step_num, task_description)
+            identity_decision = self.identity.evaluate(chosen_dict, step_num, task_key or task_description)
             if not identity_decision.accepted:
                 print(f"[IDENTITY] rejected target: {identity_decision.reason} "
                       f"distance={identity_decision.distance_m} tolerance={identity_decision.tolerance_m}")
@@ -265,10 +338,11 @@ class Planner:
         """Record a completed step into the context manager for future VLM calls."""
         self.context.add_step(step_num, actions, old_pos, new_pos, yaw_deg, collided)
 
-    def clear_context(self):
+    def clear_context(self, clear_identity: bool = True):
         """Reset conversation history (e.g. on new task)."""
         self.context.clear()
-        self.identity.clear()
+        if clear_identity:
+            self.identity.clear()
 
     def _try_reuse_target_depth(self, current_frame, depth_meters, step_num: int, pose, yaw_deg):
         """Reuse the previous target bbox and recompute depth on the current depth map."""
