@@ -1,0 +1,63 @@
+# Uni-LaViRA 主配置 —— 改此处即可切换各模块实现
+# 原理：各模块的 __init__.py 根据此配置的 name 返回对应实现
+
+AGENT:
+  # 任务解析器: vlm_parser | simple_parser
+  TASK_PARSER: vlm_parser
+  TASK_PARSER_URL: https://api.xiaomimimo.com/v1 #http://172.27.143.102:8000/v1
+  TASK_PARSER_MODEL: mimo-v2.5  #/data/sakura/models/Qwen2.5-7B-Instruct-AWQ
+  TASK_API_KEY: sk-cqfy070313s4e02e8ht1mteon7tyty9evvfkp6y8uet7k6no
+  TASK_PARSER_MAX_TOKENS: 1024
+
+  # 目标检测器: vlm_detector | groundingdino | yolo
+  DETECTOR: vlm_detector
+  DETECTOR_URL: https://api.xiaomimimo.com/v1  # OpenAI 格式（空=复用 PLANNER_URL）
+  DETECTOR_MODEL: mimo-v2.5  # 模型名（空=复用 PLANNER_MODEL）
+  DETECTOR_API_KEY: sk-cqfy070313s4e02e8ht1mteon7tyty9evvfkp6y8uet7k6no                    # API Key（空=复用 PLANNER_API_KEY）
+  DETECTOR_MAX_TOKENS: 512
+  GROUNDINGDINO_URL: http://172.27.143.102:8003/detect  # 仅 groundingdino 模式
+
+  # 轨迹规划器: api_atomic_planner | qwen_planner
+  PLANNER: api_atomic_planner
+  PLANNER_URL: https://api.xiaomimimo.com/v1   #https://api.xiaomimimo.com/v1  http://172.27.143.102:8004/v1
+  PLANNER_MODEL: mimo-v2.5
+  PLANNER_API_KEY: sk-cqfy070313s4e02e8ht1mteon7tyty9evvfkp6y8uet7k6no
+  PLANNER_MAX_TOKENS: 2048
+  PLANNER_CANDIDATE_COUNT: 5            # K 条候选轨迹
+  PLANNER_MAX_TRAJECTORY_LENGTH: 5      # 单条轨迹最大动作数
+  PLANNER_APPROACH_STOP_MARGIN: 1.0     # 接近停止余量（米）
+
+  # 方向估计器: three_dg | simple
+  DIRECTION: three_dg
+
+  # 停止深度阈值（米），bbox 中心深度小于此值判定到达
+  STOP_DEPTH_THRESHOLD: 8.0
+
+  # Qwen 每步 waypoints 数量
+  QWEN_WAYPOINT_COUNT: 5
+
+SIM:
+  FRONT_WIDTH: 1920
+  FRONT_HEIGHT: 1080
+  FRONT_FOV: 90
+  DOWN_WIDTH: 640
+  DOWN_HEIGHT: 640
+  DOWN_FOV: 90
+  # AirSim 连接 (本地留空=localhost:41451, 远程填服务器IP)
+  AIRSIM_IP: ""
+  AIRSIM_PORT: 41451
+
+WEB:
+  PORT: 5000
+
+EVAL:
+  METRICS: true
+
+# 世界模型 (独立主机, Flask HTTP 服务)
+# 输入: 前视图 + 下视图 + 指令 + K 条候选轨迹(含waypoints)
+# 输出: 最优轨迹下标 + 分数
+WORLD_MODEL:
+  ENABLED: false                         # 是否启用
+  NAME: api_world_model                  # 实现名 (api_world_model)
+  URL: http://172.27.143.102:5001/score  # 世界模型服务地址
+  TIMEOUT: 30                            # 请求超时(秒)

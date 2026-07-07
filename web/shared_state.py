@@ -26,8 +26,10 @@ class SharedState:
         self.task_done = False
         self._frame_png = b""
         self._depth_png = b""
+        self._down_frame_png = b""
         self.frame_version = 0
         self.depth_version = 0
+        self.down_frame_version = 0
 
     def update(self, **kwargs):
         with self.lock:
@@ -56,6 +58,16 @@ class SharedState:
         with self.lock:
             return self._depth_png
 
+    def set_down_frame(self, png_bytes: bytes):
+        with self.lock:
+            self._down_frame_png = png_bytes
+            self.down_frame_version += 1
+            self.version += 1
+
+    def get_down_frame(self) -> bytes:
+        with self.lock:
+            return self._down_frame_png
+
     def get_state(self) -> dict:
         with self.lock:
             return {
@@ -76,6 +88,7 @@ class SharedState:
                 "candidates": self.candidates,
                 "selected": self.selected_actions,
                 "reasoning_summary": self.reasoning_summary,
+                "down_frame_version": self.down_frame_version,
                 "task_done": self.task_done,
                 "model_name": self.model_name,
                 "error": self.error,

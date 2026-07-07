@@ -74,14 +74,14 @@ body { font-family:var(--font); background:var(--bg-primary); color:var(--text-p
 .main { display:flex; height:calc(100vh - 44px); gap:10px; padding:10px; }
 
 /* Camera */
-.viewport { flex:1; display:flex; flex-direction:column; gap:10px; min-width:0; }
-.cam-wrap {
+.viewport { flex:1; display:flex; flex-direction:column; gap:6px; min-width:0; }
+.cam-wrap { flex:1; min-height:0; display:flex; flex-direction:column; }
   flex:1; position:relative;
   background:#000; border:1px solid var(--border); border-radius:8px;
   overflow:hidden; display:flex; align-items:center; justify-content:center;
   min-height:200px;
 }
-.cam-wrap img { width:100%; height:100%; object-fit:contain; display:block; }
+.cam-wrap img { width:100%; flex:1; object-fit:contain; display:block; min-height:0; }
 .cam-placeholder { color:var(--text-muted); font-size:13px; }
 
 .cam-hud {
@@ -113,6 +113,17 @@ body { font-family:var(--font); background:var(--bg-primary); color:var(--text-p
 .right-panel::-webkit-scrollbar { width:4px; }
 .right-panel::-webkit-scrollbar-track { background:transparent; }
 .right-panel::-webkit-scrollbar-thumb { background:var(--border); border-radius:2px; }
+
+/* Depth card — fixed height for map */
+.depth-card { flex-shrink:0; }
+.depth-card .card-body { padding:4px 8px; min-height:120px; }
+
+/* Down camera card — fixed height */
+.down-card { flex-shrink:0; }
+.down-card .card-body { padding:4px 8px; min-height:130px; display:flex; align-items:center; justify-content:center; }
+
+/* Status card — fills remaining space */
+.status-card { flex:1; min-height:80px; }
 
 .card {
   background:var(--bg-secondary); border:1px solid var(--border);
@@ -169,3 +180,29 @@ body { font-family:var(--font); background:var(--bg-primary); color:var(--text-p
 
 
 .ph-muted { color:var(--text-muted); font-size:12px; font-style:italic; font-family:var(--font); }
+/* Down camera sub-view */
+.cam-sub {
+  height: 160px;
+  position: relative;
+  background: #111;
+  border-radius: 6px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.cam-sub img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+.cam-sub-label {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  background: rgba(0,0,0,0.6);
+  color: #8af;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  z-index: 2;
+}

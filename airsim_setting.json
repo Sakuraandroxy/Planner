@@ -1,0 +1,79 @@
+{
+    "SettingsVersion": 1.2,
+    "ClockSpeed": 1,
+    "SimMode": "Multirotor",
+    "CameraDefaults": {
+        "CaptureSettings": [
+            {
+                "ImageType": 0,
+                "FOV_Degrees": 90,
+                "Width": 1920,
+                "Height": 1080
+            },
+            {
+                "ImageType": 2,
+                "FOV_Degrees": 90,
+                "Width": 640,
+                "Height": 360
+            }
+        ]
+    },
+    "SeeDocsAt": "https://github.com/Microsoft/AirSim/blob/main/docs/settings.md",
+    "TargetFPS": 60
+}
+{
+    "SettingsVersion": 1.2,
+    "SimMode": "Multirotor",
+    "ClockSpeed": 5,
+    "Vehicles": {
+        "Drone_1": {
+            "VehicleType": "SimpleFlight",
+            "Cameras": {
+                "front_center": {
+                    "X": 1,
+                    "Y": 0,
+                    "Z": 0,
+                    "Pitch": 0,
+                    "Roll": 0,
+                    "Yaw": 0,
+                    "CaptureSettings": [
+                        {
+                            "ImageType": 0,
+                            "Width": 256,
+                            "Height": 256,
+                            "FOV_Degrees": 90
+                        },
+                        {
+                            "ImageType": 2,
+                            "Width": 256,
+                            "Height": 256,
+                            "FOV_Degrees": 90
+                        }
+                    ]
+                },
+                "down_center": {
+                    "X": 0,
+                    "Y": 0,
+                    "Z": 0,
+                    "Pitch": -90,
+                    "Roll": 0,
+                    "Yaw": 0,
+                    "CaptureSettings": [
+                        {
+                            "ImageType": 0,
+                            "Width": 256,
+                            "Height": 256,
+                            "FOV_Degrees": 90
+                        },
+                        {
+                            "ImageType": 2,
+                            "Width": 256,
+                            "Height": 256,
+                            "FOV_Degrees": 90
+                        }
+                    ]
+                }
+            }
+        }
+    }
+}

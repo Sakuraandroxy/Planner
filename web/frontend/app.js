@@ -1,6 +1,8 @@
 ﻿let state={version:0,status:"starting",task:"",step:0,max_steps:20,pose:[0,0,0],yaw:0,collided:false,reasoning:"",reasoning_summary:"",scene_analysis:"",candidates:[],selected:[],error:"",model_name:""};
 const camImg=document.getElementById("camImage");
 const camPh=document.getElementById("camPlaceholder");
+const downCamImg=document.getElementById("downCamImage");
+const downCamPh=document.getElementById("downCamPlaceholder");
 const sStep=document.getElementById("sStep");
 const sStatus=document.getElementById("sStatus");
 const sScene=document.getElementById("sScene");
@@ -19,6 +21,7 @@ function updateTask(){var v=taskInput.value.trim();if(!v)return;taskBtn.disabled
 taskInput.addEventListener("keydown",function(e){if(e.key==="Enter")updateTask()});
 function updateUI(s){
 if(s.frame_version>0){camImg.src="/frame?t="+s.frame_version;camImg.style.display="block";camPh.style.display="none"}
+if(s.down_frame_version>0){downCamImg.src="/down_frame?t="+s.down_frame_version;downCamImg.style.display="block";downCamPh.style.display="none"}
 if(s.depth_version>0){depthImg.src="/depth_frame?t="+s.depth_version}else if(depthPh){depthPh.textContent="depth waiting... bytes="+(s.depth_bytes||0)}
 sModel.textContent=s.model_name;
 if(!s.model_name)sModel.style.display="none";

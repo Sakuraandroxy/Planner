@@ -20,5 +20,13 @@ $PROFILE.txt
 # Logs / outputs
 *.log
 AVLN/*
+周报/*
+Fast-Planner/*
+legcy/*
+AirsimNH/*
+planner/*
+lora_example/*
+see-point-fly/*
+TravelUAV/*
 *.pdf
 *.doc

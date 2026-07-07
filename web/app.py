@@ -56,6 +56,14 @@ def create_app(state):
         return Response(png, mimetype="image/png",
                         headers={"Cache-Control": "no-cache"})
 
+    @app.route("/down_frame")
+    def down_frame():
+        png = state.get_down_frame()
+        if not png:
+            return "", 204
+        return Response(png, mimetype="image/png",
+                        headers={"Cache-Control": "no-cache"})
+
     @app.route("/events")
     def events():
         def gen():

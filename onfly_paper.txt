@@ -1,0 +1,870 @@
+OnFly: Onboard Zero-Shot Aerial Vision-Language Navigation
+toward Safety and Efficiency
+Guiyong Zheng1,2, Yueting Ban2, Mingjie Zhang3,2, Juepeng Zheng1, and Boyu Zhou2,†
+Abstract— Aerial vision-language navigation (AVLN) enables
+UAVs to follow natural-language instructions in complex 3D
+environments. However, existing zero-shot AVLN methods often
+suffer from unstable single-stream Vision-Language Model
+decision-making, unreliable long-horizon progress monitoring,
+and a trade-off between safety and efficiency. We propose
+OnFly, a fully onboard, real-time framework for zero-shot
+AVLN. OnFly adopts a shared-perception dual-agent architec-
+ture that decouples high-frequency target generation from low-
+frequency progress monitoring, thereby stabilizing decision-
+making. It further employs a hybrid keyframe-recent-frame
+memory to preserve global trajectory context while maintain-
+ing KV-cache prefix stability, enabling reliable long-horizon
+monitoring with termination and recovery signals. In addition,
+a semantic-geometric verifier refines VLM-predicted targets
+for instruction consistency and geometric safety using VLM
+features and depth cues, while a receding-horizon planner
+generates optimized collision-free trajectories under geometric
+safety constraints, improving both safety and efficiency. In
+simulation, OnFly improves task success from 26.4% to 67.8%,
+compared with the strongest state-of-the-art baseline, while
+fully onboard real-world flights validate its feasibility for real-
+time deployment. The code will be released at https://
+github.com/Robotics-STAR-Lab/OnFly
+I. INTRODUCTION
+Aerial vision-language navigation (AVLN) empowers
+UAVs to navigate complex 3D scenes following free-form
+natural-language instructions [1]–[5]. As a pivotal paradigm
+linking human intent understanding and autonomous UAV
+flight, AVLN has garnered extensive attention in academia
+and industry, with broad application prospects in intelligent
+inspection, emergency response and smart city management.
+Recently, powered by the strong generalization of vision-
+language models (VLMs), a series of zero-shot AVLN frame-
+works have emerged, greatly expanding the applicable sce-
+narios of AVLN systems in unseen open-world environments
+[1], [2], [6]–[8].
+Despite promising advances, zero-shot AVLN methods
+face several challenges impeding real-world deployment.
+First, the single-stream VLM decision paradigm suffers from
+critical disparate-frequency demand coupling and multi-
+objective misalignment, leading to inherent decision in-
+stability. Most approaches couple high-frequency real-time
+flight and low-frequency task progress monitoring into one
+† Corresponding Author
+1School of Artificial Intelligence, Sun Yat-Sen University, Zhuhai, China.
+2Southern University of Science and Technology, Shenzhen, China
+3The Hong Kong University of Science and Technology, Guangzhou,
+China.
+Email:
+zhouby@sustech.edu.cn
+Fig. 1.
+Real-world example of onboard language-guided UAV naviga-
+tion. The figure illustrates the UAV platform (left), the first-person onboard
+view (inset), and the executed flight trajectory (right).
+inference stream, which causes mutual interference, slows
+target output, and degrades overall performance [1], [7], [8].
+Second, traditional temporal memory designs for progress
+monitoring have critical flaws: sliding-window memory grad-
+ually loses global trajectory context as new observations
+are added, and frequent overwriting of early slots breaks
+KV-cache prefix stability [9], leading to low cache reuse
+rates, higher inference latency, and unreliable monitoring
+that triggers task failures. Lastly, flight safety and navigation
+efficiency present an unresolved contradiction. To mitigate
+risks from observation noise and environmental uncertainty,
+existing methods rely on conservative short-horizon actions
+via iterative inference, which avoids collisions but incurs se-
+vere stop-and-go behavior from long inference latency, dras-
+tically reducing efficiency [2], [6]. Conversely, aggressive
+long-range target prediction boosts efficiency by extending
+single-step flight scope [1]. However, the lack of systematic
+safety mechanisms makes UAVs prone to collisions.
+To tackle these intertwined challenges, we present OnFly,
+a fully onboard zero-shot real-time AVLN system with
+three targeted innovative designs that align with the above
+bottlenecks. First, we propose a shared-perception dual-agent
+architecture to decouple conflicting demands: the two agents
+share a Vision Transformer (ViT) backbone and cached vi-
+sual features to eliminate redundant computation, and main-
+tain independent KV-caches for their respective update rates,
+with a high-frequency decision agent generating real-time
+flight targets for responsiveness and a low-frequency mon-
+itoring agent tracking progress independently, avoiding in-
+ference interference and stabilizing overall decision-making.
+Second, we design a custom hybrid keyframe-recent-frame
+arXiv:2603.10682v1  [cs.RO]  11 Mar 2026
+Fig. 2.
+System pipeline of OnFly. OnFly is a fully onboard system for AVLN with dual-agent decision-making and hybrid memory-based progress
+monitoring. The task manager splits a long instruction into subtasks and outputs the current one. The dual-agent module predicts candidate goals and
+monitors progress from onboard observations, where the Hybrid Memory consists of the initial frame, keyframes, and the latest frame, to preserve global
+trajectory context and KV-cache prefix stability. Semantic–geometric verification and a safety-aware planner then generate an executable real-time trajectory.
+memory for the monitoring agent, which constructs memory
+with the initial frame, representative keyframes, and the latest
+real-time frame. It preserves global trajectory context and
+ensures KV-cache prefix stability via keyframe deduplication
+and serialization, enabling reliable long-horizon monitoring
+and accurate output of critical termination/recovery signals.
+Third, we integrate a semantic-geometric verifier with a
+receding-horizon local planner. The verifier validates and
+refines targets for instruction consistency and geometric
+safety via VLM feature matching and depth constraints.
+The planner leverages an ESDF map for obstacle avoidance
+and yaw regularization to generate optimized collision-free
+trajectories for verified long-range targets, achieving a robust
+balance between flight safety and navigation efficiency.
+We evaluate OnFly in simulation and fully onboard real-
+world flight scenarios. In simulation, OnFly improves task
+success from 26.4% to 67.8% over the strongest baseline,
+and real-world onboard experiments further validate its effi-
+ciency and flight safety. We will release our implementation
+to facilitate future research on deployable AVLN. Our con-
+tributions are summarized as follows:
+1) We propose OnFly, a fully onboard zero-shot real-
+time AVLN system with a shared-perception dual-
+agent architecture, which decouples conflicting high-
+and low-frequency decision demands and stabilizes
+overall decision-making.
+2) We design a hybrid keyframe–recent-frame memory
+for long-term progress monitoring, which preserves
+global trajectory context and ensures stable KV-cache
+usage for reliable long-horizon observation.
+3) We present a semantic–geometric verifier integrated
+with a receding-horizon local planner to refine safe tar-
+gets and generate optimized collision-free trajectories,
+balancing navigation efficiency and flight safety.
+4) We conduct extensive evaluations in simulation and
+real-world onboard flight experiments, with all mod-
+ules running onboard the UAV, and will release our
+code to support reproducible AVLN research.
+II. RELATED WORK
+A. Supervised Aerial Vision-Language Navigation
+Supervised AVLN has recently attracted growing attention.
+Most existing approaches follow training paradigms from
+ground-based VLN and rely on task-specific supervision
+(e.g., annotated trajectories or waypoint/action labels) to
+map “instruction–observation” inputs into executable deci-
+sions such as waypoints, trajectories, or actions [3]–[5],
+[10], [11]. Broadly, these methods can be grouped into
+several representative directions: one line focuses on dataset
+construction and supervision design to obtain more reliable
+training signals and improve navigation performance [4],
+[12]; another line introduces intermediate representations
+such as waypoints, structuring the decision process as “way-
+point prediction–trajectory completion/post-processing” to
+enhance trajectory coherence and execution stability [3], [5],
+[10]. Meanwhile, for complex outdoor environments, some
+studies further incorporate geometric cues such as depth to
+improve obstacle avoidance and environmental adaptability
+[13]. While these methods perform well on benchmarks, lim-
+ited task-data scale and scene coverage can reduce robustness
+under distribution shifts in open environments. Accordingly,
+researchers have begun to explore zero-shot AVLN with less
+reliance on task-specific supervision or fine-tuning.
+B. Zero-Shot Aerial Vision-Language Navigation
+With the continued advancement of VLMs and large
+language models (LLMs), zero-shot AVLN has attracted
+increasing attention in recent years [1], [2], [7]. Early zero-
+shot AVLN paradigms mainly relied on LLMs to parse
+navigation instructions and decide flight directions, and
+combined detectors [14] for target selection [6]; however,
+their performance is overly dependent on the generalization
+capability of detectors, which tends to fail when the detectors
+cannot adequately cover the target scenarios. Another subset
+of works drew on the waypoint prediction idea of ground-
+based VLN, compressing the solution space by enumerating
+waypoints on images and guiding VLMs to select waypoints
+on images to achieve flight [2], [8]. Such methods are overly
+reliant on the waypoint generation module, and inappropriate
+generation of waypoint candidates will constrain the model’s
+decision-making to an erroneous space, thereby limiting their
+ultimate performance. Recently, See, Point, Fly (SPF) [1]
+reformulates the AVLN task as grounding, where VLMs
+directly output 2D waypoints on the image and then lift them
+to 3D for execution.
+Although the above methods have advanced zero-shot
+AVLN, several common issues remain in real-world deploy-
+ment. First, many systems rely on cloud-based inference,
+making navigation sensitive to network fluctuations and
+response latency; this often disrupts control continuity and
+causes noticeable pauses [13]. Second, existing methods
+frequently lack explicit progress monitoring: while the sys-
+tem continuously outputs actions, it is difficult to timely
+determine whether the goal has been reached, whether it
+is drifting away from the instruction, or when to terminate
+or recover, which can lead to redundant actions or delayed
+termination. Finally, safety and efficiency are still hard to
+reconcile: one line of methods prioritizes safety via high-
+frequency short-horizon iterative decisions, which tends to
+induce stop-and-go behavior and reduce efficiency [2], [6];
+another line prioritizes efficiency by predicting longer-range
+targets, yet under noise and environmental uncertainty these
+targets are more likely to fall into high-risk regions, making
+safety difficult to guarantee [1].
+III. PROBLEM FORMULATION
+Given a natural-language instruction and online visual
+observations, the system should follow the instruction to
+reach the final goal safely and efficiently, and autonomously
+stop upon arrival. Formally, given a natural-language in-
+struction L, a first-person RGB-D camera mounted on the
+agent, and an odometer sensor that provides its displacement
+and attitude relative to the starting point, the agent receives
+multimodal observations Ot = {rgbt, deptht, poset}. The
+goal is to enable the system to reliably and efficiently execute
+the flight task specified by L fully onboard, autonomously
+determine task completion and trigger a termination signal
+upon reaching the final target, while strictly satisfying safety
+constraints (e.g., collision-free) and maintaining high effi-
+ciency throughout the flight.
+IV. METHODOLOGY
+Fig. 2 overviews our zero-shot onboard AVLN system.
+Given a long-horizon instruction L, Task Management de-
+composes it into a subtask queue and outputs the cur-
+rent subtask Li (Sec. IV-C). Conditioned on Ot and Li,
+a shared-perception Dual-Agent design separates high-rate
+goal proposing from low-rate progress monitoring (Sec. IV-
+A): the Decision Agent predicts an image-space target point
+and proposes candidate goals with a lightweight history-
+point cue (Sec. IV-A.1), while the Monitoring Agent tracks
+progress with a Hybrid Memory that preserves long-horizon
+trajectory context and supports prefix-stable KV-cache reuse,
+and gates execution via task-state signals (Sec. IV-A.2). Both
+agents share ViT features with separate KV-cache to reduce
+redundant computation (Sec. IV-A.3). Candidate goals are
+then passed to a local planning module with semantic–
+geometric verification, which refines instruction-consistent
+safe goals and generates executable trajectories (Sec. IV-B).
+A. Dual-Agent System
+Previous methods often couple high-frequency control de-
+cisions and low-frequency state/progress assessment within
+a single inference stream. Due to the mismatch in update
+rates, low-frequency analysis can block high-frequency target
+generation, leading to misalignment and unstable decisions.
+Moreover, because both demands share the same context and
+compute but pursue different goals, this coupling introduces
+objective conflicts and resource contention [15]. To address
+this, we adopt a dual-agent architecture that decouples the
+inference streams: a high-frequency decision agent outputs
+real-time flight targets, while a low-frequency monitoring
+agent tracks task progress and state.
+Decision Agent. We formulate decision-making as goal-
+point prediction: the VLM outputs a target point in the image
+coordinate system, which is then mapped to a 3D navigation
+goal used by the planning/control module. Compared to
+directly predicting discrete actions, this representation more
+naturally supports smooth and continuous motion [1].
+To maintain high-frequency inference efficiency and mit-
+igate the temporal “amnesia” of single-frame decision-
+making, we use a structured decision prompt Pdec for the
+Decision Agent (Fig. 2). The prompt defines the agent
+role, task context, and a strict output format, requiring the
+next waypoint to be returned as an integer (x, y) in image
+coordinates under basic execution constraints. We further
+augment Pdec with a lightweight history cue by reprojecting
+the previous 3D goal onto the current image and appending
+its 2D pixel coordinate as a history point, which incurs
+negligible overhead. The next waypoint is then predicted by
+the VLM conditioned on Pdec, the current subtask Li, and
+the observation Ot, i.e., (px, py) = VLM(Pdec, Li, Ot).
+We package the candidate goal as Gc =
+
+px, py, deptht,
+ft, poset
+
+, where deptht is the depth map at time t, ft
+denotes the cached ViT feature associated with the candidate
+(Sec. IV-A.3), and poset is the current pose from odometry.
+Gc is then passed to the downstream semantic–geometric
+verification module for further validation.
+Monitoring Agent with Hybrid Memory. The Monitoring
+Agent tracks the UAV’s task-stage progress and outputs task-
+status signals given the current sub-instruction Li and a
+compact monitoring memory Mt. We condition the VLM
+on a monitoring prompt Pmon. The prompt specifies the
+agent role and subtask context, enumerates completion and
+failure criteria (e.g., goal reached / target lost), and con-
+strains the output to a forced-choice selection over a fixed
+status set. The overall framework is illustrated in Fig. 2.
+Formally, we model monitoring as a low-frequency state
+classifier, where st
+=
+VLM(Pmon, Li, Mt) and st
+∈
+{CONTINUE, STOP, LOST}. Here, CONTINUE maintains
+normal execution of the current subtask, STOP marks com-
+pletion of the current subtask and terminates the episode if
+it is the last subtask, and LOST indicates that the agent is
+likely off-track or has lost the target, in which case the UAV
+first stops and then reorients to the heading of the last normal
+point for recovery.
+To make monitoring stable for long-horizon tasks while
+remaining efficient, Mt should both preserve global context
+and enable effective decoder KV-cache reuse [9]. We there-
+fore design a Hybrid Memory scheme to construct Mt.
+Hybrid Memory. Prior work often uses a sliding-window
+memory that keeps the latest N observations. While simple,
+it gradually loses global context and reduces KV-cache reuse.
+KV-cache reuse benefits from keeping the leading part of the
+input (the input prefix, e.g., prompt + early memory slots)
+identical across steps; however, a sliding window overwrites
+early memory slots, destabilizing the input prefix (lower
+cache hit rates and higher latency) and potentially reducing
+success when new observations overwrite long-horizon cues.
+To address this, we adopt a “first-frame + keyframe + latest-
+frame” Hybrid Memory. Let ot ≜(rgbt, deptht) denote
+the visual observation. We maintain a keyframe candidate
+pool Ut and construct an ordered keyframe list Qt with
+prefix-stable prompting. We then form the Hybrid Memory
+as Mt = [ o1, Qt, ot ], where o1 is the initial frame and
+ot is the latest frame (see Fig. 3 for an overview). The
+construction consists of three steps: keyframe maintenance,
+keyframe selection, and prefix-stable serialization.
+1) Keyframe maintenance. At each step t, we generate a
+set of new keyframe candidates Ct based on accumulated
+translation/rotation thresholds, and remove near-duplicates
+within the set under a threshold ϵ via Cnew
+t
+= Dedup(Ct, ϵ),
+where similarity is computed as cosine distance on cached
+ViT features. We then merge Cnew
+t
+into the pool with de-
+duplication against Ut−1: for each k ∈Cnew
+t
+, we first restrict
+the search to the L nearest pool items by geometric distance
+and then find the most similar entry u ∈Ut−1 under the
+same feature similarity metric; if the distance is below ϵ,
+we treat it as a duplicate and keep the existing pool entry
+unchanged; otherwise, we append k as a new pool item.
+Formally, Ut = Merge(Ut−1, Cnew
+t
+, ϵ).
+2) Keyframe selection. To keep keyframes stable over time
+Fig. 3.
+Hybrid Memory construction. The monitoring memory is built
+from the initial frame, selected keyframes, and the latest frame. It maintains
+a de-duplicated keyframe pool, selects representative keyframes for global
+coverage, and serializes them in a prefix-stable order for KV-cache reuse.
+while maintaining global coverage, we partition the traversed
+distance [0, Dt] into S equal-length segments (S is fixed) and
+assign each pool item in Ut to a segment by its odometry
+distance. We select a segment winner for each segment using
+a sticky rule: we reuse the previous winner if it remains in the
+same segment; otherwise, we re-select the candidate closest
+to the segment center, with tie-breaking that favors recently
+updated entries. If a segment is empty, we fill the missing
+slot during serialization to keep |Qt| = S fixed.
+3) Prefix-stable serialization. To enable KV-cache reuse,
+we keep the leading part of the input as stable as possible
+across steps. Given the per-segment winners, we construct
+an ordered keyframe list Qt (length S) by (i) preserving
+the longest valid prefix of Qt−1, (ii) appending the current
+winners with de-duplication, and (iii) filling remaining slots
+with unused recent pool items (e.g., when some segments
+are empty or winners are duplicated). We then sort Qt
+chronologically before input, yielding Mt = [ o1, Qt, ot ].
+Dual-Agent Coordination. The two agents share a single
+perception backbone and reuse cached ViT features, avoid-
+ing duplicate visual encoding. Their inference contexts are
+decoupled: each agent uses its own prompt/memory and
+maintains a separate KV-cache to match its input structure
+and update rate. The Monitoring Agent runs asynchronously
+at a lower frequency and outputs a signal st that modulates
+execution. The Decision Agent runs at high frequency to
+produce real-time goal points from the observation.
+B. Semantic-Geometric Verified Local Planning
+Since the VLM-predicted target primarily conveys seman-
+tic intent and does not guarantee geometric feasibility, it may
+fall on obstacles or other non-traversable regions. Moreover,
+a purely geometric correction to enforce traversability can
+still violate the instruction’s semantics. To address this,
+we introduce a semantic–geometric verifier that refines the
+2D target into a traversable, instruction-consistent goal. A
+receding-horizon local planner then optimizes a dynamically
+Fig. 4.
+Simulation environments for benchmarking. (a) Examples of the 10 high-fidelity Unreal Engine scenes, covering diverse indoor and outdoor
+settings. (b) Task composition of the benchmark, including object navigation, precise navigation, and long-range navigation.
+feasible, collision-free trajectory toward this goal.
+Semantic-Geometric Verified Local Planning. We ver-
+ify and refine the VLM-predicted target in two steps: (1)
+semantic-guided target refinement to correct local misplace-
+ment while staying within a semantically consistent region,
+and (2) bearing-aware geometric gating to avoid aggressive
+forward motion when the target lies near the image boundary.
+1) Semantic-guided target refinement. Given Gc
+=
+
+px, py, deptht, ft, poset
+
+, we refine the image target p =
+(px, py) to a semantically consistent and depth-feasible pixel
+p′. Let d = deptht(p). If d > Dmax, we skip local
+refinement since depth and feature similarity are less reliable
+at long range (i.e., p′ = p); otherwise, we reuse ft and
+compute a similarity mask Mp within a local ROI around
+p:
+Mp = {q ∈ROI(p) | sim(ft(q), ft(p)) ≥τ} .
+(1)
+Since Mp may contain multiple disjoint clusters within the
+ROI, we treat it as a binary mask and partition it into
+connected regions; we keep only the region that contains
+the original target pixel p: Cp = CC(Mp, p). We then
+search within Cp for the nearest pixel that passes a depth-
+clearance check. Let St denote the set of depth-feasible
+pixels at time t. We denote the selected pixel as p′ =
+arg minq∈Cp∩St ∥q−p∥2. We implement St by thresholding
+deptht to obtain an obstacle mask and then dilating it with
+radius r to enforce clearance; pixels outside the dilated
+obstacle mask are marked feasible. We denote the effective
+depth at the refined target as d′ = min(deptht(p′), Dmax).
+2) Bearing-aware geometric gating. When the predicted
+target falls near the image boundary, it typically corresponds
+to a large viewing bearing, suggesting that the robot should
+first reduce the bearing (i.e., turn) rather than keep moving
+forward. If we directly use its depth as a long-range 3D
+navigation goal, the planner may produce excessive forward
+progress while the yaw is still misaligned with the target
+bearing, causing the trajectory to deviate from the intended
+path. Let u′ = [p′
+x, p′
+y, 1]⊤be the refined pixel in homoge-
+neous form, and define the bearing as θ = arctan
+
+p′
+x−cx
+fx
+
+,
+where fx and cx are the horizontal focal length and principal
+point of K. Let θmax denote the half horizontal field-of-
+view (e.g., θmax = FOVx/2). We then compute the gated
+forward range as df
+= d′ exp
+
+−1
+2
+
+θ
+σθθmax
+2
+, where
+σθ controls how quickly the range decays with increasing
+|θ|. The corresponding 3D target in the camera frame is
+Xcamera = dfK−1u′. Finally, we transform it to the odometry
+frame using the odometry pose T to obtain the navigation
+goal Gp for the downstream local planner.
+Local Planner. After obtaining the 3D navigation goal Gp,
+we adopt Fast Planner [16] to generate a short-horizon
+local path. The system maintains a local ESDF map for
+obstacle avoidance and enforces UAV dynamic constraints
+to ensure trajectory executability. In addition, we regularize
+yaw to align with the goal bearing during obstacle avoidance
+(instead of the tangential heading). Specifically, let ψt denote
+the UAV yaw, let (xt, yt) denote the current UAV position in
+the odometry frame, and let ψg = atan2(Gp,y −yt, Gp,x −
+xt) denote the goal bearing in the odometry frame. We add
+a yaw penalty Jψ = λψ
+wrap(ψt −ψg)
+2, where wrap(·)
+maps angles to (−π, π].
+C. Task Management
+We maintain a Task Manager that manages a queue of
+subtasks. Given an instruction L, it decomposes the instruc-
+tion into a sequence of subtasks {L0, L1, . . . , Ln} using the
+onboard VLM as a one-time computation upon instruction
+arrival. Once the Task Manager receives a stable STOP
+signal from the Monitoring Agent for the current subtask,
+it advances to the next subtask Li+1 and repeats this process
+until all subtasks are completed.
+D. Deployment
+We deploy the VLM on Jetson Orin NX and accelerate
+onboard inference with TensorRT [17]. We further apply
+AWQ quantization to the LLM for efficiency, while keeping
+the ViT in FP16 to preserve visual accuracy, cache visual
+features to avoid rerunning the vision encoder when the same
+image is referenced repeatedly, reuse the LLM’s KV-cache to
+reduce redundant attention computation during long-context
+generation, and use CUDA Graphs to reduce kernel-launch
+overhead during decoding. Together, these optimizations
+minimize workload and enable efficient multi-image, long-
+context inference on resource-constrained edge hardware.
+Fig. 5.
+Simulation visualizations. Each row shows a navigation episode, with the language instruction at the top and representative first-person UAV
+keyframes along the trajectory.
+V. EXPERIMENTS
+A. Simulation Experimental Setup
+Simulation Environments. We constructed 10 high-
+fidelity 3D scenes in UE 4.27 [18] (e.g., urban blocks,
+factories, villas, and duplex buildings) to evaluate AVLN
+in complex environments. The benchmark contains 150
+tasks spanning object, precise, and long-range navigation
+(40%, 40%, and 20%). Object navigation requires reaching
+a specified target, precise navigation requires semantically
+grounded fine positioning (e.g., the pool edge), and long-
+range navigation spans multiple areas. Real trajectories were
+collected from the first-person view of professional pilots.
+Task descriptions were generated from paired images using
+Qwen3-VL-235B-A22B [19] and manually verified. Environ-
+ment examples and task composition are shown in Fig. 4.
+Metrics. Following prior work [1], [13], we adopt four
+commonly used metrics: Success Rate (SR), Oracle Success
+Rate (OSR), Collision Rate (CR), and Flight Time (FT). We
+terminate an episode once a collision occurs.
+• SR: Success if the UAV stops within a predefined
+threshold distance to the goal region without collision.
+• OSR: Success if the UAV reaches goal region at least
+once along its flight trajectory.
+• CR: Whether the UAV collides during the task.
+• FT: Total flight time from takeoff to task completion.
+Baselines. We compare our system with three representa-
+tive zero-shot AVLN methods: TypeFly [6], which leverages
+an LLM to generate high-level plans, obtains perception cues
+via an object detector, and invokes UAV skills for language-
+guided flight; PIVOT [2], which performs iterative visual
+prompting by overlaying candidate actions and querying a
+VLM to select the best option in a closed-loop manner; and
+See, Point, Fly (SPF) [1], a training-free VLM framework
+that formulates action prediction as 2D waypoint grounding
+on the image and converts the grounded waypoints into UAV
+motion commands.
+Implementation Details. We use a simulated UAV in Air-
+Sim equipped with a forward-facing camera (FOV: 90°×60°,
+720p). The UAV dynamics are constrained by a maximum
+velocity vm = 0.6 m/s, maximum acceleration am = 0.6
+m/s2, and maximum yaw rate ωm = 0.4 rad/s. Following
+common practice, we set the maximum depth to Dmax =
+7 m. The Monitoring Agent runs once every 2 s. For Hybrid
+Memory, we set the keyframe budget to S = 4. In semantic–
+geometric verification, we use a similarity threshold τ = 0.5
+and dilate the obstacle mask with radius r = 0.2 to enforce
+clearance. For a fair comparison, we use the same VLM,
+Qwen3-VL-4B-AWQ [19], for inference across all methods.
+For TypeFly, we adopt YOLOE [20] as the object detector to
+provide perception cues. To support a unified deployment and
+evaluation protocol, we add lightweight stopping interfaces
+to baselines without native stop signals (e.g., a stop skill for
+TypeFly and zero-depth output for SPF). These adaptations
+only standardize episode termination and do not alter the
+baselines’ core decision logic. All experiments are conducted
+on the same machine with an Intel Core i9-13900K, an
+NVIDIA GeForce RTX 4090 GPU, and 64 GB RAM.
+TABLE I. Zero-shot AVLN Benchmark Results.
+Method
+SR (%) ↑
+OSR (%) ↑
+CR (%) ↓
+FT (s) ↓
+TypeFly [6]
+5.7
+17.5
+66.5
+35.4
+PIVOT [2]
+10.3
+44.2
+64.1
+32.9
+SPF [1]
+26.4
+61.5
+42.7
+39.2
+Ours
+67.8
+78.1
+2.7
+27.1
+TABLE II. Obstacle-Avoidance Planner Control Study.
+Method
+SR (%) ↑
+OSR (%) ↑
+CR (%) ↓
+FT (s) ↓
+SPF w/ planner
+43.2
+80.3
+4.7
+50.2
+Ours
+67.8
+78.1
+2.7
+27.1
+Following prior work, the SR threshold is set to 5 m. Each
+episode has a 70 s time limit and is executed three times.
+We report the average results.
+B. Comparison with State-of-the-art
+We compare our method with three SOTA zero-shot AVLN
+baselines (TypeFly, PIVOT, and SPF) under the same sim-
+ulation setup. As shown in Table I, our system achieves a
+better balance of success, safety, and efficiency in terms of
+SR, OSR, CR, and FT. Qualitative results of our method
+in simulation are shown in Fig. 5. Specifically, Table I
+shows that the selected baselines exhibit markedly different
+performance from our proposed system. TypeFly relies on
+detector-provided visual cues and an LLM to invoke UAV
+skills; however, its performance is brittle to missed detec-
+tions, which can quickly degrade planning and execution,
+leading to low success and a high collision rate. PIVOT
+iteratively overlays candidate actions and asks a VLM to
+choose among them, but this indirect use of the VLM limits
+its ability to fully exploit instruction understanding and visual
+reasoning, resulting in limited success, frequent collisions,
+and reduced efficiency. By contrast, our Decision Agent
+directly predicts navigation goals, maximizing the utility of
+the VLM while stabilizing decision-making. SPF performs
+relatively better overall, yet it still suffers from collisions and
+prolonged execution (e.g., the longest flight time), suggesting
+inefficiencies and possibly delayed termination.
+Planner-Controlled Study. To rule out collision-induced
+failures, we further evaluate SPF with an obstacle-avoidance
+planner (“SPF w/ planner”). Table II shows that this greatly
+reduces CR and improves OSR and SR. However, its SR
+remains substantially below ours, likely due to delayed
+stopping caused by imperfect progress estimation. The added
+detours also increase travel distance and time, which im-
+proves OSR but leads to longer FT.
+Overall, our dual-agent design decouples real-time control
+from global monitoring, and our semantic-geometric verifica-
+tion and safety-aware planning enables timely stopping and
+safer, more efficient navigation, achieving higher SR/OSR,
+lower CR, and shorter FT than all baselines.
+C. Ablation Study
+We conduct three ablation experiments: architecture-level
+module removal, memory design comparison, and VLM-
+backbone scaling, with results summarized in Table III.
+TABLE III. Ablation Study Results.
+Setting
+SR (%) ↑
+OSR (%) ↑
+CR (%) ↓
+FT (s) ↓
+Architecture Ablation
+Ours
+67.8
+78.1
+2.7
+27.1
+w/o Dual Agent
+48.6
+77.9
+2.9
+44.1
+w/o Verification
+63.7
+72.6
+3.2
+28.3
+w/o Planner
+35.8
+69.4
+37.5
+32.2
+Memory Ablation
+Time Sampling
+64.2
+78.4
+2.9
+27.4
+Sliding Windows
+60.4
+79.5
+2.8
+28.3
+Hybrid Memory
+67.8
+78.1
+2.7
+27.1
+VLM Backbone Ablation
+Qwen3-VL-2B
+43.4
+53.6
+2.6
+23.7
+Qwen3-VL-4B
+67.8
+78.1
+2.7
+27.1
+Qwen3-VL-30B-A3B
+71.8
+84.0
+2.5
+29.2
+TABLE IV. Onboard Latency Breakdown on Jetson Orin NX.
+Strategy
+Decision
+Monitoring
+Cost (s) ↓
+Spd. ↑
+Cost (s) ↓
+Spd. ↑
+Baseline
+3.83
+1.00×
+7.47
+1.00×
+Edge-Deploy
+0.81
+4.73×
+1.98
+3.77×
+w/ Hybrid Memory
+0.81
+4.73×
+1.15
+6.50×
+Architecture Ablation Study. We ablate OnFly by re-
+moving Dual Agent (w/o Dual Agent), Verification (w/o
+Verification), and Planner (w/o Planner), as shown in Ta-
+ble III. Removing the Dual Agent significantly reduces SR
+and increases FT, showing that decoupling high-rate target
+generation from low-rate progress monitoring is crucial for
+stable and efficient decision-making. Disabling Verification
+decreases SR/OSR, confirming its role in correcting seman-
+tically inconsistent or geometrically infeasible VLM targets
+under noise and depth errors. Removing the Planner sharply
+raises CR and reduces SR, showing ESDF-based receding-
+horizon planning is essential for collision-free execution.
+Memory Ablation Study. We compare time sampling,
+sliding windows, and hybrid memory, as shown in Table III.
+Hybrid memory achieves the best SR and FT with the lowest
+CR, indicating the best overall trade-off. Compared with
+sliding windows, it better preserves long-horizon context for
+final task completion. Although sliding windows and time
+sampling obtain slightly higher OSR, both more often fail to
+stop at the correct time, resulting in lower SR. Table IV fur-
+ther shows that hybrid memory reduces monitoring latency
+through more efficient KV-cache reuse.
+VLM Backbone Ablation Study. We replace the VLM
+backbone with Qwen3-VL-2B/4B/30B-A3B [19] while keep-
+ing the rest of OnFly unchanged. As shown in Table III,
+stronger backbones consistently improve SR/OSR with simi-
+lar CR, but may incur higher runtime cost. The 2B model also
+exhibits more premature stopping and less stable behavior.
+These results demonstrate that OnFly scales effectively with
+model capability.
+D. Real-World Experiments
+To evaluate real-world deployability, we conduct flight
+experiments on a custom quadrotor platform. We use the
+same speed constraint, parameter settings, and model con-
+figuration as in simulation. The platform integrates a Jetson
+Fig. 6.
+Real-world flight experiments with language instructions. Each row corresponds to one task. The middle panel shows the executed 3D trajectory,
+and the right panel presents representative first-person RGB snapshots, with the corresponding language instruction shown on the left. The tasks include
+pedestrian tracking along a roughly circular route, long-range corridor navigation with sparse landmarks, precise outdoor navigation across a stepped lawn
+edge, and multi-level navigation with obstacle avoidance to reach a second-floor platform and stop near the specified person. Additional results are provided
+in the supplementary video.
+Orin NX (16GB), a Mid360 LiDAR for state estimation, and
+a D435 camera for 640×480 RGB-D input. The quadrotor
+is controlled by PX4, as shown in Fig. 1. We evaluate
+the system on four real-world tasks (Fig. 6): (i) pedestrian
+tracking along an approximately circular route; (ii) long-
+range corridor navigation to a specified target; (iii) outdoor
+precise navigation across a stepped lawn edge to a designated
+stopping point; and (iv) object navigation with obstacle
+avoidance, where the UAV flies to a second-floor platform,
+passes over a railing, and stops near a specified person. More
+results are provided in the supplementary video.
+E. Onboard Efficiency
+Table IV reports per-step latency on Jetson Orin NX.
+Compared with a standard Transformers-based implementa-
+tion [21], our deployment reduces both decision and mon-
+itoring latency, and Hybrid Memory further speeds up the
+monitoring branch. These results support the feasibility of
+fully onboard execution.
+VI. CONCLUSION
+We presented OnFly, a fully onboard real-time zero-shot
+AVLN system for unknown 3D environments. OnFly decou-
+ples high-frequency goal generation from low-frequency task
+monitoring through a shared-perception dual-agent design,
+and uses Hybrid Memory to support stable and efficient
+long-horizon progress assessment. We further introduced
+semantic–geometric verification and local replanning to re-
+fine VLM-predicted goals into executable and collision-safe
+trajectories. Experiments in simulation and fully onboard
+real-world flights demonstrated that OnFly improves task
+success, safety, and navigation efficiency over prior zero-
+shot AVLN baselines. These results suggest that combining
+decoupled decision-making, long-horizon monitoring, and
+safety-aware planning is a promising direction for deployable
+AVLN. Future work will focus on extending the system to
+longer-horizon, more challenging open-world tasks. Mean-
+while, we will leverage advanced optimization techniques
+and higher-performance hardware to further improve infer-
+ence speed and achieve more robust, responsive instruction
+following.
+REFERENCES
+[1] C. Y. Hu, Y.-S. Lin, Y. Lee, C.-H. Su, J.-Y. Lee, S.-R. Tsai, C.-Y. Lin,
+K.-W. Chen, T.-W. Ke, and Y.-L. Liu, “See, point, fly: A learning-
+free vlm framework for universal unmanned aerial navigation,” in
+Conference on Robot Learning.
+PMLR, 2025, pp. 4697–4708.
+[2] S. Nasiriany, F. Xia, W. Yu, T. Xiao, J. Liang, I. Dasgupta,
+A. Xie, D. Driess, A. Wahid, Z. Xu, et al., “Pivot: Iterative visual
+prompting elicits actionable knowledge for vlms,” arXiv preprint
+arXiv:2402.07872, 2024.
+[3] Y. Gao, C. Li, Z. You, J. Liu, Z. Li, P. Chen, Q. Chen, Z. Tang,
+L. Wang, P. Yang, et al., “Openfly: A comprehensive platform for
+aerial vision-language navigation,” arXiv preprint arXiv:2502.18041,
+2025.
+[4] S. Liu, H. Zhang, Y. Qi, P. Wang, Y. Zhang, and Q. Wu, “Aeri-
+alvln: Vision-and-language navigation for uavs,” in Proceedings of
+the IEEE/CVF International Conference on Computer Vision, 2023,
+pp. 15 384–15 394.
+[5] O. Sautenkov, Y. Yaqoot, A. Lykov, M. A. Mustafa, G. Tadevosyan,
+A. Akhmetkazy, M. A. Cabrera, M. Martynov, S. Karaf, and D. Tset-
+serukou, “Uav-vla: Vision-language-action system for large scale aerial
+mission generation,” in 2025 20th ACM/IEEE International Confer-
+ence on Human-Robot Interaction (HRI).
+IEEE, 2025, pp. 1588–
+1592.
+[6] G. Chen, X. Yu, N. Ling, and L. Zhong, “Typefly: Flying drones with
+large language model,” arXiv preprint arXiv:2312.14950, 2023.
+[7] A. Lykov, V. Serpiva, M. H. Khan, O. Sautenkov, A. Myshlyaev,
+G. Tadevosyan, Y. Yaqoot, and D. Tsetserukou, “Cognitivedrone: A vla
+model and evaluation benchmark for real-time cognitive task solving
+and reasoning in uavs,” arXiv preprint arXiv:2503.01378, 2025.
+[8] X. Zhang, Y. Tian, F. Lin, Y. Liu, J. Ma, K. S. Szatm´ary,
+and F.-Y. Wang, “Logisticsvln: Vision-language navigation for low-
+altitude terminal delivery based on agentic uavs,” arXiv preprint
+arXiv:2505.03460, 2025.
+[9] L. Shi, H. Zhang, Y. Yao, Z. Li, and H. Zhao, “Keep the cost down:
+A review on methods to optimize llm’s kv-cache consumption,” arXiv
+preprint arXiv:2407.18003, 2024.
+[10] X. Wang, D. Yang, Y. Liao, W. Zheng, B. Dai, H. Li, S. Liu, et al.,
+“Uav-flow colosseo: A real-world benchmark for flying-on-a-word uav
+imitation learning,” arXiv preprint arXiv:2505.15725, 2025.
+[11] X. Wang, D. Yang, Z. Wang, H. Kwan, J. Chen, W. Wu, H. Li,
+Y. Liao, and S. Liu, “Towards realistic uav vision-language nav-
+igation: Platform, benchmark, and methodology,” arXiv preprint
+arXiv:2410.07087, 2024.
+[12] J. Lee, T. Miyanishi, S. Kurita, K. Sakamoto, D. Azuma, Y. Matsuo,
+and N. Inoue, “Citynav: Language-goal aerial navigation dataset using
+geographic information,” 2024.
+[13] X. Sun, W. Si, W. Ni, Y. Li, D. Wu, F. Xie, R. Guan, H.-Y. Xu,
+H. Ding, Y. Wu, et al., “Autofly: Vision-language-action model for uav
+autonomous navigation in the wild,” arXiv preprint arXiv:2602.09657,
+2026.
+[14] S. Liu, Z. Zeng, T. Ren, F. Li, H. Zhang, J. Yang, Q. Jiang, C. Li,
+J. Yang, H. Su, et al., “Grounding dino: Marrying dino with grounded
+pre-training for open-set object detection,” in European conference on
+computer vision.
+Springer, 2024, pp. 38–55.
+[15] Y. Kim, K. Gu, C. Park, C. Park, S. Schmidgall, A. A. Heydari, Y. Yan,
+Z. Zhang, Y. Zhuang, M. Malhotra, et al., “Towards a science of
+scaling agent systems,” arXiv preprint arXiv:2512.08296, 2025.
+[16] B. Zhou, F. Gao, L. Wang, C. Liu, and S. Shen, “Robust and efficient
+quadrotor trajectory generation for fast autonomous flight,” IEEE
+Robotics and Automation Letters, vol. 4, no. 4, pp. 3529–3536, 2019.
+[17] NVIDIA, “TensorRT,” https://github.com/NVIDIA/TensorRT, 2026,
+gitHub repository.
+[18] Epic Games, “Unreal engine,” [Online]. Available: https://www.
+unrealengine.com/en-US, 2025, accessed: 2026-02-24.
+[19] S. Bai, Y. Cai, R. Chen, K. Chen, X. Chen, Z. Cheng, L. Deng,
+W. Ding, C. Gao, C. Ge, et al., “Qwen3-vl technical report,” arXiv
+preprint arXiv:2511.21631, 2025.
+[20] A. Wang, L. Liu, H. Chen, Z. Lin, J. Han, and G. Ding, “Yoloe: Real-
+time seeing anything,” in Proceedings of the IEEE/CVF International
+Conference on Computer Vision, 2025, pp. 24 591–24 602.
+[21] T. Wolf, L. Debut, V. Sanh, J. Chaumond, C. Delangue, A. Moi,
+P. Cistac, T. Rault, R. Louf, M. Funtowicz, et al., “Transformers:
+State-of-the-art natural language processing,” in Proceedings of the
+2020 conference on empirical methods in natural language processing:
+system demonstrations, 2020, pp. 38–45.
