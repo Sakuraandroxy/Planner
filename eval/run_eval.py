@@ -190,12 +190,17 @@ def evaluate(episodes: List[Dict], scene_filter: str = None,
                     detection.bbox, 0, front_rgb.size
                 )
 
-            # 停止判断
-            if detection.visible and detection.depth_median is not None:
-                if detection.depth_median < cfg["AGENT"]["STOP_DEPTH_THRESHOLD"]:
-                    print(f"  [Done] depth={detection.depth_median:.1f}m < threshold")
-                    task_done = True
-                    break
+            # 停止判断：用 GT 世界坐标距离（与 3DG-VLN 一致）
+            pos = client.get_pose()[0]
+            dist_to_gt = math.sqrt(
+                (pos[0] - ep["target"][0]) ** 2 +
+                (pos[1] - ep["target"][1]) ** 2 +
+                (pos[2] - ep["target"][2]) ** 2
+            )
+            if dist_to_gt < SUCCESS_RADIUS:
+                print(f"  [Done] world_dist={dist_to_gt:.1f}m < {SUCCESS_RADIUS}m")
+                task_done = True
+                break
 
             # 规划
             result = planner.plan(

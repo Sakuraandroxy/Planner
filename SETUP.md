@@ -89,6 +89,17 @@ Flask>=3.0.0
 
 > 如 `requirements.txt` 缺少 `scipy` 或 `PyYAML`：`pip install scipy PyYAML`
 
+#### 已知坑：下视图 RGBA→JPEG 崩溃
+
+如果运行时遇到 `OSError: cannot write mode RGBA as JPEG`，说明 `agent/common/image_encoder.py` 的 `encode_down()` 方法缺少 RGBA→RGB 转换。修复方式：在 `encode_down()` 的第 52 行 `buf = BytesIO()` 之前加两行：
+
+```python
+if down_frame.mode == "RGBA":
+    down_frame = down_frame.convert("RGB")
+```
+
+> 此 bug 已在最新代码中修复。如 clone 后仍遇到，按上述手动添加即可。
+
 ## 1.2 AirSim settings.json
 
 路径：`C:\Users\<用户名>\Documents\AirSim\settings.json`
@@ -150,13 +161,13 @@ pip install -e .
 pip install Flask opencv-python supervision pycocotools timm addict yapf
 ```
 
-## 2.2 权重
+## 2.2 GroundingDINO 权重
 
 ```bash
-# 下载 GroundingDINO 预训练权重到 weights/ 目录
 mkdir -p /data/sakura/models/GroundingDINO/weights
 cd /data/sakura/models/GroundingDINO/weights
-wget https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth
+# 从 HuggingFace 下载（推荐）
+wget https://huggingface.co/ShilongLiu/GroundingDINO/resolve/main/groundingdino_swint_ogc.pth
 ```
 
 ## 2.3 启动服务
@@ -255,6 +266,9 @@ python -c "import deepspeed; print(f'deepspeed {deepspeed.__version__} OK')"
 ```
 
 ## 4.2 数据准备
+
+> 数据集通过百度网盘下载：`https://pan.baidu.com/s/1slWa79ZdNIHid_fwqyhdxA` 提取码 `ymav`
+> 详见第七部分 7.2 节。
 
 ```bash
 conda activate llama-factory
@@ -485,10 +499,8 @@ AGENT:
 conda activate airsim
 cd E:\uni-lavira-code-main
 
-# 下载数据集
-pip install huggingface_hub
-export HF_ENDPOINT=https://hf-mirror.com
-hf download wangxiangyu0814/UAV-VLN-FOV --local-dir E:\UAV-VLN-FOV
+# 数据集通过百度网盘下载（见 7.2 节），放到 E:\UAV-VLN-FOV
+# 链接: https://pan.baidu.com/s/1slWa79ZdNIHid_fwqyhdxA  提取码: ymav
 
 # 跑评测
 python eval/openloop_eval.py --dataset E:\UAV-VLN-FOV\test
@@ -502,14 +514,45 @@ python eval/openloop_eval.py --dataset E:\UAV-VLN-FOV\unscene
 
 > 需要 TravelUAV 仿真环境（UE4+AirSim）。每步实时渲染。
 
-### 下载环境
+### 下载数据集
+
+> **UAV-VLN-FOV 数据集来自 3DG-VLN，仅提供百度网盘下载。**
+> 链接: `https://pan.baidu.com/s/1slWa79ZdNIHid_fwqyhdxA`  提取码: `ymav`
+
+下载解压后按以下结构放置：
 
 ```bash
-# 服务器上
-conda activate vlm   # 或任意环境，只是下载不需要 GPU
+# 服务器端（评测 + 微调都需要）
+mkdir -p /data/sakura/data/UAV-VLN-FOV
+# 将解压后的 train/ test/ unobject/ unscene/ meta/ 移入
+
+# 笔记本端（如果做开环评测）
+mkdir -p E:\UAV-VLN-FOV
+# 同样移入解压后的所有目录
+```
+
+目录结构：
+
+```
+UAV-VLN-FOV/
+├── train/          # 2228条, 训练用
+├── test/           # 152条, Seen 场景评测
+├── unobject/       # 164条, Unseen Object 评测
+├── unscene/        # 173条, Unseen Map 评测
+└── meta/           # instructions.json, map_spawnarea_info.json
+```
+
+### 下载 3DG-VLN 预训练权重（可选，微调基座）
+
+> 百度网盘: `https://pan.baidu.com/s/11lLcRczubWA01-33xhbK5A`  提取码: `sasg`
+> 或者直接用 HuggingFace 上的 Qwen2.5-VL-7B-Instruct 作为基座模型（见 3.2 节）。
+
+### 下载仿真环境
+
+```bash
+# 服务器上（来自 TravelUAV 项目的 HF 仓库）
 export HF_ENDPOINT=https://hf-mirror.com
 hf download wangxiangyu0814/TravelUAV_env --local-dir /data/sakura/data/TravelUAV_env
-hf download wangxiangyu0814/UAV-VLN-FOV --local-dir /data/sakura/data/UAV-VLN-FOV
 ```
 
 ### 运行

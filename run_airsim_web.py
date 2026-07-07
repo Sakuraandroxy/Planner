@@ -284,7 +284,46 @@ def main_loop(state, initial_task="", max_steps=999, client=None, capturer=None)
 
             state.update(step=step, status="capturing", error="")
 
-            # ── 1. 抓帧（前视 + 下视 + 深度，一次 RPC）──
+            # === 0.9 action 阶段直接执行，不调用 VLM ===
+            if current_stage and current_stage.mode == "action":
+                act = current_stage.action
+                val = current_stage.value or 0
+                print(f"  [Action] direct execution: {act} {val}")
+                pos_before, yaw_before = client.get_pose()
+                try:
+                    if act in ("left", "right"):
+                        sign = 1 if act == "right" else -1
+                        client.rotate_to_yaw(yaw_before + sign * val)
+                    elif act == "forward":
+                        rad = math.radians(yaw_before)
+                        client.move_to_position(
+                            pos_before[0] + val * math.cos(rad),
+                            pos_before[1] + val * math.sin(rad),
+                            pos_before[2])
+                    elif act == "backward":
+                        rad = math.radians(yaw_before)
+                        client.move_to_position(
+                            pos_before[0] - val * math.cos(rad),
+                            pos_before[1] - val * math.sin(rad),
+                            pos_before[2])
+                    elif act == "up":
+                        client.move_to_position(pos_before[0], pos_before[1], pos_before[2] - val)
+                    elif act == "down":
+                        client.move_to_position(pos_before[0], pos_before[1], pos_before[2] + val)
+                except Exception as e:
+                    print(f"  [Action] error: {e}")
+                pos_after, yaw_after = client.get_pose()
+                print(f"  [Action] from: ({pos_before[0]:.1f}, {pos_before[1]:.1f}, {pos_before[2]:.1f}) yaw={yaw_before:.1f}°")
+                print(f"           to:   ({pos_after[0]:.1f}, {pos_after[1]:.1f}, {pos_after[2]:.1f}) yaw={yaw_after:.1f}°")
+                task_manager.complete_current("action executed")
+                print(f"  [TASK] {task_manager.summary()}")
+                if task_manager.is_done():
+                    print("  [TASK] all stages complete")
+                    state.update(status="done", task_done=True, step=0)
+                    break
+                continue
+
+            # === 1. 抓帧（前视 + 下视 + 深度，一次 RPC）===
             _ct0 = _time.perf_counter()
             frame, down_frame, depth_meters = client.get_dual_view()
             step_timing["capture_rpc"] = _time.perf_counter() - _ct0
@@ -368,23 +407,45 @@ def main_loop(state, initial_task="", max_steps=999, client=None, capturer=None)
                   f"stop={result.done}, {len(result.candidates)} candidates "
                   f"({step_timing['planning']:.2f}s)")
 
-            # ── 5. 停止判断 ──
-            should_stop = result.done or (
+            # ── 候选轨迹详情（调试用：每条候选的原子动作 + delta）──
+            if result.candidates:
+                print(f"  [Candidates] {len(result.candidates)} trajectories:")
+                sel_acts = result.actions
+                for i, c in enumerate(result.candidates):
+                    acts = c.get("actions", [])
+                    delta = c.get("delta", [0, 0, 0, 0])
+                    marker = " ★" if acts == sel_acts else ""
+                    print(f"    [{i}]{marker} {acts}  delta=({delta[0]:.1f}, {delta[1]:.1f}, "
+                          f"{delta[2]:.1f}, {delta[3]:.1f}°)")
+
+            # ── 5. 停止判断（对 target/detect 阶段）──
+            stage_completed = result.done or (
                 detection.visible and detection.depth_median is not None
                 and detection.depth_median < stop_threshold
             )
-            if should_stop:
+            if stage_completed:
                 reason = (f"depth={detection.depth_median:.1f}m < {stop_threshold}m"
                           if (detection.visible and detection.depth_median is not None
                               and detection.depth_median < stop_threshold)
                           else "planner reported done")
-                print(f"  [Stop] {reason}")
-                step_timing["step_total"] = _time.perf_counter() - step_started
-                tracker.record(step_timing, client.get_pose()[0], detection)
-                tracker.print_step(step, max_steps, step_timing)
-                tracker.print_final()
-                state.update(status="done", task_done=True, step=0)
-                break
+                print(f"  [Done] {reason}")
+
+                # ── 只有 target 阶段才打印论文指标 ──
+                if current_stage and current_stage.mode == "target":
+                    step_timing["step_total"] = _time.perf_counter() - step_started
+                    tracker.record(step_timing, client.get_pose()[0], detection)
+                    tracker.print_step(step, max_steps, step_timing)
+                    tracker.print_final()
+
+                task_manager.complete_current(reason)
+                print(f"  [TASK] {task_manager.summary()}")
+                if task_manager.is_done():
+                    print("  [TASK] all stages complete")
+                    state.update(status="done", task_done=True, step=0)
+                    break
+                # 继续下一阶段
+                state.update(status="advancing", step=step)
+                continue
 
             # ── 6. 执行（统一：所有规划器都走 waypoints → execute_waypoints）──
             #
@@ -403,6 +464,11 @@ def main_loop(state, initial_task="", max_steps=999, client=None, capturer=None)
             non_zero_wp = sum(1 for wp in exec_waypoints if not all(abs(v) < 1e-6 for v in wp))
             can_execute = non_zero_wp > 0
 
+            # ── 调试：打印 body-frame waypoints 和选中动作 ──
+            if can_execute and result.actions:
+                nz = [wp for wp in exec_waypoints if not all(abs(v) < 1e-6 for v in wp)]
+                print(f"  [Waypoints] selected={result.actions}  body_wp={nz}")
+
             if can_execute:
                 state.update(status="executing")
                 _te0 = _time.perf_counter()
@@ -414,13 +480,12 @@ def main_loop(state, initial_task="", max_steps=999, client=None, capturer=None)
                 step_timing["collided"] = col
                 state.update(pose=pos_final, yaw=yaw_final, collided=col)
 
+                # ── 实际飞行前后世界坐标 ──
+                print(f"  [Execute] {step_timing['execute']:.2f}s")
+                print(f"    from: ({pos_before[0]:.1f}, {pos_before[1]:.1f}, {pos_before[2]:.1f}) yaw={yaw_before:.1f}°")
+                print(f"    to:   ({pos_final[0]:.1f}, {pos_final[1]:.1f}, {pos_final[2]:.1f}) yaw={yaw_final:.1f}°")
                 if detection.visible and detection.depth_median:
-                    print(f"  [Execute] {step_timing['execute']:.2f}s, "
-                          f"dist_to_target={detection.depth_median:.1f}m")
-                else:
-                    moved = ((pos_final[0]-pos_before[0])**2 +
-                             (pos_final[1]-pos_before[1])**2)**0.5
-                    print(f"  [Execute] {step_timing['execute']:.2f}s, moved={moved:.1f}m")
+                    print(f"    dist_to_target(bbox depth)={detection.depth_median:.1f}m")
 
                 from agent.planner.base import compute_per_step_deltas
                 step_deltas = compute_per_step_deltas(result, start_yaw_deg=yaw_before)
@@ -441,11 +506,7 @@ def main_loop(state, initial_task="", max_steps=999, client=None, capturer=None)
     except KeyboardInterrupt:
         print("\n[Exit] interrupted")
         tracker.print_final()
-    finally:
-        try:
-            client.cleanup()
-        except Exception:
-            pass
+        raise  # 抛给外层循环处理 cleanup
 
 
 # ═══════════════════════════════════════════════════
@@ -500,5 +561,33 @@ if __name__ == "__main__":
         st = state.get_state()
         initial_task = st.get("task", "").strip()
 
-    main_loop(state, initial_task=initial_task,
-              client=client, capturer=capturer)
+    # ── 任务循环：完成后等待 Web 输入新任务 ──
+    cur_task = initial_task
+    while True:
+        print(f"\n{'='*50}")
+        print(f"  新任务: {cur_task}")
+        print(f"{'='*50}")
+        state.update(status="running", task_done=False)
+
+        try:
+            main_loop(state, initial_task=cur_task,
+                      client=client, capturer=capturer)
+        except KeyboardInterrupt:
+            print("\n[Exit] shutting down...")
+            break
+
+        # 当前任务完成，清空等待下一个
+        state.update(status="waiting_task", task="", task_done=True)
+        print("\n[TASK] 任务完成，等待新任务...")
+        next_task = ""
+        while not next_task.strip():
+            time.sleep(1)
+            st = state.get_state()
+            next_task = st.get("task", "").strip()
+        cur_task = next_task
+
+    # 程序退出前清理
+    try:
+        client.cleanup()
+    except Exception:
+        pass

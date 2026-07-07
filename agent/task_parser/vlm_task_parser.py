@@ -12,6 +12,13 @@ from agent.task_parser.base import BaseTaskParser, TaskStage
 # (imported in __init__.py which triggers auto-registration)
 from agent.task_parser import register_task_parser
 
+# action 阶段数值默认值（VLM prompt 中声明，代码兜底）
+_ACTION_VALUE_DEFAULTS = {
+    "forward": 10.0, "backward": 5.0,
+    "left": 90.0, "right": 90.0,
+    "up": 5.0, "down": 5.0,
+}
+
 
 TASK_PARSER_SYSTEM_PROMPT = """你是无人机任务解析器。把用户的自然语言导航任务拆解成有序、可执行的阶段。
 
@@ -179,6 +186,10 @@ def parse_task_parser_to_stages(response_text: str) -> List[TaskStage]:
             value = float(value) if value is not None else None
         except (ValueError, TypeError):
             value = None
+
+        # action 阶段默认值兜底：VLM 可能未填 value → 按 action 类型补默认
+        if mode == "action" and value is None:
+            value = _ACTION_VALUE_DEFAULTS.get(str(item.get("action", "")).strip().lower(), 0.0)
 
         stage = TaskStage(
             index=i,

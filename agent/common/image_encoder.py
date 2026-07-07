@@ -49,6 +49,8 @@ class ImageEncoder:
         global _down_jpeg_b64
         if down_frame is None:
             return None
+        if down_frame.mode == "RGBA":
+            down_frame = down_frame.convert("RGB")
         buf = BytesIO()
         down_frame.save(buf, format="JPEG", quality=85)
         _down_jpeg_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")

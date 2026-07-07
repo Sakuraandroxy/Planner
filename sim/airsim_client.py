@@ -47,7 +47,10 @@ class AirSimClient:
         yaw = math.degrees(math.atan2(siny, cosy))
         return pos, yaw
 
-    def move_to_position(self, x, y, z, velocity=0.5, timeout=10.0):
+    def move_to_position(self, x, y, z, velocity=None, timeout=10.0):
+        if velocity is None:
+            from config import cfg
+            velocity = float(cfg.get("SIM", {}).get("AIRSIM_VELOCITY", 2.0))
         self.client.moveToPositionAsync(x, y, z, velocity, timeout_sec=timeout).join()
 
     def rotate_to_yaw(self, yaw_deg, timeout=5.0):
@@ -302,7 +305,7 @@ class AirSimClient:
         except Exception as e:
             print(f"[AirSim] warmup skipped: {e}")
 
-    def execute_waypoints(self, waypoints, velocity=2.0, use_forward_only=True):
+    def execute_waypoints(self, waypoints, velocity=None, use_forward_only=True):
         """执行机体坐标系 waypoints。
 
         use_forward_only=True（默认，匹配 3DG-VLN）:
@@ -316,6 +319,10 @@ class AirSimClient:
         Returns (pos_final, yaw_final, collided).
         """
         from scipy.spatial.transform import Rotation as R
+        from config import cfg
+
+        if velocity is None:
+            velocity = float(cfg.get("SIM", {}).get("AIRSIM_VELOCITY", 2.0))
 
         start_pos, start_yaw = self.get_pose()
         yaw_rad = math.radians(start_yaw)
@@ -325,11 +332,21 @@ class AirSimClient:
         pos = list(start_pos)
         collided = False
 
+        move_timeout = int(cfg.get("SIM", {}).get("AIRSIM_MOVE_TIMEOUT", 60))
+
         if use_forward_only:
             # ═══ 3DG-VLN 风格: moveOnPathAsync(ForwardOnly) ═══
             # 先构建世界坐标路径
+            # 过滤掉零位移 padding waypoints（否则 ForwardOnly 会在最后一个
+            # 真实航点之后回头飞向 [0,0,0] 对应的起点位置，导致无人机 180° 掉头）
+            active_wps = [wp for wp in waypoints
+                          if abs(wp[0]) > 0.01 or abs(wp[1]) > 0.01 or abs(wp[2]) > 0.01]
+            if not active_wps:
+                return self.get_pose() + (False,)
+
             path = []
-            for wp in waypoints:
+            path_world = []  # 用于日志
+            for wp in active_wps:
                 # 机体坐标 → 世界坐标（waypoints 可能是 [dx,dy,dz] 或 [dx,dy,dz,dyaw], 只取前3维）
                 local = np.array(wp[:3], dtype=float)
                 world = rot_3d @ local
@@ -337,16 +354,15 @@ class AirSimClient:
                           pos[1] + float(world[1]),
                           pos[2] + float(world[2])]
                 path.append(airsim.Vector3r(*target))
-
-            if not path:
-                return self.get_pose() + (False,)
+                path_world.append(tuple(round(v, 1) for v in target))
 
             print(f"  [Path] {len(path)} waypoints, ForwardOnly")
+            print(f"    world coords: {path_world}")
             try:
                 result = self.client.moveOnPathAsync(
                     path=path,
                     velocity=velocity,
-                    timeout_sec=max(15, len(path) * 3),
+                    timeout_sec=move_timeout,
                     drivetrain=airsim.DrivetrainType.ForwardOnly,
                     yaw_mode=airsim.YawMode(is_rate=False),
                     lookahead=3,
@@ -372,7 +388,7 @@ class AirSimClient:
                     print(f"  [Move] ({pos[0]:.1f},{pos[1]:.1f},{pos[2]:.1f}) + ({dx},{dy},{dz}) -> ({target[0]:.1f},{target[1]:.1f},{target[2]:.1f})")
                     result = self.client.moveToPositionAsync(
                         target[0], target[1], target[2], velocity,
-                        timeout_sec=15, drivetrain=airsim.DrivetrainType.MaxDegreeOfFreedom,
+                        timeout_sec=move_timeout, drivetrain=airsim.DrivetrainType.MaxDegreeOfFreedom,
                         yaw_mode=airsim.YawMode(False, 0)
                     ).join()
                     if result:

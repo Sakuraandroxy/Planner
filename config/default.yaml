@@ -46,6 +46,8 @@ SIM:
   # AirSim 连接 (本地留空=localhost:41451, 远程填服务器IP)
   AIRSIM_IP: ""
   AIRSIM_PORT: 41451
+  AIRSIM_MOVE_TIMEOUT: 60               # moveOnPathAsync 超时秒数
+  AIRSIM_VELOCITY: 2.0                   # 飞行速度 m/s
 
 WEB:
   PORT: 5000

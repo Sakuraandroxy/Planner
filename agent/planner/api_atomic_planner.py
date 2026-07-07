@@ -129,9 +129,8 @@ class ApiAtomicPlanner(BasePlanner):
 
         # ─── 构建 user messages ───
         content = []
-        # 前视图在前（主要参考），下视图在后
-        for label, img, getter in [("前视图", front_img, get_cached_front_b64),
-                                     ("下视图", down_img, get_cached_down_b64)]:
+        # 云 API (MiMo/GPT-4o) 模式只发前视图（下视图仅本地 Qwen 微调模型使用）
+        for label, img, getter in [("前视图", front_img, get_cached_front_b64)]:
             b64 = _b64(img, getter)
             if b64:
                 content.append({
