@@ -21,6 +21,8 @@ from agent.detector import build_detector
 from agent.planner import build_planner
 from agent.direction import build_direction_estimator
 from agent.task_parser import build_task_parser
+from agent.world_model import build_world_model
+from agent.candidate import prepare_candidates_for_world_model
 from agent.common.task_manager import TaskManager
 from agent.common.warmup import warmup_from_config
 from agent.common.image_encoder import ImageEncoder
@@ -242,11 +244,17 @@ def main_loop(state, initial_task="", max_steps=999, client=None, capturer=None)
 
     detector = build_detector()
     planner = build_planner()
+    world_model = build_world_model()
     direction_est = build_direction_estimator()
     task_manager = TaskManager(enabled=True)
     tracker = StepTracker(success_radius=cfg["AGENT"]["STOP_DEPTH_THRESHOLD"])
 
     stop_threshold = cfg["AGENT"]["STOP_DEPTH_THRESHOLD"]
+    capture_profile = client.resolve_capture_profile()
+    capture_mode = client.resolve_capture_mode()
+    print(f"[CaptureConfig] profile={capture_profile} mode={capture_mode}")
+    if capture_profile == "front_down" and cfg.get("AGENT", {}).get("PLANNER") == "qwen_planner":
+        print("[CaptureConfig] note: qwen_planner + front_down 不提供实时深度，Web 闭环不会走深度阈值自动停止；如需自动停止，请改为 front_down_front_depth")
 
     try:
         cur_task = initial_task.strip()
@@ -325,7 +333,7 @@ def main_loop(state, initial_task="", max_steps=999, client=None, capturer=None)
 
             # === 1. 抓帧（前视 + 下视 + 深度，一次 RPC）===
             _ct0 = _time.perf_counter()
-            frame, down_frame, depth_meters = client.get_dual_view()
+            frame, down_frame, depth_meters, down_depth_meters = client.get_configured_views()
             step_timing["capture_rpc"] = _time.perf_counter() - _ct0
 
             if frame is None:
@@ -346,11 +354,15 @@ def main_loop(state, initial_task="", max_steps=999, client=None, capturer=None)
                     bd = _B2()
                     depth_preview.save(bd, format="PNG")
                     state.set_depth_frame(bd.getvalue())
+            else:
+                state.set_depth_frame(b"")
             if down_frame is not None:
                 from io import BytesIO as _B3
                 bd2 = _B3()
                 down_frame.save(bd2, format="PNG")
                 state.set_down_frame(bd2.getvalue())
+            else:
+                state.set_down_frame(b"")
 
             print(f"  [Capture] rpc={step_timing['capture_rpc']:.2f}s  size={frame.size}  "
                   f"depth_shape={depth_meters.shape if depth_meters is not None else 'N/A'}")
@@ -361,7 +373,13 @@ def main_loop(state, initial_task="", max_steps=999, client=None, capturer=None)
             detect_caption = (current_stage.target_query
                               if current_stage and current_stage.target_query
                               else cur_task)
-            detection = detector.detect(frame, detect_caption, depth_meters)
+            detection = detector.detect_with_fallback(
+                frame,
+                down_frame,
+                detect_caption,
+                front_depth_meters=depth_meters,
+                down_depth_meters=down_depth_meters,
+            )
             step_timing["detect"] = _time.perf_counter() - _td0
             step_timing["detect_api"] = step_timing["detect"]
 
@@ -369,7 +387,7 @@ def main_loop(state, initial_task="", max_steps=999, client=None, capturer=None)
                 d = detection.depth_median
                 ds = f"depth={d:.2f}m" if d else "depth=N/A"
                 si = f" STOP(<{stop_threshold}m)" if (d and d < stop_threshold) else ""
-                print(f"  [Detect] {detection.label} bbox={detection.bbox} "
+                print(f"  [Detect] {detection.camera}:{detection.label} bbox={detection.bbox} "
                       f"conf={detection.score:.2f} {ds}{si} ({step_timing['detect']:.2f}s)")
 
                 # 首次检测到目标 → 估计世界坐标（供论文指标用）
@@ -381,8 +399,11 @@ def main_loop(state, initial_task="", max_steps=999, client=None, capturer=None)
             # ── 3. 方向估计 ──
             direction = ""
             if detection.visible and detection.bbox:
-                direction = direction_est.estimate(
-                    detection.bbox, 0, (frame.width, frame.height))
+                if detection.camera == "front":
+                    direction = direction_est.estimate(
+                        detection.bbox, 0, (frame.width, frame.height))
+                elif detection.camera == "down":
+                    direction = "Target is visible in the downward view below the drone."
             if direction:
                 print(f"  [Direction] {direction}")
 
@@ -395,11 +416,44 @@ def main_loop(state, initial_task="", max_steps=999, client=None, capturer=None)
                 direction=direction,
                 detected_bbox=detection.bbox if detection.visible else None,
                 depth_meters=depth_meters,
+                detection=detection,
+                down_depth_meters=down_depth_meters,
             )
             step_timing["planning"] = _time.perf_counter() - _tp0
             step_timing["planning_api"] = step_timing["planning"]
             step_timing["vlm_total"] = (step_timing.get("detect_api", 0) +
                                          step_timing.get("planning_api", 0))
+
+            candidate_prep = prepare_candidates_for_world_model(
+                result,
+                detection=detection,
+                direction=direction,
+                stop_threshold=stop_threshold,
+            )
+            if candidate_prep.all_candidates:
+                result.candidates = [c.to_dict() for c in candidate_prep.all_candidates]
+                top_conf = candidate_prep.all_candidates[0].confidence
+                top_score = candidate_prep.all_candidates[0].pre_score
+                print(f"  [PreScore] {candidate_prep.prefilter_reason}  top_conf={top_conf:.2f} top_score={top_score:.2f}")
+
+            if world_model and candidate_prep.wm_candidates:
+                wm_result = world_model.score_from_pil(
+                    frame,
+                    down_frame,
+                    instruction=stage_instruction,
+                    candidates=[c.to_dict() for c in candidate_prep.wm_candidates],
+                )
+                if 0 <= wm_result.best_index < len(candidate_prep.wm_candidates):
+                    chosen = candidate_prep.wm_candidates[wm_result.best_index]
+                    result.actions = list(chosen.actions)
+                    result.waypoints = [list(wp) for wp in chosen.waypoints]
+                    result.reasoning = (
+                        (result.reasoning + " | " if result.reasoning else "")
+                        + f"WM chose idx={wm_result.best_index} conf={chosen.confidence:.2f}"
+                    )
+                    for idx, cand in enumerate(result.candidates):
+                        cand["selected_by_world_model"] = idx == wm_result.best_index
+                    print(f"  [WorldModel] execute source={chosen.source} conf={chosen.confidence:.2f}")
 
             wp_count = len(result.waypoints)
             non_zero = sum(1 for wp in result.waypoints if not all(v == 0.0 for v in wp))
@@ -414,9 +468,13 @@ def main_loop(state, initial_task="", max_steps=999, client=None, capturer=None)
                 for i, c in enumerate(result.candidates):
                     acts = c.get("actions", [])
                     delta = c.get("delta", [0, 0, 0, 0])
+                    source = c.get("source", "planner")
+                    conf = float(c.get("confidence", 0.0) or 0.0)
+                    pre_score = float(c.get("pre_score", 0.0) or 0.0)
                     marker = " ★" if acts == sel_acts else ""
                     print(f"    [{i}]{marker} {acts}  delta=({delta[0]:.1f}, {delta[1]:.1f}, "
-                          f"{delta[2]:.1f}, {delta[3]:.1f}°)")
+                          f"{delta[2]:.1f}, {delta[3]:.1f}°)  src={source} "
+                          f"pre={pre_score:.2f} conf={conf:.2f}")
 
             # ── 5. 停止判断（对 target/detect 阶段）──
             stage_completed = result.done or (
@@ -533,7 +591,7 @@ if __name__ == "__main__":
     print("=" * 50)
 
     print("[AirSim] connecting...")
-    client = AirSimClient()
+    client = AirSimClient(use_config_ip=False)
     client.connect()
     client.warmup_capture()
     client.enable_api_control(True)

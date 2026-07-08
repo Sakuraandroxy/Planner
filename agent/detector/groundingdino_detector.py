@@ -10,6 +10,9 @@ from agent.detector.base import BaseDetector, DetectionResult
 # ─── 公共常量 ───
 from config import cfg
 GROUNDINGDINO_URL = cfg["AGENT"]["GROUNDINGDINO_URL"]
+GROUNDINGDINO_TIMEOUT = int(cfg["AGENT"].get("DETECTOR_TIMEOUT", 15))
+GROUNDINGDINO_BOX_THRESHOLD = float(cfg["AGENT"].get("DETECTOR_BOX_THRESHOLD", 0.4))
+GROUNDINGDINO_TEXT_THRESHOLD = float(cfg["AGENT"].get("DETECTOR_TEXT_THRESHOLD", 0.3))
 
 # 目标翻译由 VLM 任务解析器在输出 target 字段时完成（英文）
 
@@ -23,14 +26,14 @@ class GroundingDINODetector(BaseDetector):
     """基于 GroundingDINO 服务器 HTTP API 的目标检测器。"""
 
     def detect(self, image: Image.Image, caption: str,
-               depth_meters=None) -> DetectionResult:
+               depth_meters=None, camera_name: str = "front") -> DetectionResult:
         if image.mode == "RGBA":
             image = image.convert("RGB")
         effective = caption  # target 已由 VLM 任务解析器输出英文
 
         # 编码并调用 API（优先复用 ImageEncoder 缓存）
-        from agent.common.image_encoder import get_cached_front_b64
-        cached = get_cached_front_b64()
+        from agent.common.image_encoder import get_cached_down_b64, get_cached_front_b64
+        cached = get_cached_front_b64() if camera_name == "front" else get_cached_down_b64()
         if cached:
             b64 = cached
         else:
@@ -40,12 +43,13 @@ class GroundingDINODetector(BaseDetector):
 
         resp = requests.post(GROUNDINGDINO_URL, json={
             "image": b64, "caption": effective,
-            "box_threshold": 0.4, "text_threshold": 0.3
-        }, timeout=15)
+            "box_threshold": GROUNDINGDINO_BOX_THRESHOLD,
+            "text_threshold": GROUNDINGDINO_TEXT_THRESHOLD
+        }, timeout=GROUNDINGDINO_TIMEOUT)
         data = resp.json()
 
         if not data.get("success") or not data.get("detections"):
-            return DetectionResult(visible=False)
+            return DetectionResult(visible=False, camera=camera_name)
 
         best = data["detections"][0]
         bbox = best["bbox"]
@@ -70,21 +74,26 @@ class GroundingDINODetector(BaseDetector):
         return DetectionResult(
             visible=True, bbox=bbox, score=score,
             label=label, depth_median=depth_median, depth_bbox=depth_bbox,
+            camera=camera_name,
         )
 
     def detect_all(self, image: Image.Image, caption: str,
-                   depth_meters=None) -> List[DetectionResult]:
+                   depth_meters=None, camera_name: str = "front") -> List[DetectionResult]:
         if image.mode == "RGBA":
             image = image.convert("RGB")
         effective = caption  # target 已由 VLM 任务解析器输出英文
-        buf = io.BytesIO()
-        image.save(buf, format="JPEG", quality=90)
-        b64 = base64.b64encode(buf.getvalue()).decode()
+        from agent.common.image_encoder import get_cached_down_b64, get_cached_front_b64
+        b64 = get_cached_front_b64() if camera_name == "front" else get_cached_down_b64()
+        if not b64:
+            buf = io.BytesIO()
+            image.save(buf, format="JPEG", quality=90)
+            b64 = base64.b64encode(buf.getvalue()).decode()
 
         resp = requests.post(GROUNDINGDINO_URL, json={
             "image": b64, "caption": effective,
-            "box_threshold": 0.4, "text_threshold": 0.3
-        }, timeout=15)
+            "box_threshold": GROUNDINGDINO_BOX_THRESHOLD,
+            "text_threshold": GROUNDINGDINO_TEXT_THRESHOLD
+        }, timeout=GROUNDINGDINO_TIMEOUT)
         data = resp.json()
 
         results = []
@@ -111,5 +120,6 @@ class GroundingDINODetector(BaseDetector):
                 visible=True, bbox=bbox, score=d["score"],
                 label=d.get("phrase", effective),
                 depth_median=depth_median, depth_bbox=depth_bbox,
+                camera=camera_name,
             ))
         return results

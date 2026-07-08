@@ -8,7 +8,7 @@
         --output ./finetune_data \
         --waypoints 5
 
-输出格式（LLaMA-Factory / Qwen 官方兼容）:
+输出格式（LLaMA-Factory 兼容）:
     finetune_data/
     ├── images/
     │   ├── traj001_step00_front.png
@@ -48,14 +48,12 @@ def load_trajectory(traj_dir: Path) -> list[dict]:
 def _read_instruction(traj_dir: Path, centralized: dict = None,
                       traj_name: str = "") -> str:
     """从轨迹目录读取指令：优先 obj_des.json，回退到集中的 instructions dict。"""
-    # (1) 轨迹自身的 obj_des.json
     obj_des = traj_dir / "obj_des.json"
     if obj_des.exists():
         with open(obj_des, "r", encoding="utf-8") as f:
             arr = json.load(f)
             if isinstance(arr, list) and len(arr) > 0:
                 return arr[0]
-    # (2) 集中的 meta/instructions.json
     if centralized:
         inst = centralized.get(traj_name, "")
         if inst:
@@ -64,7 +62,7 @@ def _read_instruction(traj_dir: Path, centralized: dict = None,
 
 
 def quat_to_rot_matrix(q: list) -> np.ndarray:
-    """四元数 [x,y,z,w] -> 3x3 旋转矩阵 (body->world, R_0)。"""
+    """四元数 [x,y,z,w] -> 3x3 旋转矩阵 (body->world)。"""
     r = R.from_quat([q[0], q[1], q[2], q[3]])
     return r.as_matrix()
 
@@ -73,14 +71,12 @@ def compute_waypoints(frames: list[dict], start_idx: int, num_wp: int = 5
                       ) -> list[list[float]]:
     """从 start_idx 帧开始, 取后续 num_wp 个轨迹点。
 
-    每个 waypoint [dx,dy,dz] 是相对于起始位置的机体坐标系累积偏移量,
-    与 3DG-VLN travel_util.py 第 268-275 行逻辑一致:
+    每个 waypoint [dx,dy,dz] 是相对于起始位置的机体坐标系累积偏移量，
+    与 execute_waypoints 的执行逻辑一致：
 
-        rot  = R_0,  pos = P_0
-        deltas = [P_i - P_0 for each P_i]
-        waypoints = [rot.T @ delta for delta in deltas]
+        waypoints[i] = R_0^T @ (P_i - P_0)
 
-    （注意：是累积偏移而非逐步偏移，每个 waypoint 都从起始位置算起）
+    即所有 waypoint 都从起点算，不是增量。
     """
     n_remaining = len(frames) - start_idx - 1
     if n_remaining <= 0:
@@ -96,7 +92,7 @@ def compute_waypoints(frames: list[dict], start_idx: int, num_wp: int = 5
     wp = []
     for idx in indices:
         target_pos = np.array(frames[idx]["sensors"]["state"]["position"])
-        delta_world = target_pos - start_pos       # 从起始位置到目标点
+        delta_world = target_pos - start_pos       # 从起始位置到目标点（累积）
         delta_body = start_rot.T @ delta_world     # world -> body frame
         wp.append([round(float(delta_body[0]), 2),
                     round(float(delta_body[1]), 2),
@@ -110,7 +106,12 @@ def compute_waypoints(frames: list[dict], start_idx: int, num_wp: int = 5
 def build_sample(traj_name: str, instruction: str, step: int,
                  front_img_path: str, down_img_path: str,
                  waypoints: list) -> dict:
-    """构建一个 Qwen2.5-VL 格式的对话样本."""
+    """构建一个 Qwen2.5-VL 格式的对话样本.
+
+    prompt 格式：Instruction: xxx
+    不包含任何硬编码假字段（Stage/Previous displacement/Current position）。
+    模型只需理解：前视图+下视图+指令 → 输出 5 个机体坐标系累积位移 waypoint。
+    """
     wp_str = json.dumps(waypoints, ensure_ascii=False)
     return {
         "messages": [
@@ -120,7 +121,7 @@ def build_sample(traj_name: str, instruction: str, step: int,
                     {"type": "image", "image": front_img_path},
                     {"type": "image", "image": down_img_path},
                     {"type": "text",
-                     "text": f"Stage: cruise\nPrevious displacement: 0.0,0.0,-4.5\nCurrent position: 0.0,0.0,0.0\nInstruction: {instruction}"}
+                     "text": f"Instruction: {instruction}"}
                 ]
             },
             {

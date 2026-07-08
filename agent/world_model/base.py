@@ -31,7 +31,8 @@ class BaseWorldModel(ABC):
             down_img_b64:  下视图 JPEG base64
             instruction:   英文任务指令
             candidates:    K 条候选，每条为
-                           {"actions": [...], "waypoints": [[dx,dy,dz], ...], "reason": "..."}
+                           {"actions": [...], "waypoints": [[dx,dy,dz], ...], "reason": "...",
+                            "pre_score": float, "confidence": float, ...}
 
         Returns:
             WorldModelResult with best_index and scores.

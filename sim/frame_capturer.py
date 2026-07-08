@@ -20,7 +20,9 @@ class FrameCapturer:
 
     def __init__(self, state, interval=0.1):
         import airsim
-        self.client = airsim.MultirotorClient()
+        from config import cfg
+        port = int(cfg.get("SIM", {}).get("AIRSIM_PORT", 41451))
+        self.client = airsim.MultirotorClient(port=port)
         self.client.confirmConnection()
         self.state = state
         self.interval = interval

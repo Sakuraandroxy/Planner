@@ -1,5 +1,5 @@
 """Wraps all AirSim API calls into a clean interface."""
-import math, io
+import math, io, time
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 import airsim
@@ -9,12 +9,15 @@ from PIL import Image, ImageDraw, ImageFont
 class AirSimClient:
     """Singleton-style wrapper around the AirSim MultirotorClient."""
 
-    def __init__(self, ip: str = "", port: int = 41451):
-        if not ip:
-            from config import cfg
-            sim = cfg.get("SIM", {})
-            ip = sim.get("AIRSIM_IP", "")
+    def __init__(self, ip: str = "", port: int = 41451, use_config_ip: bool = True):
+        from config import cfg
+        sim = cfg.get("SIM", {})
+        if port == 41451:
             port = int(sim.get("AIRSIM_PORT", 41451))
+        if not ip and use_config_ip:
+            ip = sim.get("AIRSIM_IP", "")
+        self._ip = ip
+        self._port = port
         self.client = airsim.MultirotorClient(ip=ip, port=port) if ip else airsim.MultirotorClient(port=port)
         self._connected = False
 
@@ -78,6 +81,56 @@ class AirSimClient:
             r = responses[1]
             depth = np.array(r.image_data_float, dtype=np.float32).reshape(r.height, r.width)
         return frame, depth
+
+    def resolve_capture_profile(self, profile: str | None = None) -> str:
+        """解析抓图内容配置。
+
+        支持：
+        - front_depth
+        - front_down
+        - front_down_front_depth
+        - front_down_both_depth
+        - auto
+        """
+        from config import cfg
+
+        if profile and profile != "auto":
+            return profile
+
+        sim_cfg = cfg.get("SIM", {})
+        configured = str(sim_cfg.get("CAPTURE_PROFILE", "auto") or "auto").strip().lower()
+        if configured and configured != "auto":
+            return configured
+
+        planner_name = str(cfg.get("AGENT", {}).get("PLANNER", "api_atomic_planner") or "").strip().lower()
+        if planner_name == "qwen_planner":
+            return "front_down"
+        return "front_down_front_depth"
+
+    def resolve_capture_mode(self, mode: str | None = None) -> str:
+        """解析抓图模式配置。"""
+        from config import cfg
+
+        if mode and mode != "auto":
+            return mode
+        sim_cfg = cfg.get("SIM", {})
+        configured = str(sim_cfg.get("CAPTURE_MODE", "batch") or "batch").strip().lower()
+        return configured or "batch"
+
+    def get_configured_views(self, profile: str | None = None, mode: str | None = None):
+        """按配置抓取前/下视 RGB 与深度。
+
+        返回:
+            (front_rgb, down_rgb, front_depth, down_depth)
+        其中未请求的项为 None。
+        """
+        resolved_profile = self.resolve_capture_profile(profile)
+        resolved_mode = self.resolve_capture_mode(mode)
+        front_rgb, down_rgb, front_depth, down_depth, _timing = self.capture_views(
+            profile=resolved_profile,
+            mode=resolved_mode,
+        )
+        return front_rgb, down_rgb, front_depth, down_depth
 
     def depth_meters_to_image(self, depth_meters, preview_width: int = 256):
         """Convert raw meter depth matrix to an 8-bit preview image."""
@@ -218,37 +271,188 @@ class AirSimClient:
             pass
 
 
-    def get_dual_view(self):
-        """一次 RPC 获取前视+下视 RGB + 前视深度。
-        Returns (front_rgb, down_rgb, front_depth_meters) 或 (None, None, None)。
-        """
-        import time as _time
-        _t0 = _time.perf_counter()
-        responses = self.client.simGetImages([
-            airsim.ImageRequest("front_center", airsim.ImageType.Scene, False, True),
-            airsim.ImageRequest("down_center", airsim.ImageType.Scene, False, True),
-            airsim.ImageRequest("front_center", airsim.ImageType.DepthPerspective, True, False),
-        ])
-        _t1 = _time.perf_counter()
-        front_rgb = None
-        down_rgb = None
-        front_depth = None
+    def _profile_requests(self, profile: str):
+        profile = (profile or "").strip().lower()
+        mapping = {
+            "front_depth": [
+                ("front_rgb", airsim.ImageRequest("front_center", airsim.ImageType.Scene, False, True)),
+                ("front_depth", airsim.ImageRequest("front_center", airsim.ImageType.DepthPerspective, True, False)),
+            ],
+            "front_down": [
+                ("front_rgb", airsim.ImageRequest("front_center", airsim.ImageType.Scene, False, True)),
+                ("down_rgb", airsim.ImageRequest("down_center", airsim.ImageType.Scene, False, True)),
+            ],
+            "front_down_front_depth": [
+                ("front_rgb", airsim.ImageRequest("front_center", airsim.ImageType.Scene, False, True)),
+                ("down_rgb", airsim.ImageRequest("down_center", airsim.ImageType.Scene, False, True)),
+                ("front_depth", airsim.ImageRequest("front_center", airsim.ImageType.DepthPerspective, True, False)),
+            ],
+            "front_down_both_depth": [
+                ("front_rgb", airsim.ImageRequest("front_center", airsim.ImageType.Scene, False, True)),
+                ("down_rgb", airsim.ImageRequest("down_center", airsim.ImageType.Scene, False, True)),
+                ("front_depth", airsim.ImageRequest("front_center", airsim.ImageType.DepthPerspective, True, False)),
+                ("down_depth", airsim.ImageRequest("down_center", airsim.ImageType.DepthPerspective, True, False)),
+            ],
+        }
+        if profile not in mapping:
+            raise ValueError(f"Unsupported capture profile: {profile}")
+        return mapping[profile]
 
-        if responses and len(responses) > 0 and responses[0].image_data_uint8:
-            front_rgb = Image.open(io.BytesIO(bytes(responses[0].image_data_uint8)))
-        if responses and len(responses) > 1 and responses[1].image_data_uint8:
-            down_rgb = Image.open(io.BytesIO(bytes(responses[1].image_data_uint8)))
-        if responses and len(responses) > 2 and responses[2].image_data_float:
-            r = responses[2]
-            front_depth = np.array(r.image_data_float, dtype=np.float32).reshape(r.height, r.width)
+    def _decode_capture_response(self, request_name: str, response):
+        if request_name.endswith("_rgb") and response.image_data_uint8:
+            return Image.open(io.BytesIO(bytes(response.image_data_uint8)))
+        if request_name.endswith("_depth") and response.image_data_float:
+            return np.array(response.image_data_float, dtype=np.float32).reshape(response.height, response.width)
+        return None
 
+    def _print_capture_timing(self, timing: dict, front_rgb, front_depth, down_depth):
+        rpc_s = timing.get("rpc_s", 0.0)
+        decode_s = timing.get("decode_s", 0.0)
+        total_s = timing.get("total_s", rpc_s + decode_s)
         if front_rgb is not None and front_depth is not None:
-            _t2 = _time.perf_counter()
-            print(f"[TIMING] simGetImages={_t1-_t0:.3f}s  decode={_t2-_t1:.3f}s  total={_t2-_t0:.3f}s  "
-                  f"rgb={front_rgb.size}  depth={front_depth.shape}")
+            msg = (
+                f"[TIMING] simGetImages={rpc_s:.3f}s  decode={decode_s:.3f}s  total={total_s:.3f}s  "
+                f"rgb={front_rgb.size}  depth_front={front_depth.shape}"
+            )
+            if down_depth is not None:
+                msg += f" depth_down={down_depth.shape}"
+            print(msg)
         elif front_rgb is not None:
-            print(f"[TIMING] simGetImages={_t1-_t0:.3f}s  decode w/o depth")
-        return front_rgb, down_rgb, front_depth
+            print(f"[TIMING] simGetImages={rpc_s:.3f}s  decode={decode_s:.3f}s  total={total_s:.3f}s  rgb={front_rgb.size}")
+        else:
+            print(f"[TIMING] simGetImages={rpc_s:.3f}s  decode={decode_s:.3f}s  total={total_s:.3f}s")
+
+    def _capture_views_batch(self, profile: str):
+        named_requests = self._profile_requests(profile)
+        t0 = time.perf_counter()
+        responses = self.client.simGetImages([req for _, req in named_requests])
+        t1 = time.perf_counter()
+
+        values = {
+            "front_rgb": None,
+            "down_rgb": None,
+            "front_depth": None,
+            "down_depth": None,
+        }
+        for idx, (name, _req) in enumerate(named_requests):
+            if responses and len(responses) > idx:
+                values[name] = self._decode_capture_response(name, responses[idx])
+        t2 = time.perf_counter()
+
+        timing = {
+            "profile": profile,
+            "mode": "batch",
+            "rpc_s": t1 - t0,
+            "decode_s": t2 - t1,
+            "total_s": t2 - t0,
+        }
+        return values["front_rgb"], values["down_rgb"], values["front_depth"], values["down_depth"], timing
+
+    def _new_aux_client(self):
+        """创建一个额外 RPC client，供实验性并发抓图使用。"""
+        aux = airsim.MultirotorClient(ip=self._ip, port=self._port) if self._ip else airsim.MultirotorClient(port=self._port)
+        aux.confirmConnection()
+        return aux
+
+    def _capture_views_parallel(self, profile: str):
+        """多 client 并发抓图。"""
+        from concurrent.futures import ThreadPoolExecutor
+
+        named_requests = self._profile_requests(profile)
+
+        clients = {}
+        for name, _req in named_requests:
+            clients[name] = self._new_aux_client()
+
+        def _fetch_one(name, req):
+            client = clients[name]
+            t0 = time.perf_counter()
+            responses = client.simGetImages([req])
+            t1 = time.perf_counter()
+
+            value = None
+            if responses:
+                resp = responses[0]
+                value = self._decode_capture_response(name, resp)
+            t2 = time.perf_counter()
+            return {
+                "name": name,
+                "value": value,
+                "rpc_s": t1 - t0,
+                "decode_s": t2 - t1,
+                "total_s": t2 - t0,
+            }
+
+        t_all0 = time.perf_counter()
+        results = {}
+        with ThreadPoolExecutor(max_workers=len(named_requests)) as executor:
+            futures = {
+                name: executor.submit(_fetch_one, name, req)
+                for name, req in named_requests
+            }
+            for name, future in futures.items():
+                results[name] = future.result()
+        t_all1 = time.perf_counter()
+
+        front_rgb = results.get("front_rgb", {}).get("value")
+        down_rgb = results.get("down_rgb", {}).get("value")
+        front_depth = results.get("front_depth", {}).get("value")
+        down_depth = results.get("down_depth", {}).get("value")
+
+        timing = {
+            "wall_s": t_all1 - t_all0,
+            "max_rpc_s": max(item["rpc_s"] for item in results.values()),
+            "sum_rpc_s": sum(item["rpc_s"] for item in results.values()),
+            "sum_decode_s": sum(item["decode_s"] for item in results.values()),
+            "profile": profile,
+            "mode": "parallel",
+            "rpc_s": t_all1 - t_all0,
+            "decode_s": sum(item["decode_s"] for item in results.values()),
+            "total_s": t_all1 - t_all0,
+            "per_request": {
+                name: {
+                    "rpc_s": round(item["rpc_s"], 3),
+                    "decode_s": round(item["decode_s"], 3),
+                    "total_s": round(item["total_s"], 3),
+                }
+                for name, item in results.items()
+            },
+        }
+
+        label = f"[TIMING Parallel:{profile}]"
+        print(f"{label} wall={timing['wall_s']:.3f}s  max_rpc={timing['max_rpc_s']:.3f}s  sum_rpc={timing['sum_rpc_s']:.3f}s  sum_decode={timing['sum_decode_s']:.3f}s")
+        for name, item in timing["per_request"].items():
+            print(
+                f"  [Parallel:{name}] rpc={item['rpc_s']:.3f}s  "
+                f"decode={item['decode_s']:.3f}s  total={item['total_s']:.3f}s"
+            )
+        return front_rgb, down_rgb, front_depth, down_depth, timing
+
+    def capture_views(self, profile: str = "front_down_both_depth", mode: str = "batch"):
+        """按指定 profile/mode 抓图。"""
+        resolved_profile = self.resolve_capture_profile(profile)
+        resolved_mode = self.resolve_capture_mode(mode)
+        if resolved_mode == "parallel":
+            front_rgb, down_rgb, front_depth, down_depth, timing = self._capture_views_parallel(resolved_profile)
+        else:
+            front_rgb, down_rgb, front_depth, down_depth, timing = self._capture_views_batch(resolved_profile)
+            self._print_capture_timing(timing, front_rgb, front_depth, down_depth)
+        return front_rgb, down_rgb, front_depth, down_depth, timing
+
+    def get_dual_view(self):
+        """兼容旧接口：批量抓取前视+下视 RGB + 前/下视深度。"""
+        front_rgb, down_rgb, front_depth, down_depth, _timing = self.capture_views(
+            profile="front_down_both_depth",
+            mode="batch",
+        )
+        return front_rgb, down_rgb, front_depth, down_depth
+
+    def get_dual_view_parallel_experimental(self):
+        """实验接口：4 个独立 client 并发抓取前视/下视 RGB + 深度。"""
+        return self.capture_views(
+            profile="front_down_both_depth",
+            mode="parallel",
+        )
 
 
 
@@ -292,15 +496,10 @@ class AirSimClient:
         """AirSim 冷启动预热：第一次 simGetImages 通常很慢（10-20s），
         预抓 RGB + Depth 让 AirSim 初始化渲染管线。
         """
-        import time as _time
-        _t0 = _time.perf_counter()
+        _t0 = time.perf_counter()
         try:
-            self.client.simGetImages([
-                airsim.ImageRequest("front_center", airsim.ImageType.Scene, False, True),
-                airsim.ImageRequest("down_center", airsim.ImageType.Scene, False, True),
-                airsim.ImageRequest("front_center", airsim.ImageType.DepthPerspective, True, False),
-            ])
-            _elapsed = _time.perf_counter() - _t0
+            self.get_configured_views()
+            _elapsed = time.perf_counter() - _t0
             print(f"[AirSim] warmup capture done in {_elapsed:.2f}s")
         except Exception as e:
             print(f"[AirSim] warmup skipped: {e}")

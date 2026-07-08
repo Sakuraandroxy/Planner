@@ -131,7 +131,9 @@ def plan():
     front_img = decode_b64(front_b64)
     down_img = decode_b64(down_b64)
 
-    desc = f"{instruction}. {direction}" if direction else instruction
+    desc = f"Instruction: {instruction}"
+    if direction:
+        desc += f"\nDirection: {direction}"
 
     messages = [{
         "role": "user",

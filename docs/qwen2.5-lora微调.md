@@ -111,16 +111,17 @@ UAV-VLN-FOV/
 
 ```bash
 # 1. 解压（在服务器上）
-cd /data/sakura/datasets/UAV-VLN-FOV
+# 数据集下载后放在 /data/sakura/data/UAV-VLN-FOV/
+cd /data/sakura/data/UAV-VLN-FOV
 unrar x train.rar      # → train/
 unrar x test.rar       # → test/（可选）
 
 # 2. 提取样本
-cd /data/sakura
-python tools/extract_training_samples.py \
-    --dataset /data/sakura/datasets/UAV-VLN-FOV/train \
-    --meta    /data/sakura/datasets/UAV-VLN-FOV/meta \
-    --output  ./3dgvln_finetune_data \
+cd /data/sakura/data/UAV-VLN-FOV/tools
+python extract_training_samples.py \
+    --dataset /data/sakura/data/UAV-VLN-FOV/train \
+    --meta    /data/sakura/data/UAV-VLN-FOV/meta \
+    --output  /data/sakura/data/UAV-VLN-FOV/finetune_data \
     --waypoints 5 \
     --step_interval 5
 ```
@@ -144,6 +145,10 @@ python tools/extract_training_samples.py \
 └── dataset.json       # Qwen2.5-VL 对话格式
 ```
 
+**waypoint 语义**：所有 waypoint 是**相对于当前步起始位置的机体坐标系累积位移**（不是增量），与 `execute_waypoints` 的执行逻辑一致。即 `waypoints[i] = R.T @ (P_i - P_0)`，每个 waypoint 都从起点算。
+
+**prompt 简化**：去掉 `Stage/Previous displacement/Current position` 三个无用硬编码字段，只保留 `Instruction`，与推理对齐。
+
 **dataset.json 样本格式**：
 
 ```json
@@ -155,7 +160,7 @@ python tools/extract_training_samples.py \
         "content": [
           {"type": "image", "image": "images/traj_001_step0000_front.png"},
           {"type": "image", "image": "images/traj_001_step0000_down.png"},
-          {"type": "text", "text": "Stage: cruise\nPrevious displacement: 0.0,0.0,-4.5\nCurrent position: 0.0,0.0,0.0\nInstruction: Fly towards the red car and approach it from the front."}
+          {"type": "text", "text": "Instruction: Fly towards the red car and approach it from the front."}
         ]
       },
       {
@@ -207,7 +212,7 @@ LLaMA-Factory 通过 `dataset_info.json` 注册数据集——它告诉框架你
 cat > /data/sakura/data/UAV-VLN-FOV/finetune_data/dataset_info.json << 'EOF'
 {
   "3dgvln_waypoints": {
-    "file_name": "dataset.jsonl",
+    "file_name": "dataset_v2.jsonl",
     "formatting": "sharegpt",
     "columns": {
       "messages": "messages",
@@ -249,7 +254,7 @@ ArrowInvalid: Column(/messages/[]/content) changed from array to string in row 0
 
 **解决方案**：LLaMA-Factory 的 `qwen2_vl` 模板通过 `<image>` 占位符处理图片——模板在 tokenization 时自动将 `<image>` 替换为 `images[]` 中对应路径的图像 tensor。因此 `content` 必须全为字符串：
 
-- user content: `"<image><image>Stage: cruise\nInstruction: ..."`
+- user content: `"<image><image>Instruction: Fly to the white dog..."`（`extract_training_samples.py` 输出的原始格式是带 `type` 字段的 list，必须转为纯字符串）
 - assistant content: `"[[1.0, 2.0, 3.0], ...]"`
 
 将 `[{type:"image",...}, {type:"text",...}]` 列表格式转为上述字符串格式：

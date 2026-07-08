@@ -58,15 +58,15 @@ class VLMDetector(BaseDetector):
         self.max_tokens = int(ag.get("DETECTOR_MAX_TOKENS", 512))
 
     def detect(self, image: Image.Image, caption: str,
-               depth_meters=None) -> DetectionResult:
+               depth_meters=None, camera_name: str = "front") -> DetectionResult:
         """调用 VLM API 获取目标 bbox，然后从 depth_meters 计算深度。"""
         if image.mode == "RGBA":
             image = image.convert("RGB")
         w, h = image.size
 
         # 编码图片（优先复用 ImageEncoder 缓存）
-        from agent.common.image_encoder import get_cached_front_b64
-        cached = get_cached_front_b64()
+        from agent.common.image_encoder import get_cached_down_b64, get_cached_front_b64
+        cached = get_cached_front_b64() if camera_name == "front" else get_cached_down_b64()
         if cached:
             b64 = cached
         else:
@@ -118,9 +118,11 @@ class VLMDetector(BaseDetector):
                     pass
         except Exception as exc:
             print(f"  [VLMDetector] API error: {exc}")
-            return DetectionResult(visible=False)
+            return DetectionResult(visible=False, camera=camera_name)
 
-        return self._parse_response(raw, image, depth_meters, caption)
+        result = self._parse_response(raw, image, depth_meters, caption)
+        result.camera = camera_name if result.visible else camera_name
+        return result
 
     def _parse_response(self, raw: str, image: Image.Image,
                         depth_meters, caption: str = "") -> DetectionResult:
@@ -130,7 +132,7 @@ class VLMDetector(BaseDetector):
         match = re.search(r"\{.*\}", text, re.DOTALL)
         if not match:
             print(f"  [VLMDetector] no JSON in response: {raw[:200]}")
-            return DetectionResult(visible=False)
+            return DetectionResult(visible=False, camera="none")
 
         try:
             data = json.loads(match.group(), strict=False)
@@ -138,15 +140,15 @@ class VLMDetector(BaseDetector):
             data = _relaxed_json_parse(match.group())
             if data is None:
                 print(f"  [VLMDetector] parse failed: {match.group()[:200]}")
-                return DetectionResult(visible=False)
+                return DetectionResult(visible=False, camera="none")
 
         visible = bool(data.get("visible", False))
         if not visible:
-            return DetectionResult(visible=False)
+            return DetectionResult(visible=False, camera="none")
 
         bbox_norm = data.get("bbox_norm") or data.get("bbox")
         if not bbox_norm or len(bbox_norm) != 4:
-            return DetectionResult(visible=False)
+            return DetectionResult(visible=False, camera="none")
 
         w, h = image.size
         try:
@@ -161,7 +163,7 @@ class VLMDetector(BaseDetector):
                 # 像素坐标
                 bbox = [int(round(v)) for v in values]
         except (ValueError, TypeError):
-            return DetectionResult(visible=False)
+            return DetectionResult(visible=False, camera="none")
 
         bbox[0] = max(0, min(bbox[0], w - 1))
         bbox[1] = max(0, min(bbox[1], h - 1))
@@ -197,6 +199,7 @@ class VLMDetector(BaseDetector):
             visible=True, bbox=bbox, score=score,
             label=label, depth_median=depth_median,
             depth_bbox=depth_bbox_list,
+            camera="front",
         )
 
 

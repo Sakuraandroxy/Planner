@@ -10,136 +10,305 @@ eval/scene_manager.py — 轻量 UE4 场景管理器。
     # ... 跑评测 ...
     manager.start("Carla_Town01")     # 自动杀掉旧进程, 启动新场景
     manager.stop()
-
-场景映射:
-    自动从 env_root 扫描所有 .sh 文件, 建立场景名 → .sh 路径映射。
-    数据集里的 scene 目录名必须能匹配到映射中的 key。
 """
 
 import os
-import subprocess
-import time
+import shlex
 import signal
-from pathlib import Path
+import socket
+import subprocess
+import tempfile
+import time
+from pathlib import Path, PurePosixPath
 from typing import Dict, List, Optional
+
+from config import cfg
+from sim.airsim_settings import build_airsim_settings_with_overrides, LOCAL_AIRSIM_SETTINGS_PATH
+
+
+def _scene_name_from_path(path_str: str, remote: bool = False) -> str:
+    path_obj = PurePosixPath(path_str) if remote else Path(path_str)
+    parent = path_obj.parent
+    grandparent = parent.parent
+    return grandparent.name if parent.name == "LinuxNoEditor" else parent.name
 
 
 def _scan_scenes(env_root: str) -> Dict[str, str]:
-    """递归扫描 env_root 下所有 .sh 文件, 建立 {场景名: .sh路径} 映射。
-
-    场景名从 .sh 所在目录的父目录名提取 (如 ModularEuropean/LinuxNoEditor/ModularEuropean.sh → ModularEuropean)。
-    如果 key 重复, 后发现的覆盖前者。
-    """
+    """递归扫描 env_root 下所有 .sh 文件, 建立 {场景名: .sh路径} 映射。"""
     scene_map = {}
     root = Path(env_root)
     if not root.exists():
         return scene_map
-
     for sh_file in root.rglob("*.sh"):
-        # LinuxNoEditor/xxx.sh → 取 LinuxNoEditor 的父目录名作为场景名
-        parent = sh_file.parent
-        grandparent = parent.parent
-        scene_name = grandparent.name if parent.name == "LinuxNoEditor" else parent.name
+        scene_name = _scene_name_from_path(str(sh_file))
         scene_map[scene_name] = str(sh_file)
-
     return scene_map
 
 
 class SceneManager:
-    """管理单个 UE4 场景的生命周期: 启动 → 等待就绪 → 杀死。
-
-    特性:
-      - 同一场景连续调用 start() 不重启 (复用当前进程)
-      - 不同场景自动 kill 旧进程再启动新进程
-      - stop() 清理残留进程
-    """
 
     def __init__(self, env_root: str, gpu_id: int = 0,
-                 startup_wait: int = 15, airsim_port: int = 41451):
+                 startup_wait: int | None = None, airsim_port: int | None = None,
+                 remote_host: str | None = None, remote_user: str | None = None,
+                 remote_port: int = 22):
+        if startup_wait is None:
+            startup_wait = int(cfg.get("EVAL", {}).get("SCENE_STARTUP_WAIT", 25))
+        if airsim_port is None:
+            airsim_port = int(cfg.get("SIM", {}).get("AIRSIM_PORT", 41451))
         self.env_root = env_root
         self.gpu_id = gpu_id
         self.startup_wait = startup_wait
         self.airsim_port = airsim_port
+        self.remote_host = (remote_host or "").strip()
+        self.remote_user = (remote_user or "").strip()
+        self.remote_port = int(remote_port)
+        self.remote_enabled = bool(self.remote_host)
         self._proc: Optional[subprocess.Popen] = None
         self._current_scene: str = ""
-        self._scene_map = _scan_scenes(env_root)
+        self._remote_state_dir = "/tmp/unilavira_scene_manager"
+        self._remote_pid_path = f"{self._remote_state_dir}/current_scene.pid"
+        self._remote_log_path = f"{self._remote_state_dir}/current_scene.log"
+        self._remote_settings_path = f"{self._remote_state_dir}/settings.json"
+        if self.remote_enabled:
+            self._scene_map = self._scan_remote_scenes(env_root)
+        else:
+            self._scene_map = _scan_scenes(env_root)
+        self._settings_dir = tempfile.mkdtemp(prefix="airsim_settings_")
 
     @property
     def available_scenes(self) -> List[str]:
-        """返回所有可用场景名。"""
         return sorted(self._scene_map.keys())
 
-    def get_matching_scenes(self, dataset_scenes: List[str]) -> Dict[str, str]:
-        """将数据集的 scene 目录名匹配到 .sh 路径。
+    @property
+    def _ssh_target(self) -> str:
+        if not self.remote_enabled:
+            return ""
+        if self.remote_user:
+            return f"{self.remote_user}@{self.remote_host}"
+        return self.remote_host
 
-        匹配规则: 优先精确匹配, 回退到模糊匹配 (如 "Carla_Town01" 匹配包含 "Town01" 的 key)。
-        返回 {数据集scene名: .sh路径}。
-        """
-        matched = {}
-        for ds_scene in dataset_scenes:
-            if ds_scene in self._scene_map:
-                matched[ds_scene] = self._scene_map[ds_scene]
+    def _run_ssh(self, remote_cmd: str, check: bool = True) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["ssh", "-p", str(self.remote_port), self._ssh_target, remote_cmd],
+            capture_output=True, text=True, check=check
+        )
+
+    def _run_scp_to_remote(self, local_path: str, remote_path: str):
+        subprocess.run(
+            ["scp", "-P", str(self.remote_port), local_path, f"{self._ssh_target}:{remote_path}"],
+            capture_output=True, text=True, check=True
+        )
+
+    def _scan_remote_scenes(self, env_root: str) -> Dict[str, str]:
+        scene_map: Dict[str, str] = {}
+        try:
+            result = self._run_ssh(
+                f"find {shlex.quote(env_root)} -type f -name '*.sh'"
+            )
+        except Exception as exc:
+            print(f"  [SceneManager] ⚠️ 远程扫描场景失败: {exc}")
+            return scene_map
+        for line in result.stdout.splitlines():
+            path_str = line.strip()
+            if not path_str:
                 continue
-            # 模糊匹配
-            for key, path in self._scene_map.items():
-                if ds_scene.lower() in key.lower() or key.lower() in ds_scene.lower():
-                    matched[ds_scene] = path
-                    break
-        return matched
+            scene_map[_scene_name_from_path(path_str, remote=True)] = path_str
+        return scene_map
+
+    def _tail_remote_log(self, lines: int = 20) -> str:
+        if not self.remote_enabled:
+            return ""
+        try:
+            cmd = f"test -f {self._remote_log_path} && tail -n {lines} {self._remote_log_path} || true"
+            result = self._run_ssh(
+                f"bash -lc {shlex.quote(cmd)}",
+                check=False,
+            )
+            return (result.stdout or "").strip()
+        except Exception:
+            return ""
+
+    def _remote_debug_snapshot(self) -> str:
+        if not self.remote_enabled:
+            return ""
+        try:
+            debug_cmd = f"""
+echo "[ssh_target] {self._ssh_target}"
+echo "[pid_file]"
+if [ -f {shlex.quote(self._remote_pid_path)} ]; then
+  cat {shlex.quote(self._remote_pid_path)}
+else
+  echo "missing"
+fi
+echo "[ps_pid]"
+if [ -f {shlex.quote(self._remote_pid_path)} ]; then
+  ps -fp "$(cat {shlex.quote(self._remote_pid_path)})" || true
+else
+  echo "missing"
+fi
+echo "[log_file]"
+ls -l {shlex.quote(self._remote_log_path)} 2>/dev/null || echo "missing"
+echo "[settings_file]"
+ls -l {shlex.quote(self._remote_settings_path)} 2>/dev/null || echo "missing"
+echo "[scene_processes]"
+ps -ef | grep -E 'LinuxNoEditor|Carla|AirSim|UE4' | grep -v grep | head -n 20 || true
+"""
+            result = self._run_ssh(
+                f"bash -lc {shlex.quote(debug_cmd)}",
+                check=False,
+            )
+            return ((result.stdout or "") + (result.stderr or "")).strip()
+        except Exception:
+            return ""
+
+    def _remote_port_listening(self) -> bool:
+        try:
+            cmd = f'ss -ltn 2>/dev/null | grep -q ":{self.airsim_port} "'
+            result = self._run_ssh(
+                f"bash -lc {shlex.quote(cmd)}",
+                check=False,
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
+
+    def _local_port_open(self, host: str, timeout: float = 2.0) -> bool:
+        try:
+            with socket.create_connection((host, self.airsim_port), timeout=timeout):
+                return True
+        except OSError:
+            return False
+
+    def _wait_until_ready(self) -> bool:
+        deadline = time.time() + self.startup_wait
+        sim_cfg = cfg.get("SIM", {})
+        airsim_host = (sim_cfg.get("AIRSIM_IP", "") or "").strip()
+        if not airsim_host:
+            airsim_host = "127.0.0.1"
+        saw_remote_listen = False
+        saw_local_connect = False
+        saw_alive = False
+
+        while time.time() < deadline:
+            alive = self._is_alive() if self.remote_enabled else True
+            saw_alive = saw_alive or alive
+
+            port_ok = self._remote_port_listening() if self.remote_enabled else self._local_port_open(airsim_host, timeout=1.0)
+            saw_remote_listen = saw_remote_listen or port_ok
+            if port_ok:
+                if self.remote_enabled:
+                    if self._local_port_open(airsim_host, timeout=1.0):
+                        saw_local_connect = True
+                        return True
+                else:
+                    return True
+            time.sleep(2.0)
+        if self.remote_enabled:
+            print(f"  [SceneManager] debug: saw_alive={saw_alive} remote_listen={saw_remote_listen} local_connect={saw_local_connect}")
+        return False
+
+    def _write_settings(self) -> str:
+        """生成 settings.json 并返回路径。"""
+        settings = build_airsim_settings_with_overrides()
+        settings["ApiServerPort"] = self.airsim_port
+        path = os.path.join(self._settings_dir, "settings.json")
+        with open(path, "w") as f:
+            import json
+            json.dump(settings, f)
+        print(f"  [SceneManager] base settings: {LOCAL_AIRSIM_SETTINGS_PATH}")
+        return path
 
     def start(self, scene_name: str) -> bool:
-        """启动指定场景的 UE4 进程。
-
-        如果当前已是同一场景, 直接返回 True (复用)。
-        如果场景名查找失败, 返回 False。
-        """
         if scene_name == self._current_scene and self._is_alive():
             print(f"  [SceneManager] 复用当前场景: {scene_name}")
             return True
 
-        # 查找场景路径
         sh_path = self._scene_map.get(scene_name)
         if sh_path is None:
-            # 模糊查找
             for key, path in self._scene_map.items():
                 if scene_name.lower() in key.lower() or key.lower() in scene_name.lower():
                     sh_path = path
                     break
         if sh_path is None:
-            print(f"  [SceneManager] ⚠️ 未找到场景 '{scene_name}', 可用: {list(self._scene_map.keys())[:5]}...")
+            print(f"  [SceneManager] ⚠️ 未找到场景 '{scene_name}'")
             return False
 
-        # 杀掉旧进程
         self.stop()
 
-        # 启动新进程
-        print(f"  [SceneManager] 启动场景: {scene_name} ({sh_path})")
-        try:
+        settings_path = self._write_settings()
+        print(f"  [SceneManager] 启动场景: {scene_name}")
+        print(f"  [SceneManager] scene script: {sh_path}")
+        print(f"  [SceneManager] settings: {settings_path}")
+
+        if self.remote_enabled:
+            try:
+                self._run_ssh(f"mkdir -p {shlex.quote(self._remote_state_dir)}")
+                self._run_scp_to_remote(settings_path, self._remote_settings_path)
+                launch_cmd = "\n".join([
+                    f"mkdir -p {shlex.quote(self._remote_state_dir)}",
+                    f"if [ -f {shlex.quote(self._remote_pid_path)} ]; then",
+                    f"  kill $(cat {shlex.quote(self._remote_pid_path)}) >/dev/null 2>&1 || true",
+                    f"  rm -f {shlex.quote(self._remote_pid_path)}",
+                    "fi",
+                    f"printf '%s\\n' \"[launch] $(date -Is) scene={scene_name} script={sh_path}\" > {shlex.quote(self._remote_log_path)}",
+                    (
+                        f"nohup bash {shlex.quote(sh_path)} -RenderOffscreen "
+                        f"-GraphicsAdapter={self.gpu_id} "
+                        f"-settings={shlex.quote(self._remote_settings_path)} "
+                        f">> {shlex.quote(self._remote_log_path)} 2>&1 < /dev/null &"
+                    ),
+                    f"echo $! > {shlex.quote(self._remote_pid_path)}",
+                ])
+                self._run_ssh(f"bash -lc {shlex.quote(launch_cmd)}")
+            except Exception as exc:
+                print(f"  [SceneManager] ⚠️ 远程启动失败: {exc}")
+                return False
+        else:
+            cmd = ["bash", sh_path, "-RenderOffscreen",
+                   f"-GraphicsAdapter={self.gpu_id}",
+                   f"-settings={settings_path}"]
             self._proc = subprocess.Popen(
-                ["bash", sh_path, "-RenderOffscreen",
-                 f"-GraphicsAdapter={self.gpu_id}"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                preexec_fn=os.setsid,  # 独立进程组, 方便 kill
-            )
-        except FileNotFoundError:
-            print(f"  [SceneManager] ⚠️ bash 不可用, 尝试直接执行")
-            self._proc = subprocess.Popen(
-                [sh_path, "-RenderOffscreen",
-                 f"-GraphicsAdapter={self.gpu_id}"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 preexec_fn=os.setsid,
             )
-
         self._current_scene = scene_name
-        print(f"  [SceneManager] 等待 UE4 加载 ({self.startup_wait}s)...")
-        time.sleep(self.startup_wait)
-        print(f"  [SceneManager] 就绪, AirSim 端口 {self.airsim_port}")
-        return True
+        print(f"  [SceneManager] 等待 UE4/AirSim 就绪 (最多 {self.startup_wait}s)...")
+        if self._wait_until_ready():
+            print(f"  [SceneManager] 就绪, AirSim 端口 {self.airsim_port}")
+            return True
+
+        print(f"  [SceneManager] ⚠️ 等待 AirSim 端口 {self.airsim_port} 就绪超时")
+        if self.remote_enabled:
+            tail = self._tail_remote_log()
+            if tail:
+                print("  [SceneManager] 远端日志尾部:")
+                for line in tail.splitlines():
+                    print(f"    {line}")
+            else:
+                print("  [SceneManager] 远端日志为空或尚未生成")
+            snapshot = self._remote_debug_snapshot()
+            if snapshot:
+                print("  [SceneManager] 远端调试信息:")
+                for line in snapshot.splitlines():
+                    print(f"    {line}")
+        return False
 
     def stop(self):
-        """杀掉当前 UE4 进程及其子进程。"""
+        if self.remote_enabled:
+            if self._current_scene:
+                print(f"  [SceneManager] 关闭场景: {self._current_scene}")
+            try:
+                stop_cmd = (
+                    f"if [ -f {shlex.quote(self._remote_pid_path)} ]; then "
+                    f"kill $(cat {shlex.quote(self._remote_pid_path)}) >/dev/null 2>&1 || true; "
+                    f"rm -f {shlex.quote(self._remote_pid_path)}; fi"
+                )
+                self._run_ssh(f"bash -lc {shlex.quote(stop_cmd)}", check=False)
+            except Exception:
+                pass
+            self._current_scene = ""
+            time.sleep(2)
+            return
         if self._proc is not None:
             print(f"  [SceneManager] 关闭场景: {self._current_scene}")
             try:
@@ -150,14 +319,22 @@ class SceneManager:
                     os.killpg(os.getpgid(self._proc.pid), signal.SIGKILL)
                 except ProcessLookupError:
                     pass
-            except Exception as e:
-                print(f"  [SceneManager] 关闭异常: {e}")
             self._proc = None
             self._current_scene = ""
             time.sleep(2)
 
     def _is_alive(self) -> bool:
-        """检查当前进程是否存活。"""
+        if self.remote_enabled:
+            if not self._current_scene:
+                return False
+            try:
+                result = self._run_ssh(
+                    f"bash -lc {shlex.quote(f'if [ -f {self._remote_pid_path} ] && kill -0 $(cat {self._remote_pid_path}) >/dev/null 2>&1; then echo alive; fi')}",
+                    check=False,
+                )
+            except Exception:
+                return False
+            return "alive" in (result.stdout or "")
         if self._proc is None:
             return False
         return self._proc.poll() is None
@@ -170,3 +347,5 @@ class SceneManager:
 
     def __del__(self):
         self.stop()
+        import shutil
+        shutil.rmtree(self._settings_dir, ignore_errors=True)

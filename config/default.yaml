@@ -4,25 +4,29 @@
 AGENT:
   # 任务解析器: vlm_parser | simple_parser
   TASK_PARSER: vlm_parser
-  TASK_PARSER_URL: http://172.27.143.102:8000/v1  # 本地: http://172.27.143.102:8000/v1  |  云: https://api.xiaomimimo.com/v1
-  TASK_PARSER_MODEL: /data/sakura/models/Qwen2.5-7B-Instruct-AWQ  # 本地: /data/sakura/models/Qwen2.5-7B-Instruct-AWQ  |  云: mimo-v2.5
-  TASK_API_KEY: no-key  # 本地: no-key  |  云: sk-cqfy...
+  TASK_PARSER_URL: https://api.xiaomimimo.com/v1  # 本地: http://172.27.143.102:8000/v1  |  云: https://api.xiaomimimo.com/v1
+  TASK_PARSER_MODEL: mimo-v2.5  # 本地: /data/sakura/models/Qwen2.5-7B-Instruct-AWQ  |  云: mimo-v2.5
+  TASK_API_KEY: sk-cwqm9day74w6wkx0wia95djylj04mp3pzj4kmmwc8wbwdz03  # 本地: no-key  |  云: sk-cqfy...
   TASK_PARSER_MAX_TOKENS: 1024
 
   # 目标检测器: vlm_detector | groundingdino | yolo
-  DETECTOR: groundingdino  # 本地: groundingdino  |  云: vlm_detector
-  DETECTOR_URL: ""  # groundingdino 走 GROUNDINGDINO_URL，留空。云: https://api.xiaomimimo.com/v1
-  DETECTOR_MODEL: ""  # groundingdino 不需要。云: mimo-v2.5
-  DETECTOR_API_KEY: no-key  # 本地: no-key  |  云: sk-cqfy...
+  DETECTOR: vlm_detector  # 本地: groundingdino  |  云: vlm_detector
+  DETECTOR_URL: https://api.xiaomimimo.com/v1  # groundingdino 走 GROUNDINGDINO_URL，留空。云: https://api.xiaomimimo.com/v1
+  DETECTOR_MODEL: mimo-v2.5  # groundingdino 不需要。云: mimo-v2.5
+  DETECTOR_API_KEY: sk-cwqm9day74w6wkx0wia95djylj04mp3pzj4kmmwc8wbwdz03  # 本地: no-key  |  云: sk-cqfy...
   DETECTOR_MAX_TOKENS: 512
+  DETECTOR_TIMEOUT: 120
+  DETECTOR_BOX_THRESHOLD: 0.4
+  DETECTOR_TEXT_THRESHOLD: 0.3
   GROUNDINGDINO_URL: http://172.27.143.102:8003/detect
 
   # 轨迹规划器: api_atomic_planner | qwen_planner
-  PLANNER: qwen_planner  # 本地: qwen_planner  |  云: api_atomic_planner
-  PLANNER_URL: http://172.27.143.102:8004/plan  # 本地 Flask: /plan（qwen_planner 自定义格式） | 云: https://api.xiaomimimo.com/v1
-  PLANNER_MODEL: /data/sakura/models/3DG-VLN-finetuned  # 本地: /data/sakura/models/3DG-VLN-finetuned  |  云: mimo-v2.5
-  PLANNER_API_KEY: no-key  # 本地: no-key  |  云: sk-cqfy...
+  PLANNER: api_atomic_planner  # 本地: qwen_planner  |  云: api_atomic_planner
+  PLANNER_URL: https://api.xiaomimimo.com/v1  # 本地 Flask: http://172.27.143.102:8004/plan | 云: https://api.xiaomimimo.com/v1
+  PLANNER_MODEL: mimo-v2.5  # 本地: /data/sakura/models/3DG-VLN-finetuned  |  云: mimo-v2.5
+  PLANNER_API_KEY: sk-cwqm9day74w6wkx0wia95djylj04mp3pzj4kmmwc8wbwdz03  # 本地: no-key  |  云: sk-cqfy...
   PLANNER_MAX_TOKENS: 2048
+  PLANNER_TIMEOUT: 120
   PLANNER_CANDIDATE_COUNT: 5            # K 条候选轨迹
   PLANNER_MAX_TRAJECTORY_LENGTH: 5      # 单条轨迹最大动作数
   PLANNER_APPROACH_STOP_MARGIN: 1.0     # 接近停止余量（米）
@@ -34,15 +38,30 @@ AGENT:
   STOP_DEPTH_THRESHOLD: 8.0
 
   # Qwen 每步 waypoints 数量
-  QWEN_WAYPOINT_COUNT: 5
+  QWEN_WAYPOINT_COUNT: 10
 
 SIM:
   FRONT_WIDTH: 1920
   FRONT_HEIGHT: 1080
   FRONT_FOV: 90
+  DEPTH_WIDTH: 640
+  DEPTH_HEIGHT: 360
+  DEPTH_FOV: 90
   DOWN_WIDTH: 640
   DOWN_HEIGHT: 640
   DOWN_FOV: 90
+  DOWN_DEPTH_WIDTH: 640
+  DOWN_DEPTH_HEIGHT: 360
+  DOWN_DEPTH_FOV: 90
+  # 抓图模式: batch | parallel
+  # - batch: 一次 simGetImages 批量请求
+  # - parallel: 多个 AirSim client 并发请求（实验性，通常更快）
+  CAPTURE_MODE: batch
+  # 抓图内容: auto | front_depth | front_down | front_down_front_depth | front_down_both_depth
+  # auto 默认规则：
+  # - api_atomic_planner  -> front_down_front_depth
+  # - qwen_planner        -> front_down
+  CAPTURE_PROFILE: auto
   # AirSim 连接 (本地留空=localhost:41451, 远程填服务器IP)
   AIRSIM_IP: "172.27.143.102"
   AIRSIM_PORT: 41451
@@ -54,6 +73,16 @@ WEB:
 
 EVAL:
   METRICS: true
+  SUCCESS_RADIUS: 10.0
+  MAX_STEPS: 100
+  INIT_MOVE_VELOCITY: 5.0
+  INIT_MOVE_TIMEOUT: 30.0
+  INIT_SETTLE_SECONDS: 1.0
+  SCENE_SWITCH_RECONNECT_WAIT: 2.0
+  SCENE_STARTUP_WAIT: 60
+  REMOTE_HOST: sakura-airsim
+  REMOTE_USER: ""
+  REMOTE_PORT: 22
 
 # 世界模型 (独立主机, Flask HTTP 服务)
 # 输入: 前视图 + 下视图 + 指令 + K 条候选轨迹(含waypoints)
@@ -63,3 +92,13 @@ WORLD_MODEL:
   NAME: api_world_model                  # 实现名 (api_world_model)
   URL: http://172.27.143.102:5001/score  # 世界模型服务地址
   TIMEOUT: 30                            # 请求超时(秒)
+
+# 候选轨迹准备（给世界模型前的预处理）
+# 作用：统一候选格式、补生成单轨迹的扰动候选、预打分并筛到 top-k
+CANDIDATE:
+  MIN_COUNT: 5
+  TOPK_FOR_WORLD_MODEL: 3
+  MAX_GENERATED: 8
+  SCALE_FACTORS: [0.85, 1.0, 1.15]
+  YAW_OFFSETS_DEG: [-10.0, 0.0, 10.0]
+  LATERAL_OFFSETS_M: [-1.5, 0.0, 1.5]

@@ -34,7 +34,7 @@ from agent.detector import build_detector
 from agent.planner import build_planner
 from PIL import Image
 
-SUCCESS_RADIUS = 10.0  # 3DG-VLN 标准
+SUCCESS_RADIUS = float(cfg.get("EVAL", {}).get("SUCCESS_RADIUS", 10.0))
 
 
 def quat_to_rot(q: list) -> np.ndarray:
@@ -141,7 +141,13 @@ def evaluate(episodes: List[Dict]):
         target_obj = ep["instruction"].split(".")[0] if ep["instruction"] else "target"
         t0 = time.time()
         try:
-            detection = detector.detect(front_rgb, target_obj, depth)
+            detection = detector.detect_with_fallback(
+                front_rgb,
+                down_rgb,
+                target_obj,
+                front_depth_meters=depth,
+                down_depth_meters=None,
+            )
         except Exception as e:
             print(f"  [SKIP] 检测失败: {e}")
             results["ne"].append(float("nan"))
@@ -154,7 +160,7 @@ def evaluate(episodes: List[Dict]):
             continue
 
         depth_str = f"depth={detection.depth_median:.1f}m" if detection.depth_median else "depth=N/A"
-        print(f"  [DETECT] bbox={detection.bbox} {depth_str} ({t1-t0:.1f}s)")
+        print(f"  [DETECT] {detection.camera} bbox={detection.bbox} {depth_str} ({t1-t0:.1f}s)")
 
         # 规划
         try:
@@ -163,6 +169,8 @@ def evaluate(episodes: List[Dict]):
                 instruction=ep["instruction"],
                 detected_bbox=detection.bbox,
                 depth_meters=depth,
+                detection=detection,
+                down_depth_meters=None,
             )
         except Exception as e:
             print(f"  [SKIP] 规划失败: {e}")

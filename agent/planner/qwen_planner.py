@@ -10,6 +10,7 @@ from agent.planner.base import BasePlanner, TrajectoryResult
 from config import cfg
 QWEN_URL = cfg["AGENT"]["PLANNER_URL"]
 QWEN_WAYPOINT_COUNT = int(cfg["AGENT"]["QWEN_WAYPOINT_COUNT"])
+QWEN_TIMEOUT = int(cfg["AGENT"].get("PLANNER_TIMEOUT", 120))
 
 
 from agent.planner import register_planner
@@ -21,7 +22,8 @@ class QwenPlanner(BasePlanner):
 
     def plan(self, front_img, down_img, instruction: str,
              direction: str = "", detected_bbox=None,
-             depth_meters=None) -> TrajectoryResult:
+             depth_meters=None, detection=None,
+             down_depth_meters=None) -> TrajectoryResult:
 
         # 编码图像
         def to_b64(img):
@@ -37,7 +39,7 @@ class QwenPlanner(BasePlanner):
             "down_image": to_b64(down_img) if down_img else to_b64(front_img),
             "instruction": instruction,
             "direction": direction,
-        }, timeout=120)
+        }, timeout=QWEN_TIMEOUT)
         data = resp.json()
         elapsed = time.time() - t0
 

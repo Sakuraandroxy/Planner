@@ -15,7 +15,7 @@ def capture_scene_depth(client, state=None, use_dual=False):
     """
     if use_dual:
         started = time.perf_counter()
-        front_rgb, down_rgb, front_depth = client.get_dual_view()
+        front_rgb, down_rgb, front_depth, _down_depth = client.get_configured_views()
         capture_time = time.perf_counter() - started
         frame = front_rgb
         depth_meters = front_depth

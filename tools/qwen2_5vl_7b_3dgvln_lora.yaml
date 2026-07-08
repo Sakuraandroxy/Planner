@@ -9,6 +9,8 @@ stage: sft
 do_train: true
 finetuning_type: lora
 lora_target: all
+lora_rank: 8
+lora_alpha: 16
 deepspeed: /data/sakura/data/UAV-VLN-FOV/tools/ds_zero3_offload.json
 
 ### dataset

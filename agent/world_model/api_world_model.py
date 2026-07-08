@@ -67,6 +67,10 @@ class ApiWorldModel(BaseWorldModel):
                     "reason": c.get("reason", ""),
                     "delta": c.get("delta", []),
                     "scale": c.get("scale", 1.0),
+                    "source": c.get("source", "planner"),
+                    "pre_score": c.get("pre_score", 0.0),
+                    "confidence": c.get("confidence", 0.0),
+                    "score_breakdown": c.get("score_breakdown", {}),
                 }
                 for c in candidates
             ],

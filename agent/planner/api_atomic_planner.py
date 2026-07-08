@@ -59,11 +59,12 @@ PLANNER_SYSTEM_PROMPT = """你是无人机路径规划器。
 3. 到达半径只用于判断 done=true/false，禁止把到达半径从目标深度中减去来生成 forward 距离；如果当前目标深度大于到达半径，说明任务尚未完成，应规划尽可能少步数接近目标。
 4. 动作距离应根据目标深度、障碍物深度和接近停止余量 {approach_stop_margin}m 决定，而不是 target_depth - arrival_radius。例如：target_depth=41m, arrival_radius=5m, approach_stop_margin={approach_stop_margin}m 时，不能因为半径为5m就输出 forward 36；若路径安全，应接近输出 forward 40。
 5. 如果当前还未完成，应在不碰撞、不越过目标、不切换目标实例的前提下，用尽可能少的动作完成任务；安全可通行时优先使用单个较大的 forward，而不是多次小步前进。
-6. 只有当深度提示明确写着"当前RGB图中未可靠发现目标"时，才禁止 forward/backward/up/down；此时只能原地 left/right 旋转搜索。
-7. 如果当前帧有目标bbox和目标深度，就基于当前目标位置、深度和障碍物规划；不要因为历史记忆而忽略当前可见目标。
-8. 相邻动作必须是不同类型；连续同类动作必须合并。
-9. 需要绕障时可以先转向再前进；动作数值必须由当前目标深度和障碍物深度决定，不能照抄示例数值。
-10. 所有动作必须写在 candidates[].actions 中，reasoning_summary 只写文字解释。"""
+6. 只有当深度提示明确写着"前视图和下视图均未可靠发现目标"时，才禁止 forward/backward/up/down；此时只能原地 left/right 旋转搜索。
+7. 如果深度提示写着"前视图未发现目标，但下视图已发现目标"，这不算目标丢失，而表示目标已进入机体下方视野。此时必须结合下视图和下视深度做近距离修正，避免大角度旋转把目标甩出下视图。
+8. 如果当前帧有目标bbox和目标深度，就基于当前目标位置、深度和障碍物规划；不要因为历史记忆而忽略当前可见目标。
+9. 相邻动作必须是不同类型；连续同类动作必须合并。
+10. 需要绕障时可以先转向再前进；动作数值必须由当前目标深度和障碍物深度决定，不能照抄示例数值。
+11. 所有动作必须写在 candidates[].actions 中，reasoning_summary 只写文字解释。"""
 
 
 # ══════════════════════════════════════════════════════════════
@@ -90,7 +91,8 @@ class ApiAtomicPlanner(BasePlanner):
 
     def plan(self, front_img, down_img, instruction: str,
              direction: str = "", detected_bbox=None,
-             depth_meters=None) -> TrajectoryResult:
+             depth_meters=None, detection=None,
+             down_depth_meters=None) -> TrajectoryResult:
         """调用 VLM API 获取 K 条候选轨迹，计算每条 delta 供世界模型使用。"""
         t_total_start = time.time()
         k = self.candidate_count
@@ -112,7 +114,13 @@ class ApiAtomicPlanner(BasePlanner):
             return base64.b64encode(buf.getvalue()).decode()
 
         # ─── 构建深度信息文本（与旧项目 _format_depth_info 等价） ───
-        depth_info = _build_depth_info(depth_meters, detected_bbox, front_img)
+        depth_info = _build_depth_info(
+            front_depth_meters=depth_meters,
+            down_depth_meters=down_depth_meters,
+            detection=detection,
+            front_img=front_img,
+            down_img=down_img,
+        )
 
         # ─── 方向提示 ───
         direction_hint = f"\n方向提示：{direction}" if direction else ""
@@ -129,8 +137,10 @@ class ApiAtomicPlanner(BasePlanner):
 
         # ─── 构建 user messages ───
         content = []
-        # 云 API (MiMo/GPT-4o) 模式只发前视图（下视图仅本地 Qwen 微调模型使用）
-        for label, img, getter in [("前视图", front_img, get_cached_front_b64)]:
+        for label, img, getter in [
+            ("前视图", front_img, get_cached_front_b64),
+            ("下视图", down_img, get_cached_down_b64),
+        ]:
             b64 = _b64(img, getter)
             if b64:
                 content.append({
@@ -140,13 +150,15 @@ class ApiAtomicPlanner(BasePlanner):
 
         # 用户文本：任务 + 深度信息
         user_text = (
+            "输入说明：第1张图是前视图，第2张图是下视图（如果提供）。"
             f"任务：{instruction}。{depth_info}。"
             f"根据当前帧、目标/障碍物位置和深度生成 {k} 条候选轨迹；"
             "是否完成由任务语义决定：旁边/附近/接近/靠近类可按到达半径判断，上方/顶部/侧方/绕行/穿过等关系必须到对应位置；"
             "到达半径只用于判断done=true/false，禁止用target_depth-arrival_radius生成forward距离；"
             "如果目标深度大于到达半径，任务尚未完成，应根据目标深度、障碍物深度和接近停止余量用尽可能少步数接近目标；"
             "未完成时在安全可通行、不越过目标、不切换目标实例的前提下，用尽可能少的动作完成任务，安全时优先单个较大的forward；"
-            "只有目标真正不可见时才只允许原地旋转搜索；"
+            "只有前视图和下视图都没有目标时才只允许原地旋转搜索；"
+            "如果前视图没有目标但下视图有目标，说明目标在机体下方附近，此时不要把它当成not found，也不要大角度乱转；应优先根据下视目标在图中的前后左右位置做小步修正；"
             "相邻动作必须不同类型，连续 forward 必须合并；只输出JSON。"
         )
         content.append({"type": "text", "text": user_text})
@@ -215,68 +227,135 @@ class ApiAtomicPlanner(BasePlanner):
 # ══════════════════════════════════════════════════════════════
 
 def _build_depth_info(
-    depth_meters: Optional[np.ndarray],
-    detected_bbox: Optional[List[int]],
+    front_depth_meters: Optional[np.ndarray],
+    down_depth_meters: Optional[np.ndarray],
+    detection,
     front_img,
+    down_img,
 ) -> str:
-    """从原始深度矩阵构建 VLM 可读的深度提示文字。
+    """构建前视/下视联合深度提示。"""
+    parts: List[str] = []
 
-    旧项目用 estimate_depth_in_bbox() 取目标区域中位深度，
-    此处简化：取 bbox 中心点 + 画面统计。
-    """
+    if detection is not None and getattr(detection, "visible", False) and getattr(detection, "bbox", None):
+        camera = getattr(detection, "camera", "front") or "front"
+        if camera == "front":
+            parts.append("目标检测：前视图已发现目标")
+            parts.extend(_format_target_depth_parts(
+                depth_meters=front_depth_meters,
+                bbox=detection.bbox,
+                image=front_img,
+                prefix="前视目标",
+            ))
+        elif camera == "down":
+            parts.append("目标检测：前视图未发现目标，但下视图已发现目标")
+            parts.append("这表示目标已进入机体下方附近视野，不应视为目标丢失")
+            parts.append("下视图方位解释：图像上方=机体前方，下方=机体后方，左侧=机体左侧，右侧=机体右侧")
+            parts.append(f"下视目标相对位置={_describe_bbox_position(detection.bbox, down_img, downward=True)}")
+            parts.extend(_format_target_depth_parts(
+                depth_meters=down_depth_meters,
+                bbox=detection.bbox,
+                image=down_img,
+                prefix="下视目标",
+            ))
+    else:
+        parts.append("目标检测：前视图和下视图均未可靠发现目标")
+
+    front_scene = _format_scene_depth_stats(front_depth_meters, prefix="前视")
+    down_scene = _format_scene_depth_stats(down_depth_meters, prefix="下视")
+    if front_scene:
+        parts.extend(front_scene)
+    if down_scene:
+        parts.extend(down_scene)
+
+    if parts:
+        return "深度提示：" + "，".join(parts) + "。规划必须优先使用这些可见性和深度数值。"
+    return "深度提示：未获取到有效深度统计，请保守行动并优先小步观察。"
+
+
+def _format_scene_depth_stats(depth_meters: Optional[np.ndarray], prefix: str) -> List[str]:
     if depth_meters is None:
-        return "深度提示：未获取到有效深度数据，请保守行动并优先小步观察。"
-
+        return []
+    valid = depth_meters[(depth_meters > 0.1) & (depth_meters < 1000.0)]
+    if len(valid) == 0:
+        return []
     h, w = depth_meters.shape
-    all_valid = depth_meters[(depth_meters > 0.1) & (depth_meters < 1000.0)]
-
-    parts = []
-    if len(all_valid) > 0:
-        scene_min = float(np.min(all_valid))
-        parts.append(f"全画面最近深度={scene_min:.1f}m")
-
-    # 画面中心区域深度
     cy, cx = h // 2, w // 2
     half_h, half_w = max(1, h // 10), max(1, w // 10)
     center_region = depth_meters[cy - half_h:cy + half_h, cx - half_w:cx + half_w]
     center_valid = center_region[(center_region > 0.1) & (center_region < 1000.0)]
+    parts = [f"{prefix}全画面最近深度={float(np.min(valid)):.1f}m"]
     if len(center_valid) > 0:
-        center_min = float(np.min(center_valid))
-        center_avg = float(np.mean(center_valid))
-        parts.append(f"画面中心最近深度={center_min:.1f}m")
-        parts.append(f"画面中心平均深度={center_avg:.1f}m")
+        parts.append(f"{prefix}画面中心最近深度={float(np.min(center_valid)):.1f}m")
+        parts.append(f"{prefix}画面中心平均深度={float(np.mean(center_valid)):.1f}m")
+    return parts
 
-    # 目标 bbox 深度
-    if detected_bbox is not None and front_img is not None:
-        try:
-            x1, y1, x2, y2 = detected_bbox
-            cx_bbox = (x1 + x2) // 2
-            cy_bbox = (y1 + y2) // 2
-            sw = w / front_img.width
-            sh = h / front_img.height
-            dcx = int(cx_bbox * sw)
-            dcy = int(cy_bbox * sh)
-            if 0 <= dcy < h and 0 <= dcx < w:
-                target_depth = float(depth_meters[dcy, dcx])
-                if target_depth > 0.1 and target_depth < 1000.0:
-                    parts.insert(0, f"目标bbox中心深度={target_depth:.1f}m")
-                    # 也在 bbox 区域内采样几个点取中位数
-                    region_x1 = max(0, int(x1 * sw))
-                    region_y1 = max(0, int(y1 * sh))
-                    region_x2 = min(w, int(x2 * sw))
-                    region_y2 = min(h, int(y2 * sh))
-                    if region_x2 > region_x1 and region_y2 > region_y1:
-                        region = depth_meters[region_y1:region_y2, region_x1:region_x2]
-                        region_valid = region[(region > 0.1) & (region < 1000.0)]
-                        if len(region_valid) > 0:
-                            parts.insert(1, f"目标区域中位深度={float(np.median(region_valid)):.1f}m")
-                            parts.insert(2, f"目标区域最近深度={float(np.min(region_valid)):.1f}m")
-        except (IndexError, ValueError, TypeError):
-            pass
 
-    if parts:
-        return "深度提示：" + "，".join(parts) + "。规划必须优先使用这些深度数值。"
-    return "深度提示：未获取到有效深度统计，请保守行动并优先小步观察。"
+def _format_target_depth_parts(
+    depth_meters: Optional[np.ndarray],
+    bbox: Optional[List[int]],
+    image,
+    prefix: str,
+) -> List[str]:
+    if depth_meters is None or bbox is None or image is None:
+        return [f"{prefix}深度=未知"]
+    try:
+        h, w = depth_meters.shape
+        x1, y1, x2, y2 = bbox
+        sw = w / image.width
+        sh = h / image.height
+        region_x1 = max(0, int(x1 * sw))
+        region_y1 = max(0, int(y1 * sh))
+        region_x2 = min(w, int(x2 * sw))
+        region_y2 = min(h, int(y2 * sh))
+        if region_x2 <= region_x1 or region_y2 <= region_y1:
+            return [f"{prefix}深度=未知"]
+        region = depth_meters[region_y1:region_y2, region_x1:region_x2]
+        region_valid = region[(region > 0.1) & (region < 1000.0)]
+        if len(region_valid) == 0:
+            return [f"{prefix}深度=未知"]
+        cx = (region_x1 + region_x2) // 2
+        cy = (region_y1 + region_y2) // 2
+        center_depth = float(depth_meters[cy, cx]) if 0 <= cy < h and 0 <= cx < w else float(np.median(region_valid))
+        return [
+            f"{prefix}bbox中心深度={center_depth:.1f}m",
+            f"{prefix}区域中位深度={float(np.median(region_valid)):.1f}m",
+            f"{prefix}区域最近深度={float(np.min(region_valid)):.1f}m",
+        ]
+    except (IndexError, ValueError, TypeError):
+        return [f"{prefix}深度=未知"]
+
+
+def _describe_bbox_position(bbox: Optional[List[int]], image, downward: bool = False) -> str:
+    if bbox is None or image is None:
+        return "unknown"
+    x1, y1, x2, y2 = bbox
+    cx = (x1 + x2) / 2.0
+    cy = (y1 + y2) / 2.0
+    nx = cx / max(float(image.width), 1.0)
+    ny = cy / max(float(image.height), 1.0)
+
+    if abs(nx - 0.5) < 0.12 and abs(ny - 0.5) < 0.12:
+        return "center"
+
+    horizontal = "left" if nx < 0.38 else "right" if nx > 0.62 else "center"
+    vertical = "front" if ny < 0.38 else "rear" if ny > 0.62 else "center"
+
+    if downward:
+        if vertical == "center" and horizontal != "center":
+            return f"below-{horizontal}"
+        if horizontal == "center" and vertical != "center":
+            return f"below-{vertical}"
+        if horizontal == "center" and vertical == "center":
+            return "directly-below"
+        return f"below-{vertical}-{horizontal}"
+
+    if vertical == "center" and horizontal != "center":
+        return horizontal
+    if horizontal == "center" and vertical != "center":
+        return vertical
+    if horizontal == "center" and vertical == "center":
+        return "center"
+    return f"{vertical}-{horizontal}"
 
 
 # ══════════════════════════════════════════════════════════════
