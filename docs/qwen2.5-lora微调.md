@@ -428,6 +428,8 @@ ZeRO-3 将模型参数、梯度、优化器状态分片到所有 GPU + offload �
 | `offload_param` | **所有卡数都必须 `cpu`**。cross_entropy(logits) 的 1.65 GB 分配无法压缩，权重卸载到 CPU 是唯一不降分辨率的方法 |
 | `offload_optimizer` | LoRA 仅 20M 参数，优化器状态分片后每卡忽略不计，放 GPU |
 | `image_max_pixels` | 2 卡显存特别紧张（权重卸载后仍 8+GB），必须降分辨率。3~4 卡可以保持 1024² |
+>
+> **训练分辨率 ≠ 推理分辨率**：`image_max_pixels` 是模型内部处理的上限，不是 AirSim 采集分辨率。推理时 Qwen2.5-VL 的 processor 会自动把 1920×1080 原图等比缩放到训练时的分辨率，无需调低 AirSim 采集参数。原图分辨率越高越好（下采样比直接低分辨率采集细节更丰富）。
 
 ### 6.3 配置文件生成脚本
 
@@ -497,8 +499,8 @@ llamafactory-cli train $YML
 
 ```bash
 llamafactory-cli export \
-    --model_name_or_path Qwen/Qwen2.5-VL-7B-Instruct \
-    --adapter_name_or_path ./output/qwen2_5vl_7b_3dgvln_lora/checkpoint-XXX \
+    --model_name_or_path /data/sakura/models/3DG-VLN \
+    --adapter_name_or_path ./output/qwen2_5vl_7b_3dgvln_lora/checkpoint-2268 \
     --template qwen2_vl \
     --finetuning_type lora \
     --export_dir /data/sakura/models/3DG-VLN-finetuned

@@ -53,11 +53,11 @@ class QwenPlanner(BasePlanner):
         if raw_count == 0:
             print(f"  [Qwen] raw_output: {raw_out[:300]}")
         if raw_count == 0 or all(all(v == 0.0 for v in wp) for wp in waypoints):
-            print(f"  [Qwen] \U0001f4a4 空轨迹（LoRA 未生效）")
+            print(f"  [Qwen] 💤 空轨迹（LoRA 未生效）")
 
         done = self.should_stop(detected_bbox, depth_meters)
         return TrajectoryResult(
             waypoints=waypoints,
             done=done,
-            reasoning=f"Qwen: {K} waypoints" + (" [\u5230\u8fbe]" if done else ""),
+            reasoning=f"Qwen: {K} waypoints" + (" [到达]" if done else ""),
         )
