@@ -24,7 +24,8 @@ class BasePlanner(ABC):
     def plan(self, front_img, down_img, instruction: str,
              direction: str = "", detected_bbox=None,
              depth_meters=None, detection=None,
-             down_depth_meters=None) -> TrajectoryResult:
+             down_depth_meters=None,
+             relation: str = "", target: str = "") -> TrajectoryResult:
         ...
 
     def should_stop(self, detected_bbox, depth_meters,

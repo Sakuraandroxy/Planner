@@ -19,6 +19,16 @@ device = model.device
 print(f"[Qwen Server] Loaded on {device}")
 
 
+def build_waypoint_prompt(instruction: str, waypoint_count: int = 5) -> str:
+    """Build the same user prompt style used during waypoint fine-tuning."""
+    return (
+        f"Instruction: {instruction}\n"
+        f"Output exactly {waypoint_count} cumulative body-frame waypoints as a JSON list.\n"
+        "Each waypoint must be [dx, dy, dz].\n"
+        "Do not output any other text."
+    )
+
+
 # ═══════════════════════════════════════════════════════
 #  /v1/chat/completions — OpenAI 兼容（文本 + 图片）
 # ═══════════════════════════════════════════════════════
@@ -125,7 +135,7 @@ def plan():
     front_b64 = data["front_image"]
     down_b64 = data.get("down_image", front_b64)
     instruction = data.get("instruction", "Fly to the target")
-    direction = data.get("direction", "")
+    waypoint_count = int(data.get("waypoint_count", 5))
 
     def decode_b64(b64):
         return Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGB")
@@ -133,7 +143,7 @@ def plan():
     front_img = decode_b64(front_b64)
     down_img = decode_b64(down_b64)
 
-    desc = f"{instruction}. {direction}" if direction else instruction
+    desc = build_waypoint_prompt(instruction, waypoint_count)
 
     messages = [{
         "role": "user",

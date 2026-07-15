@@ -23,10 +23,11 @@ class FrameCapturer:
         from config import cfg
         port = int(cfg.get("SIM", {}).get("AIRSIM_PORT", 41451))
         self.client = airsim.MultirotorClient(port=port)
-        self.client.confirmConnection()
         self.state = state
         self.interval = interval
         self._stop = threading.Event()
+        self._paused = threading.Event()
+        self._busy = threading.Event()
         self._thread = None
         self._lock = threading.Lock()
 
@@ -46,6 +47,18 @@ class FrameCapturer:
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=2.0)
+
+    def pause(self, wait: bool = True, timeout: float = 2.0):
+        """Pause background RPCs to avoid competing with the main control loop."""
+        self._paused.set()
+        if not wait:
+            return
+        deadline = _time.perf_counter() + max(0.0, timeout)
+        while self._busy.is_set() and _time.perf_counter() < deadline:
+            _time.sleep(0.01)
+
+    def resume(self):
+        self._paused.clear()
 
     def get_latest_frame(self) -> Tuple[Optional[bytes], Optional['numpy.ndarray']]:
         """主循环调用：获取最近一次抓取的 (RGB_JPEG_bytes, depth_meters)。
@@ -68,7 +81,11 @@ class FrameCapturer:
         import numpy as np
 
         while not self._stop.is_set():
+            if self._paused.is_set():
+                _time.sleep(min(self.interval, 0.05))
+                continue
             try:
+                self._busy.set()
                 responses = self.client.simGetImages([
                     airsim.ImageRequest("front_center", airsim.ImageType.Scene,
                                         False, True),  # RGB, compressed
@@ -117,4 +134,6 @@ class FrameCapturer:
                     print(f"  [FrameCapturer] error #{self._error_count}: {exc}")
                 elif self._error_count == 4:
                     print(f"  [FrameCapturer] suppressing further errors...")
+            finally:
+                self._busy.clear()
             _time.sleep(self.interval)

@@ -69,6 +69,8 @@ class SceneManager:
         self._remote_pid_path = f"{self._remote_state_dir}/current_scene.pid"
         self._remote_log_path = f"{self._remote_state_dir}/current_scene.log"
         self._remote_settings_path = f"{self._remote_state_dir}/settings.json"
+        self._tunnel_proc: Optional[subprocess.Popen] = None
+        self._auto_ssh_tunnel = bool(cfg.get("EVAL", {}).get("AUTO_SSH_TUNNEL", True))
         if self.remote_enabled:
             self._scene_map = self._scan_remote_scenes(env_root)
         else:
@@ -90,14 +92,57 @@ class SceneManager:
     def _run_ssh(self, remote_cmd: str, check: bool = True) -> subprocess.CompletedProcess:
         return subprocess.run(
             ["ssh", "-p", str(self.remote_port), self._ssh_target, remote_cmd],
-            capture_output=True, text=True, check=check
+            capture_output=True, text=True, encoding="utf-8", errors="replace", check=check
         )
 
     def _run_scp_to_remote(self, local_path: str, remote_path: str):
         subprocess.run(
             ["scp", "-P", str(self.remote_port), local_path, f"{self._ssh_target}:{remote_path}"],
-            capture_output=True, text=True, check=True
+            capture_output=True, text=True, encoding="utf-8", errors="replace", check=True
         )
+
+    def _should_use_tunnel(self) -> bool:
+        if not self.remote_enabled or not self._auto_ssh_tunnel:
+            return False
+        airsim_host = (cfg.get("SIM", {}).get("AIRSIM_IP", "") or "").strip().lower()
+        return airsim_host in ("", "localhost", "127.0.0.1")
+
+    def _ensure_tunnel(self):
+        """Expose remote AirSim RPC as local localhost:port for Windows clients."""
+        if not self._should_use_tunnel():
+            return
+        if self._tunnel_proc is not None and self._tunnel_proc.poll() is None:
+            return
+        cmd = [
+            "ssh",
+            "-p", str(self.remote_port),
+            "-o", "ExitOnForwardFailure=yes",
+            "-N",
+            "-L", f"{self.airsim_port}:127.0.0.1:{self.airsim_port}",
+            self._ssh_target,
+        ]
+        self._tunnel_proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        time.sleep(0.5)
+        if self._tunnel_proc.poll() is not None:
+            print(f"  [SceneManager] ⚠️ SSH tunnel failed, local port {self.airsim_port} may be occupied")
+            self._tunnel_proc = None
+            return
+        print(f"  [SceneManager] SSH tunnel: localhost:{self.airsim_port} -> {self._ssh_target}:127.0.0.1:{self.airsim_port}")
+
+    def _stop_tunnel(self):
+        if self._tunnel_proc is None:
+            return
+        if self._tunnel_proc.poll() is None:
+            self._tunnel_proc.terminate()
+            try:
+                self._tunnel_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self._tunnel_proc.kill()
+        self._tunnel_proc = None
 
     def _scan_remote_scenes(self, env_root: str) -> Dict[str, str]:
         scene_map: Dict[str, str] = {}
@@ -197,6 +242,7 @@ ps -ef | grep -E 'LinuxNoEditor|Carla|AirSim|UE4' | grep -v grep | head -n 20 ||
             saw_remote_listen = saw_remote_listen or port_ok
             if port_ok:
                 if self.remote_enabled:
+                    self._ensure_tunnel()
                     if self._local_port_open(airsim_host, timeout=1.0):
                         saw_local_connect = True
                         return True
@@ -247,12 +293,14 @@ ps -ef | grep -E 'LinuxNoEditor|Carla|AirSim|UE4' | grep -v grep | head -n 20 ||
                 launch_cmd = "\n".join([
                     f"mkdir -p {shlex.quote(self._remote_state_dir)}",
                     f"if [ -f {shlex.quote(self._remote_pid_path)} ]; then",
-                    f"  kill $(cat {shlex.quote(self._remote_pid_path)}) >/dev/null 2>&1 || true",
+                    f"  old_pid=$(cat {shlex.quote(self._remote_pid_path)})",
+                    "  pkill -TERM -P \"$old_pid\" >/dev/null 2>&1 || true",
+                    "  kill -TERM \"$old_pid\" >/dev/null 2>&1 || true",
                     f"  rm -f {shlex.quote(self._remote_pid_path)}",
                     "fi",
                     f"printf '%s\\n' \"[launch] $(date -Is) scene={scene_name} script={sh_path}\" > {shlex.quote(self._remote_log_path)}",
                     (
-                        f"nohup bash {shlex.quote(sh_path)} -RenderOffscreen "
+                        f"nohup setsid bash {shlex.quote(sh_path)} -RenderOffscreen "
                         f"-GraphicsAdapter={self.gpu_id} "
                         f"-settings={shlex.quote(self._remote_settings_path)} "
                         f">> {shlex.quote(self._remote_log_path)} 2>&1 < /dev/null &"
@@ -300,7 +348,9 @@ ps -ef | grep -E 'LinuxNoEditor|Carla|AirSim|UE4' | grep -v grep | head -n 20 ||
             try:
                 stop_cmd = (
                     f"if [ -f {shlex.quote(self._remote_pid_path)} ]; then "
-                    f"kill $(cat {shlex.quote(self._remote_pid_path)}) >/dev/null 2>&1 || true; "
+                    f"old_pid=$(cat {shlex.quote(self._remote_pid_path)}); "
+                    f"pkill -TERM -P \"$old_pid\" >/dev/null 2>&1 || true; "
+                    f"kill -TERM \"$old_pid\" >/dev/null 2>&1 || true; "
                     f"rm -f {shlex.quote(self._remote_pid_path)}; fi"
                 )
                 self._run_ssh(f"bash -lc {shlex.quote(stop_cmd)}", check=False)
@@ -347,5 +397,6 @@ ps -ef | grep -E 'LinuxNoEditor|Carla|AirSim|UE4' | grep -v grep | head -n 20 ||
 
     def __del__(self):
         self.stop()
+        self._stop_tunnel()
         import shutil
         shutil.rmtree(self._settings_dir, ignore_errors=True)

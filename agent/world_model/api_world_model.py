@@ -17,7 +17,7 @@ from PIL import Image
 
 from agent.world_model.base import BaseWorldModel, WorldModelResult
 from agent.world_model import register_world_model
-from agent.planner.api_atomic_planner import _actions_to_body_waypoints
+from agent.candidate.base import candidate_dict_to_world_model
 
 
 def _pil_to_b64(img) -> str:
@@ -47,14 +47,11 @@ class ApiWorldModel(BaseWorldModel):
               instruction: str, candidates: List[dict]) -> WorldModelResult:
         """调用远程世界模型打分。
 
-        对每条候选，如果 waypoints 未预计算则从 actions 转换。
+        候选轨迹应在 candidate 模块内转成世界模型输入格式。
         """
         t0 = time.time()
 
-        # 为每条候选补全 waypoints（如果还没有）
-        for c in candidates:
-            if "waypoints" not in c or not c["waypoints"]:
-                c["waypoints"] = _actions_to_body_waypoints(c.get("actions", []))
+        wm_candidates = [candidate_dict_to_world_model(c) for c in candidates]
 
         payload = {
             "front_image": front_img_b64,
@@ -72,7 +69,7 @@ class ApiWorldModel(BaseWorldModel):
                     "confidence": c.get("confidence", 0.0),
                     "score_breakdown": c.get("score_breakdown", {}),
                 }
-                for c in candidates
+                for c in wm_candidates
             ],
         }
 

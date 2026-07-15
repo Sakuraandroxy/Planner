@@ -9,7 +9,7 @@ from transformers import AutoProcessor, AutoModelForImageTextToText
 app = Flask(__name__)
 
 print("[Qwen Server] Loading model...")
-model_path = "/data/sakura/models/3DG-VLN-finetuned"  # ← 微调后的模型
+model_path = os.environ.get("QWEN_MODEL_PATH", "/data/sakura/models/3DG-VLN-finetuned-1")
 processor = AutoProcessor.from_pretrained(model_path, trust_remote_code=True)
 model = AutoModelForImageTextToText.from_pretrained(
     model_path, device_map="auto", torch_dtype=torch.float16, trust_remote_code=True
@@ -17,6 +17,16 @@ model = AutoModelForImageTextToText.from_pretrained(
 model.eval()
 device = model.device
 print(f"[Qwen Server] Loaded on {device}")
+
+
+def build_waypoint_prompt(instruction: str, waypoint_count: int = 5) -> str:
+    """Build the same user prompt style used during waypoint fine-tuning."""
+    return (
+        f"Instruction: {instruction}\n"
+        f"Output exactly {waypoint_count} cumulative body-frame waypoints as a JSON list.\n"
+        "Each waypoint must be [dx, dy, dz].\n"
+        "Do not output any other text."
+    )
 
 
 # ═══════════════════════════════════════════════════════
@@ -123,7 +133,7 @@ def plan():
     front_b64 = data["front_image"]
     down_b64 = data.get("down_image", front_b64)
     instruction = data.get("instruction", "Fly to the target")
-    direction = data.get("direction", "")
+    waypoint_count = int(data.get("waypoint_count", 5))
 
     def decode_b64(b64):
         return Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGB")
@@ -131,9 +141,7 @@ def plan():
     front_img = decode_b64(front_b64)
     down_img = decode_b64(down_b64)
 
-    desc = f"Instruction: {instruction}"
-    if direction:
-        desc += f"\nDirection: {direction}"
+    desc = build_waypoint_prompt(instruction, waypoint_count)
 
     messages = [{
         "role": "user",

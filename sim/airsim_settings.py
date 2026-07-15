@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import time
 from pathlib import Path
 from typing import Any, Dict
 
@@ -97,3 +98,23 @@ def build_airsim_settings_with_overrides() -> Dict[str, Any]:
         },
     }
     return _deep_merge(base, overrides)
+
+
+def write_local_airsim_settings(make_backup: bool = True) -> Path:
+    """Write local AirSim settings.json using config/default.yaml SIM overrides."""
+    settings = build_airsim_settings_with_overrides()
+    LOCAL_AIRSIM_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    if make_backup and LOCAL_AIRSIM_SETTINGS_PATH.exists():
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        backup_path = LOCAL_AIRSIM_SETTINGS_PATH.with_name(f"settings.backup_{stamp}.json")
+        backup_path.write_text(
+            LOCAL_AIRSIM_SETTINGS_PATH.read_text(encoding="utf-8-sig"),
+            encoding="utf-8",
+        )
+
+    LOCAL_AIRSIM_SETTINGS_PATH.write_text(
+        json.dumps(settings, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return LOCAL_AIRSIM_SETTINGS_PATH

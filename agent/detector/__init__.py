@@ -26,6 +26,7 @@ def build_detector():
     # 懒加载：import 触发 @register_detector 装饰器自动注册
     from agent.detector.groundingdino_detector import GroundingDINODetector  # noqa: F401
     from agent.detector.vlm_detector import VLMDetector  # noqa: F401
+    from agent.detector.noop_detector import NoopDetector  # noqa: F401
     name = cfg["AGENT"]["DETECTOR"]
     if name not in _DETECTOR_REGISTRY:
         raise KeyError(f"未知检测器 [{name}]，已注册: {list(_DETECTOR_REGISTRY.keys())}")

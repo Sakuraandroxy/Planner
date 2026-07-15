@@ -1,4 +1,5 @@
 """Wraps all AirSim API calls into a clean interface."""
+import contextlib
 import math, io, time
 import numpy as np
 from scipy.spatial.transform import Rotation as R
@@ -9,7 +10,7 @@ from PIL import Image, ImageDraw, ImageFont
 class AirSimClient:
     """Singleton-style wrapper around the AirSim MultirotorClient."""
 
-    def __init__(self, ip: str = "", port: int = 41451, use_config_ip: bool = True):
+    def __init__(self, ip: str = "", port: int = 41451, use_config_ip: bool = True, timeout_value: float | None = None):
         from config import cfg
         sim = cfg.get("SIM", {})
         if port == 41451:
@@ -18,10 +19,21 @@ class AirSimClient:
             ip = sim.get("AIRSIM_IP", "")
         self._ip = ip
         self._port = port
-        self.client = airsim.MultirotorClient(ip=ip, port=port) if ip else airsim.MultirotorClient(port=port)
+        self._timeout_value = timeout_value
+        if timeout_value is None:
+            self.client = airsim.MultirotorClient(ip=ip, port=port) if ip else airsim.MultirotorClient(port=port)
+        else:
+            self.client = (
+                airsim.MultirotorClient(ip=ip, port=port, timeout_value=timeout_value)
+                if ip else airsim.MultirotorClient(port=port, timeout_value=timeout_value)
+            )
         self._connected = False
 
-    def connect(self):
+    def connect(self, quiet: bool = False):
+        # Do not redirect stdout here. `confirmConnection()` may be called from a
+        # worker thread with a timeout wrapper; `redirect_stdout()` mutates the
+        # process-global `sys.stdout`, which can hide main-thread retry logs if the
+        # RPC handshake blocks.
         self.client.confirmConnection()
         self._connected = True
 
@@ -59,13 +71,27 @@ class AirSimClient:
     def rotate_to_yaw(self, yaw_deg, timeout=5.0):
         self.client.rotateToYawAsync(yaw_deg, timeout_sec=timeout).join()
 
+    def rotate_yaw(self, delta_deg, timeout=5.0):
+        """Rotate relative to the current yaw angle."""
+        _pos, yaw = self.get_pose()
+        self.rotate_to_yaw(yaw + float(delta_deg), timeout=timeout)
+
+    def set_pose_xyz_yaw(self, x, y, z, yaw_deg: float, ignore_collision: bool = True):
+        """Teleport vehicle to an exact position/yaw pose for dataset initialization."""
+        yaw_rad = math.radians(float(yaw_deg))
+        pose = airsim.Pose(
+            airsim.Vector3r(float(x), float(y), float(z)),
+            airsim.to_quaternion(0.0, 0.0, yaw_rad),
+        )
+        self.client.simSetVehiclePose(pose, ignore_collision=ignore_collision)
+
     def get_image(self):
         responses = self.client.simGetImages([
             airsim.ImageRequest("front_center", airsim.ImageType.Scene, False, True)
         ])
         if not responses or not responses[0].image_data_uint8:
             return None
-        return Image.open(io.BytesIO(bytes(responses[0].image_data_uint8)))
+        return self._decode_rgb_image_bytes(responses[0].image_data_uint8)
 
     def get_scene_and_depth_meters(self):
         """Return RGB frame and raw DepthPerspective meters from one AirSim RPC."""
@@ -76,7 +102,7 @@ class AirSimClient:
         frame = None
         depth = None
         if responses and len(responses) > 0 and responses[0].image_data_uint8:
-            frame = Image.open(io.BytesIO(bytes(responses[0].image_data_uint8)))
+            frame = self._decode_rgb_image_bytes(responses[0].image_data_uint8)
         if responses and len(responses) > 1 and responses[1].image_data_float:
             r = responses[1]
             depth = np.array(r.image_data_float, dtype=np.float32).reshape(r.height, r.width)
@@ -88,6 +114,8 @@ class AirSimClient:
         支持：
         - front_depth
         - front_down
+        - front_depth_only
+        - front_down_depth_only
         - front_down_front_depth
         - front_down_both_depth
         - auto
@@ -102,10 +130,7 @@ class AirSimClient:
         if configured and configured != "auto":
             return configured
 
-        planner_name = str(cfg.get("AGENT", {}).get("PLANNER", "api_atomic_planner") or "").strip().lower()
-        if planner_name == "qwen_planner":
-            return "front_down"
-        return "front_down_front_depth"
+        return "front_down"
 
     def resolve_capture_mode(self, mode: str | None = None) -> str:
         """解析抓图模式配置。"""
@@ -117,7 +142,7 @@ class AirSimClient:
         configured = str(sim_cfg.get("CAPTURE_MODE", "batch") or "batch").strip().lower()
         return configured or "batch"
 
-    def get_configured_views(self, profile: str | None = None, mode: str | None = None):
+    def get_configured_views(self, profile: str | None = None, mode: str | None = None, verbose: bool = False):
         """按配置抓取前/下视 RGB 与深度。
 
         返回:
@@ -129,6 +154,7 @@ class AirSimClient:
         front_rgb, down_rgb, front_depth, down_depth, _timing = self.capture_views(
             profile=resolved_profile,
             mode=resolved_mode,
+            verbose=verbose,
         )
         return front_rgb, down_rgb, front_depth, down_depth
 
@@ -278,9 +304,16 @@ class AirSimClient:
                 ("front_rgb", airsim.ImageRequest("front_center", airsim.ImageType.Scene, False, True)),
                 ("front_depth", airsim.ImageRequest("front_center", airsim.ImageType.DepthPerspective, True, False)),
             ],
+            "front_depth_only": [
+                ("front_depth", airsim.ImageRequest("front_center", airsim.ImageType.DepthPerspective, True, False)),
+            ],
             "front_down": [
                 ("front_rgb", airsim.ImageRequest("front_center", airsim.ImageType.Scene, False, True)),
                 ("down_rgb", airsim.ImageRequest("down_center", airsim.ImageType.Scene, False, True)),
+            ],
+            "front_down_depth_only": [
+                ("front_depth", airsim.ImageRequest("front_center", airsim.ImageType.DepthPerspective, True, False)),
+                ("down_depth", airsim.ImageRequest("down_center", airsim.ImageType.DepthPerspective, True, False)),
             ],
             "front_down_front_depth": [
                 ("front_rgb", airsim.ImageRequest("front_center", airsim.ImageType.Scene, False, True)),
@@ -298,9 +331,20 @@ class AirSimClient:
             raise ValueError(f"Unsupported capture profile: {profile}")
         return mapping[profile]
 
+    def _decode_rgb_image_bytes(self, image_data_uint8):
+        """Fully decode AirSim RGB bytes before returning a PIL image.
+
+        PIL's Image.open is lazy; forcing load+copy here avoids later decode
+        failures when images are passed across threads/executors.
+        """
+        if not image_data_uint8:
+            return None
+        with Image.open(io.BytesIO(bytes(image_data_uint8))) as img:
+            return img.convert("RGB").copy()
+
     def _decode_capture_response(self, request_name: str, response):
         if request_name.endswith("_rgb") and response.image_data_uint8:
-            return Image.open(io.BytesIO(bytes(response.image_data_uint8)))
+            return self._decode_rgb_image_bytes(response.image_data_uint8)
         if request_name.endswith("_depth") and response.image_data_float:
             return np.array(response.image_data_float, dtype=np.float32).reshape(response.height, response.width)
         return None
@@ -351,10 +395,9 @@ class AirSimClient:
     def _new_aux_client(self):
         """创建一个额外 RPC client，供实验性并发抓图使用。"""
         aux = airsim.MultirotorClient(ip=self._ip, port=self._port) if self._ip else airsim.MultirotorClient(port=self._port)
-        aux.confirmConnection()
         return aux
 
-    def _capture_views_parallel(self, profile: str):
+    def _capture_views_parallel(self, profile: str, verbose: bool = False):
         """多 client 并发抓图。"""
         from concurrent.futures import ThreadPoolExecutor
 
@@ -419,24 +462,26 @@ class AirSimClient:
             },
         }
 
-        label = f"[TIMING Parallel:{profile}]"
-        print(f"{label} wall={timing['wall_s']:.3f}s  max_rpc={timing['max_rpc_s']:.3f}s  sum_rpc={timing['sum_rpc_s']:.3f}s  sum_decode={timing['sum_decode_s']:.3f}s")
-        for name, item in timing["per_request"].items():
-            print(
-                f"  [Parallel:{name}] rpc={item['rpc_s']:.3f}s  "
-                f"decode={item['decode_s']:.3f}s  total={item['total_s']:.3f}s"
-            )
+        if verbose:
+            label = f"[TIMING Parallel:{profile}]"
+            print(f"{label} wall={timing['wall_s']:.3f}s  max_rpc={timing['max_rpc_s']:.3f}s  sum_rpc={timing['sum_rpc_s']:.3f}s  sum_decode={timing['sum_decode_s']:.3f}s")
+            for name, item in timing["per_request"].items():
+                print(
+                    f"  [Parallel:{name}] rpc={item['rpc_s']:.3f}s  "
+                    f"decode={item['decode_s']:.3f}s  total={item['total_s']:.3f}s"
+                )
         return front_rgb, down_rgb, front_depth, down_depth, timing
 
-    def capture_views(self, profile: str = "front_down_both_depth", mode: str = "batch"):
+    def capture_views(self, profile: str = "front_down_both_depth", mode: str = "batch", verbose: bool = False):
         """按指定 profile/mode 抓图。"""
         resolved_profile = self.resolve_capture_profile(profile)
         resolved_mode = self.resolve_capture_mode(mode)
         if resolved_mode == "parallel":
-            front_rgb, down_rgb, front_depth, down_depth, timing = self._capture_views_parallel(resolved_profile)
+            front_rgb, down_rgb, front_depth, down_depth, timing = self._capture_views_parallel(resolved_profile, verbose=verbose)
         else:
             front_rgb, down_rgb, front_depth, down_depth, timing = self._capture_views_batch(resolved_profile)
-            self._print_capture_timing(timing, front_rgb, front_depth, down_depth)
+            if verbose:
+                self._print_capture_timing(timing, front_rgb, front_depth, down_depth)
         return front_rgb, down_rgb, front_depth, down_depth, timing
 
     def get_dual_view(self):
@@ -444,6 +489,7 @@ class AirSimClient:
         front_rgb, down_rgb, front_depth, down_depth, _timing = self.capture_views(
             profile="front_down_both_depth",
             mode="batch",
+            verbose=True,
         )
         return front_rgb, down_rgb, front_depth, down_depth
 
@@ -452,6 +498,7 @@ class AirSimClient:
         return self.capture_views(
             profile="front_down_both_depth",
             mode="parallel",
+            verbose=True,
         )
 
 
@@ -473,7 +520,7 @@ class AirSimClient:
         front_rgb = None
         front_depth = None
         if resp1 and len(resp1) > 0 and resp1[0].image_data_uint8:
-            front_rgb = Image.open(io.BytesIO(bytes(resp1[0].image_data_uint8)))
+            front_rgb = self._decode_rgb_image_bytes(resp1[0].image_data_uint8)
         if resp1 and len(resp1) > 1 and resp1[1].image_data_float:
             r = resp1[1]
             front_depth = np.array(r.image_data_float, dtype=np.float32).reshape(r.height, r.width)
@@ -487,7 +534,7 @@ class AirSimClient:
         print(f"[TIMING] down RPC={_t3-_t2:.3f}s")
         down_rgb = None
         if resp2 and len(resp2) > 0 and resp2[0].image_data_uint8:
-            down_rgb = Image.open(io.BytesIO(bytes(resp2[0].image_data_uint8)))
+            down_rgb = self._decode_rgb_image_bytes(resp2[0].image_data_uint8)
         print(f"[TIMING] total={_t3-_t0:.3f}s")
         return front_rgb, down_rgb, front_depth
 
@@ -517,16 +564,13 @@ class AirSimClient:
 
         Returns (pos_final, yaw_final, collided).
         """
-        from scipy.spatial.transform import Rotation as R
         from config import cfg
+        from agent.common.trajectory import cumulative_body_to_world_positions
 
         if velocity is None:
             velocity = float(cfg.get("SIM", {}).get("AIRSIM_VELOCITY", 2.0))
 
         start_pos, start_yaw = self.get_pose()
-        yaw_rad = math.radians(start_yaw)
-        rot_3d = R.from_euler('z', yaw_rad).as_matrix()
-        rot_2d = rot_3d[:2, :2]
 
         pos = list(start_pos)
         collided = False
@@ -543,19 +587,18 @@ class AirSimClient:
             if not active_wps:
                 return self.get_pose() + (False,)
 
-            path = []
-            path_world = []  # 用于日志
-            for wp in active_wps:
-                # 机体坐标 → 世界坐标（waypoints 可能是 [dx,dy,dz] 或 [dx,dy,dz,dyaw], 只取前3维）
-                local = np.array(wp[:3], dtype=float)
-                world = rot_3d @ local
-                target = [pos[0] + float(world[0]),
-                          pos[1] + float(world[1]),
-                          pos[2] + float(world[2])]
-                path.append(airsim.Vector3r(*target))
-                path_world.append(tuple(round(v, 1) for v in target))
+            world_positions = cumulative_body_to_world_positions(active_wps, pos, start_yaw)
+            path = [airsim.Vector3r(*target) for target in world_positions]
+            path_world = [tuple(round(v, 1) for v in target) for target in world_positions]
+            path_len = 0.0
+            prev = np.array(pos, dtype=float)
+            for target in world_positions:
+                cur = np.array(target, dtype=float)
+                path_len += float(np.linalg.norm(cur - prev))
+                prev = cur
+            lookahead = max(0.3, min(3.0, path_len * 0.5))
 
-            print(f"  [Path] {len(path)} waypoints, ForwardOnly")
+            print(f"  [Path] {len(path)} waypoints, ForwardOnly lookahead={lookahead:.2f}")
             print(f"    world coords: {path_world}")
             try:
                 result = self.client.moveOnPathAsync(
@@ -564,8 +607,8 @@ class AirSimClient:
                     timeout_sec=move_timeout,
                     drivetrain=airsim.DrivetrainType.ForwardOnly,
                     yaw_mode=airsim.YawMode(is_rate=False),
-                    lookahead=3,
-                    adaptive_lookahead=1,
+                    lookahead=lookahead,
+                    adaptive_lookahead=0,
                 ).join()
                 if result:
                     collided = True
@@ -577,7 +620,11 @@ class AirSimClient:
             # ═══ 旧行为: 逐点 moveToPositionAsync ═══
             for dx, dy, dz in waypoints:
                 local_dir = np.array([dx, dy])
-                world_dir = rot_2d @ local_dir
+                yaw_rad = math.radians(start_yaw)
+                world_dir = np.array([
+                    local_dir[0] * math.cos(yaw_rad) - local_dir[1] * math.sin(yaw_rad),
+                    local_dir[0] * math.sin(yaw_rad) + local_dir[1] * math.cos(yaw_rad),
+                ])
                 target = [
                     pos[0] + float(world_dir[0]),
                     pos[1] + float(world_dir[1]),

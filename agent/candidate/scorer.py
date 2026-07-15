@@ -1,4 +1,4 @@
-"""候选轨迹预打分与置信度计算。"""
+"""候选轨迹预打分与执行置信度计算。"""
 
 from __future__ import annotations
 
@@ -14,11 +14,14 @@ def score_candidates(
     direction: str = "",
     stop_threshold: float = 8.0,
 ) -> List[CandidateTrajectory]:
-    """为候选轨迹打预分，并计算置信度。"""
+    """为候选轨迹打预分，并计算执行置信度。
+
+    pre_score 只表示候选轨迹本身的质量，用于同一步内的候选排序。
+    detector score 是外部观测可靠性，只参与 confidence，不参与轨迹排序分。
+    """
     if not candidates:
         return candidates
 
-    raw_scores: List[float] = []
     for cand in candidates:
         breakdown = _score_one(
             cand,
@@ -29,17 +32,13 @@ def score_candidates(
         total = sum(breakdown.values())
         cand.pre_score = round(total, 4)
         cand.score_breakdown = {k: round(v, 4) for k, v in breakdown.items()}
-        raw_scores.append(total)
 
-    min_s = min(raw_scores)
-    max_s = max(raw_scores)
-    span = max(max_s - min_s, 1e-6)
     det_conf = float(getattr(detection, "score", 0.0) or 0.0)
 
     for cand in candidates:
-        norm = (cand.pre_score - min_s) / span
+        trajectory_quality = max(0.0, min(1.0, float(cand.pre_score)))
         cand.confidence = round(
-            max(0.0, min(1.0, 0.65 * norm + 0.35 * det_conf)),
+            max(0.0, min(1.0, 0.70 * trajectory_quality + 0.30 * det_conf)),
             4,
         )
     return candidates
@@ -53,7 +52,6 @@ def _score_one(
 ) -> Dict[str, float]:
     endpoint = cand.waypoints[-1] if cand.waypoints else [0.0, 0.0, 0.0]
     path_len = _path_length(cand.waypoints)
-    det_conf = float(getattr(detection, "score", 0.0) or 0.0)
     det_depth = getattr(detection, "depth_median", None)
     camera = getattr(detection, "camera", "none") if detection is not None else "none"
 
@@ -76,11 +74,10 @@ def _score_one(
     smoothness = _smoothness_score(cand.waypoints)
 
     return {
-        "detector_conf": 0.35 * det_conf,
-        "progress": 0.30 * progress,
-        "alignment": 0.20 * alignment,
-        "safety": 0.10 * safety,
-        "smoothness": 0.05 * smoothness,
+        "progress": 0.45 * progress,
+        "alignment": 0.25 * alignment,
+        "safety": 0.20 * safety,
+        "smoothness": 0.10 * smoothness,
     }
 
 

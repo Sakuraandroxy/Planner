@@ -5,6 +5,33 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
+from agent.common.trajectory import (
+    actions_to_cumulative_body_waypoints,
+    cumulative_to_step_body_waypoints,
+    normalize_xyz_waypoints,
+)
+
+
+def cumulative_to_step_waypoints(waypoints) -> List[List[float]]:
+    """累计 body-frame waypoint -> 相邻 waypoint 的位移。"""
+    return cumulative_to_step_body_waypoints(waypoints)
+
+
+def candidate_dict_to_world_model(candidate: Dict[str, Any]) -> Dict[str, Any]:
+    """把普通候选 dict 转成世界模型输入 dict。"""
+    out = dict(candidate)
+    if out.get("waypoint_mode") == "relative_step_body_xyz":
+        out["waypoints"] = normalize_xyz_waypoints(out.get("waypoints", []))
+        out.setdefault("cumulative_waypoints", normalize_xyz_waypoints(out.get("cumulative_waypoints", [])))
+        return out
+    cumulative = normalize_xyz_waypoints(out.get("waypoints", []))
+    if not cumulative and out.get("actions"):
+        cumulative = actions_to_cumulative_body_waypoints(out.get("actions", []))
+    out["cumulative_waypoints"] = cumulative
+    out["waypoints"] = cumulative_to_step_waypoints(cumulative)
+    out["waypoint_mode"] = "relative_step_body_xyz"
+    return out
+
 
 @dataclass
 class CandidateTrajectory:
@@ -34,6 +61,9 @@ class CandidateTrajectory:
             "score_breakdown": self.score_breakdown,
             "metadata": self.metadata,
         }
+
+    def to_world_model_dict(self) -> Dict[str, Any]:
+        return candidate_dict_to_world_model(self.to_dict())
 
 
 @dataclass

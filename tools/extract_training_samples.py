@@ -16,7 +16,7 @@
     │   └── ...
     └── dataset.json          # [{messages, images}, ...]
 """
-import argparse, json, os, sys
+import argparse, json, os
 from pathlib import Path
 import numpy as np
 from scipy.spatial.transform import Rotation as R
@@ -67,6 +67,52 @@ def quat_to_rot_matrix(q: list) -> np.ndarray:
     return r.as_matrix()
 
 
+def _format_coord(value: float) -> float:
+    """统一数值格式，避免 -0.0 这类无意义标签噪声。"""
+    rounded = round(float(value), 2)
+    if abs(rounded) < 1e-6:
+        return 0.0
+    return rounded
+
+
+def _format_waypoints_json(waypoints: list[list[float]]) -> str:
+    """Render labels with stable decimal text while keeping valid JSON syntax."""
+    rows = []
+    for waypoint in waypoints:
+        coords = [_format_coord(coord) for coord in waypoint]
+        rows.append("[" + ", ".join(f"{coord:.2f}" for coord in coords) + "]")
+    return "[" + ", ".join(rows) + "]"
+
+
+def sample_future_indices(start_idx: int, end_idx: int, num_wp: int) -> list[int]:
+    """将未来轨迹均分为 num_wp 段并采样.
+
+    采样策略：
+    - 前 num_wp - 1 段取中点：让短程和中程 waypoint 都更稳定
+    - 最后一段取段尾：保留终点/远期目标信息
+    """
+    if end_idx <= start_idx or num_wp <= 0:
+        return []
+
+    future_indices = list(range(start_idx + 1, end_idx + 1))
+    if len(future_indices) <= num_wp:
+        return future_indices
+
+    boundaries = np.linspace(0, len(future_indices), num_wp + 1, dtype=int)
+    sampled = []
+    for seg_id in range(num_wp):
+        left = boundaries[seg_id]
+        right = boundaries[seg_id + 1]
+        if right <= left:
+            chosen = min(left, len(future_indices) - 1)
+        elif seg_id == num_wp - 1:
+            chosen = right - 1
+        else:
+            chosen = (left + right - 1) // 2
+        sampled.append(future_indices[chosen])
+    return sampled
+
+
 def compute_waypoints(frames: list[dict], start_idx: int, num_wp: int = 5
                       ) -> list[list[float]]:
     """从 start_idx 帧开始, 取后续 num_wp 个轨迹点。
@@ -86,17 +132,22 @@ def compute_waypoints(frames: list[dict], start_idx: int, num_wp: int = 5
     ori = frames[start_idx]["sensors"]["imu"]["orientation"]
     start_rot = quat_to_rot_matrix(ori)
 
-    indices = np.linspace(start_idx + 1, len(frames) - 1, min(num_wp, n_remaining),
-                          dtype=int)
+    indices = sample_future_indices(
+        start_idx=start_idx,
+        end_idx=len(frames) - 1,
+        num_wp=min(num_wp, n_remaining),
+    )
 
     wp = []
     for idx in indices:
         target_pos = np.array(frames[idx]["sensors"]["state"]["position"])
         delta_world = target_pos - start_pos       # 从起始位置到目标点（累积）
         delta_body = start_rot.T @ delta_world     # world -> body frame
-        wp.append([round(float(delta_body[0]), 2),
-                    round(float(delta_body[1]), 2),
-                    round(float(delta_body[2]), 2)])
+        wp.append([
+            _format_coord(delta_body[0]),
+            _format_coord(delta_body[1]),
+            _format_coord(delta_body[2]),
+        ])
 
     while len(wp) < num_wp:
         wp.append([0.0, 0.0, 0.0])
@@ -108,11 +159,18 @@ def build_sample(traj_name: str, instruction: str, step: int,
                  waypoints: list) -> dict:
     """构建一个 Qwen2.5-VL 格式的对话样本.
 
-    prompt 格式：Instruction: xxx
-    不包含任何硬编码假字段（Stage/Previous displacement/Current position）。
-    模型只需理解：前视图+下视图+指令 → 输出 5 个机体坐标系累积位移 waypoint。
+    prompt 格式：Instruction + 明确输出约束。
+    模型只需理解：前视图+下视图+指令 → 输出固定数量的
+    机体坐标系累积位移 waypoint。
     """
-    wp_str = json.dumps(waypoints, ensure_ascii=False)
+    wp_str = _format_waypoints_json(waypoints)
+    num_wp = len(waypoints)
+    prompt = (
+        f"Instruction: {instruction}\n"
+        f"Output exactly {num_wp} cumulative body-frame waypoints as a JSON list.\n"
+        "Each waypoint must be [dx, dy, dz].\n"
+        "Do not output any other text."
+    )
     return {
         "messages": [
             {
@@ -121,7 +179,7 @@ def build_sample(traj_name: str, instruction: str, step: int,
                     {"type": "image", "image": front_img_path},
                     {"type": "image", "image": down_img_path},
                     {"type": "text",
-                     "text": f"Instruction: {instruction}"}
+                     "text": prompt}
                 ]
             },
             {

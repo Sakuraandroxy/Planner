@@ -1,33 +1,34 @@
 # Uni-LaViRA 主配置 —— 改此处即可切换各模块实现
 # 原理：各模块的 __init__.py 根据此配置的 name 返回对应实现
-
+#notepad "C:\Users\86136\Documents\AirSim\settings.json"
 AGENT:
   # 任务解析器: vlm_parser | simple_parser
   TASK_PARSER: vlm_parser
-  TASK_PARSER_URL: https://api.xiaomimimo.com/v1  # 本地: http://172.27.143.102:8000/v1  |  云: https://api.xiaomimimo.com/v1
-  TASK_PARSER_MODEL: mimo-v2.5  # 本地: /data/sakura/models/Qwen2.5-7B-Instruct-AWQ  |  云: mimo-v2.5
-  TASK_API_KEY: sk-cwqm9day74w6wkx0wia95djylj04mp3pzj4kmmwc8wbwdz03  # 本地: no-key  |  云: sk-cqfy...
+  TASK_PARSER_URL: http://172.27.143.102:8000/v1  # 本地程序连服务器任务解析: http://172.27.143.102:8000/v1  |  云: https://api.xiaomimimo.com/v1
+  TASK_PARSER_MODEL: /data/sakura/models/Qwen2.5-7B-Instruct-AWQ  # 本地: /data/sakura/models/Qwen2.5-7B-Instruct-AWQ  |  云: mimo-v2.5
+  TASK_API_KEY: no-key  # 本地: no-key  |  云: sk-cwqm9day74w6wkx0wia95djylj04mp3pzj4kmmwc8wbwdz03
   TASK_PARSER_MAX_TOKENS: 1024
 
-  # 目标检测器: vlm_detector | groundingdino | yolo
-  DETECTOR: vlm_detector  # 本地: groundingdino  |  云: vlm_detector
-  DETECTOR_URL: https://api.xiaomimimo.com/v1  # groundingdino 走 GROUNDINGDINO_URL，留空。云: https://api.xiaomimimo.com/v1
+  # 目标检测器实现: groundingdino | vlm_detector | yolo
+  DETECTOR: groundingdino  # depth_detector 完成判定会按需调用该实现；云端检测可改为 vlm_detector
+  DETECTOR_URL: ""  # groundingdino 走 GROUNDINGDINO_URL；仅云端 vlm_detector 时填写 OpenAI 兼容地址
   DETECTOR_MODEL: mimo-v2.5  # groundingdino 不需要。云: mimo-v2.5
-  DETECTOR_API_KEY: sk-cwqm9day74w6wkx0wia95djylj04mp3pzj4kmmwc8wbwdz03  # 本地: no-key  |  云: sk-cqfy...
+  DETECTOR_API_KEY: no-key  # 本地: no-key  |  云: sk-cqfy...
   DETECTOR_MAX_TOKENS: 512
   DETECTOR_TIMEOUT: 120
   DETECTOR_BOX_THRESHOLD: 0.4
+  DETECTOR_MIN_CONFIDENCE: 0.4
   DETECTOR_TEXT_THRESHOLD: 0.3
   GROUNDINGDINO_URL: http://172.27.143.102:8003/detect
 
   # 轨迹规划器: api_atomic_planner | qwen_planner
-  PLANNER: api_atomic_planner  # 本地: qwen_planner  |  云: api_atomic_planner
-  PLANNER_URL: https://api.xiaomimimo.com/v1  # 本地 Flask: http://172.27.143.102:8004/plan | 云: https://api.xiaomimimo.com/v1
-  PLANNER_MODEL: mimo-v2.5  # 本地: /data/sakura/models/3DG-VLN-finetuned  |  云: mimo-v2.5
-  PLANNER_API_KEY: sk-cwqm9day74w6wkx0wia95djylj04mp3pzj4kmmwc8wbwdz03  # 本地: no-key  |  云: sk-cqfy...
+  PLANNER: qwen_planner  # 本地: qwen_planner  |  云: api_atomic_planner
+  PLANNER_URL: http://172.27.143.102:8004/plan  # 本地程序连服务器规划器: http://172.27.143.102:8004/plan | 云: https://api.xiaomimimo.com/v1
+  PLANNER_MODEL: /data/sakura/models/3DG-VLN-finetuned-1  # 本地: /data/sakura/models/3DG-VLN-finetuned  |  云: mimo-v2.5
+  PLANNER_API_KEY: no-key  # 本地: no-key  |  云: sk-cqfy...
   PLANNER_MAX_TOKENS: 2048
   PLANNER_TIMEOUT: 120
-  PLANNER_CANDIDATE_COUNT: 5            # K 条候选轨迹
+  PLANNER_CANDIDATE_COUNT: 1            # 云端 API 原子规划器现在也只输出 1 条原始轨迹
   PLANNER_MAX_TRAJECTORY_LENGTH: 5      # 单条轨迹最大动作数
   PLANNER_APPROACH_STOP_MARGIN: 1.0     # 接近停止余量（米）
 
@@ -38,35 +39,42 @@ AGENT:
   STOP_DEPTH_THRESHOLD: 8.0
 
   # Qwen 每步 waypoints 数量
-  QWEN_WAYPOINT_COUNT: 10
+  QWEN_WAYPOINT_COUNT: 5
+  QWEN_RESIZE_ENABLED: true              # qwen_planner: 发送给Qwen前是否按训练尺寸缩放
+  QWEN_IMAGE_SIZE: 1024                  # qwen_planner: 训练图像尺寸；square模式输出1024x1024
+  QWEN_RESIZE_MODE: square               # square=强制1024x1024 | long_edge=长边缩到1024并保持比例
+  QWEN_AUGMENT_SPATIAL_PROMPT: true      # qwen_planner: above/on-top任务追加z轴约定，AirSim/NED中负dz表示上升
 
 SIM:
-  FRONT_WIDTH: 1920
-  FRONT_HEIGHT: 1080
+  FRONT_WIDTH: 1024
+  FRONT_HEIGHT: 1024
   FRONT_FOV: 90
-  DEPTH_WIDTH: 640
-  DEPTH_HEIGHT: 360
+  DEPTH_WIDTH: 256
+  DEPTH_HEIGHT: 256
   DEPTH_FOV: 90
-  DOWN_WIDTH: 640
-  DOWN_HEIGHT: 640
+  DOWN_WIDTH: 1024
+  DOWN_HEIGHT: 1024
   DOWN_FOV: 90
-  DOWN_DEPTH_WIDTH: 640
-  DOWN_DEPTH_HEIGHT: 360
+  DOWN_DEPTH_WIDTH: 256
+  DOWN_DEPTH_HEIGHT: 256
   DOWN_DEPTH_FOV: 90
   # 抓图模式: batch | parallel
   # - batch: 一次 simGetImages 批量请求
   # - parallel: 多个 AirSim client 并发请求（实验性，通常更快）
-  CAPTURE_MODE: batch
+  CAPTURE_MODE: parallel
   # 抓图内容: auto | front_depth | front_down | front_down_front_depth | front_down_both_depth
-  # auto 默认规则：
-  # - api_atomic_planner  -> front_down_front_depth
-  # - qwen_planner        -> front_down
+  # auto 只抓规划所需 RGB 双视图；任务完成判定需要深度时会在运行时请求 TASK_COMPLETION.DEPTH_CAPTURE_PROFILE
   CAPTURE_PROFILE: auto
   # AirSim 连接 (本地留空=localhost:41451, 远程填服务器IP)
-  AIRSIM_IP: "172.27.143.102"
+  AIRSIM_IP: ""        # "172.27.143.102"
   AIRSIM_PORT: 41451
+  APPLY_SETTINGS_ON_WEB_START: true       # run_airsim_web启动时先把SIM相机参数写入本地AirSim settings.json
+  WAIT_FOR_AIRSIM_ON_WEB_START: true      # AirSim未启动时不报错退出，而是等待你手动打开UE/AirSim
+  WAIT_FOR_AIRSIM_INTERVAL: 2.0           # 等待AirSim连接的重试间隔秒数
+  AIRSIM_CONNECT_TIMEOUT: 3.0             # AirSim RPC握手超时秒数，防止confirmConnection无输出卡死
   AIRSIM_MOVE_TIMEOUT: 60               # moveOnPathAsync 超时秒数
   AIRSIM_VELOCITY: 2.0                   # 飞行速度 m/s
+  PAUSE_BACKGROUND_CAPTURE_DURING_STEP: true  # step期间暂停后台预览抓图，避免与主流程争抢AirSim RPC
 
 WEB:
   PORT: 5000
@@ -83,6 +91,7 @@ EVAL:
   REMOTE_HOST: sakura-airsim
   REMOTE_USER: ""
   REMOTE_PORT: 22
+  AUTO_SSH_TUNNEL: true                 # 远端评测时自动映射 localhost:41451 -> 远端AirSim端口
 
 # 世界模型 (独立主机, Flask HTTP 服务)
 # 输入: 前视图 + 下视图 + 指令 + K 条候选轨迹(含waypoints)
@@ -90,15 +99,60 @@ EVAL:
 WORLD_MODEL:
   ENABLED: false                         # 是否启用
   NAME: api_world_model                  # 实现名 (api_world_model)
-  URL: http://172.27.143.102:5001/score  # 世界模型服务地址
+  URL: http://127.0.0.1:5001/score  # 世界模型服务地址
   TIMEOUT: 30                            # 请求超时(秒)
 
-# 候选轨迹准备（给世界模型前的预处理）
-# 作用：统一候选格式、补生成单轨迹的扰动候选、预打分并筛到 top-k
+TASK_COMPLETION:
+  ENABLED: True                          # 是否启用独立任务完成判定
+  NAME: depth_detector                   # depth_detector=GroundingDINO先验+深度证据+VLM最终裁决 | api_completion=纯VLM图像判定
+  URL: https://api.xiaomimimo.com/v1     # 完成判定VLM的 OpenAI 兼容地址；本地多模态服务也可改成 http://ip:port/v1
+  MODEL: mimo-v2.5                       # 完成判定VLM模型名
+  API_KEY: sk-cwqm9day74w6wkx0wia95djylj04mp3pzj4kmmwc8wbwdz03                        # 云端填写 sk-...；本地服务通常 no-key
+  MAX_TOKENS: 64                         # 完成判定只输出 target_detected/done/accepted_view JSON
+  TIMEOUT: 60                            # 完成判定VLM请求超时秒数
+  TEMPERATURE: 0.0                       # 完成判定应稳定保守
+  CAPTURE_PROFILE: front_down            # api_completion 只需要前视图+下视图，不主动取深度
+  CALL_MODE: parallel_preplan            # sync_preplan=先判定后规划 | parallel_preplan=判定和规划同帧并行
+  SPLIT_RGB_DEPTH_CAPTURE: true          # true=RGB到手即规划，深度图后台到手后再判定完成
+  ONFLY_CHECK_INTERVAL: 1.0              # 预留: 后台飞行中每隔多少秒判定一次
+
+  REQUIRE_DEPTH_FOR_DETECTION: true      # depth_detector: target阶段无深度图时不做最终完成判定
+  PLANNING_CAPTURE_PROFILE: front_down   # depth_detector: 只规划/不判定完成时的基础RGB抓图
+  DEPTH_CAPTURE_PROFILE: front_down_both_depth  # depth_detector: target完成判定时额外请求前/下视深度
+  STOP_DEPTH_THRESHOLD: 8.0              # depth_detector: VLM关闭/失败且允许回退时使用的旧深度阈值
+  VLM_FINAL_JUDGE_ENABLED: true          # depth_detector: 检测到目标后，将双视图+bbox+深度+任务目标送入VLM做最终裁决
+  VLM_FAIL_FALLBACK_TO_HEURISTIC: false  # depth_detector: VLM失败时 false=保守返回未完成 | true=回退旧深度阈值规则
+
+RELOCALIZATION:
+  ENABLED: false                         # detect阶段和target低置信/不可见时启用四向环视重定位
+  CAPTURE_PROFILE: front_down            # 每个方向使用前视图+下视图检测目标
+  TURN_DEG: 90.0                         # 每次原地转向角度
+  MAX_TURNS: 4                           # 最多检查当前方向+后续旋转方向数量
+
+TRAJECTORY_REFINER:
+  ENABLED: false                         # 是否启用轨迹精修；关闭时直接使用 planner/candidate 输出
+
+COLLISION_RECOVERY:
+  ENABLED: true                          # 执行轨迹发生碰撞后是否后退
+  BACK_DISTANCE_M: 2.0                   # 碰撞后沿当前机体后方后退距离
+  VELOCITY: 1.0                          # 后退速度
+
 CANDIDATE:
-  MIN_COUNT: 5
-  TOPK_FOR_WORLD_MODEL: 3
-  MAX_GENERATED: 8
-  SCALE_FACTORS: [0.85, 1.0, 1.15]
-  YAW_OFFSETS_DEG: [-10.0, 0.0, 10.0]
-  LATERAL_OFFSETS_M: [-1.5, 0.0, 1.5]
+  ENABLED: true                          # 是否启用轨迹扰动+预打分；关闭时直接执行规划器原始轨迹
+  MODE: smooth_bridge                    # none=只用原始轨迹 | rigid=刚性扰动 | smooth_bridge=平滑桥扰动
+  COUNT: 5                               # 候选轨迹总数
+  TOPK_FOR_WORLD_MODEL: 5                # 预打分后送入世界模型的候选数量
+  RANDOM_SEED: null                     # 固定随机种子可复现实验；null 表示不固定
+
+  RIGID_SCALE_FACTORS: [0.85, 1.0, 1.15]          # 刚性扰动的整体长度缩放
+  RIGID_YAW_OFFSETS_DEG: [-10.0, 0.0, 10.0]       # 刚性扰动的整体偏航角，左负右正
+  RIGID_LATERAL_OFFSETS_M: [-1.5, 0.0, 1.5]       # 刚性扰动的整体横向平移，左负右正
+
+  SMOOTH_BRIDGE_LATERAL_SIGMA_M: 1.0    # 平滑桥中间航点的横向扰动标准差(米)
+  SMOOTH_BRIDGE_VERTICAL_SIGMA_M: 0.25  # 平滑桥中间航点的高度扰动标准差(米)
+  SMOOTH_BRIDGE_LENGTH_SCALE: 0.35      # 平滑桥噪声相关长度，越大轨迹越平滑
+  SMOOTH_BRIDGE_MAX_ATTEMPTS: 64        # 为生成 COUNT 条候选允许的最大采样尝试次数
+  SMOOTH_BRIDGE_MAX_TURN_DEG: 120.0     # 单个转角上限，超过则丢弃
+  SMOOTH_BRIDGE_MAX_SEGMENT_LENGTH_M: 0.0  # 0 表示不启用单段长度硬限制
+  SMOOTH_BRIDGE_MAX_PATH_LENGTH_RATIO: 1.5  # 相比原轨迹的最大路径长度倍率
+  SMOOTH_BRIDGE_PROGRESS_TOLERANCE_M: 1.0  # 沿目标方向允许的后退容差(米)

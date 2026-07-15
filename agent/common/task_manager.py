@@ -41,7 +41,7 @@ class TaskManager:
             stages = self._stages_from_dicts(parsed_stages)
         if not stages:
             raise ValueError("no valid parsed task stages")
-        self.stages = stages
+        self.stages = [self._repair_stage_instruction(stage) for stage in stages]
         self._stage_state = {}
         self.current_index = 0
 
@@ -127,7 +127,7 @@ class TaskManager:
         else:
             stages = self._stages_from_dicts(vlm_stages)
         if stages:
-            self.stages = stages
+            self.stages = [self._repair_stage_instruction(stage) for stage in stages]
             self._stage_state = {}
             self.current_index = 0
 
@@ -227,3 +227,26 @@ class TaskManager:
             "上升": "up", "下降": "down",
         }
         return aliases.get(action, action)
+
+    @staticmethod
+    def _repair_stage_instruction(stage: TaskStage) -> TaskStage:
+        """Keep target instructions aligned with parser relation metadata."""
+        if stage.mode != "target" or not stage.target:
+            return stage
+
+        relation = (stage.relation or "").strip().lower()
+        instruction_low = (stage.instruction or "").strip().lower()
+        if relation in {"above", "over", "on top", "on top of"} and not any(
+            token in instruction_low for token in ("above", "over", "on top")
+        ):
+            stage.instruction = f"Fly above {TaskManager._article_for(stage.target)}{stage.target}"
+        return stage
+
+    @staticmethod
+    def _article_for(noun: str) -> str:
+        low = (noun or "").strip().lower()
+        if not low:
+            return ""
+        if low.startswith(("the ", "a ", "an ")):
+            return ""
+        return "the "

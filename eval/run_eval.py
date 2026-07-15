@@ -37,7 +37,9 @@ from agent.direction import build_direction_estimator
 from agent.task_parser import build_task_parser
 from agent.world_model import build_world_model
 from agent.candidate import prepare_candidates_for_world_model
+from agent.completion import build_task_completion_checker
 from agent.common.task_manager import TaskManager
+from agent.relocalization import TargetRelocalizer
 from eval.metrics import MetricsTracker
 from sim.airsim_client import AirSimClient
 
@@ -51,12 +53,60 @@ SCENE_SWITCH_RECONNECT_WAIT = float(cfg.get("EVAL", {}).get("SCENE_SWITCH_RECONN
 PLANNER_STOP_THRESHOLD = float(cfg.get("AGENT", {}).get("STOP_DEPTH_THRESHOLD", 8.0))
 
 
+def _shape_text(value):
+    if value is None:
+        return "N/A"
+    if hasattr(value, "shape"):
+        return str(value.shape)
+    if hasattr(value, "size") and not isinstance(value, (list, tuple)):
+        return str(value.size)
+    return str(value)
+
+
 def _distance(a: List[float], b: List[float]) -> float:
     return math.sqrt(
         (a[0] - b[0]) ** 2 +
         (a[1] - b[1]) ** 2 +
         (a[2] - b[2]) ** 2
     )
+
+
+def _yaw_from_quaternion_xyzw(q: List[float]) -> Optional[float]:
+    """Return yaw degrees from AirSim-style quaternion [x, y, z, w]."""
+    if not isinstance(q, (list, tuple)) or len(q) < 4:
+        return None
+    x, y, z, w = [float(v) for v in q[:4]]
+    siny = 2.0 * (w * z + x * y)
+    cosy = 1.0 - 2.0 * (y * y + z * z)
+    return math.degrees(math.atan2(siny, cosy))
+
+
+def _load_first_logged_pose(ep_dir: Path) -> tuple[Optional[List[float]], Optional[List[float]], str]:
+    """Load the first frame pose used by the released UAV-VLN-FOV images/logs.
+
+    mark.json can contain a coarse start field, but the images and training
+    samples are aligned to the first available frame under FrontCamera/log.
+    """
+    front_dir = ep_dir / "FrontCamera"
+    if not front_dir.exists():
+        return None, None, ""
+    front_imgs = sorted(p for p in front_dir.iterdir() if p.suffix.lower() == ".png")
+    if not front_imgs:
+        return None, None, ""
+    frame_stem = front_imgs[0].stem
+    log_file = ep_dir / "log" / f"{frame_stem}.json"
+    if not log_file.exists():
+        return None, None, frame_stem
+    try:
+        with open(log_file, "r") as f:
+            log = json.load(f)
+    except Exception:
+        return None, None, frame_stem
+    state = log.get("sensors", {}).get("state", {})
+    imu = log.get("sensors", {}).get("imu", {})
+    pos = state.get("position")
+    ori = state.get("orientation") or imu.get("orientation")
+    return pos, ori, frame_stem
 
 
 def _execute_direct_action(client: AirSimClient, action: str, value: float):
@@ -137,8 +187,18 @@ def discover_episodes(dataset_path: str) -> List[Dict]:
             with open(mark_file, "r") as f:
                 meta = json.load(f)
 
-            # 3DG-VLN 格式: mark.json 含 start/end/target
-            start_pos = meta.get("start", [0, 0, 0])
+            # 3DG-VLN 格式: mark.json 含 start/end/target。
+            # 但实际图像/训练样本与 FrontCamera 第一帧对应的 log 对齐，
+            # 因此闭环评测也优先使用第一帧 log 中的完整位姿。
+            mark_start = meta.get("start", [0, 0, 0])
+            start_pos = mark_start
+            start_orientation = None
+            start_frame = ""
+            logged_pos, logged_ori, start_frame = _load_first_logged_pose(ep_dir)
+            if logged_pos is not None:
+                start_pos = logged_pos
+            if logged_ori is not None:
+                start_orientation = logged_ori
             target_info = meta.get("target", {})
             target_pos = target_info.get("position", [0, 0, 0]) if isinstance(target_info, dict) else target_info
 
@@ -159,6 +219,9 @@ def discover_episodes(dataset_path: str) -> List[Dict]:
                 "name": ep_dir.name,
                 "scene": scene_name,
                 "start": start_pos,
+                "mark_start": mark_start,
+                "start_orientation": start_orientation,
+                "start_frame": start_frame,
                 "target": target_pos,
                 "instruction": instruction,
                 "target_obj": target_obj,
@@ -190,12 +253,20 @@ def evaluate(episodes: List[Dict], scene_filter: str = None,
     world_model = build_world_model()
     direction_est = build_direction_estimator()
     task_parser = build_task_parser()
+    completion_checker = build_task_completion_checker(detector=detector, direction_estimator=direction_est)
+    relocalizer = TargetRelocalizer(cfg, detector=detector)
+    detector_min_confidence = float(cfg.get("AGENT", {}).get(
+        "DETECTOR_MIN_CONFIDENCE",
+        cfg.get("AGENT", {}).get("DETECTOR_BOX_THRESHOLD", 0.0),
+    ))
 
     # 连接 AirSim
     client = AirSimClient()
     client.connect()
     client.warmup_capture()
-    print(f"[CaptureConfig] profile={client.resolve_capture_profile()} mode={client.resolve_capture_mode()}")
+    capture_mode = client.resolve_capture_mode()
+    print(f"[CaptureConfig] mode={capture_mode} rgb_profile={completion_checker.rgb_profile} "
+          f"completion_profile={completion_checker.depth_profile}")
 
     all_metrics = {
         "sr": 0, "osr": 0,
@@ -223,7 +294,9 @@ def evaluate(episodes: List[Dict], scene_filter: str = None,
             client = AirSimClient()
             client.connect()
             client.warmup_capture()
-            print(f"  [CaptureConfig] profile={client.resolve_capture_profile()} mode={client.resolve_capture_mode()}")
+            capture_mode = client.resolve_capture_mode()
+            print(f"  [CaptureConfig] mode={capture_mode} rgb_profile={completion_checker.rgb_profile} "
+                  f"completion_profile={completion_checker.depth_profile}")
             print(f"  [SceneManager] 已切换到 {current_scene}")
 
         # 创建指标跟踪器
@@ -233,15 +306,24 @@ def evaluate(episodes: List[Dict], scene_filter: str = None,
 
         # ── 初始化无人机到轨迹起始位姿 ──
         start = ep["start"]
-        print(f"  起始位姿: {start}")
+        start_yaw = _yaw_from_quaternion_xyzw(ep.get("start_orientation"))
+        if start_yaw is None:
+            print(f"  起始位姿: {start}")
+        else:
+            print(f"  起始位姿: {start} yaw={start_yaw:.1f}° frame={ep.get('start_frame') or 'N/A'}")
+            if ep.get("mark_start") and _distance(start, ep["mark_start"]) > 1.0:
+                print(f"  [Init] 使用首帧 log 位姿, mark.start={ep['mark_start']}")
         try:
             client.enable_api_control(True)
             client.arm(True)
-            client.move_to_position(
-                start[0], start[1], start[2],
-                velocity=INIT_MOVE_VELOCITY,
-                timeout=INIT_MOVE_TIMEOUT,
-            )
+            if start_yaw is not None:
+                client.set_pose_xyz_yaw(start[0], start[1], start[2], start_yaw)
+            else:
+                client.move_to_position(
+                    start[0], start[1], start[2],
+                    velocity=INIT_MOVE_VELOCITY,
+                    timeout=INIT_MOVE_TIMEOUT,
+                )
             time.sleep(INIT_SETTLE_SECONDS)
             metrics.record_step(client.get_pose()[0])
         except Exception as e:
@@ -285,57 +367,44 @@ def evaluate(episodes: List[Dict], scene_filter: str = None,
                     break
                 continue
 
-            # 抓帧
-            front_rgb, down_rgb, front_depth, down_depth = client.get_configured_views()
+            # ═══ 单次抓图：和 run_airsim_web.py 一样，一次 capture_views 搞定 ═══
+            _cap0 = time.perf_counter()
+            step_capture_profile = completion_checker.capture_profile_for_stage(current_stage)
+            if current_stage and current_stage.mode == "detect":
+                step_capture_profile = completion_checker.rgb_profile
+            front_rgb, down_rgb, front_depth, down_depth, _rgb_timing = client.capture_views(
+                profile=step_capture_profile,
+                mode=capture_mode,
+                verbose=False,
+            )
+            cap_rgb_elapsed = time.perf_counter() - _cap0
             if front_rgb is None:
                 time.sleep(0.1)
                 continue
 
-            # 检测：优先使用 parser 输出的英文 target_query
-            detect_caption = (
-                current_stage.target_query if current_stage and current_stage.target_query
-                else stage_instruction
+            print(
+                f"  [Capture] profile={step_capture_profile} rgb_time={cap_rgb_elapsed:.2f}s  "
+                f"front={_shape_text(front_rgb)} down={_shape_text(down_rgb)}"
             )
-            _td0 = time.perf_counter()
-            detection = detector.detect_with_fallback(
-                front_rgb,
-                down_rgb,
-                detect_caption,
-                front_depth_meters=front_depth,
-                down_depth_meters=down_depth,
-            )
-            _td = time.perf_counter() - _td0
 
-            # 方向
-            direction = ""
-            if detection.visible and detection.bbox:
-                if detection.camera == "front":
-                    direction = direction_est.estimate(
-                        detection.bbox, 0, front_rgb.size
-                    )
-                elif detection.camera == "down":
-                    direction = "Target is visible in the downward view below the drone."
-
-            # 打印检测结果
-            if detection.visible and detection.bbox:
-                d = detection.depth_median
-                ds = f"depth={d:.1f}m" if d else "depth=N/A"
-                print(f"  [DETECT] {detection.camera}:{detection.label} bbox={detection.bbox} "
-                      f"score={detection.score:.2f} {ds} ({_td:.2f}s)")
-            else:
-                print(f"  [DETECT] '{detect_caption[:50]}' not found ({_td:.2f}s)")
-
-            # detect 阶段：只要求看见并锁定目标，不进入 planner
+            # detect 阶段：四向环视重定位，不进入 planner
             if current_stage and current_stage.mode == "detect":
-                if detection.visible:
-                    task_manager.complete_current("target detected")
+                _rd0 = time.perf_counter()
+                relocalized = relocalizer.search(
+                    client, current_stage, front_image=front_rgb, down_image=down_rgb,
+                    capture_mode=capture_mode,
+                )
+                print(f"  [Relocalize] found={relocalized.found} "
+                      f"time={time.perf_counter() - _rd0:.2f}s reason={relocalized.reason}")
+                if relocalized.found:
+                    task_manager.complete_current(relocalized.reason)
                     print(f"  [TASK] {task_manager.summary()}")
                     if task_manager.is_done():
                         task_finished = True
                         break
                 continue
 
-            # 停止判断：用 GT 世界坐标距离（与 3DG-VLN 一致）
+            # 停止判断：GT 世界坐标距离
             pos = client.get_pose()[0]
             dist_to_gt = _distance(pos, ep["target"])
             if dist_to_gt < SUCCESS_RADIUS:
@@ -348,35 +417,94 @@ def evaluate(episodes: List[Dict], scene_filter: str = None,
                     task_finished = True
                 break
 
-            # 规划
+            detect_caption = (
+                current_stage.target_query if current_stage and current_stage.target_query
+                else stage_instruction
+            )
+
+            # ═══ 顺序检测：先前视后下视，不创建额外 AirSim 连接 ═══
+            _td0 = time.perf_counter()
+            if front_rgb is not None:
+                front_det = detector.detect(front_rgb, detect_caption, depth_meters=None, camera_name="front")
+            else:
+                from agent.detector.base import DetectionResult
+                front_det = DetectionResult(visible=False, camera="front")
+            if down_rgb is not None:
+                down_det = detector.detect(down_rgb, detect_caption, depth_meters=None, camera_name="down")
+            else:
+                from agent.detector.base import DetectionResult
+                down_det = DetectionResult(visible=False, camera="down")
+            _td = time.perf_counter() - _td0
+
+            visible_dets = [d for d in (front_det, down_det) if d and d.visible]
+            detection = max(visible_dets, key=lambda d: float(d.score or 0.0)) if visible_dets else None
+            low_confidence = detection is None or float(detection.score or 0.0) < detector_min_confidence
+
+            det_front_str = f"front:bbox={front_det.bbox} score={front_det.score:.2f}" if front_det and front_det.visible else "front:not_visible"
+            det_down_str = f"down:bbox={down_det.bbox} score={down_det.score:.2f}" if down_det and down_det.visible else "down:not_visible"
+            print(f"  [DetectRGB] {det_front_str}  {det_down_str}  "
+                  f"best={(detection.camera if detection else 'none')} "
+                  f"threshold={detector_min_confidence:.2f} ({_td:.2f}s)")
+
+            if low_confidence:
+                _rd0 = time.perf_counter()
+                relocalized = relocalizer.search(
+                    client, current_stage, front_image=front_rgb, down_image=down_rgb,
+                    capture_mode=capture_mode,
+                )
+                print(f"  [Relocalize] found={relocalized.found} "
+                      f"time={time.perf_counter() - _rd0:.2f}s reason=low confidence; {relocalized.reason}")
+                continue
+
+            # ═══ 完成判定 + 规划（顺序执行）═══
+            completion = completion_checker.evaluate_with_detection(
+                current_stage, ep["instruction"], front_rgb, down_rgb, detection,
+                front_detection=front_det,
+                down_detection=down_det,
+                front_depth_meters=front_depth, down_depth_meters=down_depth,
+            )
+            detection = completion.detection
+            direction = completion.direction
+            if detection and detection.visible:
+                ds = f"depth={detection.depth_median:.1f}m" if detection.depth_median else "depth=N/A"
+                print(f"  [Completion] done={completion.done} reason={completion.reason} "
+                      f"{detection.camera}:{detection.label} score={detection.score:.2f} {ds}")
+            else:
+                print(f"  [Completion] done={completion.done} reason={completion.reason}")
+
+            if completion.done:
+                if current_stage:
+                    task_manager.complete_current(completion.reason)
+                    print(f"  [TASK] {task_manager.summary()}")
+                    task_finished = task_manager.is_done()
+                else:
+                    task_finished = True
+                if task_finished:
+                    break
+                continue
+
+            # ═══ Planner（顺序执行）═══
             _tp0 = time.perf_counter()
             result = planner.plan(
                 front_rgb, down_rgb,
                 instruction=stage_instruction,
-                direction=direction,
-                detected_bbox=detection.bbox if detection.visible else None,
-                depth_meters=front_depth,
-                detection=detection,
-                down_depth_meters=down_depth,
+                relation=getattr(current_stage, "relation", "") if current_stage else "",
+                target=getattr(current_stage, "target", "") if current_stage else "",
             )
             _tp = time.perf_counter() - _tp0
 
+            # 候选轨迹（仅在启用时）
             candidate_prep = prepare_candidates_for_world_model(
-                result,
-                detection=detection,
-                direction=direction,
+                result, detection=detection, direction=direction,
                 stop_threshold=PLANNER_STOP_THRESHOLD,
             )
             if candidate_prep.all_candidates:
                 result.candidates = [c.to_dict() for c in candidate_prep.all_candidates]
-                print(f"  [PreScore] {candidate_prep.prefilter_reason}")
 
             if world_model and candidate_prep.wm_candidates:
                 wm_result = world_model.score_from_pil(
-                    front_rgb,
-                    down_rgb,
-                    instruction=stage_instruction,
-                    candidates=[c.to_dict() for c in candidate_prep.wm_candidates],
+                    front_rgb, down_rgb, instruction=stage_instruction,
+                    candidates=[c.to_world_model_dict() for c in candidate_prep.wm_candidates],
                 )
                 if 0 <= wm_result.best_index < len(candidate_prep.wm_candidates):
                     chosen = candidate_prep.wm_candidates[wm_result.best_index]
@@ -386,15 +514,14 @@ def evaluate(episodes: List[Dict], scene_filter: str = None,
                         (result.reasoning + " | " if result.reasoning else "")
                         + f"WM chose idx={wm_result.best_index} conf={chosen.confidence:.2f}"
                     )
-                    print(f"  [WorldModel] execute source={chosen.source} conf={chosen.confidence:.2f}")
 
+            # ═══ 执行 ═══
             exec_waypoints = list(result.waypoints) if result.waypoints else []
             if (not exec_waypoints or all(all(abs(v) < 1e-6 for v in wp) for wp in exec_waypoints)) \
                     and result.actions:
                 from agent.planner.api_atomic_planner import _actions_to_body_waypoints
                 exec_waypoints = _actions_to_body_waypoints(result.actions)
 
-            # 执行
             if exec_waypoints and not all(all(abs(v) < 1e-6 for v in wp) for wp in exec_waypoints):
                 _te0 = time.perf_counter()
                 pos_final, _, collided = client.execute_waypoints(exec_waypoints)

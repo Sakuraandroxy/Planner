@@ -18,6 +18,7 @@ import numpy as np
 from PIL import Image
 from openai import OpenAI
 
+from agent.common.trajectory import actions_to_cumulative_body_waypoints, trajectory_delta
 from agent.planner.base import BasePlanner, TrajectoryResult
 from agent.planner import register_planner
 
@@ -85,7 +86,7 @@ class ApiAtomicPlanner(BasePlanner):
         self.model = ag.get("PLANNER_MODEL", "")
         self.max_tokens = int(ag.get("PLANNER_MAX_TOKENS", 2048))
         self.stop_threshold = float(cfg["AGENT"]["STOP_DEPTH_THRESHOLD"])
-        self.candidate_count = int(ag.get("PLANNER_CANDIDATE_COUNT", 3))
+        self.candidate_count = 1
         self.max_trajectory_length = int(ag.get("PLANNER_MAX_TRAJECTORY_LENGTH", 5))
         self.approach_stop_margin = float(ag.get("PLANNER_APPROACH_STOP_MARGIN", 1.0))
 
@@ -114,13 +115,16 @@ class ApiAtomicPlanner(BasePlanner):
             return base64.b64encode(buf.getvalue()).decode()
 
         # ─── 构建深度信息文本（与旧项目 _format_depth_info 等价） ───
-        depth_info = _build_depth_info(
-            front_depth_meters=depth_meters,
-            down_depth_meters=down_depth_meters,
-            detection=detection,
-            front_img=front_img,
-            down_img=down_img,
-        )
+        if detection is None and depth_meters is None and down_depth_meters is None:
+            depth_info = "观测说明：未提供外部目标检测和深度图；请只根据前视图、下视图和任务文本输出一条可执行轨迹。"
+        else:
+            depth_info = _build_depth_info(
+                front_depth_meters=depth_meters,
+                down_depth_meters=down_depth_meters,
+                detection=detection,
+                front_img=front_img,
+                down_img=down_img,
+            )
 
         # ─── 方向提示 ───
         direction_hint = f"\n方向提示：{direction}" if direction else ""
@@ -198,11 +202,11 @@ class ApiAtomicPlanner(BasePlanner):
         all_candidates = parsed["candidates"]  # list of {actions, reason, delta}
 
         # ─── 计算 waypoints（兼容占位） ───
-        body_waypoints = _actions_to_body_waypoints(actions)
+        body_waypoints = actions_to_cumulative_body_waypoints(actions)
         K = 5
         body_waypoints = body_waypoints[:K]
         while len(body_waypoints) < K:
-            body_waypoints.append([0.0, 0.0, 0.0, 0.0])
+            body_waypoints.append([0.0, 0.0, 0.0])
 
         t_total = time.time() - t_total_start
         sel_act = actions[0] if actions else "none"
@@ -417,9 +421,11 @@ def _parse_candidate_response(text: str) -> dict:
             continue
         # 确保 actions 是字符串列表
         acts = [str(a) for a in acts]
-        delta = _compute_delta(acts)
+        waypoints = actions_to_cumulative_body_waypoints(acts)
+        delta = trajectory_delta(waypoints)
         all_candidates.append({
             "actions": acts,
+            "waypoints": waypoints,
             "reason": str(c.get("reason", "")),
             "delta": delta,
             "scale": float(c.get("scale", 1.0)),
@@ -462,14 +468,15 @@ def _fallback_regex_extract(text: str) -> dict:
     matches = re.findall(pattern, text, re.IGNORECASE)
     if matches:
         actions = [f"{m[0].lower()} {m[1]}" for m in matches]
-        delta = _compute_delta(actions)
+        waypoints = actions_to_cumulative_body_waypoints(actions)
+        delta = trajectory_delta(waypoints)
         return {
             "selected_index": 0,
             "selected_actions": actions,
             "done": False,
             "reasoning_summary": f"regex extracted {len(actions)} actions",
             "scene_analysis": "",
-            "candidates": [{"actions": actions, "reason": "regex fallback", "delta": delta}],
+            "candidates": [{"actions": actions, "waypoints": waypoints, "reason": "regex fallback", "delta": delta}],
         }
     return _empty_result(f"parse failed: {text[:200]}")
 
