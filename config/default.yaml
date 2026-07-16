@@ -6,7 +6,7 @@ AGENT:
   TASK_PARSER: vlm_parser
   TASK_PARSER_URL: http://172.27.143.102:8000/v1  # 本地程序连服务器任务解析: http://172.27.143.102:8000/v1  |  云: https://api.xiaomimimo.com/v1
   TASK_PARSER_MODEL: /data/sakura/models/Qwen2.5-7B-Instruct-AWQ  # 本地: /data/sakura/models/Qwen2.5-7B-Instruct-AWQ  |  云: mimo-v2.5
-  TASK_API_KEY: no-key  # 本地: no-key  |  云: sk-cwqm9day74w6wkx0wia95djylj04mp3pzj4kmmwc8wbwdz03
+  TASK_API_KEY: no-key  # 本地: no-key  |  云: xxxxxxxxxxxxxxx
   TASK_PARSER_MAX_TOKENS: 1024
 
   # 目标检测器实现: groundingdino | vlm_detector | yolo
@@ -107,7 +107,7 @@ TASK_COMPLETION:
   NAME: depth_detector                   # depth_detector=GroundingDINO先验+深度证据+VLM最终裁决 | api_completion=纯VLM图像判定
   URL: https://api.xiaomimimo.com/v1     # 完成判定VLM的 OpenAI 兼容地址；本地多模态服务也可改成 http://ip:port/v1
   MODEL: mimo-v2.5                       # 完成判定VLM模型名
-  API_KEY: sk-cwqm9day74w6wkx0wia95djylj04mp3pzj4kmmwc8wbwdz03                        # 云端填写 sk-...；本地服务通常 no-key
+  API_KEY: sk-cwqxxxxxxxxx                        # 云端填写 sk-...；本地服务通常 no-key
   MAX_TOKENS: 64                         # 完成判定只输出 target_detected/done/accepted_view JSON
   TIMEOUT: 60                            # 完成判定VLM请求超时秒数
   TEMPERATURE: 0.0                       # 完成判定应稳定保守
