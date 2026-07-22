@@ -172,6 +172,16 @@ body { font-family:var(--font); background:var(--bg-primary); color:var(--text-p
 .cand-delta { color:var(--text-muted); font-size:9px; margin-top:1px; font-family:var(--font-mono); }
 .cand-select-badge { float:right; font-size:9px; color:var(--green); font-weight:600; font-family:var(--font); }
 
+.trajectory-card { flex-shrink:0; }
+.trajectory-card .card-body { padding:8px 10px; max-height:220px; overflow:auto; }
+.trajectory-debug { display:flex; flex-direction:column; gap:6px; font-size:11px; color:var(--text-primary); }
+.traj-section { display:flex; flex-direction:column; gap:3px; padding:6px 8px; background:var(--bg-card); border:1px solid var(--border); border-radius:5px; }
+.traj-section span { font-size:10px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.4px; }
+.traj-section code { font-family:var(--font-mono); font-size:10px; color:var(--text-primary); white-space:pre-wrap; word-break:break-word; }
+.traj-cand { display:flex; flex-direction:column; gap:2px; padding:5px 0; border-top:1px dashed rgba(255,255,255,0.08); }
+.traj-cand.selected { color:var(--green); }
+.traj-cand code { display:block; margin-top:2px; }
+
 @media (max-width:800px) {
   .main { flex-direction:column; height:auto; overflow-y:auto; }
   .right-panel { width:100%; }

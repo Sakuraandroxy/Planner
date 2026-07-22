@@ -1,0 +1,71 @@
+python tools/extract_training_samples.py \
+  --dataset /data/sakura/data/UAV-VLN-FOV/train \
+  --meta /data/sakura/data/UAV-VLN-FOV/meta \
+  --output /data/sakura/data/UAV-VLN-FOV/finetune_data \
+  --waypoints 5 \
+  --step_interval 5
+
+#sliding window
+python tools/extract_training_samples_sliding_window.py \
+  --dataset /data/sakura/data/UAV-VLN-FOV/train \
+  --meta /data/sakura/data/UAV-VLN-FOV/meta \
+  --output /data/sakura/data/UAV-VLN-FOV/finetune_sliding_window \
+  --future_stride 3 \
+  --step_interval 5 \
+  --max_pending 3 \
+  --max_additional 5 \
+  --pending_counts 0,1,2,3 \
+  --pending_count_mode random \
+  --seed 42 \
+  --image_mode hardlink   
+
+  #auto hardlink reference
+
+cd  /data/sakura/data/UAV-VLN-FOV/finetune_sliding_window
+
+python -c "
+import json
+
+with open('dataset.json', 'r') as f:
+    data = json.load(f)
+
+output = []
+for item in data:
+    new_msgs = []
+    for msg in item['messages']:
+        if isinstance(msg['content'], list):
+            parts = []
+            for block in msg['content']:
+                if block['type'] == 'image':
+                    parts.append('<image>')
+                elif block['type'] == 'text':
+                    parts.append(block['text'])
+            new_content = ''.join(parts)
+        else:
+            new_content = msg['content']
+        new_msgs.append({'role': msg['role'], 'content': new_content})
+
+    output.append({
+        'messages': new_msgs,
+        'images': item['images']
+    })
+
+with open('dataset_v2.jsonl', 'w') as f:
+    for item in output:
+        f.write(json.dumps(item, ensure_ascii=False) + '\n')
+
+print(f'{len(output)} samples → dataset_v2.jsonl')"
+
+
+
+
+export CUDA_HOME=$CONDA_PREFIX
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+llamafactory-cli train /data/sakura/data/UAV-VLN-FOV/tools/qwen2_5vl_7b_3dgvln_lora.yaml
+
+llamafactory-cli export \
+  --model_name_or_path /data/sakura/models/3DG-VLN \
+  --adapter_name_or_path /data/sakura/data/UAV-VLN-FOV/tools/output/qwen2_5vl_7b_3dgvln_lora_sliding_window/checkpoint-2169 \
+  --template qwen2_vl \
+  --finetuning_type lora \
+  --export_dir /data/sakura/models/3DG-VLN-finetuned-sliding_window

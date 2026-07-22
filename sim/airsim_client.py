@@ -62,6 +62,17 @@ class AirSimClient:
         yaw = math.degrees(math.atan2(siny, cosy))
         return pos, yaw
 
+    def get_pose_full(self):
+        """Returns (pos, yaw_deg, rotation_matrix body->world)."""
+        p = self.client.simGetVehiclePose()
+        pos = [p.position.x_val, p.position.y_val, p.position.z_val]
+        q = p.orientation
+        siny = 2.0 * (q.w_val * q.z_val + q.x_val * q.y_val)
+        cosy = 1.0 - 2.0 * (q.y_val * q.y_val + q.z_val * q.z_val)
+        yaw = math.degrees(math.atan2(siny, cosy))
+        rot = R.from_quat([q.x_val, q.y_val, q.z_val, q.w_val]).as_matrix().tolist()
+        return pos, yaw, rot
+
     def move_to_position(self, x, y, z, velocity=None, timeout=10.0):
         if velocity is None:
             from config import cfg
@@ -552,64 +563,78 @@ class AirSimClient:
             print(f"[AirSim] warmup skipped: {e}")
 
     def execute_waypoints(self, waypoints, velocity=None, use_forward_only=True):
-        """执行机体坐标系 waypoints。
+        """执行世界坐标系 waypoints。
 
-        use_forward_only=True（默认，匹配 3DG-VLN）:
-            转世界坐标路径 → moveOnPathAsync(ForwardOnly)
-            → 无人机自动面朝每个航点方向
+        所有 waypoints 都是 [x, y, z] 世界坐标。
 
-        use_forward_only=False（旧行为）:
+        use_forward_only=True（默认）:
+            直接 moveToPositionAsync 到本批次最后一个世界坐标航点。
+            moveOnPathAsync 在当前 AirSim 环境中会立即返回但不移动。
+
+        use_forward_only=False（旧行为，碰撞后退用）:
             逐个 moveToPositionAsync(MaxDegreeOfFreedom)
-            → 无人机保持初始朝向
+            waypoints 为 [dx, dy, dz] 机体位移
 
         Returns (pos_final, yaw_final, collided).
         """
         from config import cfg
-        from agent.common.trajectory import cumulative_body_to_world_positions
 
         if velocity is None:
             velocity = float(cfg.get("SIM", {}).get("AIRSIM_VELOCITY", 2.0))
 
-        start_pos, start_yaw = self.get_pose()
-
-        pos = list(start_pos)
+        pos, yaw = self.get_pose()
+        pos = list(pos)
         collided = False
 
         move_timeout = int(cfg.get("SIM", {}).get("AIRSIM_MOVE_TIMEOUT", 60))
 
         if use_forward_only:
-            # ═══ 3DG-VLN 风格: moveOnPathAsync(ForwardOnly) ═══
-            # 先构建世界坐标路径
-            # 过滤掉零位移 padding waypoints（否则 ForwardOnly 会在最后一个
-            # 真实航点之后回头飞向 [0,0,0] 对应的起点位置，导致无人机 180° 掉头）
-            active_wps = [wp for wp in waypoints
-                          if abs(wp[0]) > 0.01 or abs(wp[1]) > 0.01 or abs(wp[2]) > 0.01]
+            # Ignore waypoints that are effectively the current position.
+            active_wps = []
+            prev_target = np.array(pos, dtype=float)
+            for wp in waypoints:
+                cur_target = np.array(wp, dtype=float)
+                if float(np.linalg.norm(cur_target - prev_target)) > 0.01:
+                    active_wps.append(wp)
+                    prev_target = cur_target
             if not active_wps:
                 return self.get_pose() + (False,)
 
-            world_positions = cumulative_body_to_world_positions(active_wps, pos, start_yaw)
-            path = [airsim.Vector3r(*target) for target in world_positions]
-            path_world = [tuple(round(v, 1) for v in target) for target in world_positions]
+            path_world = [tuple(round(v, 1) for v in target) for target in active_wps]
             path_len = 0.0
             prev = np.array(pos, dtype=float)
-            for target in world_positions:
+            for target in active_wps:
                 cur = np.array(target, dtype=float)
                 path_len += float(np.linalg.norm(cur - prev))
                 prev = cur
-            lookahead = max(0.3, min(3.0, path_len * 0.5))
 
-            print(f"  [Path] {len(path)} waypoints, ForwardOnly lookahead={lookahead:.2f}")
+            print(f"  [Path] {len(active_wps)} world waypoints, direct moveToPosition final target")
             print(f"    world coords: {path_world}")
             try:
-                result = self.client.moveOnPathAsync(
-                    path=path,
-                    velocity=velocity,
+                before_pos, before_yaw = self.get_pose()
+                target = active_wps[-1]
+                dx = float(target[0]) - float(before_pos[0])
+                dy = float(target[1]) - float(before_pos[1])
+                if math.hypot(dx, dy) > 0.05:
+                    heading = math.degrees(math.atan2(dy, dx))
+                    if abs(((heading - float(before_yaw) + 180.0) % 360.0) - 180.0) > 3.0:
+                        self.client.rotateToYawAsync(heading, timeout_sec=5).join()
+                result = self.client.moveToPositionAsync(
+                    float(target[0]),
+                    float(target[1]),
+                    float(target[2]),
+                    velocity,
                     timeout_sec=move_timeout,
-                    drivetrain=airsim.DrivetrainType.ForwardOnly,
-                    yaw_mode=airsim.YawMode(is_rate=False),
-                    lookahead=lookahead,
-                    adaptive_lookahead=0,
                 ).join()
+                time.sleep(0.15)
+                after_pos, after_yaw = self.get_pose()
+                moved = float(np.linalg.norm(np.array(after_pos, dtype=float) - np.array(before_pos, dtype=float)))
+                print(
+                    f"  [PathResult] moved={moved:.2f}m "
+                    f"from=({before_pos[0]:.2f},{before_pos[1]:.2f},{before_pos[2]:.2f}) yaw={before_yaw:.1f} "
+                    f"to=({after_pos[0]:.2f},{after_pos[1]:.2f},{after_pos[2]:.2f}) yaw={after_yaw:.1f} "
+                    f"result={result}"
+                )
                 if result:
                     collided = True
             except Exception as e:
@@ -620,7 +645,7 @@ class AirSimClient:
             # ═══ 旧行为: 逐点 moveToPositionAsync ═══
             for dx, dy, dz in waypoints:
                 local_dir = np.array([dx, dy])
-                yaw_rad = math.radians(start_yaw)
+                yaw_rad = math.radians(yaw)
                 world_dir = np.array([
                     local_dir[0] * math.cos(yaw_rad) - local_dir[1] * math.sin(yaw_rad),
                     local_dir[0] * math.sin(yaw_rad) + local_dir[1] * math.cos(yaw_rad),

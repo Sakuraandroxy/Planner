@@ -38,7 +38,7 @@ from agent.task_parser import build_task_parser
 from agent.world_model import build_world_model
 from agent.candidate import prepare_candidates_for_world_model
 from agent.completion import build_task_completion_checker
-from agent.common.task_manager import TaskManager
+from agent.functions.common.task_manager import TaskManager
 from agent.relocalization import TargetRelocalizer
 from eval.metrics import MetricsTracker
 from sim.airsim_client import AirSimClient

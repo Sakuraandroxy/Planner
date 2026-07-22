@@ -19,6 +19,10 @@ class SharedState:
         self.collided = False
         self.reasoning = ""
         self.scene_analysis = ""
+        self.trajectory_queue = []
+        self.qwen_waypoints = []
+        self.trajectory_candidates = []
+        self.selected_trajectory = {}
         self.candidates = []
         self.selected_actions = []
         self.error = ""
@@ -85,6 +89,10 @@ class SharedState:
                 "collided": self.collided,
                 "reasoning": self.reasoning,
                 "scene_analysis": self.scene_analysis,
+                "trajectory_queue": self.trajectory_queue,
+                "qwen_waypoints": self.qwen_waypoints,
+                "trajectory_candidates": self.trajectory_candidates,
+                "selected_trajectory": self.selected_trajectory,
                 "candidates": self.candidates,
                 "selected": self.selected_actions,
                 "reasoning_summary": self.reasoning_summary,
