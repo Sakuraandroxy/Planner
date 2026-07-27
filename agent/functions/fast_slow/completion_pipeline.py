@@ -1,10 +1,7 @@
-"""Asynchronous completion pipeline for the fast-slow runtime.
+"""Asynchronous detector/depth observation pipeline for the fast-slow runtime.
 
-The pipeline never advances stages by itself.  It only reports events back to
-the runtime:
-- ``near_stop`` means geometry says we should pause and confirm on fresh frames.
-- ``done_candidate`` means a delayed VLM result thinks the stage is complete;
-  the runtime must still pause and confirm on fresh frames before switching.
+In the current distance-only completion mode this pipeline refreshes the
+cached target world pose. It never advances stages itself.
 """
 
 from __future__ import annotations
@@ -23,6 +20,8 @@ class DetectionDepthBundle:
     best_detection: Optional[DetectionResult]
     front_detection: Optional[DetectionResult]
     down_detection: Optional[DetectionResult]
+    front_image: Any = None
+    down_image: Any = None
     front_depth: Any = None
     down_depth: Any = None
     detect_elapsed: float = 0.0
@@ -32,6 +31,8 @@ class DetectionDepthBundle:
     distance_reason: str = ""
     front_reliability: float = 0.0
     down_reliability: float = 0.0
+    observer_world: Optional[list[float]] = None
+    observer_yaw_deg: Optional[float] = None
 
 
 @dataclass
@@ -74,6 +75,7 @@ class CompletionPipeline:
         stop_radius_m: float,
         slow_radius_m: float,
         distance_view_policy: str = "relation_aware",
+        debug_logs: bool = False,
     ):
         self.detector = detector
         self.checker = checker
@@ -84,6 +86,7 @@ class CompletionPipeline:
         self.stop_radius_m = float(stop_radius_m)
         self.slow_radius_m = float(slow_radius_m)
         self.distance_view_policy = str(distance_view_policy or "relation_aware").strip().lower()
+        self.debug_logs = bool(debug_logs)
         self._job: Optional[CompletionPipelineJob] = None
 
     @property
@@ -105,12 +108,12 @@ class CompletionPipeline:
             down_frame=down_frame,
         )
         if getattr(self.checker, "uses_detector", False) and self.checker.is_detector_enabled():
-            job.detect_future = self.slow_executor.submit(self._detect_dual_view, stage, task_text, frame, down_frame)
-            job.depth_future = self.slow_executor.submit(self._capture_depth)
+            job.detect_future = self.slow_executor.submit(self._capture_detect_depth_bundle, stage, task_text)
             job.phase = "detect_depth"
         else:
-            job.vlm_future = self.slow_executor.submit(self._evaluate_freshless, stage, task_text, frame, down_frame)
-            job.phase = "vlm"
+            # Distance completion requires detector/depth observations. There
+            # is deliberately no VLM-only fallback.
+            return False
         self._job = job
         return True
 
@@ -120,35 +123,41 @@ class CompletionPipeline:
             return None
 
         if job.phase == "detect_depth":
-            if not (job.detect_future and job.detect_future.done() and job.depth_future and job.depth_future.done()):
+            if not (job.detect_future and job.detect_future.done()):
                 return None
-            front_det, down_det, detect_elapsed = job.detect_future.result()
-            front_depth, down_depth, depth_elapsed = job.depth_future.result()
-            bundle = self._make_bundle(job, front_det, down_det, front_depth, down_depth, detect_elapsed, depth_elapsed)
+            bundle = job.detect_future.result()
             job.bundle = bundle
-            print(
-                "  [TargetDepth] "
-                + web_helpers.target_depth_text("front", bundle.front_detection, job.frame, bundle.front_depth)
-                + "  "
-                + web_helpers.target_depth_text("down", bundle.down_detection, job.down_frame, bundle.down_depth)
-            )
+            job.frame = bundle.front_image
+            job.down_frame = bundle.down_image
+            if bundle.best_detection is None or not getattr(bundle.best_detection, "visible", False):
+                self._job = None
+                return CompletionPipelineEvent(
+                    "target_lost",
+                    job.stage_key,
+                    bundle=bundle,
+                    elapsed=time.perf_counter() - job.submitted_at,
+                )
             bundle.distance_m = self._distance_for_stage(job.stage, bundle, job.frame, job.down_frame)
             depth_text = "none" if bundle.distance_m is None else f"{bundle.distance_m:.1f}m"
-            print(
-                "  [CompletionDistance] "
-                f"policy={self.distance_view_policy} selected={bundle.distance_view} "
-                f"depth={depth_text} reason={bundle.distance_reason} "
-                f"front_rel={bundle.front_reliability:.3f} down_rel={bundle.down_reliability:.3f}"
-            )
+            if self.debug_logs:
+                print(
+                    "  [CompletionDistance] "
+                    f"policy={self.distance_view_policy} selected={bundle.distance_view} "
+                    f"depth={depth_text} reason={bundle.distance_reason} "
+                    f"front_rel={bundle.front_reliability:.3f} down_rel={bundle.down_reliability:.3f}"
+                )
             if bundle.distance_m is not None and bundle.distance_m <= self.stop_radius_m:
                 job.near_stop_emitted = True
                 elapsed = time.perf_counter() - job.submitted_at
                 self._job = None
                 return CompletionPipelineEvent("near_stop", job.stage_key, bundle=bundle, elapsed=elapsed)
 
-            job.vlm_future = self.slow_executor.submit(self._evaluate_with_bundle, job, bundle)
-            job.phase = "vlm"
-            return None
+            # Far from the target, geometry is sufficient. Release this job so
+            # the next detector snapshot can refresh the cached world pose;
+            # the expensive VLM judge is reserved for fresh near-target confirmation.
+            self._job = None
+            return CompletionPipelineEvent("observation", job.stage_key, bundle=bundle,
+                                           elapsed=time.perf_counter() - job.submitted_at)
 
         if job.phase == "vlm":
             if not job.vlm_future or not job.vlm_future.done():
@@ -201,28 +210,94 @@ class CompletionPipeline:
         down_future = self.detect_executor.submit(detect_one, down_frame, "down")
         front_det = front_future.result()
         down_det = down_future.result()
+        self._suppress_giant_bbox(front_det, frame)
+        self._suppress_giant_bbox(down_det, down_frame)
         return front_det, down_det, time.perf_counter() - t0
 
-    def _capture_depth(self):
-        depth_profile = web_helpers.depth_only_profile(getattr(self.checker, "depth_profile", "front_down_both_depth"))
+    def _capture_detect_depth_bundle(self, stage: Any, task_text: str) -> DetectionDepthBundle:
+        profile = "front_down"
         t0 = time.perf_counter()
-        _front, _down, front_depth, down_depth, _timing = web_helpers.capture_profile_isolated(self.client, depth_profile)
-        return front_depth, down_depth, time.perf_counter() - t0
+        (
+            frame,
+            down_frame,
+            _front_depth,
+            _down_depth,
+            timing,
+            observer_world,
+            observer_yaw_deg,
+        ) = web_helpers.capture_profile_isolated_with_pose(self.client, profile)
+        capture_elapsed = time.perf_counter() - t0
+        timing = dict(timing or {})
+        timing.setdefault("total_s", capture_elapsed)
+        if self.debug_logs:
+            print(
+                f"  [CompletionSnapshot] profile={profile} time={timing.get('total_s', capture_elapsed):.2f}s  "
+                f"front={web_helpers.shape_text(frame)} down={web_helpers.shape_text(down_frame)}"
+            )
 
-    def _make_bundle(self, job, front_det, down_det, front_depth, down_depth, detect_elapsed, depth_elapsed):
+        front_det, down_det, detect_elapsed = self._detect_dual_view(stage, task_text, frame, down_frame)
+        bundle = self._make_bundle(job=None, front_det=front_det, down_det=down_det,
+                                   front_depth=None, down_depth=None,
+                                   detect_elapsed=detect_elapsed, depth_elapsed=0.0,
+                                   frame=frame, down_frame=down_frame, stage=stage)
+        bundle.observer_world = list(observer_world)
+        bundle.observer_yaw_deg = float(observer_yaw_deg)
+        if bundle.best_detection is None or not getattr(bundle.best_detection, "visible", False):
+            bundle.distance_view = "none"
+            bundle.distance_reason = "target_not_detected_in_rgb"
+            return bundle
+
+        depth_profile = web_helpers.depth_only_profile("front_down_both_depth")
+        depth_t0 = time.perf_counter()
+        _front_rgb, _down_rgb, front_depth, down_depth, depth_timing = web_helpers.capture_profile_isolated(
+            self.client,
+            depth_profile,
+        )
+        depth_elapsed = time.perf_counter() - depth_t0
+        depth_timing = dict(depth_timing or {})
+        depth_timing.setdefault("total_s", depth_elapsed)
+        if self.debug_logs:
+            print(
+                f"  [CompletionDepth] profile={depth_profile} "
+                f"time={depth_timing.get('total_s', depth_elapsed):.2f}s  "
+                f"front_depth={web_helpers.shape_text(front_depth)} "
+                f"down_depth={web_helpers.shape_text(down_depth)}"
+            )
+
+        # Depth attachment is functional state, not logging. target_depth_text
+        # populates depth_median/depth_bbox while also returning debug text.
+        front_depth_text = web_helpers.target_depth_text("front", front_det, frame, front_depth)
+        down_depth_text = web_helpers.target_depth_text("down", down_det, down_frame, down_depth)
+        if self.debug_logs:
+            print(f"  [TargetDepth] {front_depth_text}  {down_depth_text}")
+        bundle = self._make_bundle(job=None, front_det=front_det, down_det=down_det,
+                                   front_depth=front_depth, down_depth=down_depth,
+                                   detect_elapsed=detect_elapsed, depth_elapsed=depth_elapsed,
+                                   frame=frame, down_frame=down_frame, stage=stage)
+        bundle.observer_world = list(observer_world)
+        bundle.observer_yaw_deg = float(observer_yaw_deg)
+        return bundle
+
+    def _make_bundle(self, job, front_det, down_det, front_depth, down_depth,
+                     detect_elapsed, depth_elapsed, frame=None, down_frame=None, stage=None):
+        frame = frame if frame is not None else getattr(job, "frame", None)
+        down_frame = down_frame if down_frame is not None else getattr(job, "down_frame", None)
+        stage = stage if stage is not None else getattr(job, "stage", None)
         visible = [d for d in (front_det, down_det) if d and d.visible]
         best = self._select_reliable_detection(
-            job.stage,
+            stage,
             front_det,
             down_det,
-            job.frame,
-            job.down_frame,
+            frame,
+            down_frame,
             require_depth=False,
         ) if visible else None
         return DetectionDepthBundle(
             best_detection=best,
             front_detection=front_det,
             down_detection=down_det,
+            front_image=frame,
+            down_image=down_frame,
             front_depth=front_depth,
             down_depth=down_depth,
             detect_elapsed=detect_elapsed,
@@ -233,8 +308,8 @@ class CompletionPipeline:
         completion = self.checker.evaluate_with_detection(
             job.stage,
             job.task_text,
-            job.frame,
-            job.down_frame,
+            bundle.front_image,
+            bundle.down_image,
             bundle.best_detection,
             front_detection=bundle.front_detection,
             down_detection=bundle.down_detection,
@@ -243,8 +318,9 @@ class CompletionPipeline:
         )
         return completion
 
-    def _evaluate_freshless(self, stage: Any, task_text: str, frame: Any, down_frame: Any):
-        front_depth, down_depth, _elapsed = self._capture_depth()
+    def _evaluate_freshless(self, stage: Any, task_text: str):
+        profile = "front_down_both_depth"
+        frame, down_frame, front_depth, down_depth, _timing = web_helpers.capture_profile_isolated(self.client, profile)
         return self.checker.evaluate(
             stage,
             task_text,
@@ -383,6 +459,25 @@ class CompletionPipeline:
         if touches_border:
             quality *= 0.45 if self._is_above_stage(stage) else 0.35
         return score * quality
+
+    @staticmethod
+    def _suppress_giant_bbox(
+        detection: Optional[DetectionResult],
+        image,
+        max_span: float = 0.90,
+    ) -> None:
+        """Treat full-image detector boxes as no target evidence."""
+        if detection is None or not detection.bbox or image is None or not hasattr(image, "size"):
+            return
+        width, height = float(image.size[0]), float(image.size[1])
+        if width <= 1.0 or height <= 1.0:
+            return
+        x1, y1, x2, y2 = [float(v) for v in detection.bbox[:4]]
+        box_w = max(0.0, min(width, x2) - max(0.0, x1))
+        box_h = max(0.0, min(height, y2) - max(0.0, y1))
+        if box_w / width >= max_span or box_h / height >= max_span:
+            detection.score = 0.0
+            detection.visible = False
 
     @staticmethod
     def _is_above_stage(stage: Any) -> bool:

@@ -1,10 +1,36 @@
 """Wraps all AirSim API calls into a clean interface."""
 import contextlib
 import math, io, time
+import threading
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 import airsim
 from PIL import Image, ImageDraw, ImageFont
+
+
+class _SynchronizedAirSimRpcClient:
+    """Serialize calls made through one msgpackrpc client.
+
+    AirSim's Python client uses a mutable Tornado write buffer and is not
+    thread-safe.  The fast/slow runtime intentionally captures images in a
+    worker while the main thread polls vehicle pose, so all calls that share
+    this connection must cross one lock.
+    """
+
+    def __init__(self, client):
+        self._client = client
+        self._lock = threading.RLock()
+
+    def __getattr__(self, name):
+        attribute = getattr(self._client, name)
+        if not callable(attribute):
+            return attribute
+
+        def synchronized_call(*args, **kwargs):
+            with self._lock:
+                return attribute(*args, **kwargs)
+
+        return synchronized_call
 
 
 class AirSimClient:
@@ -21,12 +47,13 @@ class AirSimClient:
         self._port = port
         self._timeout_value = timeout_value
         if timeout_value is None:
-            self.client = airsim.MultirotorClient(ip=ip, port=port) if ip else airsim.MultirotorClient(port=port)
+            raw_client = airsim.MultirotorClient(ip=ip, port=port) if ip else airsim.MultirotorClient(port=port)
         else:
-            self.client = (
+            raw_client = (
                 airsim.MultirotorClient(ip=ip, port=port, timeout_value=timeout_value)
                 if ip else airsim.MultirotorClient(port=port, timeout_value=timeout_value)
             )
+        self.client = _SynchronizedAirSimRpcClient(raw_client)
         self._connected = False
 
     def connect(self, quiet: bool = False):
@@ -300,6 +327,86 @@ class AirSimClient:
     def check_collision(self):
         return self.client.simGetCollisionInfo().has_collided
 
+    def collision_marker(self):
+        info = self.client.simGetCollisionInfo()
+        return (
+            bool(getattr(info, "has_collided", False)),
+            int(getattr(info, "time_stamp", 0) or 0),
+            str(getattr(info, "object_name", "") or ""),
+        )
+
+    def has_collision_since(self, marker) -> bool:
+        current = self.collision_marker()
+        if not current[0]:
+            return False
+        if marker is None:
+            return True
+        previous = tuple(marker)
+        if not previous[0]:
+            return True
+        return current[1:] != previous[1:]
+
+    def get_speed_mps(self) -> float:
+        state = self.client.getMultirotorState()
+        velocity = state.kinematics_estimated.linear_velocity
+        return math.sqrt(
+            float(velocity.x_val) ** 2
+            + float(velocity.y_val) ** 2
+            + float(velocity.z_val) ** 2
+        )
+
+    def start_waypoint_path(self, waypoints, velocity=None):
+        """Start or replace the active AirSim path without waiting for it to finish."""
+        from config import cfg
+
+        if velocity is None:
+            velocity = float(cfg.get("SIM", {}).get("AIRSIM_VELOCITY", 2.0))
+        active_wps = [[float(v) for v in waypoint[:3]] for waypoint in waypoints]
+        if not active_wps:
+            return None
+
+        current_pos, _yaw = self.get_pose()
+        previous = np.array(current_pos, dtype=float)
+        path_len = 0.0
+        for waypoint in active_wps:
+            target = np.array(waypoint, dtype=float)
+            path_len += float(np.linalg.norm(target - previous))
+            previous = target
+
+        sim_cfg = cfg.get("SIM", {})
+        configured_lookahead = float(sim_cfg.get("AIRSIM_PATH_LOOKAHEAD", 3.0))
+        minimum_lookahead = float(sim_cfg.get("AIRSIM_MIN_PATH_LOOKAHEAD", 0.2))
+        effective_lookahead = max(
+            minimum_lookahead,
+            min(configured_lookahead, max(path_len * 0.5, minimum_lookahead)),
+        )
+        adaptive_lookahead = float(sim_cfg.get("AIRSIM_ADAPTIVE_LOOKAHEAD", 1.0))
+        move_timeout = int(sim_cfg.get("AIRSIM_MOVE_TIMEOUT", 60))
+        path = [airsim.Vector3r(*waypoint) for waypoint in active_wps]
+        functions_cfg = cfg.get("FUNCTIONS", {}) or {}
+        fast_slow_cfg = {**(cfg.get("FAST_SLOW", {}) or {}), **(functions_cfg.get("FAST_SLOW", {}) or {})}
+        if bool(fast_slow_cfg.get("DEBUG_LOGS", False)):
+            print(
+                f"  [PathCommand] points={len(active_wps)} path_m={path_len:.2f} "
+                f"lookahead={effective_lookahead:.2f} adaptive={adaptive_lookahead:g}"
+            )
+        return self.client.moveOnPathAsync(
+            path=path,
+            velocity=float(velocity),
+            timeout_sec=move_timeout,
+            drivetrain=airsim.DrivetrainType.ForwardOnly,
+            yaw_mode=airsim.YawMode(is_rate=False),
+            lookahead=effective_lookahead,
+            adaptive_lookahead=adaptive_lookahead,
+        )
+
+    def stop_waypoint_path(self):
+        try:
+            self.client.cancelLastTask()
+        except Exception:
+            pass
+        self.client.hoverAsync().join()
+
     def cleanup(self):
         try:
             self.client.armDisarm(False)
@@ -402,6 +509,63 @@ class AirSimClient:
             "total_s": t2 - t0,
         }
         return values["front_rgb"], values["down_rgb"], values["front_depth"], values["down_depth"], timing
+
+    @staticmethod
+    def _body_pose_from_camera_response(response, camera_offset):
+        """Recover the vehicle pose paired with an AirSim image response."""
+        if response is None:
+            return None
+        position = getattr(response, "camera_position", None)
+        orientation = getattr(response, "camera_orientation", None)
+        if position is None or orientation is None:
+            return None
+        q = orientation
+        quat = [float(q.x_val), float(q.y_val), float(q.z_val), float(q.w_val)]
+        if not all(math.isfinite(value) for value in quat):
+            return None
+        rot = R.from_quat(quat).as_matrix()
+        camera_world = np.array(
+            [float(position.x_val), float(position.y_val), float(position.z_val)],
+            dtype=float,
+        )
+        offset = np.array([float(value) for value in camera_offset[:3]], dtype=float)
+        body_world = camera_world - rot @ offset
+        siny = 2.0 * (q.w_val * q.z_val + q.x_val * q.y_val)
+        cosy = 1.0 - 2.0 * (q.y_val * q.y_val + q.z_val * q.z_val)
+        yaw_deg = math.degrees(math.atan2(siny, cosy))
+        return body_world.tolist(), yaw_deg, rot.tolist()
+
+    def capture_planning_views_with_pose(self, camera_offset=(1.0, 0.0, 0.0)):
+        """Capture paired front/down RGB and their exact vehicle-frame pose."""
+        named_requests = self._profile_requests("front_down")
+        t0 = time.perf_counter()
+        responses = self.client.simGetImages([request for _, request in named_requests])
+        t1 = time.perf_counter()
+
+        front = down = None
+        front_response = None
+        for index, (name, _request) in enumerate(named_requests):
+            if not responses or len(responses) <= index:
+                continue
+            response = responses[index]
+            if name == "front_rgb":
+                front_response = response
+                front = self._decode_capture_response(name, response)
+            elif name == "down_rgb":
+                down = self._decode_capture_response(name, response)
+
+        pose = self._body_pose_from_camera_response(front_response, camera_offset)
+        if pose is None:
+            pose = self.get_pose_full()
+        t2 = time.perf_counter()
+        timing = {
+            "profile": "front_down",
+            "mode": "batch_with_pose",
+            "rpc_s": t1 - t0,
+            "decode_s": t2 - t1,
+            "total_s": t2 - t0,
+        }
+        return front, down, pose[0], pose[1], pose[2], timing
 
     def _new_aux_client(self):
         """创建一个额外 RPC client，供实验性并发抓图使用。"""
@@ -568,8 +732,8 @@ class AirSimClient:
         所有 waypoints 都是 [x, y, z] 世界坐标。
 
         use_forward_only=True（默认）:
-            直接 moveToPositionAsync 到本批次最后一个世界坐标航点。
-            moveOnPathAsync 在当前 AirSim 环境中会立即返回但不移动。
+            一次 moveOnPathAsync 执行整批世界坐标航点。
+            ForwardOnly 让机头沿路径切线连续转向，lookahead 负责平滑过点。
 
         use_forward_only=False（旧行为，碰撞后退用）:
             逐个 moveToPositionAsync(MaxDegreeOfFreedom)
@@ -608,38 +772,67 @@ class AirSimClient:
                 path_len += float(np.linalg.norm(cur - prev))
                 prev = cur
 
-            print(f"  [Path] {len(active_wps)} world waypoints, direct moveToPosition final target")
+            configured_lookahead = float(cfg.get("SIM", {}).get("AIRSIM_PATH_LOOKAHEAD", 3.0))
+            minimum_lookahead = float(cfg.get("SIM", {}).get("AIRSIM_MIN_PATH_LOOKAHEAD", 0.2))
+            lookahead = max(minimum_lookahead, min(configured_lookahead, max(path_len * 0.5, minimum_lookahead)))
+            adaptive_lookahead = float(cfg.get("SIM", {}).get("AIRSIM_ADAPTIVE_LOOKAHEAD", 1.0))
+            print(
+                f"  [Path] {len(active_wps)} world waypoints, moveOnPath "
+                f"ForwardOnly lookahead={lookahead:g} adaptive={adaptive_lookahead:g}"
+            )
             print(f"    world coords: {path_world}")
+            before_pos, before_yaw = self.get_pose()
+            collision_before = self.collision_marker()
+            path = [airsim.Vector3r(float(wp[0]), float(wp[1]), float(wp[2])) for wp in active_wps]
+            used_fallback = False
             try:
-                before_pos, before_yaw = self.get_pose()
-                target = active_wps[-1]
-                dx = float(target[0]) - float(before_pos[0])
-                dy = float(target[1]) - float(before_pos[1])
-                if math.hypot(dx, dy) > 0.05:
-                    heading = math.degrees(math.atan2(dy, dx))
-                    if abs(((heading - float(before_yaw) + 180.0) % 360.0) - 180.0) > 3.0:
-                        self.client.rotateToYawAsync(heading, timeout_sec=5).join()
-                result = self.client.moveToPositionAsync(
-                    float(target[0]),
-                    float(target[1]),
-                    float(target[2]),
-                    velocity,
+                self.client.moveOnPathAsync(
+                    path=path,
+                    velocity=velocity,
                     timeout_sec=move_timeout,
+                    drivetrain=airsim.DrivetrainType.ForwardOnly,
+                    yaw_mode=airsim.YawMode(is_rate=False),
+                    lookahead=lookahead,
+                    adaptive_lookahead=adaptive_lookahead,
                 ).join()
-                time.sleep(0.15)
+            except Exception as e:
+                print(f"  [Path] moveOnPath error: {e}; falling back to moveToPosition")
+                used_fallback = True
+
+            after_pos, after_yaw = self.get_pose()
+            moved = float(np.linalg.norm(np.array(after_pos, dtype=float) - np.array(before_pos, dtype=float)))
+            if not used_fallback and path_len > 0.5 and moved < 0.05:
+                print("  [Path] moveOnPath produced no displacement; falling back to moveToPosition")
+                try:
+                    self.client.hoverAsync().join()
+                except Exception:
+                    pass
+                used_fallback = True
+
+            if used_fallback:
+                for target in active_wps:
+                    self.client.moveToPositionAsync(
+                        float(target[0]),
+                        float(target[1]),
+                        float(target[2]),
+                        velocity,
+                        timeout_sec=move_timeout,
+                        drivetrain=airsim.DrivetrainType.ForwardOnly,
+                        yaw_mode=airsim.YawMode(is_rate=False),
+                    ).join()
                 after_pos, after_yaw = self.get_pose()
                 moved = float(np.linalg.norm(np.array(after_pos, dtype=float) - np.array(before_pos, dtype=float)))
-                print(
-                    f"  [PathResult] moved={moved:.2f}m "
-                    f"from=({before_pos[0]:.2f},{before_pos[1]:.2f},{before_pos[2]:.2f}) yaw={before_yaw:.1f} "
-                    f"to=({after_pos[0]:.2f},{after_pos[1]:.2f},{after_pos[2]:.2f}) yaw={after_yaw:.1f} "
-                    f"result={result}"
-                )
-                if result:
-                    collided = True
-            except Exception as e:
-                print(f"  [Path] ⚠️ error: {e}")
-                collided = True
+
+            collided = self.has_collision_since(collision_before)
+            final_target = active_wps[-1]
+            target_error = float(
+                np.linalg.norm(np.array(after_pos, dtype=float) - np.array(final_target, dtype=float))
+            )
+            print(
+                f"  [PathResult] points={len(active_wps)} moved={moved:.2f}m "
+                f"target_error={target_error:.2f}m "
+                f"yaw={before_yaw:.1f}->{after_yaw:.1f} fallback={used_fallback} collided={collided}"
+            )
 
         else:
             # ═══ 旧行为: 逐点 moveToPositionAsync ═══

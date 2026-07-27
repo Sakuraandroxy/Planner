@@ -19,10 +19,9 @@ from dataclasses import dataclass, field
 from typing import Iterable, List, Sequence
 
 import requests
-from PIL import Image
 from urllib.parse import urlparse
 
-from agent.functions.common.config_access import as_bool, first_value, function_section
+from agent.functions.common.config_access import first_value, function_section
 from agent.functions.common.trajectory import normalize_xyz_waypoints
 from agent.models.planner import register_planner
 from agent.models.planner.base import BasePlanner, TrajectoryResult
@@ -58,23 +57,18 @@ def cumulative_to_incremental(waypoints: Iterable[Sequence[float]] | None) -> Li
 
 
 def _yaw_rotation_matrix(yaw_deg: float) -> List[List[float]]:
-    yaw = math.radians(float(yaw_deg))
-    cos_yaw = math.cos(yaw)
-    sin_yaw = math.sin(yaw)
+    yaw = math.radians(float(yaw_deg or 0.0))
+    c = math.cos(yaw)
+    s = math.sin(yaw)
     return [
-        [cos_yaw, -sin_yaw, 0.0],
-        [sin_yaw, cos_yaw, 0.0],
+        [c, -s, 0.0],
+        [s, c, 0.0],
         [0.0, 0.0, 1.0],
     ]
 
 
 def _rotation_matrix(rot_body_to_world, yaw_deg: float) -> List[List[float]]:
-    if rot_body_to_world is None:
-        return _yaw_rotation_matrix(yaw_deg)
-    rows = [list(row) for row in rot_body_to_world]
-    if len(rows) != 3 or any(len(row) != 3 for row in rows):
-        return _yaw_rotation_matrix(yaw_deg)
-    return [[float(v) for v in row] for row in rows]
+    return _yaw_rotation_matrix(yaw_deg)
 
 
 def cumulative_body_to_world(
@@ -83,10 +77,13 @@ def cumulative_body_to_world(
     start_yaw_deg: float,
     start_rot_body_to_world=None,
 ) -> List[List[float]]:
+    normalized = normalize_xyz_waypoints(waypoints)
+    if not normalized:
+        return []
     rot = _rotation_matrix(start_rot_body_to_world, start_yaw_deg)
     sx, sy, sz = float(start_pos[0]), float(start_pos[1]), float(start_pos[2])
     out: List[List[float]] = []
-    for x, y, z in normalize_xyz_waypoints(waypoints):
+    for x, y, z in normalized:
         wx = sx + rot[0][0] * x + rot[0][1] * y + rot[0][2] * z
         wy = sy + rot[1][0] * x + rot[1][1] * y + rot[1][2] * z
         wz = sz + rot[2][0] * x + rot[2][1] * y + rot[2][2] * z
@@ -105,10 +102,13 @@ def world_to_cumulative_body(
     current_rot_body_to_world=None,
 ) -> List[List[float]]:
     """Convert absolute world positions into current-pose cumulative body offsets."""
+    positions = list(world_positions or [])
+    if not positions:
+        return []
     rot = _rotation_matrix(current_rot_body_to_world, current_yaw_deg)
     sx, sy, sz = float(current_pos[0]), float(current_pos[1]), float(current_pos[2])
     out: List[List[float]] = []
-    for wp in world_positions or []:
+    for wp in positions:
         if not isinstance(wp, (list, tuple)) or len(wp) < 3:
             continue
         dx = float(wp[0]) - sx
@@ -125,7 +125,7 @@ def world_to_cumulative_body(
 class SlidingWindowTrajectoryQueue:
     """World-coordinate queue used between sliding Qwen and AirSim execution."""
 
-    max_pending: int = 3
+    max_pending: int = 5
     execute_count: int = 1
     world_waypoints: List[List[float]] = field(default_factory=list)
 
@@ -226,18 +226,11 @@ class SlidingWindowQwenPlanner(BasePlanner):
         self.timeout = int(first_value(pc.get("TIMEOUT"), ag.get("PLANNER_TIMEOUT"), default=120))
         self.model = str(first_value(pc.get("MODEL_NAME"), ag.get("PLANNER_MODEL"), default="qwen-vl"))
         self.api_key = str(first_value(pc.get("API_KEY"), ag.get("PLANNER_API_KEY"), default="no-key"))
-        self.max_additional = int(first_value(pc.get("MAX_ADDITIONAL"), default=5))
-        self.resize_enabled = as_bool(first_value(pc.get("RESIZE_ENABLED"), ag.get("QWEN_RESIZE_ENABLED"), default=True), True)
-        self.image_size = int(first_value(pc.get("IMAGE_SIZE"), ag.get("QWEN_IMAGE_SIZE"), default=1024))
-        self.resize_mode = str(first_value(pc.get("RESIZE_MODE"), ag.get("QWEN_RESIZE_MODE"), default="square")).strip().lower()
+        self.max_additional = 5
 
     @staticmethod
     def _chat_url(url: str) -> str:
-        if url.endswith("/plan"):
-            return url[:-5] + "/v1/chat/completions"
-        if url.endswith("/health"):
-            return url[:-7] + "/v1/chat/completions"
-        return url
+        return str(url or "").strip()
 
     @classmethod
     def _resolve_chat_url(cls, pc: dict, ag: dict) -> str:
@@ -263,17 +256,7 @@ class SlidingWindowQwenPlanner(BasePlanner):
     def _prepare_image(self, img):
         if img.mode != "RGB":
             img = img.convert("RGB")
-        if not self.resize_enabled or self.image_size <= 0:
-            return img
-        resample = getattr(getattr(Image, "Resampling", Image), "BILINEAR")
-        if self.resize_mode == "long_edge":
-            w, h = img.size
-            long_edge = max(w, h)
-            if long_edge <= 0 or long_edge == self.image_size:
-                return img
-            scale = self.image_size / float(long_edge)
-            return img.resize((max(1, int(round(w * scale))), max(1, int(round(h * scale)))), resample)
-        return img.resize((self.image_size, self.image_size), resample)
+        return img
 
     def _image_url(self, img) -> str:
         img = self._prepare_image(img)
@@ -282,25 +265,39 @@ class SlidingWindowQwenPlanner(BasePlanner):
         b64 = base64.b64encode(buf.getvalue()).decode("ascii")
         return f"data:image/jpeg;base64,{b64}"
 
-    def _build_prompt(self, instruction: str, pending_waypoints: Iterable[Sequence[float]] | None,
-                      direction: str = "") -> str:
-        pending = normalize_xyz_waypoints(pending_waypoints)
+    def _build_prompt(
+        self,
+        instruction: str,
+        pending_waypoints: Iterable[Sequence[float]] | None,
+        direction: str = "",
+    ) -> str:
+        pending = normalize_xyz_waypoints(pending_waypoints)[:5]
         pending_str = "[" + ", ".join(
             "[" + ", ".join(f"{v:.2f}" for v in wp) + "]"
             for wp in pending
         ) + "]"
-        parts = [f"Instruction: {(instruction or '').strip()}"]
+        parts = [
+            f"Instruction: {(instruction or '').strip()}",
+        ]
+        direction = str(direction or "").strip()
         if direction:
-            parts.append(f"Direction: {direction}")
+            parts.append(f"Direction:{direction}")
         if pending:
             parts.append(f"Pending incremental body-frame waypoints: {pending_str}")
         parts.extend([
-            f"Output up to {self.max_additional} additional incremental body-frame waypoints as a JSON list.",
-            "Each waypoint must be [dx, dy, dz], where the first pending or output waypoint is relative "
-            "to the current drone position and each following waypoint is relative to the previous waypoint.",
+            "Output exactly 5 additional incremental body-frame waypoints as a JSON list.",
+            (
+                "Each waypoint must be [dx, dy, dz], where the first pending "
+                "or output waypoint is relative to the current drone position/front-view frame "
+                "and each following waypoint is relative to the previous waypoint."
+            ),
             "Do not output any other text.",
         ])
         return "\n".join(parts)
+
+    @staticmethod
+    def _format_prompt_for_log(prompt: str) -> str:
+        return f"<image><image>{prompt}"
 
     @staticmethod
     def _parse_waypoints(text: str) -> List[List[float]]:
@@ -318,8 +315,12 @@ class SlidingWindowQwenPlanner(BasePlanner):
              depth_meters=None, detection=None,
              down_depth_meters=None,
              relation: str = "", target: str = "",
-             pending_waypoints=None) -> TrajectoryResult:
+             pending_waypoints=None,
+             print_prompt: bool = True) -> TrajectoryResult:
         prompt = self._build_prompt(instruction, pending_waypoints, direction=direction)
+        if print_prompt:
+            print("[QwenSlidingPrompt]")
+            print(self._format_prompt_for_log(prompt))
         content = [
             {"type": "image_url", "image_url": {"url": self._image_url(front_img)}},
             {"type": "image_url", "image_url": {"url": self._image_url(down_img if down_img else front_img)}},
@@ -336,23 +337,34 @@ class SlidingWindowQwenPlanner(BasePlanner):
             headers["Authorization"] = f"Bearer {self.api_key}"
 
         t0 = time.time()
-        resp = requests.post(self.url, json=payload, headers=headers, timeout=self.timeout)
-        resp.raise_for_status()
-        data = resp.json()
+        try:
+            resp = requests.post(self.url, json=payload, headers=headers, timeout=self.timeout)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:
+            elapsed = time.time() - t0
+            print(f"  [QwenSliding] API error after {elapsed:.2f}s url={self.url!r}: {exc}")
+            result = TrajectoryResult(
+                waypoints=[],
+                done=False,
+                reasoning=f"QwenSliding api error: {exc}",
+            )
+            result.elapsed_s = elapsed
+            result.pending_count = len(normalize_xyz_waypoints(pending_waypoints))
+            return result
         elapsed = time.time() - t0
         raw_output = data.get("choices", [{}])[0].get("message", {}).get("content", "")
         waypoints = self._parse_waypoints(raw_output)[: self.max_additional]
 
         server_time = data.get("time_s", elapsed)
-        print(
-            f"  [QwenSliding] {float(server_time):.2f}s -> "
-            f"{len(waypoints)} additional waypoints, pending={len(normalize_xyz_waypoints(pending_waypoints))}"
-        )
         if not waypoints:
             print(f"  [QwenSliding] raw_output: {raw_output[:300]}")
 
-        return TrajectoryResult(
+        result = TrajectoryResult(
             waypoints=waypoints,
             done=False,
             reasoning=f"QwenSliding: {len(waypoints)} incremental body waypoints",
         )
+        result.elapsed_s = float(server_time)
+        result.pending_count = len(normalize_xyz_waypoints(pending_waypoints))
+        return result

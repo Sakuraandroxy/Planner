@@ -15,6 +15,8 @@ from agent.models.detection.base import DetectionResult
 class RelocalizationResult:
     found: bool = False
     detection: Optional[DetectionResult] = None
+    front_image: Any = None
+    down_image: Any = None
     direction_index: int = 0
     yaw_delta_deg: float = 0.0
     elapsed: float = 0.0
@@ -30,9 +32,22 @@ class TargetRelocalizer:
         self.turn_deg = float(rcfg.get("TURN_DEG", 90.0))
         self.max_turns = int(rcfg.get("MAX_TURNS", 4))
         self.capture_profile = str(rcfg.get("CAPTURE_PROFILE", "front_down"))
+        self.accept_down_view = bool(rcfg.get("ACCEPT_DOWN_VIEW", False))
+        self.center_on_target = bool(rcfg.get("CENTER_ON_TARGET", True))
+        self.camera_hfov_deg = float(rcfg.get("CAMERA_HFOV_DEG", 90.0))
+        self.min_center_offset_deg = float(rcfg.get("MIN_CENTER_OFFSET_DEG", 3.0))
+        self.min_bbox_area_ratio = float(rcfg.get("MIN_BBOX_AREA_RATIO", 0.002))
+        self.max_bbox_span = float(rcfg.get("MAX_BBOX_SPAN", 0.90))
         self.detector = detector
         ag = cfg.get("AGENT", {})
-        self.min_confidence = float(ag.get("DETECTOR_MIN_CONFIDENCE", ag.get("DETECTOR_BOX_THRESHOLD", 0.0)))
+        perception = cfg.get("FUNCTIONS", {}).get("PERCEPTION", {}) or {}
+        self.min_confidence = float(rcfg.get(
+            "MIN_CONFIDENCE",
+            perception.get(
+                "MIN_CONFIDENCE",
+                ag.get("DETECTOR_MIN_CONFIDENCE", ag.get("DETECTOR_BOX_THRESHOLD", 0.0)),
+            ),
+        ))
 
     def search(
         self,
@@ -58,14 +73,15 @@ class TargetRelocalizer:
         if not target:
             return RelocalizationResult(reason="empty target")
 
+        _start_pos, start_yaw = client.get_pose()
+        turns_done = 0
         for idx in range(max(1, self.max_turns)):
-            yaw_delta_deg = idx * self.turn_deg
             if idx == 0 and front_image is not None and not skip_initial_frame:
                 frame, down = front_image, down_image
             else:
-                if idx == 0 and skip_initial_frame:
+                if skip_initial_frame or idx > 0:
                     client.rotate_yaw(self.turn_deg)
-                    yaw_delta_deg = self.turn_deg
+                    turns_done += 1
                 frame, down, _fd, _dd, _timing = client.capture_views(
                     profile=self.capture_profile,
                     mode=capture_mode,
@@ -83,18 +99,25 @@ class TargetRelocalizer:
                 accepted = detection
 
             if accepted is not None and accepted.visible:
+                center_offset = 0.0
+                if accepted.camera == "front" and self.center_on_target:
+                    center_offset = self._front_center_offset_deg(accepted, frame)
+                    if abs(center_offset) >= self.min_center_offset_deg:
+                        client.rotate_yaw(center_offset)
                 return RelocalizationResult(
                     found=True,
                     detection=accepted,
+                    front_image=frame,
+                    down_image=down,
                     direction_index=idx,
-                    yaw_delta_deg=yaw_delta_deg,
+                    yaw_delta_deg=(turns_done * self.turn_deg) + center_offset,
                     elapsed=time.perf_counter() - started,
                     reason=f"target detected in {accepted.camera} view",
                 )
 
-            if idx < self.max_turns - 1:
-                client.rotate_yaw(self.turn_deg)
-
+        # Do not leave the vehicle facing an arbitrary scan direction after a
+        # failed search. Restore the exact heading from before relocalization.
+        client.rotate_to_yaw(start_yaw)
         return RelocalizationResult(
             found=False,
             elapsed=time.perf_counter() - started,
@@ -120,7 +143,11 @@ class TargetRelocalizer:
                     camera_name="down",
                 ) if down_image is not None else DetectionResult(visible=False, camera="down")
             )
-        visible = [d for d in (front_det, down_det) if d and d.visible]
+        candidates = (front_det, down_det) if self.accept_down_view else (front_det,)
+        visible = [
+            d for d in candidates
+            if d and d.visible and self._bbox_is_reliable(d, front_image if d.camera == "front" else down_image)
+        ]
         if not visible:
             return front_det, down_det, DetectionResult(visible=False, camera="none")
         best = max(visible, key=lambda d: float(d.score or 0.0))
@@ -133,4 +160,27 @@ class TargetRelocalizer:
                 camera=best.camera,
             )
         return front_det, down_det, best
+
+    def _bbox_is_reliable(self, detection: DetectionResult, image) -> bool:
+        if not detection.bbox or image is None or not hasattr(image, "size"):
+            return False
+        width, height = float(image.size[0]), float(image.size[1])
+        if width <= 1.0 or height <= 1.0:
+            return False
+        x1, y1, x2, y2 = [float(v) for v in detection.bbox[:4]]
+        box_w = max(0.0, min(width, x2) - max(0.0, x1))
+        box_h = max(0.0, min(height, y2) - max(0.0, y1))
+        area_ratio = box_w * box_h / max(width * height, 1.0)
+        return bool(
+            area_ratio >= self.min_bbox_area_ratio
+            and box_w / width < self.max_bbox_span
+            and box_h / height < self.max_bbox_span
+        )
+
+    def _front_center_offset_deg(self, detection: DetectionResult, image) -> float:
+        if not detection.bbox or image is None or not hasattr(image, "width") or image.width <= 1:
+            return 0.0
+        center_x = (float(detection.bbox[0]) + float(detection.bbox[2])) / 2.0
+        normalized_x = center_x / float(image.width) - 0.5
+        return normalized_x * self.camera_hfov_deg
 

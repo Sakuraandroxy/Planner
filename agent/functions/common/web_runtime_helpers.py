@@ -46,19 +46,26 @@ def target_depth_text(name, detection, image, depth_meters) -> str:
             db[0], db[2] = db[2], db[0]
         if db[3] < db[1]:
             db[1], db[3] = db[3], db[1]
-        cx = max(0, min(w - 1, (db[0] + db[2]) // 2))
-        cy = max(0, min(h - 1, (db[1] + db[3]) // 2))
-        center_depth = float(depth_meters[cy, cx])
         region = depth_meters[db[1]:db[3] + 1, db[0]:db[2] + 1]
         valid = region[np.isfinite(region)]
         valid = valid[valid > 0]
         median_depth = float(np.median(valid)) if valid.size else float("nan")
-        detection.depth_median = center_depth
+        region_h, region_w = region.shape
+        crop_h = max(1, region_h // 2)
+        crop_w = max(1, region_w // 2)
+        crop_y = max(0, (region_h - crop_h) // 2)
+        crop_x = max(0, (region_w - crop_w) // 2)
+        center_region = region[crop_y:crop_y + crop_h, crop_x:crop_x + crop_w]
+        center_valid = center_region[np.isfinite(center_region)]
+        center_valid = center_valid[center_valid > 0]
+        robust_depth = float(np.median(center_valid)) if center_valid.size else median_depth
+        detection.depth_median = robust_depth if np.isfinite(robust_depth) else None
         detection.depth_bbox = db
         median_text = f"{median_depth:.1f}m" if np.isfinite(median_depth) else "N/A"
+        robust_text = f"{robust_depth:.1f}m" if np.isfinite(robust_depth) else "N/A"
         return (
             f"{name}:bbox={bbox} score={float(getattr(detection, 'score', 0.0) or 0.0):.2f} "
-            f"center={center_depth:.1f}m median={median_text} depth_bbox={db}"
+            f"depth={robust_text} bbox_median={median_text} depth_bbox={db}"
         )
     except Exception as exc:
         return (
@@ -91,6 +98,14 @@ def depth_only_profile(profile: str) -> str:
 def capture_profile_isolated(client: AirSimClient, profile: str):
     aux = AirSimClient(ip=getattr(client, "_ip", ""), port=getattr(client, "_port", 41451), use_config_ip=False)
     return aux.capture_views(profile=profile, mode="batch", verbose=False)
+
+
+def capture_profile_isolated_with_pose(client: AirSimClient, profile: str):
+    """Capture with a pose sampled immediately before simGetImages on the same RPC client."""
+    aux = AirSimClient(ip=getattr(client, "_ip", ""), port=getattr(client, "_port", 41451), use_config_ip=False)
+    observer_world, observer_yaw_deg = aux.get_pose()
+    captured = aux.capture_views(profile=profile, mode="batch", verbose=False)
+    return (*captured, observer_world, observer_yaw_deg)
 
 
 @contextlib.contextmanager

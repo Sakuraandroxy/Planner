@@ -14,7 +14,7 @@ get_cfg(os.path.join(_script_dir, "config", "default.yaml"))
 
 from sim.frame_capturer import FrameCapturer
 from agent.functions.common.warmup import warmup_from_config
-from agent.functions.fast_slow.runtime import run_fast_slow_loop
+from agent.functions.fast_slow.runtime import run_fast_slow_loop, print_last_navigation_summary
 from agent.functions.common import web_runtime_helpers as web_helpers
 
 
@@ -105,9 +105,11 @@ def main():
                 max_steps=int(cfg.get("EVAL", {}).get("MAX_STEPS", 100)),
                 client=client,
                 capturer=capturer,
+                isolated_planning_capture=True,
             )
         except KeyboardInterrupt:
             print("\n[Interrupted]")
+            print_last_navigation_summary()
             break
 
         print("\n[Task complete]\n")

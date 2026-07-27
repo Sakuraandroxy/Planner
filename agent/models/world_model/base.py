@@ -14,6 +14,7 @@ class WorldModelResult:
     best_index: int = 0
     scores: List[float] = field(default_factory=list)
     reasoning: str = ""
+    ok: bool = False
 
 
 class BaseWorldModel(ABC):

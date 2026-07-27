@@ -78,3 +78,14 @@ class CandidatePreparationResult:
     wm_candidates: List[CandidateTrajectory] = field(default_factory=list)
     planner_selected_index: int = 0
     prefilter_reason: str = ""
+
+
+@dataclass
+class CandidateSelectionResult:
+    """Final candidate choice after optional world-model scoring."""
+
+    chosen: CandidateTrajectory | None = None
+    selected_index: int = -1
+    world_model_scores: List[float] = field(default_factory=list)
+    used_world_model: bool = False
+    reasoning: str = ""

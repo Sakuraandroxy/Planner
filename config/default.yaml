@@ -27,43 +27,87 @@ FUNCTIONS:
     NAME: depth_detector                  # 完成判定功能: depth_detector | api_completion
     MODEL: mimo-v2.5                      # 完成判定 VLM 模型名
     URL: https://api.xiaomimimo.com/v1    # 完成判定 VLM OpenAI 兼容 base_url
-    API_KEY: no-key                       # 完成判定 API key
+    API_KEY: sk-cyx6rpmwj842kezx5voi4p4toef2hud1wp4miul5r2p8xnl8                       # 完成判定 API key
     MAX_TOKENS: 64                        # 完成判定最大输出 token 数
     TIMEOUT: 60                           # 完成判定请求超时秒数
     TEMPERATURE: 0.0                      # 完成判定温度
     RGB_CAPTURE_PROFILE: front_down       # 快系统常规 RGB 抓图 profile
     DEPTH_CAPTURE_PROFILE: front_down_both_depth # 慢系统判定完成时才抓深度
-    STOP_DEPTH_THRESHOLD: 8.0             # 到达半径/停止深度阈值，单位米
-    VLM_FINAL_JUDGE_ENABLED: true         # 是否启用 VLM 最终裁决
+    STOP_DEPTH_THRESHOLD: 4.0             # 到达半径/停止深度阈值，单位米
+    DISTANCE_COMPLETION_ENABLED: false    # 距离不直接完成任务，只负责触发悬停
+    ARRIVAL_RADIUS_M: 4.0                 # estimated_distance <= radius 时悬停并进行一次新鲜双视图VLM判定
+    VLM_FINAL_JUDGE_ENABLED: true         # 使用任务目标、双视图、检测框和距离进行最终完成裁决
     VLM_FAIL_FALLBACK_TO_HEURISTIC: false # VLM 失败时是否回退纯深度启发式
+    MIN_DETECTION_CONFIDENCE: 0.4          # 新鲜双视图检测低于该置信度时禁止完成
+    MAX_DETECTION_SPAN: 0.90               # 覆盖单边90%以上的异常框不作为完成证据
+
+  RELOCALIZATION:
+    NAME: target_relocalization            # 双视图看不到目标后的原地重定位功能
+    ENABLED: true                          # 完成确认未看到目标时自动环视搜索
+    CAPTURE_PROFILE: front_down            # 每个朝向抓取前视和下视RGB
+    TURN_DEG: 90.0                         # 每次原地扫描转角
+    MAX_TURNS: 4                           # 跳过已失败朝向后最多扫描一整周
+    ACCEPT_DOWN_VIEW: false                # 定向重定位只接受前视目标，确保机头朝向目标
+    CENTER_ON_TARGET: true                 # 找到后按bbox水平中心进一步对准目标
+    CAMERA_HFOV_DEG: 90.0                  # 前视相机水平视场角，用于bbox到yaw修正
+    MIN_CENTER_OFFSET_DEG: 3.0             # 小于该角度不再微调机头
+    MIN_CONFIDENCE: 0.4                    # 重定位接受目标框的最低置信度
+    MIN_BBOX_AREA_RATIO: 0.002             # 近目标重定位拒绝过小的远处/噪声候选框
+    MAX_BBOX_SPAN: 0.90                    # 拒绝单边覆盖90%以上的异常候选框
+
+  DISTANCE_ESTIMATION:
+    NAME: geometric_target_pose           # 根据检测框、深度和无人机位姿估计目标世界坐标
+    ENABLED: true                         # false时完全关闭距离估计，不影响原完成判定链路
+    USE_FOR_COMPLETION: true              # 每消费轨迹点后检查缓存距离，仅用于触发悬停和VLM完成判定
+    TRIGGER_RADIUS_M: 4.0                 # 首次观测在此半径外时可作为后续距离判定的远端锚点
+    MIN_SCORE: 0.4                        # 用于更新目标世界位姿的最低检测置信度
+    MAX_DEPTH_M: 200.0                    # 忽略异常远距离深度
+    DEPTH_MODE: radial                    # AirSim DepthPerspective按视线径向距离投影
+    COMPLETION_CONFIRMATIONS: 2           # 首次观测已在半径内时至少需要两次一致观测
+    FRONT_CAMERA_OFFSET: [1.0, 0.0, 0.0] # front_center相对机体的NED偏移
+    DOWN_CAMERA_OFFSET: [0.0, 0.0, 0.0]  # down_center相对机体的NED偏移
 
   PLANNING:
-    NAME: sliding_window_planning         # 滑动窗口规划功能
+    NAME: sliding_window_planning  #api_atomic_planner #sliding_window_planning         # 滑动窗口规划功能
     MODEL: qwen_sliding_window_planner    # 滑窗 Qwen 后端
-    URL: ""                               # 完整 chat URL，留空则拼 SERVER_IP/PORT/CHAT_PATH
+    URL:  #https://api.xiaomimimo.com/v1/chat/completions                           # 完整 chat URL，留空则拼 SERVER_IP/PORT/CHAT_PATH
     SERVER_IP: 172.27.143.102             # 滑窗 Qwen 服务器 IP
     SERVER_PORT: 8004                     # 滑窗 Qwen 服务端口
     CHAT_PATH: /v1/chat/completions       # OpenAI 兼容 chat 路径
-    MODEL_NAME: /data/sakura/models/3DG-VLN-sliding-window # 滑窗 Qwen 模型名或路径
-    API_KEY: no-key                       # 本地服务通常 no-key
+    MODEL_NAME: /data/sakura/models/3DG-VLN-sliding-window  #/data/sakura/models/3DG-VLN-sliding-window # 滑窗 Qwen 模型名或路径
+    API_KEY:  xxx                   # 本地服务通常 no-key
     MAX_TOKENS: 256                       # 滑窗 Qwen 输出 token 上限
     TIMEOUT: 120                          # 滑窗 Qwen 请求超时秒数
-    MAX_PENDING: 3                        # 输入 pending 增量 waypoint 最大数量，匹配滑窗训练上限
+    MAX_PENDING: 5                        # 输入 0-5 个 pending 增量 waypoint，匹配新版滑窗训练分布
     MAX_ADDITIONAL: 5                     # 单次最多补充增量 waypoint 数量
+    MIN_FORWARD_PROGRESS_M: 0.0           # 训练轨迹为前向飞行；累计终点不前进的输出不进入执行队列
+    CAPTURE_MODE: batch                    # 前视/下视使用同一次simGetImages抓取，与训练集成对帧一致
+    FRONT_CAMERA_OFFSET: [1.0, 0.0, 0.0]  # 用ImageResponse相机位姿还原同帧机体位姿
     RESIZE_ENABLED: true                  # 发送给 Qwen 前是否缩放图像
     IMAGE_SIZE: 1024                      # Qwen 输入图像尺寸
     RESIZE_MODE: square                   # square | long_edge
+    DIRECTION_HINT_ENABLED: true         # true时前视图检测到可靠目标后，在Qwen提示词中加入Direction行
+    DIRECTION_HINT_USE_ANGLE: false        # true: The target is 13 degrees on the left; false: The target is on the left
+    DIRECTION_HINT_STRAIGHT_DEG: 3.0      # 目标中心偏角小于该阈值时输出straight
 
   FAST_SLOW:
     NAME: fast_slow_controller            # 快慢系统调度功能
     ENABLED: true                         # 是否启用快慢系统
-    LOW_WATERMARK: 3                      # 队列剩余<=3且Qwen空闲时补轨迹，此时pending就是全部剩余队列
-    HIGH_WATERMARK: 8                     # 队列高水位
-    EXECUTE_COUNT: 3                      # 每次取3个队列点
-    EXECUTION_SETTLE_S: 0.15              # 每次飞完后等待秒数，让PID收敛减少摇晃；调大=更稳但更顿
-    COMPLETION_INTERVAL_S: 1.5            # completion 检查间隔秒数
-    STOP_RADIUS: 8.0                      # 演示模式: 进入6m后暂停确认；比4m更不容易因3点执行而飞过
-    SLOW_RADIUS: 8.0                      # 当前不直接触发暂停，和STOP_RADIUS保持一致便于看日志
+    DEBUG_LOGS: false                     # false仅输出关键事件；true输出抓图、bbox、候选轨迹和完整调度细节
+    MAX_PENDING: 5                        # 提交 Qwen 时允许保留的最大 pending 点数
+    RESERVE_TIME_S: 4.5                   # Qwen运行时保证剩余路径至少覆盖该时长，不足时按路径长度动态降速
+    PLANNING_EXECUTE_COUNT: 2             # 旧阻塞执行兼容项；连续路径模式不按固定点数停车
+    EXECUTE_COUNT: 3                      # 未指定动态批次时的兼容默认值
+    EXECUTION_SETTLE_S: 0.0               # 每批飞完后的额外等待秒数；调大=更稳但更顿
+    PATH_POLL_INTERVAL_S: 0.05            # 连续路径进度轮询周期
+    PATH_REACH_TOLERANCE_M: 0.8           # 距离轨迹点小于该值视为已到达
+    PATH_FINAL_REACH_TOLERANCE_M: 0.2     # 最后一点使用更严格阈值，避免提前宣布路径耗尽
+    PATH_PASS_TOLERANCE_M: 1.5            # 仅在确实越过轨迹点且横向误差较小时消费，避免提前删除前方点
+    PATH_REISSUE_MIN_INTERVAL_S: 0.15     # 两次路径续写命令的最小间隔
+    PATH_VELOCITY_EPSILON_MPS: 0.05       # 速度变化小于该值时不重发相同路径
+    COMPLETION_INTERVAL_S: 1.0            # 后台目标观测最短提交间隔；active任务未结束时不会重复堆积
+    STOP_RADIUS: 5.0                      # 兼容旧完成判定的停止半径；距离到达模式使用ARRIVAL_RADIUS_M
+    SLOW_RADIUS: 5.0                      # 兼容旧慢速判定配置；距离到达模式不调用VLM裁决
     DISTANCE_VIEW_POLICY: relation_aware  # completion距离视图策略: relation_aware | front_only | down_only | best_reliable
     SLOW_WORKERS: 2                       # 慢系统后台线程数：depth/VLM/Qwen 周边任务
     DETECT_WORKERS: 2                     # front/down 检测线程数
@@ -109,13 +153,13 @@ AGENT:
   QWEN_RESIZE_MODE: square               # square=强制1024x1024 | long_edge=长边缩到1024并保持比例
 
 SIM:
-  FRONT_WIDTH: 1960
+  FRONT_WIDTH: 1920
   FRONT_HEIGHT: 1080
   FRONT_FOV: 90
   DEPTH_WIDTH: 256
   DEPTH_HEIGHT: 256
   DEPTH_FOV: 90
-  DOWN_WIDTH: 1960
+  DOWN_WIDTH: 1920
   DOWN_HEIGHT: 1080
   DOWN_FOV: 90
   DOWN_DEPTH_WIDTH: 256
@@ -137,6 +181,9 @@ SIM:
   AIRSIM_CONNECT_TIMEOUT: 3.0             # AirSim RPC握手超时秒数，防止confirmConnection无输出卡死
   AIRSIM_MOVE_TIMEOUT: 60               # moveOnPathAsync 超时秒数
   AIRSIM_VELOCITY: 2.0                   # 飞行速度 m/s
+  AIRSIM_PATH_LOOKAHEAD: 3.0             # moveOnPath 前视距离，沿用旧 Planner 的平滑路径参数
+  AIRSIM_MIN_PATH_LOOKAHEAD: 0.2         # 短路径动态前视的下限
+  AIRSIM_ADAPTIVE_LOOKAHEAD: 1.0         # AirSim 自适应前视，沿用旧 Planner 配置
   PAUSE_BACKGROUND_CAPTURE_DURING_STEP: true  # step期间暂停后台预览抓图，避免与主流程争抢AirSim RPC
 
 WEB:
@@ -173,8 +220,14 @@ CANDIDATE:
   SMOOTH_BRIDGE_MAX_PATH_LENGTH_RATIO: 1.35 # 候选轨迹不能比原始轨迹长太多
   SMOOTH_BRIDGE_PROGRESS_TOLERANCE_M: 0.8 # 沿目标方向允许的后退容差
 
+WORLD_MODEL:
+  ENABLED: false                          # true时对预筛后的5条候选轨迹调用世界模型评分
+  NAME: api_world_model                  # 当前实现: HTTP JSON评分接口
+  URL: http://127.0.0.1:5001/score       # POST评分服务地址
+  TIMEOUT: 30                            # 超时或接口异常时自动回退到最大预分候选
+
 RELOCALIZATION:
-  ENABLED: false                         # detect阶段和target低置信/不可见时启用四向环视重定位
+  ENABLED: true                          # 旧配置兼容；实际优先读取FUNCTIONS.RELOCALIZATION
   CAPTURE_PROFILE: front_down            # 每个方向使用前视图+下视图检测目标
   TURN_DEG: 90.0                         # 每次原地转向角度
   MAX_TURNS: 4                           # 最多检查当前方向+后续旋转方向数量

@@ -13,19 +13,26 @@ __pycache__/
 *.egg-info/
 .env
 **/.env
-
+.cph
+.agents
+.pytest_cache
 # Local shell profiles / secrets
 $PROFILE.txt
 
 # Logs / outputs
 *.log
-AVLN/*
-周报/*
-Fast-Planner/*
-legcy/*
-AirsimNH/*
-planner/*
-see-point-fly/*
-TravelUAV/*
+AVLN
+周报
+Fast-Planner
+lora_example
+legcy
+AirsimNH
+planner
+see-point-fly
+TravelUAV
 *.pdf
 *.doc
+3DG-VLN-main
+test
+tests
+tools

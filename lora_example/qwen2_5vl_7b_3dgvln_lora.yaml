@@ -16,7 +16,7 @@ deepspeed: /data/sakura/data/UAV-VLN-FOV/tools/ds_zero3_offload.json
 ### dataset
 dataset: 3dgvln_waypoints
 # dataset_dir: /data/sakura/data/UAV-VLN-FOV/finetune_data  
-dataset_dir: /data/sakura/data/UAV-VLN-FOV/finetune_sliding_window
+dataset_dir: /data/sakura/data/UAV-VLN-FOV/finetune_sliding_window_2
 template: qwen2_vl
 cutoff_len: 4096
 max_samples: 50000
@@ -28,7 +28,7 @@ gradient_checkpointing: true
 
 ### output
 # output_dir: /data/sakura/data/UAV-VLN-FOV/tools/output/qwen2_5vl_7b_3dgvln_lora
-output_dir: /data/sakura/data/UAV-VLN-FOV/tools/output/qwen2_5vl_7b_3dgvln_lora_sliding_window
+output_dir: /data/sakura/data/UAV-VLN-FOV/tools/output/qwen2_5vl_7b_3dgvln_lora_sliding_window_2
 logging_steps: 10
 save_steps: 500
 plot_loss: true

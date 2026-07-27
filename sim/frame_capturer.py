@@ -121,10 +121,6 @@ class FrameCapturer:
                     self._latest_depth = depth_meters
                     self._latest_rgb_png = rgb_png
 
-                # 推送前端 RGB
-                if rgb_png:
-                    self.state.set_frame(rgb_png)
-
             except Exception as exc:
                 # 首 3 次错误打印日志，之后静默（避免刷屏）
                 if not hasattr(self, '_error_count'):

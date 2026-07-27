@@ -30,8 +30,12 @@ sys.path.insert(0, str(_root))
 from config import cfg, get_cfg
 get_cfg(str(_root / "config" / "default.yaml"))
 
-from agent.detector import build_detector
-from agent.planner import build_planner
+from agent.functions.candidate import prepare_candidates_for_world_model, select_best_candidate
+from agent.functions.common.config_access import function_section
+from agent.functions.planning.sliding_window_planning import SlidingWindowPlanningFunction
+from agent.models.detection import build_detector
+from agent.models.planner.sliding_window_planner import incremental_to_cumulative
+from agent.models.world_model import build_world_model
 from PIL import Image
 
 SUCCESS_RADIUS = float(cfg.get("EVAL", {}).get("SUCCESS_RADIUS", 10.0))
@@ -114,7 +118,8 @@ def load_episodes(dataset_path: str) -> List[Dict]:
 def evaluate(episodes: List[Dict]):
     """开环批量评估。"""
     detector = build_detector()
-    planner = build_planner()
+    planner = SlidingWindowPlanningFunction(function_section(cfg, "PLANNING"))
+    world_model = build_world_model()
 
     results = {"ne": [], "sr": 0, "osr": 0, "spl": [], "total": len(episodes)}
     waypoints_all = []
@@ -167,10 +172,9 @@ def evaluate(episodes: List[Dict]):
             plan_result = planner.plan(
                 front_rgb, down_rgb,
                 instruction=ep["instruction"],
-                detected_bbox=detection.bbox,
-                depth_meters=depth,
+                pending_waypoints=[],
                 detection=detection,
-                down_depth_meters=None,
+                target=target_obj,
             )
         except Exception as e:
             print(f"  [SKIP] 规划失败: {e}")
@@ -178,7 +182,41 @@ def evaluate(episodes: List[Dict]):
             continue
 
         t2 = time.time()
-        wps = plan_result.waypoints
+        qwen_cumulative = incremental_to_cumulative(plan_result.waypoints)
+        candidate_prep = prepare_candidates_for_world_model(
+            type("PreparedPlan", (), {
+                "waypoints": qwen_cumulative,
+                "candidates": [],
+                "reasoning": plan_result.reasoning,
+            })(),
+            detection=detection,
+            direction=ep["instruction"],
+            stop_threshold=float(cfg.get("AGENT", {}).get("STOP_DEPTH_THRESHOLD", 8.0)),
+        )
+        selection = select_best_candidate(
+            candidate_prep,
+            world_model=world_model,
+            front_image=front_rgb,
+            down_image=down_rgb,
+            instruction=ep["instruction"],
+        )
+        for candidate_index, candidate in enumerate(candidate_prep.all_candidates):
+            wm_text = ""
+            if candidate_index < len(selection.world_model_scores):
+                wm_score = selection.world_model_scores[candidate_index]
+                if math.isfinite(wm_score):
+                    wm_text = f" wm={wm_score:.4f}"
+            points = " ".join(f"[{wp[0]:.2f},{wp[1]:.2f},{wp[2]:.2f}]" for wp in candidate.waypoints)
+            print(
+                f"  [Candidate {candidate_index}] pre={candidate.pre_score:.4f}{wm_text} "
+                f"source={candidate.source} waypoints={points}"
+            )
+        if selection.chosen is not None:
+            print(
+                f"  [Candidate] selected={selection.selected_index} "
+                f"by={'world_model' if selection.used_world_model else 'pre_score'}"
+            )
+        wps = [list(wp) for wp in selection.chosen.waypoints] if selection.chosen else qwen_cumulative
         non_zero = sum(1 for wp in wps if not all(abs(v) < 1e-6 for v in wp))
         print(f"  [PLAN] {len(wps)} waypoints ({non_zero} non-zero, {t2-t1:.1f}s)")
 

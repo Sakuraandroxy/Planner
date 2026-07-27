@@ -1,46 +1,126 @@
-"""OpenAI-compatible atomic-action planner backend."""
+"""OpenAI-compatible sliding-window Qwen planner backend.
+
+Despite the historical name, this planner now follows the same input/output
+contract as ``SlidingWindowQwenPlanner``: two images plus the sliding-window
+prompt in, incremental body-frame ``[dx, dy, dz]`` waypoints out.
+"""
 
 from __future__ import annotations
 
+import ast
 import base64
 import io
-import json
 import re
 import time
-from typing import List
+from typing import Iterable, List, Sequence
+from urllib.parse import urlparse
 
-from openai import OpenAI
+import requests
 
-from agent.functions.common.image_encoder import get_cached_down_b64, get_cached_front_b64
 from agent.functions.common.config_access import first_value, function_section
-from agent.functions.common.trajectory import actions_to_cumulative_body_waypoints, trajectory_delta
+from agent.functions.common.trajectory import normalize_xyz_waypoints
 from agent.models.planner import register_planner
 from agent.models.planner.base import BasePlanner, TrajectoryResult
-
-PLANNER_SYSTEM_PROMPT = """You are a UAV path planner.
-Return only valid JSON with:
-{"selected_index": 0, "done": false, "candidates": [{"actions": ["forward 5"], "reason": "...", "scale": 1.0}]}
-Allowed actions: forward X, backward X, left X, right X, up X, down X.
-"""
+from config import cfg
 
 
 @register_planner("api_atomic_planner")
 class ApiAtomicPlanner(BasePlanner):
-    """Plan atomic actions through an OpenAI-compatible VLM API."""
+    """Call an OpenAI-compatible chat API using the sliding-window Qwen prompt."""
 
     def __init__(self):
-        from config import cfg
-
         ag = cfg.get("AGENT", {}) or {}
         pc = function_section(cfg, "PLANNING")
-        self.client = OpenAI(
-            base_url=first_value(pc.get("URL"), ag.get("PLANNER_URL"), default=""),
-            api_key=first_value(pc.get("API_KEY"), ag.get("PLANNER_API_KEY"), default="no-key"),
-        )
-        self.model = str(first_value(pc.get("MODEL_NAME"), ag.get("PLANNER_MODEL"), default=""))
-        self.max_tokens = int(first_value(pc.get("MAX_TOKENS"), ag.get("PLANNER_MAX_TOKENS"), default=2048))
-        self.stop_threshold = float(first_value(pc.get("STOP_DEPTH_THRESHOLD"), ag.get("STOP_DEPTH_THRESHOLD"), default=8.0))
-        self.candidate_count = 1
+        self.url = self._resolve_chat_url(pc, ag)
+        self.api_key = str(first_value(pc.get("API_KEY"), ag.get("PLANNER_API_KEY"), default="no-key"))
+        self.model = str(first_value(pc.get("MODEL_NAME"), ag.get("PLANNER_MODEL"), default="qwen-vl"))
+        self.max_tokens = int(first_value(pc.get("MAX_TOKENS"), ag.get("PLANNER_MAX_TOKENS"), default=256))
+        self.timeout = int(first_value(pc.get("TIMEOUT"), ag.get("PLANNER_TIMEOUT"), default=120))
+
+    @staticmethod
+    def _chat_url(url: str) -> str:
+        return str(url or "").strip()
+
+    @classmethod
+    def _resolve_chat_url(cls, pc: dict, ag: dict) -> str:
+        explicit = str(first_value(pc.get("URL"), ag.get("PLANNER_URL"), default="")).strip()
+        if explicit:
+            return cls._chat_url(explicit)
+
+        host = str(first_value(pc.get("SERVER_IP"), default="")).strip()
+        port = str(first_value(pc.get("SERVER_PORT"), default="")).strip()
+        path = str(first_value(pc.get("CHAT_PATH"), default="/v1/chat/completions")).strip() or "/v1/chat/completions"
+        if host:
+            if host.startswith("http://") or host.startswith("https://"):
+                base = host.rstrip("/")
+            else:
+                base = f"http://{host}"
+            parsed = urlparse(base)
+            if port and not parsed.port:
+                base = f"{base}:{port}"
+            return f"{base}{path if path.startswith('/') else '/' + path}"
+
+        return cls._chat_url(str(ag.get("PLANNER_URL", "")).strip())
+
+    @staticmethod
+    def _prepare_image(img):
+        if img is None:
+            return None
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        return img
+
+    def _image_url(self, img) -> str:
+        img = self._prepare_image(img)
+        if img is None:
+            return ""
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=90)
+        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        return f"data:image/jpeg;base64,{b64}"
+
+    def _build_prompt(
+        self,
+        instruction: str,
+        pending_waypoints: Iterable[Sequence[float]] | None,
+        direction: str = "",
+    ) -> str:
+        pending = normalize_xyz_waypoints(pending_waypoints)[:5]
+        pending_str = "[" + ", ".join(
+            "[" + ", ".join(f"{v:.2f}" for v in wp) + "]"
+            for wp in pending
+        ) + "]"
+        parts = [f"Instruction: {(instruction or '').strip()}"]
+        direction = str(direction or "").strip()
+        if direction:
+            parts.append(f"Direction:{direction}")
+        if pending:
+            parts.append(f"Pending incremental body-frame waypoints: {pending_str}")
+        parts.extend([
+            "Output exactly 5 additional incremental body-frame waypoints as a JSON list.",
+            (
+                "Each waypoint must be [dx, dy, dz], where the first pending "
+                "or output waypoint is relative to the current drone position/front-view frame "
+                "and each following waypoint is relative to the previous waypoint."
+            ),
+            "Do not output any other text.",
+        ])
+        return "\n".join(parts)
+
+    @staticmethod
+    def _format_prompt_for_log(prompt: str) -> str:
+        return f"<image><image>{prompt}"
+
+    @staticmethod
+    def _parse_waypoints(text: str) -> List[List[float]]:
+        match = re.search(r"\[\s*\[.*?\]\s*\]", text or "", re.DOTALL)
+        if not match:
+            return []
+        try:
+            parsed = ast.literal_eval(match.group(0))
+        except Exception:
+            return []
+        return normalize_xyz_waypoints(parsed)
 
     def plan(
         self,
@@ -54,87 +134,57 @@ class ApiAtomicPlanner(BasePlanner):
         down_depth_meters=None,
         relation: str = "",
         target: str = "",
+        pending_waypoints=None,
+        print_prompt: bool = True,
     ) -> TrajectoryResult:
         started = time.time()
+        prompt = self._build_prompt(instruction, pending_waypoints, direction=direction)
+        if print_prompt:
+            print("[QwenSlidingPrompt]")
+            print(self._format_prompt_for_log(prompt))
+
+        front_url = self._image_url(front_img)
+        down_url = self._image_url(down_img if down_img is not None else front_img)
         content = []
-        for img, getter in ((front_img, get_cached_front_b64), (down_img, get_cached_down_b64)):
-            b64 = _b64(img, getter)
-            if b64:
-                content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
-        content.append({"type": "text", "text": f"Instruction: {instruction}\nDirection hint: {direction}\nReturn {self.candidate_count} candidates."})
+        if front_url:
+            content.append({"type": "image_url", "image_url": {"url": front_url}})
+        if down_url:
+            content.append({"type": "image_url", "image_url": {"url": down_url}})
+        content.append({"type": "text", "text": prompt})
+
+        payload = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": content}],
+            "max_tokens": self.max_tokens,
+            "temperature": 0.0,
+        }
+        headers = {}
+        if self.api_key and self.api_key != "no-key":
+            headers["Authorization"] = f"Bearer {self.api_key}"
 
         try:
-            resp = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "system", "content": PLANNER_SYSTEM_PROMPT}, {"role": "user", "content": content}],
-                max_tokens=self.max_tokens,
-                temperature=0.0,
-                extra_body={"thinking": {"type": "disabled"}},
-            )
-            raw = resp.choices[0].message.content or ""
+            resp = requests.post(self.url, json=payload, headers=headers, timeout=self.timeout)
+            resp.raise_for_status()
+            data = resp.json()
+            raw = data["choices"][0]["message"]["content"]
         except Exception as exc:
             print(f"  [ApiAtomicPlanner] API error: {exc}")
             return TrajectoryResult(waypoints=[], done=False, reasoning=f"api error: {exc}")
 
-        data = _parse_json(raw)
-        candidates = _parse_candidates(data.get("candidates", []))
-        selected = int(data.get("selected_index", 0) or 0)
-        selected = max(0, min(selected, len(candidates) - 1)) if candidates else 0
-        chosen = candidates[selected] if candidates else {"actions": [], "waypoints": []}
+        waypoints = self._parse_waypoints(raw)
         elapsed = time.time() - started
-        print(f"  [ApiAtomicPlanner] {elapsed:.2f}s -> {len(candidates)} candidates, selected={selected}")
+        print(
+            f"  [ApiAtomicPlanner] {elapsed:.2f}s -> wp={len(waypoints)} "
+            f"raw={raw[:200].replace(chr(10), ' ')}"
+        )
         return TrajectoryResult(
-            waypoints=chosen.get("waypoints", []),
-            done=bool(data.get("done", False)),
-            reasoning=str(data.get("reasoning_summary", "")),
-            actions=chosen.get("actions", []),
-            candidates=candidates,
+            waypoints=waypoints,
+            done=False,
+            reasoning=raw,
+            actions=[],
+            candidates=[],
         )
 
 
-def _b64(img, cache_getter=None):
-    if img is None:
-        return None
-    if cache_getter:
-        cached = cache_getter()
-        if cached:
-            return cached
-    if img.mode == "RGBA":
-        img = img.convert("RGB")
-    elif img.mode != "RGB":
-        img = img.convert("RGB")
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=85)
-    return base64.b64encode(buf.getvalue()).decode()
-
-
-def _parse_json(raw: str) -> dict:
-    text = re.sub(r"```(?:json)?\s*", "", raw or "")
-    text = re.sub(r"```\s*", "", text)
-    match = re.search(r"\{.*\}", text, re.S)
-    if not match:
-        return {}
-    try:
-        return json.loads(match.group())
-    except json.JSONDecodeError:
-        return {}
-
-
-def _parse_candidates(raw_candidates) -> List[dict]:
-    out = []
-    for raw in raw_candidates or []:
-        if not isinstance(raw, dict):
-            continue
-        actions = [str(a) for a in raw.get("actions", [])]
-        waypoints = actions_to_cumulative_body_waypoints(actions)
-        out.append(
-            {
-                "actions": actions,
-                "reason": str(raw.get("reason", "")),
-                "scale": float(raw.get("scale", 1.0) or 1.0),
-                "waypoints": waypoints,
-                "delta": trajectory_delta(waypoints),
-                "source": "api_atomic_planner",
-            }
-        )
-    return out
+# Compatibility for registries that refer to the older all-caps spelling.
+APIAtomicPlanner = ApiAtomicPlanner

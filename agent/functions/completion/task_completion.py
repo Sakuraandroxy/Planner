@@ -16,32 +16,35 @@ from PIL import ImageDraw
 from agent.models.detection.base import DetectionResult
 
 
-SYSTEM_PROMPT = """You are a UAV navigation stage completion judge.
+SYSTEM_PROMPT = """You are a deterministic UAV navigation stage completion judge.
 
-You are given two current camera images:
+You are given one or more current camera images with reliable detector evidence:
 - front-view: what the drone sees ahead
 - down-view: what the drone sees below
 
-Judge the current stage like a human operator would: look at BOTH images and the stage instruction first. Detector boxes, confidences, and depth values are only auxiliary hints; they may be wrong.
+Use the provided image evidence, the exact stage target, the overlaid detector box, target depth, and the estimated world distance together. The distance trigger has already stopped the drone near the cached target; your job is to verify target identity and the requested relation.
 
 Your job is to decide:
 1. whether the requested target is actually visible in the images, and
 2. whether the requested spatial relation is complete now.
 
 Rules:
-- Do not choose a view just because its detector confidence is higher.
+- Apply the same rule consistently. Do not become more permissive or stricter across repeated calls.
+- Do not choose a view just because its detector confidence is higher; verify that the boxed object matches the requested target, including color and object type.
 - If a detector box covers most of the image or does not visually match the requested object/color/shape, distrust that proposal.
-- If the instruction says above / over / on top, actively inspect the down-view. A front-view target only means the drone is near or facing it; it does not by itself mean the drone is above it.
+- If the instruction says above / over / on top, actively inspect the down-view when it is provided. A front-view target only means the drone is near or facing it; it does not by itself mean the drone is above it.
 - For above / over / on top, mark done=true only when the target's main body is clearly visible near the central area of the down-view and the down-view depth is within the arrival radius.
 - For above / over / on top, if the down-view shows only a small edge/corner/partial fragment of the target, or the target is mainly at the image border, return done=false even if the depth is small.
-- For fly to / beside / near, use the front-view or down-view that best matches the actual target and judge distance with the corresponding depth.
-- For fly to / beside / near, target visibility alone is not completion. If the target is only a clipped edge/corner in down-view, mostly outside the image, or represented by a box covering most of the image, return done=false.
-- If front-view depth and down-view depth strongly disagree, prefer the view whose box visually matches the requested target and is not a huge or border-clipped proposal.
-- If neither image truly shows the requested target, return target_detected=false, done=false, accepted_view="none".
+- For fly to / beside / near, return done=true only when the requested target is visually matched in at least one reliable boxed view AND that same fresh view's target depth is within the arrival radius.
+- Estimated world distance is trigger/context information only. It must never replace a fresh boxed target depth or make an otherwise invisible target complete.
+- A close target may be large or partially clipped because the drone is already beside it. Cropping alone is NOT a reason for done=false when target identity is clear and distance is within the radius.
+- Return done=false only when the requested target identity is not supported by either view, or when every available reliable distance is outside the arrival radius.
+- If multiple reliable views are provided and their depths strongly disagree, prefer the view whose box visually matches the requested target and is not a huge or border-clipped proposal.
+- If the provided image evidence does not truly show the requested target, return target_detected=false, done=false, accepted_view="none".
 
-Return only one JSON object. No reasoning. No explanation.
+Return only one JSON object. Keep reason_code short and deterministic.
 Required keys:
-{"target_detected": true or false, "done": true or false, "accepted_view": "front" or "down" or "none"}
+{"target_detected": true or false, "done": true or false, "accepted_view": "front" or "down" or "none", "reason_code": "complete_near_target" or "target_mismatch" or "outside_radius"}
 """
 
 
@@ -51,13 +54,13 @@ Target: {target}
 Relation: {relation}
 Completion condition: {completion_condition}
 Arrival radius: {arrival_radius_m} meters
+Estimated UAV-to-target world distance: {estimated_distance_m}
 
 Detector evidence:
 {evidence}
 
-Question: Looking at both images and the task target, is this stage complete now?
-Return only {{"target_detected": true or false, "done": true or false, "accepted_view": "front" or "down" or "none"}}.
-No reason. No explanation."""
+Question: Looking at the provided image evidence and the task target, is this stage complete now?
+Return only {{"target_detected": true or false, "done": true or false, "accepted_view": "front" or "down" or "none", "reason_code": "complete_near_target" or "target_mismatch" or "outside_radius"}}."""
 
 
 @dataclass
@@ -100,6 +103,12 @@ class TaskCompletionChecker:
         self.timeout = float(tc.get("TIMEOUT", 60))
         self.max_tokens = int(tc.get("MAX_TOKENS", 128))
         self.temperature = float(tc.get("TEMPERATURE", 0.0))
+        perception = cfg.get("FUNCTIONS", {}).get("PERCEPTION", {}) or {}
+        self.min_detection_confidence = float(tc.get(
+            "MIN_DETECTION_CONFIDENCE",
+            perception.get("MIN_CONFIDENCE", ag.get("DETECTOR_MIN_CONFIDENCE", 0.0)),
+        ))
+        self.max_detection_span = float(tc.get("MAX_DETECTION_SPAN", 0.90))
 
     def is_detector_enabled(self) -> bool:
         return self.detector is not None and self.detector_name not in {"", "none", "noop"}
@@ -175,6 +184,7 @@ class TaskCompletionChecker:
         down_detection: Optional[DetectionResult] = None,
         front_depth_meters=None,
         down_depth_meters=None,
+        estimated_distance_m: Optional[float] = None,
     ) -> CompletionResult:
         """Check completion using already computed RGB detections."""
         started = time.perf_counter()
@@ -192,6 +202,7 @@ class TaskCompletionChecker:
             detection=detection,
             front_depth_meters=front_depth_meters,
             down_depth_meters=down_depth_meters,
+            estimated_distance_m=estimated_distance_m,
             started=started,
         )
 
@@ -206,68 +217,88 @@ class TaskCompletionChecker:
         detection: Optional[DetectionResult],
         front_depth_meters=None,
         down_depth_meters=None,
+        estimated_distance_m: Optional[float] = None,
         started: float = 0.0,
     ) -> CompletionResult:
-        front_detection = self._prepare_detection(
-            front_detection,
-            "front",
-            front_image,
-            down_image,
-            front_depth_meters,
-            down_depth_meters,
-        )
-        down_detection = self._prepare_detection(
-            down_detection,
-            "down",
-            front_image,
-            down_image,
-            front_depth_meters,
-            down_depth_meters,
-        )
-        best_detection = self._select_best_detection(
-            detection=detection,
-            front_detection=front_detection,
-            down_detection=down_detection,
-        )
-
-        direction = self._estimate_direction(best_detection, front_image)
-        heuristic_done, heuristic_reason = self._heuristic_decision(stage, best_detection)
-
-        if self._can_use_vlm_final_judge():
-            ok, target_detected, accepted_view, done, reason = self._judge_with_vlm(
-                stage=stage,
-                fallback_instruction=fallback_instruction,
-                front_image=front_image,
-                down_image=down_image,
-                front_detection=front_detection,
-                down_detection=down_detection,
+        # Attach depth to both detections before reliability filtering.
+        if front_detection is not None:
+            front_detection = self._attach_depth(
+                front_detection, front_image, down_image, front_depth_meters, down_depth_meters,
             )
+        if down_detection is not None:
+            down_detection = self._attach_depth(
+                down_detection, front_image, down_image, front_depth_meters, down_depth_meters,
+            )
+
+        # If a bbox spans >90 % of its image, zero that detection's score.
+        # Score-zero proposals are not sent to the VLM final judge.
+        if front_detection and front_detection.visible:
+            self._zero_giant_bbox_score(front_detection, front_image)
+        if down_detection and down_detection.visible:
+            self._zero_giant_bbox_score(down_detection, down_image)
+
+        front_ok = front_detection is not None and front_detection.visible
+        down_ok = down_detection is not None and down_detection.visible
+        if not front_ok and not down_ok:
+            return CompletionResult(
+                checked=True, done=False, target_detected=False,
+                accepted_view="none", reason="fresh target not detected",
+                detection=None, direction="",
+                elapsed=time.perf_counter() - started,
+            )
+
+        reliable_front = front_detection if self._has_reliable_fresh_evidence(front_detection, front_image) else None
+        reliable_down = down_detection if self._has_reliable_fresh_evidence(down_detection, down_image) else None
+
+        # ── VLM final judge (only reliable detector-backed image evidence) ──
+        if self._can_use_vlm_final_judge():
+            if reliable_front is None and reliable_down is None:
+                ok, target_detected, accepted_view, done, reason = (
+                    True,
+                    False,
+                    "none",
+                    False,
+                    "no reliable target evidence",
+                )
+            else:
+                ok, target_detected, accepted_view, done, reason = self._judge_with_vlm(
+                    stage=stage,
+                    fallback_instruction=fallback_instruction,
+                    front_image=front_image,
+                    down_image=down_image,
+                    front_detection=reliable_front,
+                    down_detection=reliable_down,
+                    estimated_distance_m=estimated_distance_m,
+                )
             if ok:
-                accepted_detection = self._select_detection_by_view(
-                    accepted_view,
-                    front_detection=front_detection,
-                    down_detection=down_detection,
-                    fallback_detection=best_detection,
-                ) if target_detected else None
-                if target_detected and accepted_view in {"front", "down"}:
-                    if accepted_detection is None or not accepted_detection.visible:
+                # Validate the VLM's decision against physical constraints
+                if done and target_detected and accepted_view in {"front", "down"}:
+                    accepted_det = (
+                        reliable_front if accepted_view == "front" else reliable_down
+                    )
+                    if accepted_det is None or not accepted_det.visible:
                         target_detected = False
                         accepted_view = "none"
-                        accepted_detection = None
                         done = False
                         reason = "not complete"
-                    elif done and not self._is_depth_inside_arrival_radius(accepted_detection):
+                    elif not self._is_depth_inside_arrival_radius(
+                        accepted_det, estimated_distance_m=estimated_distance_m,
+                    ):
                         done = False
                         reason = "not complete"
-                accepted_direction = self._estimate_direction(accepted_detection, front_image) if target_detected else ""
-                if self._is_above_stage(stage) and done:
-                    done = bool(
-                        accepted_view == "down"
-                        and accepted_detection is not None
-                        and accepted_detection.depth_median is not None
-                        and accepted_detection.depth_median < self.stop_depth
-                    )
-                    reason = "complete" if done else "not complete"
+                if self._is_above_stage(stage) and done and accepted_view != "down":
+                    done = False
+                    reason = "not complete"
+
+                accepted_detection = (
+                    (reliable_front if accepted_view == "front" else reliable_down)
+                    if target_detected and accepted_view in {"front", "down"}
+                    else None
+                )
+                direction = (
+                    self._estimate_direction(accepted_detection, front_image)
+                    if target_detected else ""
+                )
                 return CompletionResult(
                     checked=True,
                     done=done,
@@ -275,30 +306,41 @@ class TaskCompletionChecker:
                     accepted_view=accepted_view,
                     reason=reason,
                     detection=accepted_detection,
-                    direction=accepted_direction,
+                    direction=direction,
                     elapsed=time.perf_counter() - started,
                 )
             if not self.vlm_fail_fallback_to_heuristic:
                 return CompletionResult(
-                    checked=True,
-                    done=False,
-                    target_detected=None,
-                    accepted_view="none",
-                    reason=reason,
-                    detection=best_detection,
-                    direction=direction,
-                    elapsed=time.perf_counter() - started,
+                    checked=True, done=False, target_detected=None,
+                    accepted_view="none", reason=reason, detection=None,
+                    direction="", elapsed=time.perf_counter() - started,
                 )
 
+        # ── Heuristic fallback (VLM disabled or failed with fallback enabled) ──
+        for det in (front_detection, down_detection):
+            if det is None or not det.visible:
+                continue
+            if getattr(stage, "mode", "") == "detect":
+                return CompletionResult(
+                    checked=True, done=True, target_detected=True,
+                    accepted_view=det.camera, reason="target detected",
+                    detection=det,
+                    direction=self._estimate_direction(det, front_image),
+                    elapsed=time.perf_counter() - started,
+                )
+            if det.depth_median is not None and det.depth_median < self.stop_depth:
+                return CompletionResult(
+                    checked=True, done=True, target_detected=True,
+                    accepted_view=det.camera,
+                    reason=f"depth={det.depth_median:.1f}m < {self.stop_depth:.1f}m",
+                    detection=det,
+                    direction=self._estimate_direction(det, front_image),
+                    elapsed=time.perf_counter() - started,
+                )
         return CompletionResult(
-            checked=True,
-            done=heuristic_done,
-            target_detected=bool(best_detection and best_detection.visible),
-            accepted_view=(best_detection.camera if best_detection and best_detection.visible else "none"),
-            reason=heuristic_reason,
-            detection=best_detection,
-            direction=direction,
-            elapsed=time.perf_counter() - started,
+            checked=True, done=False, target_detected=False,
+            accepted_view="none", reason="target not complete",
+            direction="", elapsed=time.perf_counter() - started,
         )
 
     @staticmethod
@@ -367,15 +409,36 @@ class TaskCompletionChecker:
     ) -> Optional[DetectionResult]:
         if detection is None:
             return None
-        image = down_image if view_name == "down" and down_image is not None else front_image
-        if self._bbox_exceeds_image_span(detection, image, max_span=0.90):
-            return None
-        return self._attach_depth(
+        prepared = self._attach_depth(
             detection,
             front_image,
             down_image,
             front_depth_meters,
             down_depth_meters,
+        )
+        image = down_image if view_name == "down" else front_image
+        if not self._has_reliable_fresh_evidence(prepared, image):
+            return None
+        return prepared
+
+    def _has_reliable_fresh_evidence(self, detection: Optional[DetectionResult], image) -> bool:
+        if detection is None or not detection.visible or not detection.bbox:
+            return False
+        if float(detection.score or 0.0) < self.min_detection_confidence:
+            return False
+        if image is None or not hasattr(image, "size") or len(detection.bbox) < 4:
+            return False
+        width, height = float(image.size[0]), float(image.size[1])
+        if width <= 1.0 or height <= 1.0:
+            return False
+        x1, y1, x2, y2 = [float(v) for v in detection.bbox[:4]]
+        box_w = max(0.0, min(width, x2) - max(0.0, x1))
+        box_h = max(0.0, min(height, y2) - max(0.0, y1))
+        if box_w <= 1.0 or box_h <= 1.0:
+            return False
+        return not (
+            box_w / width >= self.max_detection_span
+            or box_h / height >= self.max_detection_span
         )
 
     def _select_best_detection(
@@ -405,12 +468,34 @@ class TaskCompletionChecker:
             return down_detection
         return fallback_detection
 
-    def _is_depth_inside_arrival_radius(self, detection: Optional[DetectionResult]) -> bool:
+    def _is_depth_inside_arrival_radius(
+        self,
+        detection: Optional[DetectionResult],
+        estimated_distance_m: Optional[float] = None,
+    ) -> bool:
         if detection is None or not detection.visible:
             return False
         if detection.depth_median is None:
             return not self.require_depth
-        return float(detection.depth_median) < self.stop_depth
+        return float(detection.depth_median) <= self.stop_depth
+
+    @staticmethod
+    def _zero_giant_bbox_score(detection: DetectionResult, image) -> None:
+        """Zero detection.score when the bbox covers >90 % of the image.
+
+        The detection object is kept for logs/debug evidence, but score=0
+        makes the VLM request builder skip the corresponding image.
+        """
+        if detection is None or not detection.bbox or image is None or not hasattr(image, "size"):
+            return
+        width, height = float(image.size[0]), float(image.size[1])
+        if width <= 1.0 or height <= 1.0:
+            return
+        x1, y1, x2, y2 = [float(v) for v in detection.bbox[:4]]
+        box_w = max(0.0, min(width, x2) - max(0.0, x1))
+        box_h = max(0.0, min(height, y2) - max(0.0, y1))
+        if box_w / width >= 0.90 or box_h / height >= 0.90:
+            detection.score = 0.0
 
     @staticmethod
     def _bbox_exceeds_image_span(
@@ -455,6 +540,7 @@ class TaskCompletionChecker:
         down_image,
         front_detection: Optional[DetectionResult],
         down_detection: Optional[DetectionResult],
+        estimated_distance_m: Optional[float] = None,
     ) -> Tuple[bool, bool, str, bool, str]:
         if front_image is None:
             return False, False, "none", False, "vlm judge skipped: front image unavailable"
@@ -465,12 +551,15 @@ class TaskCompletionChecker:
         completion_condition = (getattr(stage, "completion_condition", "") or "").strip()
         mode = (getattr(stage, "mode", "") or "").strip()
         prefer_down_view = self._is_above_stage(stage)
-        evidence_items = [
-            self._format_detection_evidence("front", front_detection, front_image),
-            self._format_detection_evidence("down", down_detection, down_image),
-        ]
+        evidence_items = []
+        if front_detection is not None:
+            evidence_items.append(self._format_detection_evidence("front", front_detection, front_image))
+        if down_detection is not None:
+            evidence_items.append(self._format_detection_evidence("down", down_detection, down_image))
+        if not evidence_items:
+            return False, False, "none", False, "vlm judge skipped: no reliable image evidence"
         if prefer_down_view:
-            evidence_items = [evidence_items[1], evidence_items[0]]
+            evidence_items = sorted(evidence_items, key=lambda item: 0 if item.startswith("- down:") else 1)
         evidence = "\n".join(evidence_items)
         user_text = USER_PROMPT.format(
             mode=mode or "unknown",
@@ -479,6 +568,11 @@ class TaskCompletionChecker:
             relation=relation or "none",
             completion_condition=completion_condition or "none",
             arrival_radius_m=f"{self.stop_depth:.2f}",
+            estimated_distance_m=(
+                f"{float(estimated_distance_m):.2f} meters"
+                if estimated_distance_m is not None
+                else "unavailable"
+            ),
             evidence=evidence,
         )
         messages = [
@@ -514,7 +608,8 @@ class TaskCompletionChecker:
             if not target_detected:
                 accepted_view = "none"
             done = bool(data.get("done", False)) if target_detected else False
-            reason = "complete" if done else "not complete"
+            reason_code = str(data.get("reason_code", "") or "").strip().lower()
+            reason = reason_code or ("complete" if done else "not complete")
             return True, target_detected, accepted_view, done, reason
         except Exception as exc:
             return False, False, "none", False, f"vlm judge failed: {exc}"
@@ -530,7 +625,17 @@ class TaskCompletionChecker:
     ):
         content = [{"type": "text", "text": text}]
 
+        def has_reliable_detection(detection: Optional[DetectionResult]) -> bool:
+            return bool(
+                detection is not None
+                and detection.visible
+                and detection.bbox
+                and float(detection.score or 0.0) >= self.min_detection_confidence
+            )
+
         def append_front():
+            if front_image is None or not has_reliable_detection(front_detection):
+                return
             content.append({"type": "text", "text": "Front-view image with proposed detection box overlay:"})
             content.append({
                 "type": "image_url",
@@ -540,7 +645,7 @@ class TaskCompletionChecker:
             })
 
         def append_down():
-            if down_image is None:
+            if down_image is None or not has_reliable_detection(down_detection):
                 return
             content.append({"type": "text", "text": "Down-view image with proposed detection box overlay:"})
             content.append({
@@ -648,4 +753,3 @@ class TaskCompletionChecker:
             f"bbox_px={bbox}, score={float(detection.score or 0.0):.2f}, "
             f"depth={depth}, bbox_area_ratio={area_ratio}, bbox_center_norm={center}, label={label}"
         )
-

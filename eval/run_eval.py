@@ -23,6 +23,7 @@ eval/run_eval.py — 通用离线评估器（闭环，需 AirSim）。
 
 import os, json, sys, time, math
 from pathlib import Path
+from types import SimpleNamespace
 from typing import List, Dict, Optional
 import numpy as np
 
@@ -31,15 +32,17 @@ _root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_root))
 
 from config import cfg
-from agent.detector import build_detector
-from agent.planner import build_planner
-from agent.direction import build_direction_estimator
-from agent.task_parser import build_task_parser
-from agent.world_model import build_world_model
-from agent.candidate import prepare_candidates_for_world_model
-from agent.completion import build_task_completion_checker
+from agent.models.detection import build_detector
+from agent.functions.direction import build_direction_estimator
+from agent.functions.task_parser import build_task_parser
+from agent.models.world_model import build_world_model
+from agent.functions.candidate import prepare_candidates_for_world_model, select_best_candidate
+from agent.functions.completion import build_task_completion_checker
+from agent.functions.common.config_access import function_section
 from agent.functions.common.task_manager import TaskManager
-from agent.relocalization import TargetRelocalizer
+from agent.functions.planning.sliding_window_planning import SlidingWindowPlanningFunction
+from agent.functions.relocalization import TargetRelocalizer
+from agent.models.planner.sliding_window_planner import incremental_to_cumulative
 from eval.metrics import MetricsTracker
 from sim.airsim_client import AirSimClient
 
@@ -249,7 +252,7 @@ def evaluate(episodes: List[Dict], scene_filter: str = None,
 
     # 初始化各模块（由 config 决定实现）
     detector = build_detector()
-    planner = build_planner()
+    planner = SlidingWindowPlanningFunction(function_section(cfg, "PLANNING"))
     world_model = build_world_model()
     direction_est = build_direction_estimator()
     task_parser = build_task_parser()
@@ -427,12 +430,12 @@ def evaluate(episodes: List[Dict], scene_filter: str = None,
             if front_rgb is not None:
                 front_det = detector.detect(front_rgb, detect_caption, depth_meters=None, camera_name="front")
             else:
-                from agent.detector.base import DetectionResult
+                from agent.models.detection.base import DetectionResult
                 front_det = DetectionResult(visible=False, camera="front")
             if down_rgb is not None:
                 down_det = detector.detect(down_rgb, detect_caption, depth_meters=None, camera_name="down")
             else:
-                from agent.detector.base import DetectionResult
+                from agent.models.detection.base import DetectionResult
                 down_det = DetectionResult(visible=False, camera="down")
             _td = time.perf_counter() - _td0
 
@@ -488,39 +491,57 @@ def evaluate(episodes: List[Dict], scene_filter: str = None,
             result = planner.plan(
                 front_rgb, down_rgb,
                 instruction=stage_instruction,
+                pending_waypoints=[],
                 relation=getattr(current_stage, "relation", "") if current_stage else "",
                 target=getattr(current_stage, "target", "") if current_stage else "",
             )
             _tp = time.perf_counter() - _tp0
 
-            # 候选轨迹（仅在启用时）
+            # 滑窗 Qwen 输出相邻增量点；候选扰动和 AirSim 执行使用累计机体系点。
+            qwen_cumulative = incremental_to_cumulative(result.waypoints)
+            prepared_result = SimpleNamespace(
+                waypoints=qwen_cumulative,
+                candidates=getattr(result, "candidates", []),
+                reasoning=getattr(result, "reasoning", ""),
+            )
             candidate_prep = prepare_candidates_for_world_model(
-                result, detection=detection, direction=direction,
+                prepared_result, detection=detection, direction=direction,
                 stop_threshold=PLANNER_STOP_THRESHOLD,
             )
-            if candidate_prep.all_candidates:
-                result.candidates = [c.to_dict() for c in candidate_prep.all_candidates]
-
-            if world_model and candidate_prep.wm_candidates:
-                wm_result = world_model.score_from_pil(
-                    front_rgb, down_rgb, instruction=stage_instruction,
-                    candidates=[c.to_world_model_dict() for c in candidate_prep.wm_candidates],
+            selection = select_best_candidate(
+                candidate_prep,
+                world_model=world_model,
+                front_image=front_rgb,
+                down_image=down_rgb,
+                instruction=stage_instruction,
+            )
+            for candidate_index, candidate in enumerate(candidate_prep.all_candidates):
+                wm_text = ""
+                if candidate_index < len(selection.world_model_scores):
+                    wm_score = selection.world_model_scores[candidate_index]
+                    if math.isfinite(wm_score):
+                        wm_text = f" wm={wm_score:.4f}"
+                points = " ".join(
+                    f"[{wp[0]:.2f},{wp[1]:.2f},{wp[2]:.2f}]"
+                    for wp in candidate.waypoints
                 )
-                if 0 <= wm_result.best_index < len(candidate_prep.wm_candidates):
-                    chosen = candidate_prep.wm_candidates[wm_result.best_index]
-                    result.actions = list(chosen.actions)
-                    result.waypoints = [list(wp) for wp in chosen.waypoints]
-                    result.reasoning = (
-                        (result.reasoning + " | " if result.reasoning else "")
-                        + f"WM chose idx={wm_result.best_index} conf={chosen.confidence:.2f}"
-                    )
+                print(
+                    f"  [Candidate {candidate_index}] pre={candidate.pre_score:.4f}{wm_text} "
+                    f"source={candidate.source} waypoints={points}"
+                )
+            if selection.chosen is not None:
+                print(
+                    f"  [Candidate] selected={selection.selected_index} "
+                    f"by={'world_model' if selection.used_world_model else 'pre_score'} "
+                    f"reason={selection.reasoning}"
+                )
 
             # ═══ 执行 ═══
-            exec_waypoints = list(result.waypoints) if result.waypoints else []
-            if (not exec_waypoints or all(all(abs(v) < 1e-6 for v in wp) for wp in exec_waypoints)) \
-                    and result.actions:
-                from agent.planner.api_atomic_planner import _actions_to_body_waypoints
-                exec_waypoints = _actions_to_body_waypoints(result.actions)
+            exec_waypoints = (
+                [list(wp) for wp in selection.chosen.waypoints]
+                if selection.chosen is not None
+                else qwen_cumulative
+            )
 
             if exec_waypoints and not all(all(abs(v) < 1e-6 for v in wp) for wp in exec_waypoints):
                 _te0 = time.perf_counter()

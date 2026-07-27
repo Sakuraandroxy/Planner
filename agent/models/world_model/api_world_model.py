@@ -70,10 +70,18 @@ class ApiWorldModel(BaseWorldModel):
             )
             resp.raise_for_status()
             data = resp.json()
+            if not isinstance(data, dict):
+                raise ValueError("response JSON must be an object")
+            raw_scores = data.get("scores", [])
+            if raw_scores is None:
+                raw_scores = []
+            if not isinstance(raw_scores, list):
+                raise ValueError("response 'scores' must be a list")
             result = WorldModelResult(
                 best_index=int(data.get("best_index", 0)),
-                scores=data.get("scores", []),
-                reasoning=data.get("reasoning", ""),
+                scores=raw_scores,
+                reasoning=data.get("reasoning", data.get("reason", "")),
+                ok=True,
             )
             print(f"  [WorldModel] best={result.best_index} scores={result.scores} ({time.time() - started:.2f}s)")
             return result

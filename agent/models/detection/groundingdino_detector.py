@@ -9,7 +9,6 @@ from typing import List
 from PIL import Image
 import requests
 
-from agent.functions.common.image_encoder import get_cached_down_b64, get_cached_front_b64
 from agent.functions.common.config_access import first_value, function_section
 from agent.models.detection import register_detector
 from agent.models.detection.base import BaseDetector, DetectionResult
@@ -44,11 +43,13 @@ class GroundingDINODetector(BaseDetector):
         elif image.mode != "RGB":
             image = image.convert("RGB")
 
-        b64 = get_cached_front_b64() if camera_name == "front" else get_cached_down_b64()
-        if not b64:
-            buf = io.BytesIO()
-            image.save(buf, format="JPEG", quality=90)
-            b64 = base64.b64encode(buf.getvalue()).decode()
+        # Detection may run after planning has populated the global image
+        # cache with an older frame. Always encode the image passed to this
+        # call so a fresh completion/relocalization capture cannot silently be
+        # replaced by stale Qwen input.
+        buf = io.BytesIO()
+        image.save(buf, format="JPEG", quality=90)
+        b64 = base64.b64encode(buf.getvalue()).decode()
 
         resp = requests.post(
             self.url,

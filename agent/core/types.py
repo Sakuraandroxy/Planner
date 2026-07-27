@@ -44,6 +44,7 @@ class PlanOutput:
     waypoint_format: str = "cumulative_body"
     done: bool = False
     reasoning: str = ""
+    rejection_reason: str = ""
     raw: Any = None
 
 
