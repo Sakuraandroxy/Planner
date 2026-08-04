@@ -17,6 +17,37 @@ _ACTION_VALUE_DEFAULTS = {
     "right": 90.0,
     "up": 5.0,
     "down": 5.0,
+    "land": 0.0,
+}
+
+_SPATIAL_DESCRIPTOR_KEYS = {
+    "left",
+    "right",
+    "front",
+    "back",
+    "behind",
+    "ahead",
+    "forward",
+    "left front",
+    "front left",
+    "right front",
+    "front right",
+    "left side",
+    "right side",
+    "左",
+    "右",
+    "前",
+    "后",
+    "後",
+    "左前",
+    "右前",
+    "左前方",
+    "右前方",
+    "左边",
+    "右边",
+    "前方",
+    "后方",
+    "後方",
 }
 
 TASK_PARSER_SYSTEM_PROMPT = """You are a UAV navigation task parser.
@@ -26,6 +57,7 @@ All output fields must be English, even when the user instruction is Chinese.
 
 Split the user instruction into ordered executable stages. Use:
 - mode="action" only for fixed ego-motion commands: forward/backward/left/right/up/down.
+- mode="action" for land only when the current stage is an actual landing/touch-down command.
 - mode="detect" for find/search/locate target without flying to it.
 - mode="target" for navigation to a physical target or spatial relation such as beside/near/above/on top.
 
@@ -36,11 +68,18 @@ When the instruction contains "然后/then/and then/first...then", split into mu
   Example: "先左转45度再飞到房子附近" -> task_type="multi" with:
     stage 1: {"instruction": "Turn left 45 degrees", "mode": "action", "action": "left", "value": 45, "unit": "degree"}
     stage 2: {"instruction": "Fly to the house", "mode": "target", "target": "house", "relation": "near"}
+  Example: "到路口右转，然后到遇到的一堆木箱旁降落" -> task_type="multi" with:
+    stage 1: {"instruction": "Fly to the intersection", "mode": "target", "target": "intersection", "relation": "near"}
+    stage 2: {"instruction": "Turn right", "mode": "action", "action": "right", "value": 90, "unit": "degree"}
+    stage 3: {"instruction": "Fly near the pile of wooden boxes", "mode": "target", "target": "pile of wooden boxes", "relation": "near"}
+    stage 4: {"instruction": "Land", "mode": "action", "action": "land", "value": null, "unit": ""}
 
 The "instruction" field is a simple English command. Examples:
   "飞到红色车旁" -> {"instruction": "Fly to the red car", "target": "red car", "relation": "beside"}
   "飞到房子附近" -> {"instruction": "Fly to the house", "target": "house", "relation": "near"}
   "飞到房子上方" -> {"instruction": "Fly above the house", "target": "house", "relation": "above"}
+  "飞到第2辆红车旁" -> {"instruction": "Fly to the second red car", "target": "red car", "relation": "beside", "ordinal": 2, "selection_rule": "ordinal"}
+  "飞到灌木丛旁边的红车旁" -> {"instruction": "Fly to the red car near the bushes", "target": "red car", "relation": "beside", "auxiliary_targets": ["bushes"], "selection_rule": "anchored"}
 
 JSON schema:
 {
@@ -57,7 +96,11 @@ JSON schema:
       "unit": "",
       "requires_target": false,
       "allow_relocalize": false,
-      "completion_condition": "English completion condition"
+      "completion_condition": "English completion condition",
+      "ordinal": null,
+      "selection_rule": "stable|ordinal|nearest|anchored",
+      "stage_kind": "navigation|landing|search|action",
+      "auxiliary_targets": ["English landmark or qualifier targets, e.g. bushes"]
     }
   ]
 }
@@ -153,6 +196,38 @@ def parse_task_parser_to_stages(response_text: str, original_instruction: str = 
         )
 
         value = item.get("value")
+        ordinal = _coerce_ordinal(item.get("ordinal"))
+        if ordinal is None:
+            ordinal = _infer_ordinal_from_text(
+                " ".join([
+                    instruction,
+                    target,
+                    str(item.get("completion_condition", "") or ""),
+                    original_instruction or "",
+                ])
+            )
+        selection_rule = str(item.get("selection_rule", "") or "").strip().lower()
+        if not selection_rule:
+            selection_rule = _infer_selection_rule(
+                " ".join([instruction, target, original_instruction or ""]),
+                ordinal=ordinal,
+            )
+        completion_condition = str(item.get("completion_condition", "") or "").strip()
+        auxiliary_targets = _coerce_auxiliary_targets(item.get("auxiliary_targets"))
+        split_target, split_aux = _split_target_and_auxiliary(
+            target,
+            instruction=instruction,
+            completion_condition=completion_condition,
+            original_instruction=original_instruction,
+        )
+        if split_target:
+            target = split_target
+        auxiliary_targets = _merge_unique(auxiliary_targets + split_aux)
+        if auxiliary_targets and selection_rule == "stable":
+            selection_rule = "anchored"
+        if ordinal and target:
+            target = _strip_ordinal_from_target(target)
+
         if mode == "action":
             if action not in _ACTION_VALUE_DEFAULTS:
                 action = _infer_action_from_instruction(instruction)
@@ -177,13 +252,18 @@ def parse_task_parser_to_stages(response_text: str, original_instruction: str = 
                 unit=str(item.get("unit", "") or "").strip(),
                 requires_target=bool(item.get("requires_target", mode in {"target", "detect"})),
                 allow_relocalize=bool(item.get("allow_relocalize", mode in {"target", "detect"})),
-                completion_condition=str(item.get("completion_condition", "") or "").strip(),
+                completion_condition=completion_condition,
+                # ordinal/selection_rule 用于memory锁定“第N个目标”，避免多实例场景重新编号。
+                ordinal=ordinal,
+                selection_rule=selection_rule if mode in {"target", "detect"} else "",
+                stage_kind=str(item.get("stage_kind", "") or "").strip().lower(),
+                auxiliary_targets=auxiliary_targets if mode in {"target", "detect"} else [],
             )
         )
 
     if not stages:
         raise ValueError("task parser returned no valid stages")
-    return stages
+    return _split_landing_stages(stages)
 
 
 def parse_task_parser_response(response_text: str, original_instruction: str = "") -> List[TaskStage]:
@@ -213,13 +293,16 @@ def _normalize_action(action: str) -> str:
         "turn_right": "right",
         "ascend": "up",
         "descend": "down",
+        "landing": "land",
+        "touchdown": "land",
+        "touch_down": "land",
     }
     return aliases.get(action, action)
 
 
 def _infer_action_from_instruction(instruction: str) -> str:
     text = (instruction or "").lower()
-    for name in ("forward", "backward", "left", "right", "up", "down"):
+    for name in ("forward", "backward", "left", "right", "up", "down", "land"):
         if name in text:
             return name
     if "turn left" in text:
@@ -230,11 +313,15 @@ def _infer_action_from_instruction(instruction: str) -> str:
         return "up"
     if "descend" in text:
         return "down"
+    if "降落" in text or "着陆" in text or "touch down" in text:
+        return "land"
     return ""
 
 
 def _coerce_action_value(value, action: str) -> float | None:
     if action not in _ACTION_VALUE_DEFAULTS:
+        return None
+    if action == "land":
         return None
     try:
         return float(value) if value is not None else _ACTION_VALUE_DEFAULTS[action]
@@ -264,6 +351,210 @@ def _coerce_spatial_action_stage(
 def _has_above_relation(text: str) -> bool:
     lower = (text or "").lower()
     return any(token in lower for token in ("above", "over", "on top", "top of", "上方", "上面", "顶部"))
+
+
+def _has_landing_intent(text: str) -> bool:
+    lower = (text or "").lower()
+    return any(token in lower for token in (" land", "landing", "touch down", "降落", "着陆", "落地"))
+
+
+def _split_landing_stages(stages: List[TaskStage]) -> List[TaskStage]:
+    out: List[TaskStage] = []
+    for stage in stages:
+        if (
+            stage.mode == "target"
+            and _has_landing_intent(f" {stage.instruction} {stage.completion_condition}")
+        ):
+            # 降落不能由完成判定“判定”出来，必须拆成导航到目标旁 + 真实land动作。
+            stage.instruction = re.sub(
+                r"\b(and\s+)?(then\s+)?(land|landing|touch down)\b",
+                "",
+                stage.instruction,
+                flags=re.IGNORECASE,
+            ).strip() or _repair_instruction(stage.instruction, stage.target, stage.relation, stage.mode)
+            stage.completion_condition = re.sub(
+                r"\b(and\s+)?(then\s+)?(land|landing|touch down)\b",
+                "",
+                stage.completion_condition,
+                flags=re.IGNORECASE,
+            ).strip()
+            out.append(stage)
+            out.append(
+                TaskStage(
+                    index=0,
+                    instruction="Land",
+                    mode="action",
+                    action="land",
+                    value=None,
+                    unit="",
+                    stage_kind="landing",
+                )
+            )
+        else:
+            out.append(stage)
+    for index, stage in enumerate(out):
+        stage.index = index
+    return out
+
+
+def _coerce_ordinal(value) -> int | None:
+    try:
+        if value in (None, ""):
+            return None
+        ordinal = int(value)
+        return ordinal if ordinal > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _infer_ordinal_from_text(text: str) -> int | None:
+    lower = (text or "").lower()
+    mapping = {
+        "first": 1,
+        "1st": 1,
+        "second": 2,
+        "2nd": 2,
+        "third": 3,
+        "3rd": 3,
+        "fourth": 4,
+        "4th": 4,
+        "fifth": 5,
+        "5th": 5,
+    }
+    for token, ordinal in mapping.items():
+        if re.search(rf"\b{re.escape(token)}\b", lower):
+            return ordinal
+    zh_match = re.search(r"第\s*([0-9一二两三四五六七八九]+)", lower)
+    if zh_match:
+        raw = zh_match.group(1)
+        if raw.isdigit():
+            return int(raw)
+        return {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}.get(raw)
+    return None
+
+
+def _infer_selection_rule(text: str, ordinal: int | None = None) -> str:
+    lower = (text or "").lower()
+    if ordinal:
+        return "ordinal"
+    if any(token in lower for token in ("nearest", "closest", "最近")):
+        return "nearest"
+    return "stable"
+
+
+def _coerce_auxiliary_targets(value) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        raw_items = re.split(r"[,;/，、]| and ", value)
+    elif isinstance(value, list):
+        raw_items = value
+    else:
+        raw_items = []
+    return _merge_unique(
+        item
+        for item in (str(item or "").strip() for item in raw_items)
+        if item and not _is_spatial_descriptor(item)
+    )
+
+
+def _split_target_and_auxiliary(
+    target: str,
+    *,
+    instruction: str = "",
+    completion_condition: str = "",
+    original_instruction: str = "",
+) -> tuple[str, List[str]]:
+    """Split target qualifiers such as 'red car near bushes'.
+
+    这里把“主目标”和“锚点目标”拆开，便于 memory 在执行白车阶段时也提前记住红车和灌木。
+    """
+    target_text = str(target or "").strip()
+    aux: List[str] = []
+    primary = target_text
+    pattern = (
+        r"\b(.+?)\s+"
+        r"(?:near|beside|next to|by|adjacent to|close to|in front of|behind)\s+"
+        r"(?:the\s+|a\s+|an\s+)?(.+)$"
+    )
+    match = re.search(pattern, target_text, flags=re.IGNORECASE)
+    if match:
+        primary = match.group(1).strip()
+        aux.append(_clean_auxiliary_target(match.group(2)))
+
+    source = " ".join([instruction or "", completion_condition or ""])
+    if primary:
+        escaped = re.escape(primary)
+        inst_match = re.search(
+            rf"{escaped}\s+(?:near|beside|next to|by|adjacent to|close to)\s+"
+            r"(?:the\s+|a\s+|an\s+)?([a-zA-Z][a-zA-Z\s-]{1,40})",
+            source,
+            flags=re.IGNORECASE,
+        )
+        if inst_match:
+            aux.append(_clean_auxiliary_target(inst_match.group(1)))
+
+    original = str(original_instruction or "")
+    stage_source = f"{target_text} {instruction}".lower()
+    if "red" in stage_source and any(token in original for token in ("灌木", "草丛", "树丛")):
+        aux.append("bushes")
+    aux = [
+        item for item in _merge_unique(aux)
+        if normalize_simple(item) != normalize_simple(primary)
+        and not _is_spatial_descriptor(item)
+    ]
+    return primary.strip(), aux
+
+
+def _clean_auxiliary_target(text: str) -> str:
+    cleaned = re.sub(
+        r"\b(?:near|beside|next to|by|and|then|finally|land|landing|touch down)\b.*$",
+        "",
+        str(text or "").strip(),
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(r"\b(the|a|an)\b", " ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" .,:;")
+    return "" if _is_spatial_descriptor(cleaned) else cleaned
+
+
+def _merge_unique(items) -> List[str]:
+    seen = set()
+    out: List[str] = []
+    for item in items:
+        cleaned = re.sub(r"\s+", " ", str(item or "").strip())
+        if not cleaned:
+            continue
+        key = normalize_simple(cleaned)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(cleaned)
+    return out
+
+
+def normalize_simple(text: str) -> str:
+    return re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff]+", " ", str(text or "").lower()).strip()
+
+
+def _is_spatial_descriptor(text: str) -> bool:
+    """过滤纯方位词：left front/右前方是目标限定方向，不是可检测锚点物体。"""
+    normalized = normalize_simple(text)
+    compact = normalized.replace(" ", "")
+    if not normalized:
+        return True
+    if normalized in _SPATIAL_DESCRIPTOR_KEYS or compact in _SPATIAL_DESCRIPTOR_KEYS:
+        return True
+    tokens = set(normalized.split())
+    direction_tokens = {"left", "right", "front", "back", "behind", "ahead", "forward", "side"}
+    return bool(tokens and tokens.issubset(direction_tokens))
+
+
+def _strip_ordinal_from_target(target: str) -> str:
+    text = str(target or "").strip()
+    text = re.sub(r"\b(first|second|third|fourth|fifth|\d+(?:st|nd|rd|th))\b", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"第\s*[0-9一二两三四五六七八九]+\s*[个辆台座只架]?", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def _repair_instruction(instruction: str, target: str, relation: str, mode: str) -> str:

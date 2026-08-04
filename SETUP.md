@@ -70,7 +70,7 @@
 # Windows 上用 Anaconda Prompt 或 git-bash
 conda create -n airsim python=3.10 -y
 conda activate airsim
-cd E:\uni-lavira-code-main
+cd D:\Codex_code\world_model\Planner
 pip install -r requirements.txt
 ```
 
@@ -164,8 +164,8 @@ pip install Flask opencv-python supervision pycocotools timm addict yapf
 ## 2.2 GroundingDINO 权重
 
 ```bash
-mkdir -p /data/sakura/models/GroundingDINO/weights
-cd /data/sakura/models/GroundingDINO/weights
+mkdir -p /data/zhusai/zhusai-tmp/codes/GroundingDINO/weights
+cd /data/zhusai/zhusai-tmp/codes/GroundingDINO/weights
 # 从 HuggingFace 下载（推荐）
 wget https://huggingface.co/ShilongLiu/GroundingDINO/resolve/main/groundingdino_swint_ogc.pth
 ```
@@ -174,7 +174,7 @@ wget https://huggingface.co/ShilongLiu/GroundingDINO/resolve/main/groundingdino_
 
 ```bash
 conda activate groundingdino
-CUDA_VISIBLE_DEVICES=2 python /data/sakura/models/GroundingDINO/groundingdino_server.py
+PYTHONPATH=/data/sakura/models/GroundingDINO/GroundingDINO:$PYTHONPATH CUDA_VISIBLE_DEVICES=2 python /data/sakura/models/GroundingDINO/groundingdino_server.py
 ```
 
 > `groundingdino_server.py` 不在本仓库中——它是一个独立的 Flask wrapper，位于 GroundingDINO 仓库根目录。接口为 `POST :8003/detect`，非标准 OpenAI 格式。
@@ -218,13 +218,12 @@ CUDA_VISIBLE_DEVICES=3 vllm serve /data/sakura/models/Qwen2.5-7B-Instruct-AWQ \
   --host 0.0.0.0 --port 8000 --max-model-len 4096
 
 # 终端2: 轨迹规划 (:8004) —— GPU 0,1 双卡张量并行
-CUDA_VISIBLE_DEVICES=0,1 vllm serve /data/sakura/models/3DG-VLN \
-  --host 0.0.0.0 --port 8004 --max-model-len 8192
+CUDA_VISIBLE_DEVICES=0,1 vllm serve /data/sakura/models/3DG-VLN-finetuned-sliding_window_2 --host 0.0.0.0 --port 8004 --max-model-len 8192 --tensor-parallel-size 2
 
 # 终端3 (可选): VLM 检测备选 (:8001) —— 如果不用 GroundingDINO
 # 注意：和终端1 共用 GPU3，显存够但要错开端口
-# CUDA_VISIBLE_DEVICES=3 vllm serve /data/sakura/models/Qwen3-VL-4B-Instruct \
-#   --host 0.0.0.0 --port 8001 --max-model-len 4096
+#CUDA_VISIBLE_DEVICES=3 vllm serve /data/sakura/models/Qwen3-VL-4B-Instruct \
+#  --host 0.0.0.0 --port 8001 --max-model-len 4096
 ```
 
 > **备选方案**：`qwen_server_updated.py`（Flask 直连模式，开发调试用），其 `model_path` 在第 12 行硬编码，换模型需手动修改。

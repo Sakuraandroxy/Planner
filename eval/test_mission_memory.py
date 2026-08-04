@@ -1,0 +1,412 @@
+"""Focused tests for the lightweight MissionMemory behavior."""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+from PIL import Image
+
+from agent.functions.candidate.base import CandidateTrajectory
+from agent.functions.candidate.scorer import score_candidates
+from agent.functions.fast_slow.runtime import _apply_memory_path_guard
+from agent.functions.memory import MissionMemory
+from agent.functions.memory.appearance_signature import build_appearance_signature
+from agent.functions.memory.schemas import TargetInstanceBelief, TargetMemory
+from agent.functions.obstacle_avoidance import DepthObstacleAvoider
+from agent.functions.task_parser.vlm_task_parser import parse_task_parser_to_stages
+
+
+def _stage(**kwargs):
+    data = {
+        "index": 0,
+        "instruction": "Fly to the red car",
+        "mode": "target",
+        "target": "red car",
+        "relation": "near",
+        "ordinal": None,
+        "selection_rule": "",
+        "completion_condition": "",
+    }
+    data.update(kwargs)
+    return SimpleNamespace(**data)
+
+
+def _det(bbox, depth, score=0.8, camera="front", label="red car"):
+    return SimpleNamespace(
+        visible=True,
+        bbox=list(bbox),
+        score=score,
+        label=label,
+        depth_median=depth,
+        depth_bbox=None,
+        camera=camera,
+    )
+
+
+def _memory():
+    return MissionMemory(
+        config={
+            "ENABLED": True,
+            "MIN_DETECTION_SCORE": 0.1,
+            "MEMORY_ONLY_COMPLETION_ENABLED": True,
+            "MEMORY_ONLY_MIN_CONFIDENCE": 0.80,
+            "MEMORY_ONLY_MIN_OBSERVATIONS": 2,
+            "MAX_COMPLETION_UNCERTAINTY_M": 5.0,
+            "NEAR_MAX_ALTITUDE_M": 8.0,
+            "ABOVE_HORIZONTAL_RADIUS_M": 2.0,
+            "ABOVE_MIN_CLEARANCE_M": 0.1,
+            "ABOVE_MAX_ALTITUDE_M": 60.0,
+            "FRONT_CAMERA_OFFSET": [0.0, 0.0, 0.0],
+        },
+        sim_config={"FRONT_FOV": 90.0, "DOWN_FOV": 90.0},
+    )
+
+
+def test_ordinal_lock_survives_after_first_instance_leaves_view():
+    img = Image.new("RGB", (640, 480), (120, 120, 120))
+    memory = _memory()
+    stage = _stage(
+        instruction="Fly to the second red car",
+        ordinal=2,
+        selection_rule="ordinal",
+    )
+
+    memory.update_from_detections(
+        stage=stage,
+        detections_by_view={
+            "front": [
+                _det([290, 210, 330, 250], 10.0),
+                _det([290, 210, 330, 250], 20.0),
+                _det([290, 210, 330, 250], 30.0),
+            ],
+        },
+        images_by_view={"front": img},
+        observer_world=[0.0, 0.0, -5.0],
+        observer_yaw_deg=0.0,
+    )
+    primary_before = memory.primary_instance(stage)
+
+    memory.update_from_detections(
+        stage=stage,
+        detections_by_view={
+            "front": [
+                _det([290, 210, 330, 250], 10.0),
+                _det([290, 210, 330, 250], 20.0),
+            ],
+        },
+        images_by_view={"front": img},
+        observer_world=[10.0, 0.0, -5.0],
+        observer_yaw_deg=0.0,
+    )
+    primary_after = memory.primary_instance(stage)
+
+    assert primary_before is not None
+    assert primary_after is not None
+    assert primary_before.instance_id == primary_after.instance_id
+    assert primary_after.encounter_order == 2
+
+
+def test_near_completion_rejects_large_height_difference():
+    memory = _memory()
+    stage = _stage(relation="near")
+    target = TargetMemory(target_key="red car", target_name="red car", primary_instance_id="red_car:1")
+    target.instances["red_car:1"] = TargetInstanceBelief(
+        instance_id="red_car:1",
+        encounter_order=1,
+        target_world=[0.0, 0.0, 0.0],
+        confidence=0.95,
+        observation_count=3,
+        uncertainty_m=1.0,
+    )
+    memory.target_memories["red car"] = target
+    memory.stage_locks["0|Fly to the red car|target"] = "red_car:1"
+
+    decision = memory.evaluate_completion(stage=stage, current_world=[1.0, 1.0, -20.0], stop_radius_m=4.0)
+
+    assert not decision.done
+    assert decision.status in {"HOLD_CONFIRM", "NOT_COMPLETE"}
+    assert "height" in decision.reason
+
+
+def test_above_completion_uses_horizontal_geometry_and_uncertainty():
+    memory = _memory()
+    stage = _stage(instruction="Fly above the red car", relation="above")
+    target = TargetMemory(target_key="red car", target_name="red car", primary_instance_id="red_car:1")
+    target.instances["red_car:1"] = TargetInstanceBelief(
+        instance_id="red_car:1",
+        encounter_order=1,
+        target_world=[0.0, 0.0, 0.0],
+        confidence=0.96,
+        observation_count=3,
+        uncertainty_m=0.8,
+        footprint_radius_m=1.5,
+    )
+    memory.target_memories["red car"] = target
+    memory.stage_locks["0|Fly above the red car|target"] = "red_car:1"
+
+    decision = memory.evaluate_completion(stage=stage, current_world=[0.8, 0.4, -3.0], stop_radius_m=4.0)
+
+    assert decision.done
+    assert decision.status == "COMPLETE"
+
+
+def test_low_saturation_appearance_is_less_reliable_than_red_crop():
+    gray = Image.new("RGB", (80, 80), (120, 120, 120))
+    red = Image.new("RGB", (80, 80), (180, 40, 35))
+
+    gray_sig = build_appearance_signature(gray, [5, 5, 75, 75])
+    red_sig = build_appearance_signature(red, [5, 5, 75, 75])
+
+    assert gray_sig is not None
+    assert red_sig is not None
+    assert red_sig.reliability > gray_sig.reliability
+
+
+def test_candidate_memory_score_prefers_locked_primary():
+    primary = CandidateTrajectory(waypoints=[[4.0, 0.0, 0.0], [9.5, 0.2, 0.0]], source="primary")
+    wrong = CandidateTrajectory(waypoints=[[4.0, 2.0, 0.0], [9.5, 5.0, 0.0]], source="wrong")
+
+    scored = score_candidates(
+        [primary, wrong],
+        memory_context={
+            "enabled": True,
+            "target_body": [10.0, 0.0, 0.0],
+            "non_primary_bodies": [[10.0, 5.0, 0.0]],
+            "relation": "near",
+            "confidence": 0.95,
+            "uncertainty_m": 1.0,
+            "footprint_radius_m": 1.5,
+        },
+    )
+
+    assert scored[0].pre_score > scored[1].pre_score
+    assert scored[0].score_breakdown["memory"] > scored[1].score_breakdown["memory"]
+
+
+def test_parser_extracts_bush_anchor_for_red_car_stage():
+    stages = parse_task_parser_to_stages(
+        """
+        {"stages": [
+          {"instruction": "Fly to the white car", "mode": "target", "target": "white car", "relation": "beside"},
+          {"instruction": "Fly to the red car near the bushes", "mode": "target", "target": "red car near bushes", "relation": "beside"}
+        ]}
+        """,
+        original_instruction="首先飞行到白车旁边，然后飞行到灌木丛旁边的红车旁边",
+    )
+
+    assert stages[0].target == "white car"
+    assert stages[0].auxiliary_targets == []
+    assert stages[1].target == "red car"
+    assert "bushes" in stages[1].auxiliary_targets
+    assert stages[1].selection_rule == "anchored"
+
+
+def test_anchor_memory_selects_red_car_near_bushes():
+    memory = _memory()
+    stage = _stage(
+        instruction="Fly to the red car near the bushes",
+        target="red car",
+        selection_rule="anchored",
+    )
+    stage.auxiliary_targets = ["bushes"]
+    red = TargetMemory(target_key="red car", target_name="red car")
+    red.instances["red_car:1"] = TargetInstanceBelief(
+        instance_id="red_car:1",
+        encounter_order=1,
+        target_world=[0.0, 0.0, 0.0],
+        confidence=0.95,
+        observation_count=2,
+    )
+    red.instances["red_car:2"] = TargetInstanceBelief(
+        instance_id="red_car:2",
+        encounter_order=2,
+        target_world=[20.0, 0.0, 0.0],
+        confidence=0.90,
+        observation_count=2,
+    )
+    bushes = TargetMemory(target_key="bushes", target_name="bushes", primary_instance_id="bushes:1")
+    bushes.instances["bushes:1"] = TargetInstanceBelief(
+        instance_id="bushes:1",
+        encounter_order=1,
+        target_world=[21.0, 0.5, 0.0],
+        confidence=0.90,
+        observation_count=2,
+    )
+    memory.target_memories["red car"] = red
+    memory.target_memories["bushes"] = bushes
+
+    primary = memory.primary_instance(stage)
+
+    assert primary is not None
+    assert primary.instance_id == "red_car:2"
+
+
+def test_memory_path_guard_clips_qwen_overshoot():
+    objects = SimpleNamespace(
+        mission_memory=SimpleNamespace(config={"PATH_CLIP_ENABLED": True, "PATH_CLIP_RADIUS_M": 4.0}),
+        completion_checker=SimpleNamespace(stop_depth=4.0),
+    )
+    original = [
+        [16.3, -5.0, 0.0],
+        [30.6, -9.4, 0.0],
+        [43.0, -13.2, 0.0],
+        [63.1, -19.3, 0.0],
+    ]
+
+    clipped, reason = _apply_memory_path_guard(
+        objects,
+        _stage(),
+        original,
+        {
+            "enabled": True,
+            "target_body": [21.2, -4.9, 0.8],
+            "relation": "near",
+            "footprint_radius_m": 1.5,
+        },
+    )
+
+    assert reason
+    assert len(clipped) < len(original)
+    last = clipped[-1]
+    horizontal = ((last[0] - 21.2) ** 2 + (last[1] + 4.9) ** 2) ** 0.5
+    assert horizontal <= 4.05
+    assert last[2] <= 0.2
+
+
+def test_memory_path_guard_replaces_when_target_is_behind():
+    objects = SimpleNamespace(
+        mission_memory=SimpleNamespace(config={"PATH_CLIP_ENABLED": True, "PATH_CLIP_RADIUS_M": 4.0}),
+        completion_checker=SimpleNamespace(stop_depth=4.0),
+    )
+
+    guarded, reason = _apply_memory_path_guard(
+        objects,
+        _stage(),
+        [[5.0, 0.0, 0.0], [10.0, 0.0, 0.0]],
+        {
+            "enabled": True,
+            "target_body": [-20.0, 3.0, 0.0],
+            "relation": "near",
+            "footprint_radius_m": 1.5,
+        },
+    )
+
+    assert "target_behind" in reason
+    assert guarded and guarded[0][0] < 0.0
+
+
+def test_memory_path_guard_uses_inner_approach_not_outer_circle():
+    objects = SimpleNamespace(
+        mission_memory=SimpleNamespace(
+            config={
+                "PATH_CLIP_ENABLED": True,
+                "PATH_CLIP_RADIUS_M": 6.0,
+                "NEAR_STANDOFF_M": 6.0,
+                "LOW_ALTITUDE_EXTRA_STANDOFF_M": 1.0,
+                "NEAR_APPROACH_RADIUS_M": 4.5,
+                "NEAR_APPROACH_TARGET_CLEARANCE_M": 2.2,
+                "NEAR_APPROACH_UNCERTAINTY_CAP_M": 1.5,
+            }
+        ),
+        completion_checker=SimpleNamespace(stop_depth=4.0),
+    )
+
+    guarded, reason = _apply_memory_path_guard(
+        objects,
+        _stage(),
+        [[16.8, -4.0, 0.0], [31.5, -7.5, 0.0]],
+        {
+            "enabled": True,
+            "target_body": [21.2, -4.9, 0.8],
+            "relation": "near",
+            "footprint_radius_m": 1.5,
+            "uncertainty_m": 2.3,
+        },
+    )
+
+    assert "approach" in reason
+    last = guarded[-1]
+    horizontal = ((last[0] - 21.2) ** 2 + (last[1] + 4.9) ** 2) ** 0.5
+    assert 4.4 <= horizontal <= 4.6
+
+
+def test_memory_path_guard_allows_refinement_inside_above_radius():
+    objects = SimpleNamespace(
+        mission_memory=SimpleNamespace(config={"PATH_CLIP_ENABLED": True, "PATH_CLIP_RADIUS_M": 6.0}),
+        completion_checker=SimpleNamespace(stop_depth=4.0),
+    )
+    original = [[3.7, -1.3, -0.5], [7.5, -2.6, -1.0]]
+
+    guarded, reason = _apply_memory_path_guard(
+        objects,
+        _stage(instruction="Fly over the building", target="building", relation="above"),
+        original,
+        {
+            "enabled": True,
+            "target_body": [4.8, -2.6, 0.2],
+            "relation": "above",
+            "footprint_radius_m": 4.3,
+            "uncertainty_m": 0.6,
+        },
+    )
+
+    assert reason == ""
+    assert guarded == original
+
+
+def test_parser_does_not_treat_direction_words_as_auxiliary_targets():
+    stages = parse_task_parser_to_stages(
+        """
+        {"stages": [
+          {"instruction": "Fly to the first white car on the left front", "mode": "target", "target": "white car", "relation": "beside", "ordinal": 1, "auxiliary_targets": ["left front"]},
+          {"instruction": "Fly to the first red car on the right front", "mode": "target", "target": "red car", "relation": "beside", "ordinal": 1, "auxiliary_targets": ["right front"]}
+        ]}
+        """,
+        original_instruction="首先飞到左前方第一辆白车旁边，然后再飞到右前方第一辆红车旁边",
+    )
+
+    assert stages[0].target == "white car"
+    assert stages[0].auxiliary_targets == []
+    assert stages[1].target == "red car"
+    assert stages[1].auxiliary_targets == []
+
+
+def test_depth_obstacle_avoider_stops_before_front_obstacle():
+    import numpy as np
+
+    depth = np.full((32, 32), 50.0, dtype=np.float32)
+    depth[15:17, 15:17] = 5.0
+    avoider = DepthObstacleAvoider(
+        config={
+            "ENABLED": True,
+            "FRONT_DEPTH_STRIDE": 1,
+            "FRONT_MIN_DEPTH_M": 0.5,
+            "FRONT_MAX_DEPTH_M": 10.0,
+            "LOOKAHEAD_M": 10.0,
+            "SIDE_RANGE_M": 4.0,
+            "VERTICAL_RANGE_M": 3.0,
+            "SAFETY_RADIUS_M": 0.8,
+            "VERTICAL_CLEARANCE_M": 0.8,
+            "STOP_BUFFER_M": 2.0,
+            "BYPASS_ENABLED": False,
+            "TARGET_KEEP_OUT_ENABLED": False,
+            "FRONT_CAMERA_OFFSET": [0.0, 0.0, 0.0],
+        },
+        sim_config={"FRONT_FOV": 90.0},
+    )
+
+    updates = avoider.update_from_depth(
+        front_depth_meters=depth,
+        observer_world=[0.0, 0.0, 0.0],
+        observer_yaw_deg=0.0,
+    )
+    result = avoider.filter_cumulative_waypoints(
+        [[8.0, 0.0, 0.0]],
+        current_world=[0.0, 0.0, 0.0],
+        yaw_deg=0.0,
+    )
+
+    assert updates > 0
+    assert result.changed
+    assert result.waypoints
+    assert result.waypoints[-1][0] < 5.0

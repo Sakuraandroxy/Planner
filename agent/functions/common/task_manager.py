@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Dict, List, Optional
 
 from agent.functions.task_parser.base import TaskStage
@@ -132,7 +133,15 @@ class TaskManager:
     def _stage_rule(stage: TaskStage) -> str:
         target = stage.target_query or stage.instruction
         template = TaskManager._STAGE_RULES.get(stage.mode, TaskManager._STAGE_RULES_DEFAULT)
-        return template.format(target=target)
+        rule = template.format(target=target)
+        if getattr(stage, "ordinal", None):
+            rule += f" The target instance is encounter/order #{int(stage.ordinal)}; keep this identity stable."
+        elif getattr(stage, "selection_rule", ""):
+            rule += f" Target selection rule: {stage.selection_rule}."
+        if getattr(stage, "auxiliary_targets", None):
+            anchors = ", ".join(str(t) for t in stage.auxiliary_targets)
+            rule += f" Use these landmark qualifiers to disambiguate the target: {anchors}."
+        return rule
 
     _ACTION_DEFAULTS = {
         "forward": 10,
@@ -141,6 +150,7 @@ class TaskManager:
         "right": 90,
         "up": 5,
         "down": 5,
+        "land": 0,
     }
 
     @staticmethod
@@ -161,10 +171,13 @@ class TaskManager:
             if action_raw in TaskManager._ACTION_DEFAULTS:
                 mode = "action"
                 value = item.get("value")
-                try:
-                    value = float(value) if value is not None else TaskManager._ACTION_DEFAULTS[action_raw]
-                except (TypeError, ValueError):
-                    value = TaskManager._ACTION_DEFAULTS[action_raw]
+                if action_raw == "land":
+                    value = None
+                else:
+                    try:
+                        value = float(value) if value is not None else TaskManager._ACTION_DEFAULTS[action_raw]
+                    except (TypeError, ValueError):
+                        value = TaskManager._ACTION_DEFAULTS[action_raw]
             elif mode_hint in {"target", "detect"}:
                 mode = mode_hint
                 action_raw = ""
@@ -175,8 +188,12 @@ class TaskManager:
                 value = None
 
             target = str(item.get("target", item.get("target_query", "")) or "").strip()
+            ordinal = TaskManager._coerce_ordinal(item.get("ordinal"))
+            if ordinal and target:
+                target = TaskManager._strip_ordinal_from_target(target)
             if mode in {"target", "detect"} and not target:
                 target = instruction
+            auxiliary_targets = TaskManager._coerce_auxiliary_targets(item.get("auxiliary_targets"))
 
             stages.append(
                 TaskStage(
@@ -189,6 +206,11 @@ class TaskManager:
                     unit=str(item.get("unit", "") or "").strip(),
                     relation=str(item.get("relation", "") or "").strip(),
                     completion_condition=str(item.get("completion_condition", "") or "").strip(),
+                    # 这两个字段供 MissionMemory 维护多实例身份，例如“第2辆红车”。
+                    ordinal=ordinal,
+                    selection_rule=str(item.get("selection_rule", "") or "").strip().lower(),
+                    stage_kind=str(item.get("stage_kind", "") or "").strip().lower(),
+                    auxiliary_targets=auxiliary_targets if mode in {"target", "detect"} else [],
                 )
             )
         return stages
@@ -203,8 +225,52 @@ class TaskManager:
             "turn_right": "right",
             "ascend": "up",
             "descend": "down",
+            "landing": "land",
+            "touchdown": "land",
+            "touch_down": "land",
         }
         return aliases.get(action, action)
+
+    @staticmethod
+    def _coerce_ordinal(value) -> int | None:
+        try:
+            if value in (None, ""):
+                return None
+            ordinal = int(value)
+            return ordinal if ordinal > 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _strip_ordinal_from_target(target: str) -> str:
+        text = str(target or "").strip()
+        text = re.sub(r"\b(first|second|third|fourth|fifth|\d+(?:st|nd|rd|th))\b", " ", text, flags=re.IGNORECASE)
+        text = re.sub(r"第\s*[0-9一二两三四五六七八九]+\s*[个辆台座只架]?", " ", text)
+        return re.sub(r"\s+", " ", text).strip()
+
+    @staticmethod
+    def _coerce_auxiliary_targets(value) -> List[str]:
+        if isinstance(value, list):
+            raw = value
+        elif isinstance(value, str):
+            raw = re.split(r"[,;/，、]| and ", value)
+        else:
+            raw = []
+        seen = set()
+        out: List[str] = []
+        for item in raw:
+            text = re.sub(r"\s+", " ", str(item or "").strip())
+            key = re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff]+", " ", text.lower()).strip()
+            compact = key.replace(" ", "")
+            # left front/右前方只是方位限定，不是后续要检测和记忆的实体锚点。
+            if key in {"left", "right", "front", "left front", "right front", "front left", "front right"}:
+                continue
+            if compact in {"左", "右", "前", "左前", "右前", "左前方", "右前方", "前方"}:
+                continue
+            if text and key and key not in seen:
+                seen.add(key)
+                out.append(text)
+        return out
 
     @staticmethod
     def _repair_stage_instruction(stage: TaskStage) -> TaskStage:

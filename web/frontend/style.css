@@ -182,6 +182,27 @@ body { font-family:var(--font); background:var(--bg-primary); color:var(--text-p
 .traj-cand.selected { color:var(--green); }
 .traj-cand code { display:block; margin-top:2px; }
 
+.memory-card { flex-shrink:0; }
+.memory-card .card-body { padding:8px 10px; max-height:180px; overflow:auto; }
+.memory-debug { display:flex; flex-direction:column; gap:6px; font-size:11px; }
+.memory-target {
+  background:var(--bg-card); border:1px solid var(--border); border-radius:5px;
+  padding:7px 8px; display:flex; flex-direction:column; gap:4px;
+}
+.memory-title { display:flex; justify-content:space-between; gap:8px; color:var(--text-primary); font-weight:600; }
+.memory-title span { color:var(--text-muted); font-weight:500; font-family:var(--font-mono); }
+.memory-primary { color:var(--text-secondary); font-family:var(--font-mono); font-size:10px; word-break:break-word; }
+.memory-instances { display:flex; flex-wrap:wrap; gap:4px; }
+.memory-instances span {
+  border:1px solid var(--border); border-radius:4px; padding:2px 4px;
+  color:var(--text-muted); font-family:var(--font-mono); font-size:10px;
+}
+.memory-instances span.locked { border-color:var(--accent); color:var(--green); }
+.memory-decision {
+  background:var(--bg-card); border:1px solid var(--border); border-radius:5px;
+  padding:6px 8px; color:var(--yellow); font-family:var(--font-mono); font-size:10px;
+}
+
 @media (max-width:800px) {
   .main { flex-direction:column; height:auto; overflow-y:auto; }
   .right-panel { width:100%; }

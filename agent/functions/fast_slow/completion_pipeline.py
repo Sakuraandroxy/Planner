@@ -20,6 +20,8 @@ class DetectionDepthBundle:
     best_detection: Optional[DetectionResult]
     front_detection: Optional[DetectionResult]
     down_detection: Optional[DetectionResult]
+    front_detections: list[DetectionResult] = field(default_factory=list)
+    down_detections: list[DetectionResult] = field(default_factory=list)
     front_image: Any = None
     down_image: Any = None
     front_depth: Any = None
@@ -202,17 +204,24 @@ class CompletionPipeline:
 
         def detect_one(image, camera_name: str):
             if image is None:
-                return DetectionResult(visible=False, camera=camera_name)
-            return self.detector.detect(image, caption, depth_meters=None, camera_name=camera_name)
+                return []
+            if hasattr(self.detector, "detect_all"):
+                return list(self.detector.detect_all(image, caption, depth_meters=None, camera_name=camera_name) or [])
+            result = self.detector.detect(image, caption, depth_meters=None, camera_name=camera_name)
+            return [result] if result and result.visible else []
 
         t0 = time.perf_counter()
         front_future = self.detect_executor.submit(detect_one, frame, "front")
         down_future = self.detect_executor.submit(detect_one, down_frame, "down")
-        front_det = front_future.result()
-        down_det = down_future.result()
-        self._suppress_giant_bbox(front_det, frame)
-        self._suppress_giant_bbox(down_det, down_frame)
-        return front_det, down_det, time.perf_counter() - t0
+        front_all = front_future.result()
+        down_all = down_future.result()
+        for det in front_all:
+            self._suppress_giant_bbox(det, frame)
+        for det in down_all:
+            self._suppress_giant_bbox(det, down_frame)
+        front_det = self._best_from_list(stage, front_all, frame, require_depth=False, camera_name="front")
+        down_det = self._best_from_list(stage, down_all, down_frame, require_depth=False, camera_name="down")
+        return front_det, down_det, front_all, down_all, time.perf_counter() - t0
 
     def _capture_detect_depth_bundle(self, stage: Any, task_text: str) -> DetectionDepthBundle:
         profile = "front_down"
@@ -235,8 +244,9 @@ class CompletionPipeline:
                 f"front={web_helpers.shape_text(frame)} down={web_helpers.shape_text(down_frame)}"
             )
 
-        front_det, down_det, detect_elapsed = self._detect_dual_view(stage, task_text, frame, down_frame)
+        front_det, down_det, front_all, down_all, detect_elapsed = self._detect_dual_view(stage, task_text, frame, down_frame)
         bundle = self._make_bundle(job=None, front_det=front_det, down_det=down_det,
+                                   front_detections=front_all, down_detections=down_all,
                                    front_depth=None, down_depth=None,
                                    detect_elapsed=detect_elapsed, depth_elapsed=0.0,
                                    frame=frame, down_frame=down_frame, stage=stage)
@@ -268,9 +278,12 @@ class CompletionPipeline:
         # populates depth_median/depth_bbox while also returning debug text.
         front_depth_text = web_helpers.target_depth_text("front", front_det, frame, front_depth)
         down_depth_text = web_helpers.target_depth_text("down", down_det, down_frame, down_depth)
+        self._attach_depth_to_all("front", front_all, frame, front_depth)
+        self._attach_depth_to_all("down", down_all, down_frame, down_depth)
         if self.debug_logs:
             print(f"  [TargetDepth] {front_depth_text}  {down_depth_text}")
         bundle = self._make_bundle(job=None, front_det=front_det, down_det=down_det,
+                                   front_detections=front_all, down_detections=down_all,
                                    front_depth=front_depth, down_depth=down_depth,
                                    detect_elapsed=detect_elapsed, depth_elapsed=depth_elapsed,
                                    frame=frame, down_frame=down_frame, stage=stage)
@@ -279,7 +292,8 @@ class CompletionPipeline:
         return bundle
 
     def _make_bundle(self, job, front_det, down_det, front_depth, down_depth,
-                     detect_elapsed, depth_elapsed, frame=None, down_frame=None, stage=None):
+                     detect_elapsed, depth_elapsed, frame=None, down_frame=None, stage=None,
+                     front_detections=None, down_detections=None):
         frame = frame if frame is not None else getattr(job, "frame", None)
         down_frame = down_frame if down_frame is not None else getattr(job, "down_frame", None)
         stage = stage if stage is not None else getattr(job, "stage", None)
@@ -296,6 +310,8 @@ class CompletionPipeline:
             best_detection=best,
             front_detection=front_det,
             down_detection=down_det,
+            front_detections=list(front_detections or ([front_det] if front_det else [])),
+            down_detections=list(down_detections or ([down_det] if down_det else [])),
             front_image=frame,
             down_image=down_frame,
             front_depth=front_depth,
@@ -425,6 +441,39 @@ class CompletionPipeline:
         if not candidates:
             return None
         return max(candidates, key=lambda item: item[0])[1]
+
+    def _best_from_list(
+        self,
+        stage: Any,
+        detections: list[DetectionResult],
+        image,
+        *,
+        require_depth: bool,
+        camera_name: str,
+    ) -> DetectionResult:
+        best = self._select_reliable_detection(
+            stage,
+            detections[0] if detections else None,
+            None,
+            image,
+            None,
+            require_depth=require_depth,
+        )
+        if best is not None:
+            return best
+        visible = [
+            detection for detection in detections
+            if detection and detection.visible and self._detection_reliability(stage, detection, image) > 0.0
+        ]
+        if visible:
+            return max(visible, key=lambda d: float(d.score or 0.0))
+        return DetectionResult(visible=False, camera=camera_name)
+
+    @staticmethod
+    def _attach_depth_to_all(name: str, detections: list[DetectionResult], image, depth_meters) -> None:
+        # depth_median 是后续memory投影到世界坐标的必要轻量证据。
+        for index, detection in enumerate(detections or []):
+            web_helpers.target_depth_text(f"{name}#{index}", detection, image, depth_meters)
 
     def _detection_reliability(self, stage: Any, detection: DetectionResult, image: Any = None) -> float:
         score = max(0.0, min(1.0, float(getattr(detection, "score", 0.0) or 0.0)))

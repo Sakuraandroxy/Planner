@@ -567,6 +567,42 @@ class AirSimClient:
         }
         return front, down, pose[0], pose[1], pose[2], timing
 
+    def capture_planning_views_depth_with_pose(self, camera_offset=(1.0, 0.0, 0.0)):
+        """Capture paired planning RGB plus depth for the local safety layer."""
+        named_requests = self._profile_requests("front_down_both_depth")
+        t0 = time.perf_counter()
+        responses = self.client.simGetImages([request for _, request in named_requests])
+        t1 = time.perf_counter()
+
+        front = down = front_depth = down_depth = None
+        front_response = None
+        for index, (name, _request) in enumerate(named_requests):
+            if not responses or len(responses) <= index:
+                continue
+            response = responses[index]
+            if name == "front_rgb":
+                front_response = response
+                front = self._decode_capture_response(name, response)
+            elif name == "down_rgb":
+                down = self._decode_capture_response(name, response)
+            elif name == "front_depth":
+                front_depth = self._decode_capture_response(name, response)
+            elif name == "down_depth":
+                down_depth = self._decode_capture_response(name, response)
+
+        pose = self._body_pose_from_camera_response(front_response, camera_offset)
+        if pose is None:
+            pose = self.get_pose_full()
+        t2 = time.perf_counter()
+        timing = {
+            "profile": "front_down_both_depth",
+            "mode": "batch_depth_with_pose",
+            "rpc_s": t1 - t0,
+            "decode_s": t2 - t1,
+            "total_s": t2 - t0,
+        }
+        return front, down, front_depth, down_depth, pose[0], pose[1], pose[2], timing
+
     def _new_aux_client(self):
         """创建一个额外 RPC client，供实验性并发抓图使用。"""
         aux = airsim.MultirotorClient(ip=self._ip, port=self._port) if self._ip else airsim.MultirotorClient(port=self._port)

@@ -23,6 +23,9 @@ class SharedState:
         self.qwen_waypoints = []
         self.trajectory_candidates = []
         self.selected_trajectory = {}
+        # memory_summary/memory_events 用于观察轻量记忆的实例锁定与完成判定，不含原始图像。
+        self.memory_summary = {}
+        self.memory_events = []
         self.candidates = []
         self.selected_actions = []
         self.error = ""
@@ -93,6 +96,8 @@ class SharedState:
                 "qwen_waypoints": self.qwen_waypoints,
                 "trajectory_candidates": self.trajectory_candidates,
                 "selected_trajectory": self.selected_trajectory,
+                "memory_summary": self.memory_summary,
+                "memory_events": self.memory_events,
                 "candidates": self.candidates,
                 "selected": self.selected_actions,
                 "reasoning_summary": self.reasoning_summary,

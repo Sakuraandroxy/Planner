@@ -31,6 +31,8 @@ from agent.functions.fast_slow.completion_pipeline import CompletionPipeline
 from agent.functions.fast_slow.completion_pipeline import DetectionDepthBundle
 from agent.functions.fast_slow.controller import FastSlowController
 from agent.functions.fast_slow.path_stream import ContinuousPathStream
+from agent.functions.memory import MissionMemory, build_mission_memory
+from agent.functions.obstacle_avoidance import DepthObstacleAvoider, build_depth_obstacle_avoider
 from agent.functions.planning.direction_hint import direction_hint_from_front_detection
 from agent.functions.planning.sliding_window_planning import SlidingWindowPlanningFunction
 from agent.functions.recovery.collision_recovery import CollisionRecovery
@@ -61,11 +63,16 @@ class RuntimeObjects:
     distance_estimator: Any
     arrival_completion: Any
     navigation_metrics: NavigationMetricsTracker
+    mission_memory: MissionMemory
+    obstacle_avoider: DepthObstacleAvoider
     world_model: Any = None
     completion_pipeline: CompletionPipeline | None = None
     display_step: int = 0
     display_max_steps: int = 0
     task_failed: bool = False
+    # future_scan_index/last_future_scan_s 控制低频轮询未来目标，避免每帧都检测所有目标。
+    future_scan_index: int = 0
+    last_future_scan_s: float = 0.0
 
 
 def _debug_logs_enabled() -> bool:
@@ -114,12 +121,37 @@ def _build_runtime_objects() -> RuntimeObjects:
         distance_estimator=build_distance_estimator(),
         arrival_completion=arrival_completion,
         navigation_metrics=NavigationMetricsTracker(arrival_completion.arrival_radius_m),
+        mission_memory=build_mission_memory(),
+        obstacle_avoider=build_depth_obstacle_avoider(),
         world_model=build_world_model(),
     )
 
 
 def _update_target_pose_from_bundle(objects: RuntimeObjects, stage, bundle: DetectionDepthBundle | None):
-    if bundle is None or not objects.distance_estimator.enabled:
+    if bundle is None:
+        return None
+    if (
+        getattr(objects, "mission_memory", None) is not None
+        and bundle.observer_world is not None
+        and bundle.observer_yaw_deg is not None
+    ):
+        events = objects.mission_memory.update_from_detections(
+            stage=stage,
+            detections_by_view={
+                "front": getattr(bundle, "front_detections", None) or [bundle.front_detection],
+                "down": getattr(bundle, "down_detections", None) or [bundle.down_detection],
+            },
+            images_by_view={"front": bundle.front_image, "down": bundle.down_image},
+            observer_world=bundle.observer_world,
+            observer_yaw_deg=bundle.observer_yaw_deg,
+        )
+        if events:
+            primary = objects.mission_memory.primary_instance(stage)
+            print(
+                f"  [Memory] updates={len(events)} "
+                f"primary={(primary.instance_id if primary else 'none')}"
+            )
+    if not objects.distance_estimator.enabled:
         return None
     view = str(bundle.distance_view or "none").strip().lower()
     if view == "front":
@@ -185,6 +217,9 @@ def _execute_action_stage(client, stage) -> None:
             client.move_to_position(pos_before[0], pos_before[1], pos_before[2] - val)
         elif act == "down":
             client.move_to_position(pos_before[0], pos_before[1], pos_before[2] + val)
+        elif act == "land":
+            # 降落是物理动作，不能由memory完成判定替代，必须真正调用飞控执行。
+            client.land()
     except Exception as exc:
         print(f"  [Action] error: {exc}")
     pos_after, yaw_after = client.get_pose()
@@ -350,16 +385,23 @@ def _detect_dual_view(objects: RuntimeObjects, stage, task_text, frame, down_fra
 
     def detect_one(image, camera_name: str):
         if image is None:
-            return DetectionResult(visible=False, camera=camera_name)
-        return objects.detector.detect(image, caption, depth_meters=None, camera_name=camera_name)
+            return []
+        if hasattr(objects.detector, "detect_all"):
+            return list(objects.detector.detect_all(image, caption, depth_meters=None, camera_name=camera_name) or [])
+        result = objects.detector.detect(image, caption, depth_meters=None, camera_name=camera_name)
+        return [result] if result and result.visible else []
 
     t0 = time.perf_counter()
     front_future = objects.detect_executor.submit(detect_one, frame, "front")
     down_future = objects.detect_executor.submit(detect_one, down_frame, "down")
-    front_det = front_future.result()
-    down_det = down_future.result()
-    _suppress_unreliable_detection(stage, front_det, frame)
-    _suppress_unreliable_detection(stage, down_det, down_frame)
+    front_all = front_future.result()
+    down_all = down_future.result()
+    for det in front_all:
+        _suppress_unreliable_detection(stage, det, frame)
+    for det in down_all:
+        _suppress_unreliable_detection(stage, det, down_frame)
+    front_det = _best_detection_from_list(stage, front_all, frame, camera_name="front")
+    down_det = _best_detection_from_list(stage, down_all, down_frame, camera_name="down")
     elapsed = time.perf_counter() - t0
     visible = [d for d in (front_det, down_det) if d and d.visible]
     best = _select_reliable_detection(stage, front_det, down_det, frame, down_frame) if visible else None
@@ -378,7 +420,20 @@ def _detect_dual_view(objects: RuntimeObjects, stage, task_text, frame, down_fra
         f"best={(best.camera if best else 'none')} "
         f"front_rel={front_rel:.3f} down_rel={down_rel:.3f} time={elapsed:.2f}s"
     )
-    return best, front_det, down_det, elapsed
+    return best, front_det, down_det, elapsed, front_all, down_all
+
+
+def _best_detection_from_list(stage: Any, detections: list, image: Any, *, camera_name: str):
+    from agent.models.detection.base import DetectionResult
+
+    visible = [
+        detection for detection in list(detections or [])
+        if detection and getattr(detection, "visible", False)
+        and _detection_reliability(stage, detection, image) > 0.0
+    ]
+    if not visible:
+        return DetectionResult(visible=False, camera=camera_name)
+    return max(visible, key=lambda d: float(getattr(d, "score", 0.0) or 0.0))
 
 
 def _evaluate_completion_fast_slow(
@@ -397,7 +452,7 @@ def _evaluate_completion_fast_slow(
         return None
 
     if getattr(checker, "uses_detector", False) and checker.is_detector_enabled():
-        best_det, front_det, down_det, detect_elapsed = _detect_dual_view(
+        best_det, front_det, down_det, detect_elapsed, front_all, down_all = _detect_dual_view(
             objects,
             stage,
             task_text,
@@ -424,6 +479,16 @@ def _evaluate_completion_fast_slow(
                 + web_helpers.target_depth_text("front", front_det, frame, front_depth)
                 + "  "
                 + web_helpers.target_depth_text("down", down_det, down_frame, down_depth)
+            )
+            _attach_depth_to_detection_lists(front_all, down_all, frame, down_frame, front_depth, down_depth)
+            _update_memory_from_fresh_detection(
+                objects,
+                client,
+                stage,
+                frame=frame,
+                down_frame=down_frame,
+                front_all=front_all,
+                down_all=down_all,
             )
         completion = checker.evaluate_with_detection(
             stage,
@@ -511,6 +576,242 @@ def _wait_completion_depth(depth_future):
         return None, None, 0.0
 
 
+def _attach_depth_to_detection_lists(front_all, down_all, frame, down_frame, front_depth, down_depth) -> None:
+    # memory需要每个候选实例的depth_median来投影世界坐标；这里只写入检测对象的轻量字段。
+    for index, detection in enumerate(list(front_all or [])):
+        web_helpers.target_depth_text(f"front#{index}", detection, frame, front_depth)
+    for index, detection in enumerate(list(down_all or [])):
+        web_helpers.target_depth_text(f"down#{index}", detection, down_frame, down_depth)
+
+
+def _update_memory_from_fresh_detection(
+    objects: RuntimeObjects,
+    client,
+    stage,
+    *,
+    frame,
+    down_frame,
+    front_all,
+    down_all,
+) -> None:
+    if getattr(objects, "mission_memory", None) is None:
+        return
+    try:
+        observer_world, observer_yaw = client.get_pose()
+        events = objects.mission_memory.update_from_detections(
+            stage=stage,
+            detections_by_view={"front": front_all or [], "down": down_all or []},
+            images_by_view={"front": frame, "down": down_frame},
+            observer_world=observer_world,
+            observer_yaw_deg=observer_yaw,
+        )
+        if events:
+            primary = objects.mission_memory.primary_instance(stage)
+            print(
+                f"  [Memory] fresh_updates={len(events)} "
+                f"primary={(primary.instance_id if primary else 'none')}"
+            )
+    except Exception as exc:
+        print(f"  [Memory] update skipped: {exc}")
+
+
+def _memory_auxiliary_stages(stage) -> list:
+    stages = []
+    for idx, target in enumerate(list(getattr(stage, "auxiliary_targets", []) or [])):
+        target = str(target or "").strip()
+        if not target:
+            continue
+        # 辅助目标是锚点/限定物，例如 bush；它单独进memory，但不参与任务完成。
+        stages.append(SimpleNamespace(
+            index=getattr(stage, "index", 0),
+            instruction=f"Memory anchor for stage {getattr(stage, 'index', 0) + 1}: {target}",
+            mode="target",
+            target=target,
+            relation="",
+            action="",
+            value=None,
+            unit="",
+            requires_target=True,
+            allow_relocalize=False,
+            completion_condition="anchor landmark only",
+            ordinal=None,
+            selection_rule="stable",
+            stage_kind="memory_anchor",
+            auxiliary_targets=[],
+        ))
+    return stages
+
+
+def _memory_observation_stages(objects: RuntimeObjects, current_stage=None, *, future_only: bool = False) -> list:
+    if getattr(objects, "mission_memory", None) is None:
+        return []
+    stages = []
+    current_index = getattr(current_stage, "index", -1) if current_stage is not None else -1
+    seen = set()
+    for stage in list(objects.task_manager.stages or []):
+        if getattr(stage, "mode", "") not in {"target", "detect"}:
+            continue
+        if future_only and int(getattr(stage, "index", 0)) <= int(current_index):
+            continue
+        for query_stage in [stage] + _memory_auxiliary_stages(stage):
+            target = _caption_for_stage(query_stage, "")
+            if not target:
+                continue
+            key = (getattr(query_stage, "index", None), target.lower(), getattr(query_stage, "stage_kind", ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            stages.append(query_stage)
+    return stages
+
+
+def _run_memory_observation_scan(
+    objects: RuntimeObjects,
+    state,
+    *,
+    query_stages: list,
+    frame,
+    down_frame,
+    front_depth,
+    down_depth,
+    observer_world,
+    observer_yaw_deg,
+    task_text: str,
+    reason: str,
+    max_queries: int,
+) -> int:
+    if getattr(objects, "mission_memory", None) is None or not objects.mission_memory.enabled:
+        return 0
+    if frame is None or not query_stages:
+        return 0
+    updated_total = 0
+    for query_stage in list(query_stages)[: max(0, int(max_queries))]:
+        best_det, front_det, down_det, detect_elapsed, front_all, down_all = _detect_dual_view(
+            objects,
+            query_stage,
+            task_text,
+            frame,
+            down_frame,
+        )
+        _attach_depth_to_detection_lists(front_all, down_all, frame, down_frame, front_depth, down_depth)
+        events = objects.mission_memory.update_from_detections(
+            stage=query_stage,
+            detections_by_view={"front": front_all or [], "down": down_all or []},
+            images_by_view={"front": frame, "down": down_frame},
+            observer_world=observer_world,
+            observer_yaw_deg=observer_yaw_deg,
+        )
+        if events:
+            updated_total += len(events)
+            primary = objects.mission_memory.primary_instance(query_stage)
+            print(
+                f"  [MemoryScan] reason={reason} target={_caption_for_stage(query_stage, task_text)!r} "
+                f"updates={len(events)} primary={(primary.instance_id if primary else 'none')} "
+                f"detect={detect_elapsed:.2f}s"
+            )
+    if updated_total:
+        state.update(memory_summary=objects.mission_memory.summary())
+    return updated_total
+
+
+def _bootstrap_mission_memory(objects: RuntimeObjects, client, state, task_text: str, capture_mode: str) -> None:
+    memory = getattr(objects, "mission_memory", None)
+    if memory is None or not memory.enabled or not bool(memory.config.get("BOOTSTRAP_ENABLED", True)):
+        return
+    query_stages = _memory_observation_stages(objects, current_stage=None, future_only=False)
+    if not query_stages:
+        return
+    max_queries = int(memory.config.get("BOOTSTRAP_MAX_TARGETS", 8))
+    profile = str(memory.config.get("BOOTSTRAP_CAPTURE_PROFILE", "front_down_both_depth") or "front_down_both_depth")
+    try:
+        (
+            frame,
+            down_frame,
+            front_depth,
+            down_depth,
+            timing,
+            observer_world,
+            observer_yaw_deg,
+        ) = web_helpers.capture_profile_isolated_with_pose(client, profile)
+    except Exception as exc:
+        print(f"  [MemoryBootstrap] skipped: {exc}")
+        return
+    target_text = ", ".join(_caption_for_stage(stage, task_text) for stage in query_stages[:max_queries])
+    print(
+        f"  [MemoryBootstrap] profile={profile} targets=[{target_text}] "
+        f"time={float((timing or {}).get('total_s', 0.0) or 0.0):.2f}s"
+    )
+    _run_memory_observation_scan(
+        objects,
+        state,
+        query_stages=query_stages,
+        frame=frame,
+        down_frame=down_frame,
+        front_depth=front_depth,
+        down_depth=down_depth,
+        observer_world=observer_world,
+        observer_yaw_deg=observer_yaw_deg,
+        task_text=task_text,
+        reason="bootstrap",
+        max_queries=max_queries,
+    )
+
+
+def _maybe_scan_future_memory(
+    objects: RuntimeObjects,
+    client,
+    state,
+    stage,
+    task_text: str,
+    capture_mode: str,
+    *,
+    frame,
+    down_frame,
+) -> None:
+    memory = getattr(objects, "mission_memory", None)
+    if memory is None or not memory.enabled or not bool(memory.config.get("OPPORTUNISTIC_SCAN_ENABLED", True)):
+        return
+    if frame is None:
+        return
+    now = time.perf_counter()
+    interval = float(memory.config.get("OPPORTUNISTIC_SCAN_INTERVAL_S", 4.0))
+    if now - float(objects.last_future_scan_s or 0.0) < interval:
+        return
+    query_stages = _memory_observation_stages(objects, current_stage=stage, future_only=True)
+    if not query_stages:
+        return
+    per_scan = max(1, int(memory.config.get("OPPORTUNISTIC_TARGETS_PER_SCAN", 2)))
+    start = int(objects.future_scan_index) % len(query_stages)
+    ordered = query_stages[start:] + query_stages[:start]
+    selected = ordered[:per_scan]
+    objects.future_scan_index = (start + len(selected)) % len(query_stages)
+    objects.last_future_scan_s = now
+    try:
+        front_depth, down_depth, _depth_elapsed = _capture_completion_depth(
+            client,
+            objects.completion_checker,
+            capture_mode,
+        )
+        observer_world, observer_yaw_deg = client.get_pose()
+    except Exception as exc:
+        print(f"  [MemoryScan] future scan skipped: {exc}")
+        return
+    _run_memory_observation_scan(
+        objects,
+        state,
+        query_stages=selected,
+        frame=frame,
+        down_frame=down_frame,
+        front_depth=front_depth,
+        down_depth=down_depth,
+        observer_world=observer_world,
+        observer_yaw_deg=observer_yaw_deg,
+        task_text=task_text,
+        reason="future",
+        max_queries=per_scan,
+    )
+
+
 def _print_completion_evidence(stage, front_det, down_det, frame, down_frame):
     def evidence_text(name, detection, image):
         reliable = _detection_reliability(stage, detection, image)
@@ -550,7 +851,7 @@ def _confirm_completion_now(
         return None
 
     if getattr(objects.completion_checker, "uses_detector", False) and objects.completion_checker.is_detector_enabled():
-        best_det, front_det, down_det, detect_elapsed = _detect_dual_view(
+        best_det, front_det, down_det, detect_elapsed, front_all, down_all = _detect_dual_view(
             objects,
             stage,
             task_text,
@@ -562,6 +863,16 @@ def _confirm_completion_now(
             + web_helpers.target_depth_text("front", front_det, frame, front_depth)
             + "  "
             + web_helpers.target_depth_text("down", down_det, down_frame, down_depth)
+        )
+        _attach_depth_to_detection_lists(front_all, down_all, frame, down_frame, front_depth, down_depth)
+        _update_memory_from_fresh_detection(
+            objects,
+            client,
+            stage,
+            frame=frame,
+            down_frame=down_frame,
+            front_all=front_all,
+            down_all=down_all,
         )
         _print_completion_evidence(stage, front_det, down_det, frame, down_frame)
         judge_started = time.perf_counter()
@@ -605,6 +916,8 @@ def _submit_plan_if_needed(
     frame,
     down_frame,
     *,
+    front_depth=None,
+    down_depth=None,
     plan_pos=None,
     plan_yaw=None,
     plan_rot=None,
@@ -616,6 +929,18 @@ def _submit_plan_if_needed(
         pos_now, yaw_now = client.get_pose()
     else:
         pos_now, yaw_now = list(plan_pos), float(plan_yaw)
+
+    avoider = getattr(objects, "obstacle_avoider", None)
+    if avoider is not None and getattr(avoider, "enabled", False):
+        updated = avoider.update_from_depth(
+            front_depth_meters=front_depth,
+            down_depth_meters=down_depth,
+            observer_world=pos_now,
+            observer_yaw_deg=yaw_now,
+        )
+        if updated:
+            # 这里只输出稀疏cell数量，不打印点云；避障memory本身不保存原始深度图。
+            print(f"  [ObstacleMemory] depth_updates={updated} cells={len(avoider.obstacle_cells)}")
 
     # Drop waypoints that have fallen behind the drone before they become
     # negative-dx pending entries that confuse Qwen.
@@ -637,10 +962,18 @@ def _submit_plan_if_needed(
         or instruction,
     )
     direction_text = direction_hint.text
+    memory_hint = ""
+    if getattr(objects, "mission_memory", None) is not None:
+        memory_hint = objects.mission_memory.planner_hint(
+            stage=stage,
+            current_world=pos_now,
+            yaw_deg=yaw_now,
+        )
     print(
         f"  [PlanInput] instruction={inst!r} pending={len(pending_for_model)} "
         f"pending_wp={_format_waypoints(pending_for_model)} "
         f"direction={direction_text!r} direction_reason={direction_hint.reason} "
+        f"memory_hint={'yes' if memory_hint else 'no'} "
         f"front={web_helpers.shape_text(frame)} down={web_helpers.shape_text(down_frame)} "
         f"pose=({pos_now[0]:.2f},{pos_now[1]:.2f},{pos_now[2]:.2f}) yaw={yaw_now:.1f}"
     )
@@ -654,9 +987,14 @@ def _submit_plan_if_needed(
             direction=direction_text,
             relation=getattr(stage, "relation", "") if stage else "",
             target=getattr(stage, "target_query", "") if stage else "",
+            memory_hint=memory_hint,
         )
         output._selection_front_frame = frame
         output._selection_down_frame = down_frame
+        output._selection_front_depth = front_depth
+        output._selection_down_depth = down_depth
+        output._selection_pos = list(pos_now)
+        output._selection_yaw = float(yaw_now)
         return output
 
     submitted = objects.controller.maybe_submit_plan(
@@ -703,6 +1041,344 @@ def _candidate_trace_text(cand) -> str:
     return " ".join(parts)
 
 
+def _memory_path_clip_radius(objects: RuntimeObjects) -> float:
+    memory_cfg = getattr(getattr(objects, "mission_memory", None), "config", {}) or {}
+    distance_cfg = function_section(cfg, "DISTANCE_ESTIMATION")
+    return float(memory_cfg.get(
+        "PATH_CLIP_RADIUS_M",
+        distance_cfg.get(
+            "TRIGGER_RADIUS_M",
+            getattr(objects.completion_checker, "stop_depth", cfg.get("AGENT", {}).get("STOP_DEPTH_THRESHOLD", 4.0)),
+        ),
+    ))
+
+
+def _memory_near_standoff_radius(objects: RuntimeObjects, memory_context: dict, base_radius: float) -> float:
+    memory_cfg = getattr(getattr(objects, "mission_memory", None), "config", {}) or {}
+    target = memory_context.get("target_body") or []
+    radius = max(float(base_radius), float(memory_cfg.get("NEAR_STANDOFF_M", base_radius)))
+    footprint = float(memory_context.get("footprint_radius_m", 1.5) or 1.5)
+    uncertainty = float(memory_context.get("uncertainty_m", 0.0) or 0.0)
+    radius = max(
+        radius,
+        footprint
+        + float(memory_cfg.get("NEAR_TARGET_EXTRA_STANDOFF_M", 0.0))
+        + min(max(uncertainty, 0.0), float(memory_cfg.get("STANDOFF_UNCERTAINTY_CAP_M", 0.0))) * 0.35,
+    )
+    # 低空贴近车辆/箱子时不要按目标中心飞，额外留一点外圈距离，避免擦到碰撞盒。
+    if len(target) >= 3 and abs(float(target[2])) <= float(memory_cfg.get("LOW_ALTITUDE_Z_DELTA_M", 3.0)):
+        radius += float(memory_cfg.get("LOW_ALTITUDE_EXTRA_STANDOFF_M", 0.0))
+    return max(0.8, radius)
+
+
+def _memory_near_approach_radius_from_values(
+    memory_cfg: dict,
+    *,
+    footprint: float,
+    uncertainty: float,
+    outer_radius: float,
+) -> float:
+    explicit = memory_cfg.get("NEAR_APPROACH_RADIUS_M", None)
+    if explicit is None:
+        return max(0.8, float(outer_radius))
+    radius = float(explicit)
+    radius = max(
+        radius,
+        float(footprint)
+        + float(memory_cfg.get("NEAR_APPROACH_TARGET_CLEARANCE_M", 2.2))
+        + min(max(float(uncertainty), 0.0), float(memory_cfg.get("NEAR_APPROACH_UNCERTAINTY_CAP_M", 1.5))) * 0.25,
+    )
+    min_gap = float(memory_cfg.get("NEAR_APPROACH_OUTER_GAP_M", 1.0))
+    if float(outer_radius) > min_gap + 0.8:
+        radius = min(radius, float(outer_radius) - min_gap)
+    return max(0.8, radius)
+
+
+def _memory_near_approach_radius(objects: RuntimeObjects, memory_context: dict, outer_radius: float) -> float:
+    memory_cfg = getattr(getattr(objects, "mission_memory", None), "config", {}) or {}
+    return _memory_near_approach_radius_from_values(
+        memory_cfg,
+        footprint=float(memory_context.get("footprint_radius_m", 1.5) or 1.5),
+        uncertainty=float(memory_context.get("uncertainty_m", 0.0) or 0.0),
+        outer_radius=float(outer_radius),
+    )
+
+
+def _apply_memory_path_guard(objects: RuntimeObjects, stage, cumulative_waypoints: list, memory_context: dict) -> tuple[list, str]:
+    """Clip or replace a Qwen path so it cannot fly far past the locked memory target."""
+    memory_cfg = getattr(getattr(objects, "mission_memory", None), "config", {}) or {}
+    if not bool(memory_cfg.get("PATH_CLIP_ENABLED", True)):
+        return cumulative_waypoints, ""
+    if not memory_context or not bool(memory_context.get("enabled", False)):
+        return cumulative_waypoints, ""
+    target = memory_context.get("target_body") or []
+    if len(target) < 3 or not cumulative_waypoints:
+        return cumulative_waypoints, ""
+    target = [float(target[0]), float(target[1]), float(target[2])]
+    target_dist = _norm3(target)
+    if target_dist <= 1e-6:
+        return [], "already_at_memory_target"
+
+    relation = str(memory_context.get("relation", "near") or "near").lower()
+    base_radius = _memory_path_clip_radius(objects)
+    if relation == "above":
+        outer_radius = max(
+            base_radius,
+            float(memory_context.get("footprint_radius_m", 1.5) or 1.5)
+            + float(memory_cfg.get("ABOVE_HORIZONTAL_RADIUS_M", 3.5)),
+        )
+        # 已经进入“上方”的水平范围时，不要把所有轨迹清空；还需要允许Qwen继续做高度/位置微调。
+        if _guard_distance([0.0, 0.0, 0.0], target, relation) <= outer_radius:
+            return cumulative_waypoints, ""
+        radius = float(memory_cfg.get("ABOVE_APPROACH_RADIUS_M", max(2.0, min(outer_radius * 0.65, outer_radius - 1.0))))
+    else:
+        outer_radius = _memory_near_standoff_radius(objects, memory_context, base_radius)
+        radius = _memory_near_approach_radius(objects, memory_context, outer_radius)
+    radius = max(0.8, float(radius))
+    current_dist = _guard_distance([0.0, 0.0, 0.0], target, relation)
+    start_inside_outer = current_dist <= float(outer_radius)
+
+    clipped = _clip_path_at_target_radius(
+        cumulative_waypoints,
+        target,
+        radius,
+        relation=relation,
+        near_max_descent_m=float(memory_cfg.get("PATH_NEAR_MAX_DESCENT_M", 0.2)),
+        near_max_climb_m=float(memory_cfg.get("PATH_NEAR_MAX_CLIMB_M", 0.5)),
+        empty_if_start_inside=not start_inside_outer,
+    )
+    if clipped is not None:
+        return clipped, f"clip_enter_approach_{radius:.1f}m"
+
+    endpoint = [float(v) for v in cumulative_waypoints[-1][:3]]
+    endpoint_dist = _distance3_body(endpoint, target)
+    closest_dist = _closest_path_distance_to_target(cumulative_waypoints, target, relation=relation)
+    target_xy_norm = math.sqrt(target[0] * target[0] + target[1] * target[1])
+    endpoint_projection = _project_xy(endpoint, target)
+    overshoot = target_xy_norm > 1e-6 and endpoint_projection > target_xy_norm + radius
+    if start_inside_outer:
+        # 已在完成圆内部时，只拦截明显飞离目标的路径，允许继续向圆内部微调。
+        diverging = endpoint_dist > max(
+            float(outer_radius) * float(memory_cfg.get("PATH_EXIT_RADIUS_RATIO", 1.20)),
+            current_dist + float(memory_cfg.get("PATH_EXIT_MARGIN_M", 2.0)),
+        )
+    else:
+        diverging = endpoint_dist > target_dist * float(memory_cfg.get("PATH_DIVERGE_RATIO", 0.90))
+    missed_close = closest_dist <= radius * float(memory_cfg.get("PATH_CLOSE_MISS_RATIO", 1.35))
+    target_behind = (
+        not start_inside_outer
+        and target[0] < -float(memory_cfg.get("PATH_TARGET_BEHIND_X_M", 2.0))
+    )
+    if overshoot or diverging or missed_close or target_behind:
+        direct = _direct_memory_waypoint(
+            target,
+            radius,
+            relation=relation,
+            near_max_descent_m=float(memory_cfg.get("PATH_NEAR_MAX_DESCENT_M", 0.2)),
+            near_max_climb_m=float(memory_cfg.get("PATH_NEAR_MAX_CLIMB_M", 0.5)),
+        )
+        reason_bits = []
+        if overshoot:
+            reason_bits.append("overshoot")
+        if diverging:
+            reason_bits.append("diverging")
+        if missed_close:
+            reason_bits.append("near_miss")
+        if target_behind:
+            reason_bits.append("target_behind")
+        return direct, "replace_" + "_".join(reason_bits)
+    return cumulative_waypoints, ""
+
+
+def _clip_path_at_target_radius(
+    cumulative_waypoints: list,
+    target: list[float],
+    radius: float,
+    *,
+    relation: str = "near",
+    near_max_descent_m: float = 0.2,
+    near_max_climb_m: float = 0.5,
+    empty_if_start_inside: bool = True,
+):
+    prev = [0.0, 0.0, 0.0]
+    prev_dist = _guard_distance(prev, target, relation)
+    if prev_dist <= radius:
+        return [] if empty_if_start_inside else None
+    out = []
+    for waypoint in cumulative_waypoints:
+        cur = [float(v) for v in waypoint[:3]]
+        cur_dist = _guard_distance(cur, target, relation)
+        if cur_dist <= radius:
+            if relation == "above":
+                hit = _segment_circle_entry_xy(prev, cur, target, radius) or cur
+            else:
+                hit = _segment_circle_entry_xy(prev, cur, target, radius) or cur
+                # “旁边/附近”不应该把高度也插值到目标中心；低空靠近车辆时尤其容易撞。
+                hit[2] = _clamp(hit[2], -abs(float(near_max_climb_m)), abs(float(near_max_descent_m)))
+            out.append([round(hit[0], 3), round(hit[1], 3), round(hit[2], 3)])
+            return out
+        out.append([round(cur[0], 3), round(cur[1], 3), round(cur[2], 3)])
+        prev = cur
+    return None
+
+
+def _segment_sphere_entry(a: list[float], b: list[float], center: list[float], radius: float):
+    dx = b[0] - a[0]
+    dy = b[1] - a[1]
+    dz = b[2] - a[2]
+    ax = a[0] - center[0]
+    ay = a[1] - center[1]
+    az = a[2] - center[2]
+    qa = dx * dx + dy * dy + dz * dz
+    if qa <= 1e-9:
+        return None
+    qb = 2.0 * (ax * dx + ay * dy + az * dz)
+    qc = ax * ax + ay * ay + az * az - radius * radius
+    disc = qb * qb - 4.0 * qa * qc
+    if disc < 0.0:
+        return None
+    root = math.sqrt(disc)
+    candidates = [(-qb - root) / (2.0 * qa), (-qb + root) / (2.0 * qa)]
+    valid = [t for t in candidates if 0.0 <= t <= 1.0]
+    if not valid:
+        return None
+    t = min(valid)
+    return [a[0] + t * dx, a[1] + t * dy, a[2] + t * dz]
+
+
+def _segment_circle_entry_xy(a: list[float], b: list[float], center: list[float], radius: float):
+    dx = b[0] - a[0]
+    dy = b[1] - a[1]
+    ax = a[0] - center[0]
+    ay = a[1] - center[1]
+    qa = dx * dx + dy * dy
+    if qa <= 1e-9:
+        return None
+    qb = 2.0 * (ax * dx + ay * dy)
+    qc = ax * ax + ay * ay - radius * radius
+    disc = qb * qb - 4.0 * qa * qc
+    if disc < 0.0:
+        return None
+    root = math.sqrt(disc)
+    candidates = [(-qb - root) / (2.0 * qa), (-qb + root) / (2.0 * qa)]
+    valid = [t for t in candidates if 0.0 <= t <= 1.0]
+    if not valid:
+        return None
+    t = min(valid)
+    return [a[0] + t * dx, a[1] + t * dy, a[2] + t * (b[2] - a[2])]
+
+
+def _direct_memory_waypoint(
+    target: list[float],
+    radius: float,
+    *,
+    relation: str = "near",
+    near_max_descent_m: float = 0.2,
+    near_max_climb_m: float = 0.5,
+) -> list:
+    dist = _norm3(target) if relation == "above" else math.sqrt(target[0] * target[0] + target[1] * target[1])
+    if dist <= max(radius, 1e-6):
+        return []
+    scale = max(0.0, (dist - radius) / dist)
+    z = target[2] * scale if relation == "above" else _clamp(0.0, -abs(float(near_max_climb_m)), abs(float(near_max_descent_m)))
+    return [[
+        round(target[0] * scale, 3),
+        round(target[1] * scale, 3),
+        round(z, 3),
+    ]]
+
+
+def _closest_path_distance_to_target(cumulative_waypoints: list, target: list[float], *, relation: str = "near") -> float:
+    prev = [0.0, 0.0, 0.0]
+    best = _guard_distance(prev, target, relation)
+    for waypoint in cumulative_waypoints:
+        cur = [float(v) for v in waypoint[:3]]
+        if relation == "above":
+            best = min(best, _segment_point_distance_xy(prev, cur, target))
+        else:
+            best = min(best, _segment_point_distance_xy(prev, cur, target))
+        prev = cur
+    return best
+
+
+def _segment_point_distance(a: list[float], b: list[float], point: list[float]) -> float:
+    vx = b[0] - a[0]
+    vy = b[1] - a[1]
+    vz = b[2] - a[2]
+    wx = point[0] - a[0]
+    wy = point[1] - a[1]
+    wz = point[2] - a[2]
+    denom = vx * vx + vy * vy + vz * vz
+    if denom <= 1e-9:
+        return _distance3_body(a, point)
+    t = max(0.0, min(1.0, (wx * vx + wy * vy + wz * vz) / denom))
+    closest = [a[0] + t * vx, a[1] + t * vy, a[2] + t * vz]
+    return _distance3_body(closest, point)
+
+
+def _segment_point_distance_xy(a: list[float], b: list[float], point: list[float]) -> float:
+    vx = b[0] - a[0]
+    vy = b[1] - a[1]
+    wx = point[0] - a[0]
+    wy = point[1] - a[1]
+    denom = vx * vx + vy * vy
+    if denom <= 1e-9:
+        return math.sqrt((a[0] - point[0]) ** 2 + (a[1] - point[1]) ** 2)
+    t = max(0.0, min(1.0, (wx * vx + wy * vy) / denom))
+    closest_x = a[0] + t * vx
+    closest_y = a[1] + t * vy
+    return math.sqrt((closest_x - point[0]) ** 2 + (closest_y - point[1]) ** 2)
+
+
+def _guard_distance(point: list[float], target: list[float], relation: str = "near") -> float:
+    if str(relation or "near").lower() == "above":
+        return math.sqrt((float(point[0]) - float(target[0])) ** 2 + (float(point[1]) - float(target[1])) ** 2)
+    return math.sqrt((float(point[0]) - float(target[0])) ** 2 + (float(point[1]) - float(target[1])) ** 2)
+
+
+def _clamp(value: float, lo: float, hi: float) -> float:
+    return max(float(lo), min(float(hi), float(value)))
+
+
+def _project_xy(point: list[float], direction: list[float]) -> float:
+    denom = math.sqrt(direction[0] * direction[0] + direction[1] * direction[1])
+    if denom <= 1e-9:
+        return 0.0
+    return (point[0] * direction[0] + point[1] * direction[1]) / denom
+
+
+def _norm3(point: list[float]) -> float:
+    return math.sqrt(point[0] * point[0] + point[1] * point[1] + point[2] * point[2])
+
+
+def _distance3_body(a: list[float], b: list[float]) -> float:
+    return math.sqrt(sum((float(a[i]) - float(b[i])) ** 2 for i in range(3)))
+
+
+def _apply_obstacle_path_guard(
+    objects: RuntimeObjects,
+    cumulative_waypoints: list,
+    *,
+    selection_pos,
+    selection_yaw: float,
+    memory_context: dict,
+) -> tuple[list, str]:
+    avoider = getattr(objects, "obstacle_avoider", None)
+    if avoider is None or not getattr(avoider, "enabled", False):
+        return cumulative_waypoints, ""
+    result = avoider.filter_cumulative_waypoints(
+        cumulative_waypoints,
+        current_world=selection_pos,
+        yaw_deg=float(selection_yaw),
+        memory_context=memory_context,
+    )
+    if not getattr(result, "changed", False):
+        return cumulative_waypoints, ""
+    obstacle = getattr(result, "obstacle_body", None)
+    obstacle_text = "" if obstacle is None else f" obstacle_body={obstacle}"
+    return list(getattr(result, "waypoints", []) or []), f"{result.reason}{obstacle_text}"
+
+
 def _select_and_transform_plan(objects: RuntimeObjects, stage, result, frame, down_frame):
     if result is None:
         return None
@@ -717,11 +1393,19 @@ def _select_and_transform_plan(objects: RuntimeObjects, stage, result, frame, do
         candidates=getattr(result, "candidates", []),
         reasoning=getattr(result, "reasoning", ""),
     )
+    memory_context = {}
+    if getattr(objects, "mission_memory", None) is not None:
+        memory_context = objects.mission_memory.candidate_context(
+            stage=stage,
+            current_world=getattr(result, "_selection_pos", [0.0, 0.0, 0.0]),
+            yaw_deg=float(getattr(result, "_selection_yaw", 0.0) or 0.0),
+        )
     selection = prepare_candidates_for_world_model(
         prepared,
         detection=None,
         direction=getattr(stage, "instruction", "") if stage else "",
         stop_threshold=float(cfg.get("AGENT", {}).get("STOP_DEPTH_THRESHOLD", 8.0)),
+        memory_context=memory_context,
     )
     all_candidates = selection.all_candidates or []
     selection_result = select_best_candidate(
@@ -767,6 +1451,31 @@ def _select_and_transform_plan(objects: RuntimeObjects, stage, result, frame, do
     )
 
     chosen_cumulative = [list(wp) for wp in getattr(chosen, "waypoints", []) or []]
+    guarded_cumulative, guard_reason = _apply_memory_path_guard(
+        objects,
+        stage,
+        chosen_cumulative,
+        memory_context,
+    )
+    if guard_reason:
+        print(
+            f"  [MemoryPathGuard] {guard_reason} "
+            f"from={_format_waypoints(chosen_cumulative)} to={_format_waypoints(guarded_cumulative)}"
+        )
+        chosen_cumulative = guarded_cumulative
+    obstacle_guarded, obstacle_reason = _apply_obstacle_path_guard(
+        objects,
+        chosen_cumulative,
+        selection_pos=getattr(result, "_selection_pos", [0.0, 0.0, 0.0]),
+        selection_yaw=float(getattr(result, "_selection_yaw", 0.0) or 0.0),
+        memory_context=memory_context,
+    )
+    if obstacle_reason:
+        print(
+            f"  [DepthObstacleGuard] {obstacle_reason} "
+            f"from={_format_waypoints(chosen_cumulative)} to={_format_waypoints(obstacle_guarded)}"
+        )
+        chosen_cumulative = obstacle_guarded
     chosen_incremental = cumulative_to_incremental(chosen_cumulative)
     print(
         f"  [Trajectory] wp={len(chosen_cumulative)} non_zero={len(chosen_incremental)} "
@@ -784,6 +1493,8 @@ def _select_and_transform_plan(objects: RuntimeObjects, stage, result, frame, do
         "qwen_cumulative": qwen_cumulative,
         "selected_cumulative": chosen_cumulative,
         "selected_incremental": chosen_incremental,
+        "memory_path_guard": guard_reason,
+        "obstacle_path_guard": obstacle_reason,
         "all_candidates": [cand.to_dict() for cand in all_candidates],
         "wm_candidates": [cand.to_dict() for cand in (selection.wm_candidates or [])],
         "selected_candidate": chosen.to_dict(),
@@ -872,13 +1583,18 @@ def _capture_and_submit_plan(
 ):
     planning_cfg = function_section(cfg, "PLANNING")
     planning_capture_mode = str(planning_cfg.get("CAPTURE_MODE", "batch"))
+    avoider = getattr(objects, "obstacle_avoider", None)
+    need_depth = bool(avoider is not None and getattr(avoider, "needs_plan_depth", lambda: False)())
+    front_depth = down_depth = None
     if isolated_capture and planning_capture_mode == "batch":
         profile = str(planning_cfg.get("CAPTURE_PROFILE", "front_down") or "front_down")
+        if need_depth and profile == "front_down":
+            profile = "front_down_both_depth"
         (
             frame,
             down_frame,
-            _front_depth,
-            _down_depth,
+            front_depth,
+            down_depth,
             _timing,
             capture_pos,
             capture_yaw,
@@ -888,23 +1604,48 @@ def _capture_and_submit_plan(
         else:
             print("  [Capture] full body rotation unavailable for Qwen plan, retry later")
             return None, None, False
+    elif (
+        planning_capture_mode == "batch"
+        and need_depth
+        and hasattr(client, "capture_planning_views_depth_with_pose")
+    ):
+        camera_offset = planning_cfg.get("FRONT_CAMERA_OFFSET", [1.0, 0.0, 0.0])
+        frame, down_frame, front_depth, down_depth, capture_pos, capture_yaw, capture_rot, _timing = (
+            client.capture_planning_views_depth_with_pose(camera_offset=camera_offset)
+        )
     elif planning_capture_mode == "batch" and hasattr(client, "capture_planning_views_with_pose"):
         camera_offset = planning_cfg.get("FRONT_CAMERA_OFFSET", [1.0, 0.0, 0.0])
         frame, down_frame, capture_pos, capture_yaw, capture_rot, _timing = (
             client.capture_planning_views_with_pose(camera_offset=camera_offset)
         )
     else:
-        frame, down_frame, _front_depth, _down_depth, _timing = _capture_rgb_for_stage(
-            client,
-            objects.completion_checker,
-            stage,
-            planning_capture_mode,
-        )
+        if need_depth:
+            frame, down_frame, front_depth, down_depth, _timing = client.capture_views(
+                profile="front_down_both_depth",
+                mode=planning_capture_mode,
+                verbose=False,
+            )
+        else:
+            frame, down_frame, front_depth, down_depth, _timing = _capture_rgb_for_stage(
+                client,
+                objects.completion_checker,
+                stage,
+                planning_capture_mode,
+            )
         if hasattr(client, "get_pose_full"):
             capture_pos, capture_yaw, capture_rot = client.get_pose_full()
         else:
             capture_pos, capture_yaw = client.get_pose()
             capture_rot = None
+    if need_depth and front_depth is None:
+        try:
+            front_depth, down_depth, _depth_timing = _capture_completion_depth(
+                client,
+                objects.completion_checker,
+                capture_mode,
+            )
+        except Exception as exc:
+            print(f"  [ObstacleMemory] depth capture skipped: {exc}")
     if frame is None:
         print("  [Capture] no frame for Qwen plan, retry later")
         return None, None, False
@@ -918,6 +1659,8 @@ def _capture_and_submit_plan(
         instruction,
         frame,
         down_frame,
+        front_depth=front_depth,
+        down_depth=down_depth,
         plan_pos=capture_pos,
         plan_yaw=capture_yaw,
         plan_rot=capture_rot,
@@ -941,7 +1684,39 @@ def _complete_stage_from_vlm(objects, path_stream, state, completion, distance_m
         trajectory_candidates=[],
         selected_trajectory={},
     )
+    current_stage = objects.task_manager.current_stage()
+    if getattr(objects, "mission_memory", None) is not None and current_stage is not None:
+        objects.mission_memory.archive_stage(current_stage, completion.reason)
+        state.update(memory_summary=objects.mission_memory.summary(current_stage))
     objects.task_manager.complete_current(completion.reason)
+    print(f"  [TASK] {objects.task_manager.summary()}")
+    task_done = objects.task_manager.is_done()
+    if task_done:
+        objects.navigation_metrics.task_completed = True
+        state.update(status="done", task_done=True, step=0)
+    return task_done
+
+
+def _complete_stage_from_memory(objects, path_stream, state, stage, decision) -> bool:
+    """Finish a stage when memory geometry reaches the strict completion threshold."""
+    distance_text = "N/A" if decision.distance_m is None else f"{decision.distance_m:.2f}m"
+    print(
+        f"  [Completion] done=True source=mission_memory instance={decision.instance_id} "
+        f"distance={distance_text} confidence={decision.confidence:.2f} reason={decision.reason}"
+    )
+    path_stream.stop()
+    objects.controller.clear()
+    if objects.completion_pipeline is not None:
+        objects.completion_pipeline.clear()
+    state.update(
+        trajectory_queue=[],
+        qwen_waypoints=[],
+        trajectory_candidates=[],
+        selected_trajectory={},
+    )
+    objects.mission_memory.archive_stage(stage, decision.reason)
+    state.update(memory_summary=objects.mission_memory.summary(stage))
+    objects.task_manager.complete_current(decision.reason)
     print(f"  [TASK] {objects.task_manager.summary()}")
     task_done = objects.task_manager.is_done()
     if task_done:
@@ -977,6 +1752,50 @@ def _fail_current_stage_after_relocalization(objects, path_stream, state, stage_
     return False
 
 
+def _search_with_memory_guidance(objects, client, stage, capture_mode: str, *, skip_initial_frame: bool):
+    if (
+        getattr(objects, "mission_memory", None) is not None
+        and bool(objects.mission_memory.config.get("DIRECTED_RELOCALIZATION_ENABLED", True))
+        and objects.mission_memory.has_primary(stage)
+    ):
+        pos_now, _yaw_now = client.get_pose()
+        preferred_yaw = objects.mission_memory.preferred_yaw_deg(stage, pos_now)
+        if preferred_yaw is not None:
+            print(f"  [Relocalize] memory_guided_yaw={preferred_yaw:.1f}deg")
+            try:
+                client.rotate_to_yaw(preferred_yaw)
+                skip_initial_frame = False
+            except Exception as exc:
+                print(f"  [Relocalize] memory-guided yaw failed: {exc}")
+    return objects.relocalizer.search(
+        client,
+        stage,
+        capture_mode=capture_mode,
+        skip_initial_frame=skip_initial_frame,
+    )
+
+
+def _evaluate_memory_completion_now(
+    objects,
+    client,
+    stage,
+    *,
+    fresh_visual_support: bool = False,
+    visual_score: float = 0.0,
+    stop_radius_m: float = 4.0,
+):
+    if getattr(objects, "mission_memory", None) is None:
+        return None
+    pos_now, _yaw_now = client.get_pose()
+    return objects.mission_memory.evaluate_completion(
+        stage=stage,
+        current_world=pos_now,
+        fresh_visual_support=fresh_visual_support,
+        visual_score=visual_score,
+        stop_radius_m=stop_radius_m,
+    )
+
+
 def _handle_background_target_lost(
     objects: RuntimeObjects,
     client,
@@ -988,6 +1807,19 @@ def _handle_background_target_lost(
 ) -> bool:
     """Stop immediately when the slow observation loop loses the target."""
     current_stage_key = CompletionPipeline.stage_key(stage)
+    if getattr(objects, "mission_memory", None) is not None and objects.mission_memory.has_primary(stage):
+        pos_now, _yaw_now = client.get_pose()
+        mem_distance = objects.mission_memory.estimate_distance(stage, pos_now)
+        confidence = float((mem_distance or {}).get("confidence", 0.0) or 0.0)
+        uncertainty = float((mem_distance or {}).get("uncertainty_m", 999.0) or 999.0)
+        if confidence >= 0.65 and uncertainty <= float(objects.mission_memory.config.get("MAX_COMPLETION_UNCERTAINTY_M", 5.0)):
+            # 有稳定锁定实例时，单帧/单轮检测丢失不立刻停车清空；继续用memory引导规划。
+            print(
+                f"  [TargetLost] ignored_once_by_memory confidence={confidence:.2f} "
+                f"uncertainty={uncertainty:.1f}m reason={reason}"
+            )
+            state.update(memory_summary=objects.mission_memory.summary(stage))
+            return False
     _clear_stopped_queue(objects, path_stream, state)
     objects.distance_estimator.clear()
     objects.navigation_metrics.invalidate_target(current_stage_key)
@@ -1001,10 +1833,11 @@ def _handle_background_target_lost(
             "target lost and relocalization disabled",
         )
 
-    relocalized = objects.relocalizer.search(
+    relocalized = _search_with_memory_guidance(
+        objects,
         client,
         stage,
-        capture_mode=capture_mode,
+        capture_mode,
         skip_initial_frame=True,
     )
     print(
@@ -1042,10 +1875,18 @@ def _handle_distance_completion_trigger(
     trigger_radius_m: float,
 ) -> bool:
     current_stage_key = CompletionPipeline.stage_key(stage)
+    cached_distance_m = float(
+        cached_distance.get("distance_m") if isinstance(cached_distance, dict)
+        else getattr(cached_distance, "distance_m", 0.0)
+    )
+    trigger_display_m = float(
+        cached_distance.get("trigger_radius_m") if isinstance(cached_distance, dict) and cached_distance.get("trigger_radius_m") is not None
+        else getattr(cached_distance, "trigger_radius_m", trigger_radius_m)
+    )
     _clear_stopped_queue(objects, path_stream, state)
     print(
-        f"\n  [CompletionTrigger] distance={cached_distance.distance_m:.2f}m "
-        f"<= {float(trigger_radius_m):.2f}m; stopped, cleared queue, checking fresh evidence"
+        f"\n  [CompletionTrigger] distance={cached_distance_m:.2f}m "
+        f"<= {trigger_display_m:.2f}m; stopped, cleared queue, checking fresh evidence"
     )
 
     frame, down_frame, rgb_elapsed = _capture_fresh_rgb_frames(
@@ -1062,7 +1903,7 @@ def _handle_distance_completion_trigger(
             "fresh RGB capture failed",
         )
 
-    best_det, front_det, down_det, detect_elapsed = _detect_dual_view(
+    best_det, front_det, down_det, detect_elapsed, front_all, down_all = _detect_dual_view(
         objects,
         stage,
         task_text,
@@ -1070,6 +1911,21 @@ def _handle_distance_completion_trigger(
         down_frame,
     )
     if best_det is None or not getattr(best_det, "visible", False):
+        decision = _evaluate_memory_completion_now(
+            objects,
+            client,
+            stage,
+            fresh_visual_support=False,
+            stop_radius_m=float(trigger_radius_m),
+        )
+        if decision is not None:
+            print(
+                f"  [MemoryCompletion] status={decision.status} "
+                f"confidence={decision.confidence:.2f} reason={decision.reason}"
+            )
+            state.update(memory_summary=objects.mission_memory.summary(stage))
+            if decision.done:
+                return _complete_stage_from_memory(objects, path_stream, state, stage, decision)
         objects.distance_estimator.clear()
         objects.navigation_metrics.invalidate_target(current_stage_key)
         if not objects.relocalizer.enabled:
@@ -1081,10 +1937,11 @@ def _handle_distance_completion_trigger(
                 "fresh target not detected and relocalization disabled",
             )
         print("  [Relocalize] fresh RGB lost the target; scanning 360deg")
-        relocalized = objects.relocalizer.search(
+        relocalized = _search_with_memory_guidance(
+            objects,
             client,
             stage,
-            capture_mode=capture_mode,
+            capture_mode,
             skip_initial_frame=True,
         )
         print(
@@ -1115,7 +1972,7 @@ def _handle_distance_completion_trigger(
                 current_stage_key,
                 "fresh RGB capture failed after relocalization",
             )
-        best_det, front_det, down_det, detect_elapsed = _detect_dual_view(
+        best_det, front_det, down_det, detect_elapsed, front_all, down_all = _detect_dual_view(
             objects,
             stage,
             task_text,
@@ -1123,6 +1980,21 @@ def _handle_distance_completion_trigger(
             down_frame,
         )
         if best_det is None or not getattr(best_det, "visible", False):
+            decision = _evaluate_memory_completion_now(
+                objects,
+                client,
+                stage,
+                fresh_visual_support=False,
+                stop_radius_m=float(trigger_radius_m),
+            )
+            if decision is not None:
+                print(
+                    f"  [MemoryCompletion] status={decision.status} "
+                    f"confidence={decision.confidence:.2f} reason={decision.reason}"
+                )
+                state.update(memory_summary=objects.mission_memory.summary(stage))
+                if decision.done:
+                    return _complete_stage_from_memory(objects, path_stream, state, stage, decision)
             return _fail_current_stage_after_relocalization(
                 objects,
                 path_stream,
@@ -1144,6 +2016,16 @@ def _handle_distance_completion_trigger(
         + "  "
         + web_helpers.target_depth_text("down", down_det, down_frame, down_depth)
     )
+    _attach_depth_to_detection_lists(front_all, down_all, frame, down_frame, front_depth, down_depth)
+    _update_memory_from_fresh_detection(
+        objects,
+        client,
+        stage,
+        frame=frame,
+        down_frame=down_frame,
+        front_all=front_all,
+        down_all=down_all,
+    )
     _print_completion_evidence(stage, front_det, down_det, frame, down_frame)
 
     judge_started = time.perf_counter()
@@ -1157,7 +2039,7 @@ def _handle_distance_completion_trigger(
         down_detection=down_det,
         front_depth_meters=front_depth,
         down_depth_meters=down_depth,
-        estimated_distance_m=cached_distance.distance_m,
+        estimated_distance_m=cached_distance_m,
     )
     completion.capture_elapsed = max(rgb_elapsed, depth_elapsed)
     completion.detect_elapsed = detect_elapsed
@@ -1173,8 +2055,29 @@ def _handle_distance_completion_trigger(
             path_stream,
             state,
             completion,
-            cached_distance.distance_m,
+            cached_distance_m,
         )
+
+    visual_score = max(
+        _detection_reliability(stage, front_det, frame),
+        _detection_reliability(stage, down_det, down_frame),
+    )
+    decision = _evaluate_memory_completion_now(
+        objects,
+        client,
+        stage,
+        fresh_visual_support=True,
+        visual_score=visual_score,
+        stop_radius_m=float(trigger_radius_m),
+    )
+    if decision is not None:
+        print(
+            f"  [MemoryCompletion] status={decision.status} "
+            f"confidence={decision.confidence:.2f} reason={decision.reason}"
+        )
+        state.update(memory_summary=objects.mission_memory.summary(stage))
+        if decision.done:
+            return _complete_stage_from_memory(objects, path_stream, state, stage, decision)
 
     objects.distance_estimator.clear()
     objects.navigation_metrics.invalidate_target(current_stage_key)
@@ -1188,16 +2091,135 @@ def _cached_target_distance(objects, stage, current_world):
         stage_key=CompletionPipeline.stage_key(stage),
         current_world=current_world,
     )
+    memory_estimate = None
+    if getattr(objects, "mission_memory", None) is not None:
+        memory_estimate = objects.mission_memory.estimate_distance(stage, current_world)
+    if memory_estimate is not None:
+        memory_ns = SimpleNamespace(**memory_estimate)
+        memory_cfg = getattr(objects.mission_memory, "config", {}) or {}
+        prefer_memory = bool(memory_cfg.get("PREFER_MEMORY_DISTANCE", True))
+        memory_conf = float(getattr(memory_ns, "confidence", 0.0) or 0.0)
+        memory_uncertainty = float(getattr(memory_ns, "uncertainty_m", 999.0) or 999.0)
+        max_uncertainty = float(memory_cfg.get("MAX_COMPLETION_UNCERTAINTY_M", 5.0))
+        if (
+            estimated is None
+            or (
+                prefer_memory
+                and memory_conf >= float(memory_cfg.get("MEMORY_DISTANCE_MIN_CONFIDENCE", 0.45))
+                and memory_uncertainty <= max_uncertainty * float(memory_cfg.get("MEMORY_DISTANCE_UNCERTAINTY_RATIO", 1.5))
+            )
+        ):
+            # 锁定实例已经稳定时，完成触发优先使用memory距离；单帧距离估计偶尔会跳到远处。
+            estimated = memory_ns
     if estimated is None:
         return None
     objects.navigation_metrics.record_distance(estimated.distance_m)
     return estimated
 
 
-def _should_trigger_completion_vlm(objects, stage_key, estimated, trigger_radius_m: float) -> bool:
-    if estimated is None or not objects.distance_estimator.use_for_completion:
+def _memory_distance_trigger_radius(objects, stage, trigger_radius_m: float) -> float:
+    memory = getattr(objects, "mission_memory", None)
+    if memory is None:
+        return float(trigger_radius_m)
+    instance = memory.primary_instance(stage)
+    if instance is None:
+        return float(trigger_radius_m)
+    memory_cfg = getattr(memory, "config", {}) or {}
+    uncertainty = instance.effective_uncertainty(
+        stale_growth_per_s=float(memory_cfg.get("STALE_UNCERTAINTY_GROWTH_MPS", 0.03))
+    )
+    max_uncertainty = float(memory_cfg.get("MAX_COMPLETION_UNCERTAINTY_M", 5.0))
+    if _is_above_stage(stage):
+        return float(trigger_radius_m)
+    outer_radius = max(
+        float(memory_cfg.get("NEAR_STANDOFF_M", trigger_radius_m))
+        + float(memory_cfg.get("LOW_ALTITUDE_EXTRA_STANDOFF_M", 0.0)),
+        float(trigger_radius_m)
+        + float(memory_cfg.get("NEAR_RADIUS_MARGIN_M", 1.0))
+        + min(max(float(uncertainty), 0.0), max_uncertainty),
+    )
+    # 完成判定允许“圆内任意点”，但飞行触发不要卡在外圆边界；先飞进更自然的内圈。
+    return max(
+        float(trigger_radius_m),
+        _memory_near_approach_radius_from_values(
+            memory_cfg,
+            footprint=float(getattr(instance, "footprint_radius_m", 1.5) or 1.5),
+            uncertainty=float(uncertainty),
+            outer_radius=outer_radius,
+        ),
+    )
+
+
+def _memory_completion_outer_radius(objects, stage, trigger_radius_m: float) -> float:
+    memory = getattr(objects, "mission_memory", None)
+    if memory is None:
+        return float(trigger_radius_m)
+    instance = memory.primary_instance(stage)
+    if instance is None:
+        return float(trigger_radius_m)
+    memory_cfg = getattr(memory, "config", {}) or {}
+    uncertainty = instance.effective_uncertainty(
+        stale_growth_per_s=float(memory_cfg.get("STALE_UNCERTAINTY_GROWTH_MPS", 0.03))
+    )
+    if _is_above_stage(stage):
+        return (
+            float(getattr(instance, "footprint_radius_m", 1.5) or 1.5)
+            + float(memory_cfg.get("ABOVE_HORIZONTAL_RADIUS_M", 3.5))
+            + min(max(float(uncertainty), 0.0), float(memory_cfg.get("MAX_COMPLETION_UNCERTAINTY_M", 5.0)))
+        )
+    return max(
+        float(memory_cfg.get("NEAR_STANDOFF_M", trigger_radius_m))
+        + float(memory_cfg.get("LOW_ALTITUDE_EXTRA_STANDOFF_M", 0.0)),
+        float(trigger_radius_m)
+        + float(memory_cfg.get("NEAR_RADIUS_MARGIN_M", 1.0))
+        + min(max(float(uncertainty), 0.0), float(memory_cfg.get("MAX_COMPLETION_UNCERTAINTY_M", 5.0))),
+    )
+
+
+def _should_trigger_completion_vlm(objects, stage, estimated, trigger_radius_m: float) -> bool:
+    if estimated is None:
         return False
-    return bool(estimated.distance_m <= float(trigger_radius_m))
+    source = str(getattr(estimated, "source", "distance_estimator") or "distance_estimator")
+    if source != "mission_memory" and not objects.distance_estimator.use_for_completion:
+        return False
+    radius = _memory_distance_trigger_radius(objects, stage, trigger_radius_m) if source == "mission_memory" else float(trigger_radius_m)
+    try:
+        estimated.trigger_radius_m = radius
+    except Exception:
+        pass
+    return bool(float(estimated.distance_m) <= float(radius))
+
+
+def _queue_reaches_memory_arrival(objects, stage, trigger_radius_m: float) -> bool:
+    memory = getattr(objects, "mission_memory", None)
+    if memory is None or not memory.has_primary(stage):
+        return False
+    radius = _memory_distance_trigger_radius(objects, stage, trigger_radius_m)
+    for waypoint in list(objects.controller.queue.world_waypoints or []):
+        estimate = memory.estimate_distance(stage, waypoint)
+        if estimate is not None and float(estimate.get("distance_m", 999.0)) <= radius:
+            return True
+    return False
+
+
+def _should_trigger_idle_memory_completion(objects, stage, estimated, trigger_radius_m: float) -> bool:
+    if estimated is None:
+        return False
+    if str(getattr(estimated, "source", "") or "") != "mission_memory":
+        return False
+    memory = getattr(objects, "mission_memory", None)
+    if memory is None or not bool(memory.config.get("IDLE_OUTER_COMPLETION_TRIGGER_ENABLED", True)):
+        return False
+    if objects.controller.planning or objects.controller.has_plan_job:
+        return False
+    if objects.controller.queue.world_waypoints:
+        return False
+    outer_radius = _memory_completion_outer_radius(objects, stage, trigger_radius_m)
+    try:
+        estimated.trigger_radius_m = outer_radius
+    except Exception:
+        pass
+    return bool(float(getattr(estimated, "distance_m", 999.0)) <= float(outer_radius))
 
 
 def _completion_needs_relocalization(completion) -> bool:
@@ -1346,6 +2368,12 @@ def run_fast_slow_loop(
     )
 
     task_text = initial_task.strip()
+    if getattr(objects, "mission_memory", None) is not None:
+        objects.mission_memory.reset(task_text)
+        state.update(memory_summary=objects.mission_memory.summary(), memory_events=[])
+    if getattr(objects, "obstacle_avoider", None) is not None:
+        objects.obstacle_avoider.reset()
+        state.update(obstacle_summary=objects.obstacle_avoider.summary())
     if task_text:
         print("[TASK PARSER] parsing task...")
         t0 = time.perf_counter()
@@ -1354,6 +2382,7 @@ def run_fast_slow_loop(
             objects.task_manager.start_with_stages(task_text, parsed)
             print(f"[TASK PARSER] parsed {len(parsed)} stages in {time.perf_counter() - t0:.2f}s")
             print(f"[TASK] {objects.task_manager.summary()}")
+            _bootstrap_mission_memory(objects, client, state, task_text, capture_mode)
         else:
             objects.task_manager.start(task_text)
 
@@ -1373,12 +2402,14 @@ def run_fast_slow_loop(
             if objects.completion_pipeline is not None:
                 objects.completion_pipeline.clear()
             objects.distance_estimator.clear()
-            distance_check_pending = False
+            # 阶段刚切换时先检查一次memory/距离缓存；如果已经在目标附近，不再盲目起新规划。
+            distance_check_pending = True
             state.update(
                 trajectory_queue=[],
                 qwen_waypoints=[],
                 trajectory_candidates=[],
                 selected_trajectory={},
+                memory_summary=objects.mission_memory.summary(stage) if getattr(objects, "mission_memory", None) else {},
             )
             last_stage_key = stage_key
             objects.navigation_metrics.start_stage(CompletionPipeline.stage_key(stage))
@@ -1398,6 +2429,9 @@ def run_fast_slow_loop(
 
         pos_now, yaw_now = client.get_pose()
         objects.navigation_metrics.record_pose(pos_now)
+        if getattr(objects, "mission_memory", None) is not None:
+            objects.mission_memory.record_pose(stage, pos_now, yaw_now)
+            state.update(memory_summary=objects.mission_memory.summary(stage))
         stream_event = path_stream.poll(objects.controller.queue.world_waypoints, pos_now)
         if stream_event.consumed > 0:
             objects.controller.mark_executed(stream_event.consumed)
@@ -1425,19 +2459,23 @@ def run_fast_slow_loop(
             state.update(collided=True, trajectory_queue=[])
             continue
 
-        # Background observations update the target world pose. Distance is
-        # evaluated only when waypoint progress is consumed.
-        cached_distance = None
-        if distance_check_pending:
-            cached_distance = _cached_target_distance(objects, stage, pos_now)
-            distance_check_pending = False
+        # memory/距离缓存很便宜；每轮都查一次，避免无人机已经到目标外圈但还沿旧队列冲进去。
+        cached_distance = _cached_target_distance(objects, stage, pos_now)
+        distance_check_pending = False
         current_stage_key = CompletionPipeline.stage_key(stage)
         trigger_vlm = _should_trigger_completion_vlm(
             objects,
-            current_stage_key,
+            stage,
             cached_distance,
             distance_trigger_radius,
         )
+        if not trigger_vlm and _should_trigger_idle_memory_completion(
+            objects,
+            stage,
+            cached_distance,
+            distance_trigger_radius,
+        ):
+            trigger_vlm = True
         if trigger_vlm:
             should_break = _handle_distance_completion_trigger(
                 objects,
@@ -1496,7 +2534,16 @@ def run_fast_slow_loop(
 
             pos_for_plan, _yaw_for_plan = client.get_pose()
             velocity = float(cfg.get("SIM", {}).get("AIRSIM_VELOCITY", 2.0))
+            queue_reaches_memory = _queue_reaches_memory_arrival(objects, stage, distance_trigger_radius)
             planning_decision = objects.controller.continuous_planning_decision(pos_for_plan, velocity)
+            if queue_reaches_memory:
+                planning_decision = SimpleNamespace(
+                    submit=False,
+                    queue_time_s=0.0,
+                    after_next_time_s=0.0,
+                    reason="queue_reaches_memory_arrival",
+                )
+                _debug_print("  [MemoryHold] pending queue already reaches memory arrival radius; skip Qwen append")
             if planning_decision.submit:
                 _debug_print(
                     f"  [ContinuousSchedule] reason={planning_decision.reason} "
@@ -1511,6 +2558,16 @@ def run_fast_slow_loop(
                     instruction,
                     capture_mode,
                     isolated_capture=isolated_planning_capture,
+                )
+                _maybe_scan_future_memory(
+                    objects,
+                    client,
+                    state,
+                    stage,
+                    task_text,
+                    capture_mode,
+                    frame=frame,
+                    down_frame=down_frame,
                 )
 
             # Sync path AFTER Qwen submission so _continuous_path_velocity

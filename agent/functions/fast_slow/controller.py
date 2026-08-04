@@ -78,7 +78,12 @@ class FastSlowController:
         return (
             self.enabled
             and self._job is None
-            and len(self.queue.world_waypoints) <= self.queue.max_pending
+            # 队列刚好已有 max_pending 个点时先执行，不再立刻追加下一批。
+            # 否则会在无人机还没动时连续拼接两段Qwen输出，目标在第一段附近时很容易过冲。
+            and (
+                len(self.queue.world_waypoints) == 0
+                or len(self.queue.world_waypoints) < self.queue.max_pending
+            )
         )
 
     def clear(self) -> None:

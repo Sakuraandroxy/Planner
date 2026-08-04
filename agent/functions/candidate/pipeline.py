@@ -19,6 +19,7 @@ def prepare_candidates_for_world_model(
     detection=None,
     direction: str = "",
     stop_threshold: float = 8.0,
+    memory_context: dict | None = None,
 ) -> CandidatePreparationResult:
     """Normalize, augment, score, and filter candidate trajectories."""
     cand_cfg = cfg.get("CANDIDATE", {})
@@ -117,6 +118,7 @@ def prepare_candidates_for_world_model(
         detection=detection,
         direction=direction,
         stop_threshold=stop_threshold,
+        memory_context=memory_context,
     )
     candidates = sorted(candidates, key=lambda c: (c.pre_score, c.confidence), reverse=True)
     wm_candidates = candidates[:topk]

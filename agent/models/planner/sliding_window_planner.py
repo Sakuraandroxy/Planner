@@ -270,6 +270,7 @@ class SlidingWindowQwenPlanner(BasePlanner):
         instruction: str,
         pending_waypoints: Iterable[Sequence[float]] | None,
         direction: str = "",
+        memory_hint: str = "",
     ) -> str:
         pending = normalize_xyz_waypoints(pending_waypoints)[:5]
         pending_str = "[" + ", ".join(
@@ -282,6 +283,9 @@ class SlidingWindowQwenPlanner(BasePlanner):
         direction = str(direction or "").strip()
         if direction:
             parts.append(f"Direction:{direction}")
+        memory_hint = str(memory_hint or "").strip()
+        if memory_hint:
+            parts.append(memory_hint)
         if pending:
             parts.append(f"Pending incremental body-frame waypoints: {pending_str}")
         parts.extend([
@@ -316,8 +320,9 @@ class SlidingWindowQwenPlanner(BasePlanner):
              down_depth_meters=None,
              relation: str = "", target: str = "",
              pending_waypoints=None,
+             memory_hint: str = "",
              print_prompt: bool = True) -> TrajectoryResult:
-        prompt = self._build_prompt(instruction, pending_waypoints, direction=direction)
+        prompt = self._build_prompt(instruction, pending_waypoints, direction=direction, memory_hint=memory_hint)
         if print_prompt:
             print("[QwenSlidingPrompt]")
             print(self._format_prompt_for_log(prompt))

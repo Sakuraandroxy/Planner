@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 
 
@@ -22,6 +22,11 @@ class TaskStage:
     requires_target: bool = False
     allow_relocalize: bool = False
     completion_condition: str = ""
+    ordinal: Optional[int] = None
+    selection_rule: str = ""
+    stage_kind: str = ""
+    # auxiliary_targets 是当前目标的空间锚点/限定物，例如“灌木丛旁边的红车”里的 bush。
+    auxiliary_targets: List[str] = field(default_factory=list)
 
     @property
     def target_query(self) -> str:

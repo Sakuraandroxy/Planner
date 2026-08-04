@@ -14,6 +14,8 @@ let state = {
   qwen_waypoints: [],
   trajectory_candidates: [],
   selected_trajectory: {},
+  memory_summary: {},
+  memory_events: [],
   candidates: [],
   selected: [],
   error: "",
@@ -30,6 +32,7 @@ const sScene = document.getElementById("sScene");
 const sReasoning = document.getElementById("sReasoning");
 const sCandidates = document.getElementById("sCandidates");
 const sTrajectory = document.getElementById("sTrajectory");
+const sMemory = document.getElementById("sMemory");
 const sModel = document.getElementById("sModel");
 const taskInput = document.getElementById("taskInput");
 const taskBtn = document.getElementById("taskBtn");
@@ -125,7 +128,82 @@ function updateUI(s) {
   if (!txt) sReasoning.innerHTML = '<span class="ph-muted">thinking...</span>';
   else sReasoning.textContent = txt;
   if (sTrajectory) renderTrajectoryDebug(s);
+  if (sMemory) renderMemoryDebug(s);
   renderLegacyCandidates(s);
+}
+
+function renderMemoryDebug(s) {
+  var memory = s.memory_summary || {};
+  if (!memory.enabled) {
+    sMemory.innerHTML = '<span class="ph-muted">disabled</span>';
+    return;
+  }
+  var targets = memory.targets || [];
+  if (!targets.length) {
+    sMemory.innerHTML = '<span class="ph-muted">no target memory yet</span>';
+    return;
+  }
+  var html = [];
+  for (var i = 0; i < Math.min(targets.length, 3); i++) {
+    var t = targets[i] || {};
+    var primary = t.primary || {};
+    html.push(
+      '<div class="memory-target"><div class="memory-title">' +
+        escapeHtml(t.target || t.key || "target") +
+        '<span>' +
+        escapeHtml(t.selection_rule || "stable") +
+        (t.ordinal ? " #" + t.ordinal : "") +
+        "</span></div>" +
+        '<div class="memory-primary">primary ' +
+        escapeHtml(primary.id || "none") +
+        " conf=" +
+        num(primary.confidence) +
+        " unc=" +
+        num(primary.uncertainty_m) +
+        "m world=" +
+        escapeHtml(fmtWpList(primary.world ? [primary.world] : [], 1)) +
+        "</div>" +
+        '<div class="memory-instances">' +
+        renderMemoryInstances(t.instances || [], primary.id || "") +
+        "</div></div>"
+    );
+  }
+  if (memory.last_completion) {
+    var d = memory.last_completion;
+    html.push(
+      '<div class="memory-decision">' +
+        escapeHtml(d.status || "") +
+        " " +
+        escapeHtml(d.reason || "") +
+        " d=" +
+        num(d.distance_m) +
+        " h=" +
+        num(d.horizontal_m) +
+        "</div>"
+    );
+  }
+  sMemory.innerHTML = html.join("");
+}
+
+function renderMemoryInstances(instances, primaryId) {
+  if (!instances.length) return '<span class="ph-muted">no instances</span>';
+  var rows = [];
+  for (var i = 0; i < Math.min(instances.length, 6); i++) {
+    var inst = instances[i] || {};
+    rows.push(
+      '<span class="' +
+        (inst.id === primaryId ? "locked" : "") +
+        '">' +
+        "#" +
+        escapeHtml(inst.order || "?") +
+        " " +
+        escapeHtml(inst.id || "") +
+        " " +
+        num(inst.confidence) +
+        "</span>"
+    );
+  }
+  return rows.join("");
 }
 
 function renderLegacyCandidates(s) {

@@ -5,7 +5,7 @@ FUNCTIONS:
   TASK_PARSER:
     NAME: vlm_task_parser                 # 任务解析功能实现
     MODEL: openai_chat                    # 任务解析模型接口类型
-    URL: http://172.27.143.102:8000/v1    # 任务解析 API base_url
+    URL: http://172.27.162.190:8000/v1    # 任务解析 API base_url
     MODEL_NAME: /data/sakura/models/Qwen2.5-7B-Instruct-AWQ # 任务解析模型名或路径
     API_KEY: no-key                       # 本地服务通常 no-key
     MAX_TOKENS: 1024                      # 任务解析最大输出 token 数
@@ -14,7 +14,7 @@ FUNCTIONS:
   PERCEPTION:
     NAME: dual_view_detector              # 双视图目标检测功能
     MODEL: groundingdino                  # 检测模型后端: groundingdino | vlm_detector | noop
-    URL: http://172.27.143.102:8003/detect # GroundingDINO 检测服务地址
+    URL: http://172.27.162.190:8003/detect # GroundingDINO 检测服务地址
     MODEL_NAME: ""                        # VLM detector 模型名；GroundingDINO 留空
     API_KEY: no-key                       # VLM detector API key；GroundingDINO 不使用
     BOX_THRESHOLD: 0.4                    # GroundingDINO box threshold
@@ -67,14 +67,113 @@ FUNCTIONS:
     FRONT_CAMERA_OFFSET: [1.0, 0.0, 0.0] # front_center相对机体的NED偏移
     DOWN_CAMERA_OFFSET: [0.0, 0.0, 0.0]  # down_center相对机体的NED偏移
 
+  MEMORY:
+    NAME: mission_memory                  # 轻量级任务内记忆：只存目标坐标/置信度/外观统计，不存原图和深度图
+    ENABLED: true                         # 开启后跨“小任务阶段”保持目标实例记忆，完整长任务结束后清空
+    MAX_TARGET_MEMORIES: 24               # 最多缓存多少类目标，防止长任务内存无限增长
+    MAX_INSTANCES_PER_TARGET: 8           # 每类目标最多保留多少个实例，例如多辆红车
+    MAX_APPEARANCE_PROTOTYPES: 5          # 每个实例最多保留多少个外观原型，适配正面/侧面/阴影等状态
+    MAX_POSE_RECORDS: 240                 # 最近位姿历史数量，后续用于“经过/路过”关系，不做稠密SLAM
+    BOOTSTRAP_ENABLED: true               # 任务解析后立即扫描整条任务提到的所有目标，提前记住未来目标位置
+    BOOTSTRAP_CAPTURE_PROFILE: front_down_both_depth # 启动扫描需要RGB+深度，才能把未来目标投影到世界坐标
+    BOOTSTRAP_MAX_TARGETS: 8              # 启动扫描最多检测多少个任务目标/锚点，控制首帧额外耗时
+    OPPORTUNISTIC_SCAN_ENABLED: true      # 飞行中低频扫描未来小任务目标，避免视角转开后未来目标完全丢失
+    OPPORTUNISTIC_SCAN_INTERVAL_S: 4.0    # 机会扫描最小间隔；越小越积极但会增加检测/深度开销
+    OPPORTUNISTIC_TARGETS_PER_SCAN: 2     # 每次机会扫描检测几个未来目标，采用轮询避免一次性太重
+    PATH_CLIP_ENABLED: true               # 已知锁定目标坐标时，裁剪/替换明显飞过目标的Qwen轨迹
+    PATH_CLIP_RADIUS_M: 6.0               # memory路径守卫的外圈基准半径；实际飞行目标会再收进NEAR_APPROACH内圈
+    PATH_DIVERGE_RATIO: 0.90              # 候选终点比当前位置更远离memory目标时，用直达目标附近的短路径替换
+    PATH_CLOSE_MISS_RATIO: 1.35           # 轨迹擦过目标附近但没进半径时，也按最近点截断/替换，防止高速掠过
+    PATH_TARGET_BEHIND_X_M: 2.0           # 目标已在机体后方超过该距离时，不再接受继续向前的Qwen轨迹
+    NEAR_STANDOFF_M: 6.0                  # 低空“到车/箱子旁边”的完成外圈半径，不再作为固定停车圆周
+    NEAR_TARGET_EXTRA_STANDOFF_M: 3.0     # 根据目标footprint额外留出的旁停距离
+    LOW_ALTITUDE_Z_DELTA_M: 3.0           # 当前高度与目标中心差值小于该值时认为是低空贴近目标
+    LOW_ALTITUDE_EXTRA_STANDOFF_M: 1.0    # 低空贴近车辆/箱子时额外扩大停靠半径，减少撞碰撞盒
+    STANDOFF_UNCERTAINTY_CAP_M: 3.0       # memory不确定性最多给停靠半径贡献多少米
+    NEAR_APPROACH_RADIUS_M: 4.5           # 真正飞行目标内圈：允许进入完成圆内部，而不是卡在完成半径圆周上
+    NEAR_APPROACH_TARGET_CLEARANCE_M: 2.2 # 内圈至少距离目标footprint留出的安全余量
+    NEAR_APPROACH_UNCERTAINTY_CAP_M: 1.5  # memory不确定性最多给内圈半径贡献多少米
+    NEAR_APPROACH_OUTER_GAP_M: 1.0        # 内圈与完成外圈至少保持的间隔
+    IDLE_OUTER_COMPLETION_TRIGGER_ENABLED: true # 如果队列已空且在完成外圈内，可以停车做最终完成确认
+    PATH_NEAR_MAX_DESCENT_M: 0.2          # “旁边/附近”路径守卫最多允许向下修正多少米，避免扎向车身
+    PATH_NEAR_MAX_CLIMB_M: 0.5            # “旁边/附近”路径守卫最多允许向上修正多少米
+    PATH_EXIT_RADIUS_RATIO: 1.20          # 已在完成圆内时，只有明显飞出外圈才拦截
+    PATH_EXIT_MARGIN_M: 2.0               # 已在完成圆内时允许的短距离微调余量
+    PREFER_MEMORY_DISTANCE: true          # 完成触发优先使用锁定实例memory距离，避免单帧深度目标跳远
+    MEMORY_DISTANCE_MIN_CONFIDENCE: 0.45  # memory距离参与完成触发的最低置信度
+    MEMORY_DISTANCE_UNCERTAINTY_RATIO: 1.5 # memory距离触发允许的不确定性相对完成阈值倍数
+    TARGET_MAX_AGE_S: 60.0                # 记忆超过该时间未观测会被标为stale，不直接作为强证据
+    INSTANCE_LOCK_ENABLED: true           # 每个小任务锁定一个目标实例，避免第2辆红车被重新编号
+    LOCK_ON_FIRST_STABLE_INSTANCE: true   # 普通目标默认锁定第一个稳定实例；带“第N个”时锁定对应顺序实例
+    LOCK_MIN_CONFIDENCE: 0.35             # 达到该置信度后才允许锁定实例
+    INSTANCE_SWITCH_CONFIRMATIONS: 2      # 切换锁定实例需要连续确认次数，防止单帧误检导致跳目标
+    INSTANCE_SWITCH_MARGIN: 0.25          # 新实例置信度至少高出该值才考虑切换
+    MIN_DETECTION_SCORE: 0.35             # 进入memory的最低检测分数
+    MIN_ASSOCIATION_RADIUS_M: 2.0         # 新观测匹配旧实例的最小空间门限
+    ASSOCIATION_MIN_SCORE: 0.28           # 几何+外观匹配分数低于该值则创建新实例
+    ANCHOR_MAX_DISTANCE_M: 25.0           # “灌木旁红车”中红车与灌木允许的最大锚点关联距离
+    ANCHOR_SWITCH_ENABLED: true           # 锚点关系强时允许纠正已锁定实例，避免先锁错同类目标
+    DEFAULT_FOOTPRINT_RADIUS_M: 1.5       # 无法从bbox估计尺寸时的默认目标半径
+    MAX_FOOTPRINT_RADIUS_M: 8.0           # 目标半径上限，避免异常大框把完成半径放得过宽
+    DEPTH_UNCERTAINTY_RATIO: 0.06         # 深度越远，不确定性越大；该值控制增长比例
+    STALE_UNCERTAINTY_GROWTH_MPS: 0.03    # 记忆越旧，不确定性每秒增长多少米
+    MEMORY_ONLY_COMPLETION_ENABLED: true  # 允许高置信memory在检测/VLM失效时完成当前小任务
+    MEMORY_ONLY_MIN_CONFIDENCE: 0.88      # memory-only完成需要更高置信度
+    MEMORY_ONLY_MIN_OBSERVATIONS: 2       # memory-only完成至少需要几次一致观测
+    MIN_CONFIDENCE_FOR_COMPLETION: 0.65   # 有新鲜弱视觉支持时的完成置信度阈值
+    MIN_OBSERVATIONS_FOR_COMPLETION: 1    # 有新鲜视觉支持时所需观测次数
+    MAX_COMPLETION_UNCERTAINTY_M: 5.0     # 完成判定允许的最大不确定性
+    WEAK_VISUAL_SUPPORT_ENABLED: true     # 允许检测/VLM弱证据辅助memory完成，但身份仍以几何锁定为主
+    ABOVE_HORIZONTAL_RADIUS_M: 3.5        # “飞到上方”时，目标footprint之外允许的水平误差
+    ABOVE_MIN_CLEARANCE_M: 0.3            # “上方”至少要高于目标中心的粗略安全余量
+    ABOVE_MAX_ALTITUDE_M: 60.0            # 过高时不直接凭memory完成，避免高空误判
+    NEAR_MAX_ALTITUDE_M: 8.0              # “旁边/附近”不能在目标正上方很高处直接完成
+    NEAR_RADIUS_MARGIN_M: 1.0             # “附近/旁边”在原到达半径外的额外容差
+    DIRECTED_RELOCALIZATION_ENABLED: true # 丢失目标时先朝memory中的目标方向转向，再做环视搜索
+    PLANNER_MEMORY_HINT_ENABLED: true     # 向Qwen提示锁定实例的大致相对方位，不改变输出格式
+    CANDIDATE_MEMORY_SCORING_ENABLED: true # 候选轨迹打分时优先靠近锁定实例，远离非锁定同类
+
+  OBSTACLE_AVOIDANCE:
+    NAME: depth_obstacle_avoidance        # 深度+稀疏memory局部避障层，不替代VLM全局规划
+    ENABLED: true                         # 开启后在Qwen轨迹入队前做本地安全过滤
+    CAPTURE_DEPTH_ON_PLAN: true           # 规划抓图时同步抓前/下视深度，用于构建局部障碍memory
+    MAX_CELLS: 256                        # 稀疏障碍地图最多cell数，固定上限避免内存增长
+    GRID_RESOLUTION_M: 1.0                # 障碍memory网格分辨率，越大越粗糙但越省内存
+    OBSTACLE_TTL_S: 12.0                  # 障碍cell多久未观测后过期
+    MIN_CELL_CONFIDENCE: 0.12             # 低置信障碍cell不参与避障
+    FRONT_DEPTH_STRIDE: 8                 # 深度图采样步长；256深度图约采样千级点后再稀疏化
+    FRONT_MIN_DEPTH_M: 0.8                # 忽略过近异常深度
+    FRONT_MAX_DEPTH_M: 28.0               # 只关心局部前方障碍，远处交给VLM全局规划
+    LOOKAHEAD_M: 18.0                     # 只检查未来多少米内的障碍
+    SIDE_RANGE_M: 9.0                     # 只保留航迹附近左右范围内的障碍
+    VERTICAL_RANGE_M: 4.5                 # 只保留当前高度附近的障碍
+    SAFETY_RADIUS_M: 1.35                 # 航迹到障碍水平距离小于该值认为有碰撞风险
+    VERTICAL_CLEARANCE_M: 1.15            # 航迹与障碍高度差小于该值才认为会撞
+    PATH_CHECK_DISTANCE_M: 18.0           # 每条候选轨迹最多检查的前向距离
+    STOP_BUFFER_M: 2.2                    # 无可绕行时，在障碍前提前停多少米
+    MIN_STOP_WAYPOINT_M: 0.8              # 太近时不再给前进点，交给悬停/碰撞恢复/完成判定
+    BYPASS_ENABLED: true                  # 非目标障碍允许尝试左右绕行
+    BYPASS_LATERAL_M: 3.0                 # 绕障横向偏移
+    BYPASS_FORWARD_M: 2.5                 # 绕障点可向前推进的最大距离
+    BYPASS_UP_M: 0.0                      # 默认不主动爬升绕障，避免改变任务高度语义
+    BYPASS_MAX_HIT_DISTANCE_M: 12.0       # 太远的障碍暂不绕，后续重规划再处理
+    TARGET_KEEP_OUT_ENABLED: true         # memory锁定目标也作为禁入障碍，防止路径穿过车/箱子中心
+    TARGET_KEEP_OUT_RADIUS_M: 3.0         # 目标禁入半径下限
+    TARGET_KEEP_OUT_EXTRA_M: 2.2          # 目标footprint外额外安全边界
+    TARGET_KEEP_OUT_VERTICAL_M: 2.2       # 与目标高度接近时才启用目标禁入
+    TARGET_KEEP_OUT_STOP_BUFFER_M: 1.0    # 目标禁入触发后再向外退一点停靠
+    TARGET_MATCH_MARGIN_M: 2.0            # 深度障碍点距离锁定目标多近时视作目标本体，不绕进去
+    TARGET_DEPTH_EXCLUSION_M: 0.0         # 默认不排除目标深度点，让目标本体也能阻止撞车
+    USE_DOWN_DEPTH: false                 # 下视深度默认不用于前向避障，避免把地面密集写入障碍地图
+
   PLANNING:
     NAME: sliding_window_planning  #api_atomic_planner #sliding_window_planning         # 滑动窗口规划功能
     MODEL: qwen_sliding_window_planner    # 滑窗 Qwen 后端
     URL:  #https://api.xiaomimimo.com/v1/chat/completions                           # 完整 chat URL，留空则拼 SERVER_IP/PORT/CHAT_PATH
-    SERVER_IP: 172.27.143.102             # 滑窗 Qwen 服务器 IP
+    SERVER_IP: 172.27.162.190             # 滑窗 Qwen 服务器 IP
     SERVER_PORT: 8004                     # 滑窗 Qwen 服务端口
     CHAT_PATH: /v1/chat/completions       # OpenAI 兼容 chat 路径
-    MODEL_NAME: /data/sakura/models/3DG-VLN-sliding-window  #/data/sakura/models/3DG-VLN-sliding-window # 滑窗 Qwen 模型名或路径
+    MODEL_NAME: /data/sakura/models/3DG-VLN-finetuned-sliding_window_2  #/data/sakura/models/3DG-VLN-finetuned-sliding_window_2 # 滑窗 Qwen 模型名或路径
     API_KEY:  xxx                   # 本地服务通常 no-key
     MAX_TOKENS: 256                       # 滑窗 Qwen 输出 token 上限
     TIMEOUT: 120                          # 滑窗 Qwen 请求超时秒数
@@ -115,7 +214,7 @@ FUNCTIONS:
 AGENT:
   # 任务解析器: vlm_parser | simple_parser
   TASK_PARSER: vlm_parser
-  TASK_PARSER_URL: http://172.27.143.102:8000/v1  # 本地程序连服务器任务解析: http://172.27.143.102:8000/v1  |  云: https://api.xiaomimimo.com/v1
+  TASK_PARSER_URL: http://172.27.162.190:8000/v1  # 本地程序连服务器任务解析: http://172.27.162.190:8000/v1  |  云: https://api.xiaomimimo.com/v1
   TASK_PARSER_MODEL: /data/sakura/models/Qwen2.5-7B-Instruct-AWQ  # 本地: /data/sakura/models/Qwen2.5-7B-Instruct-AWQ  |  云: mimo-v2.5
   TASK_API_KEY: no-key  # 本地: no-key  |  云: sk-...
   TASK_PARSER_MAX_TOKENS: 1024
@@ -130,12 +229,12 @@ AGENT:
   DETECTOR_BOX_THRESHOLD: 0.4
   DETECTOR_MIN_CONFIDENCE: 0.4
   DETECTOR_TEXT_THRESHOLD: 0.3
-  GROUNDINGDINO_URL: http://172.27.143.102:8003/detect
+  GROUNDINGDINO_URL: http://172.27.162.190:8003/detect
 
   # 轨迹规划器默认使用滑动窗口 Qwen；旧版 qwen_planner 只给旧入口对照使用
   PLANNER: qwen_sliding_window_planner
-  PLANNER_URL: http://172.27.143.102:8004/v1/chat/completions
-  PLANNER_MODEL: /data/sakura/models/3DG-VLN-sliding-window
+  PLANNER_URL: http://172.27.162.190:8004/v1/chat/completions
+  PLANNER_MODEL: /data/sakura/models/3DG-VLN-finetuned-sliding_window_2
   PLANNER_API_KEY: no-key  # 本地: no-key  |  云: sk-...
   PLANNER_MAX_TOKENS: 2048
   PLANNER_TIMEOUT: 120
@@ -173,7 +272,7 @@ SIM:
   # auto 只抓规划所需 RGB 双视图；任务完成判定需要深度时会在运行时请求 TASK_COMPLETION.DEPTH_CAPTURE_PROFILE
   CAPTURE_PROFILE: auto
   # AirSim 连接 (本地留空=localhost:41451, 远程填服务器IP)
-  AIRSIM_IP: ""        # "172.27.143.102"
+  AIRSIM_IP: ""        # "172.27.162.190"
   AIRSIM_PORT: 41451
   APPLY_SETTINGS_ON_WEB_START: true       # run_airsim_web启动时先把SIM相机参数写入本地AirSim settings.json
   WAIT_FOR_AIRSIM_ON_WEB_START: true      # AirSim未启动时不报错退出，而是等待你手动打开UE/AirSim

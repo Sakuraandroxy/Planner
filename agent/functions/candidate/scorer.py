@@ -13,6 +13,7 @@ def score_candidates(
     detection=None,
     direction: str = "",
     stop_threshold: float = 8.0,
+    memory_context: dict | None = None,
 ) -> List[CandidateTrajectory]:
     """Assign pre_score for ranking and confidence for execution trust."""
     if not candidates:
@@ -24,6 +25,7 @@ def score_candidates(
             detection=detection,
             direction=direction,
             stop_threshold=stop_threshold,
+            memory_context=memory_context,
         )
         total = sum(breakdown.values())
         cand.pre_score = round(total, 4)
@@ -45,6 +47,7 @@ def _score_one(
     detection=None,
     direction: str = "",
     stop_threshold: float = 8.0,
+    memory_context: dict | None = None,
 ) -> Dict[str, float]:
     endpoint = cand.waypoints[-1] if cand.waypoints else [0.0, 0.0, 0.0]
     path_len = _path_length(cand.waypoints)
@@ -68,12 +71,22 @@ def _score_one(
 
     safety = _safety_score(endpoint, path_len, det_depth, camera)
     smoothness = _smoothness_score(cand.waypoints)
+    memory = _memory_score(cand, memory_context)
+
+    if not (memory_context and bool(memory_context.get("enabled", False))):
+        return {
+            "progress": 0.45 * progress,
+            "alignment": 0.25 * alignment,
+            "safety": 0.20 * safety,
+            "smoothness": 0.10 * smoothness,
+        }
 
     return {
-        "progress": 0.45 * progress,
-        "alignment": 0.25 * alignment,
-        "safety": 0.20 * safety,
-        "smoothness": 0.10 * smoothness,
+        "progress": 0.36 * progress,
+        "alignment": 0.20 * alignment,
+        "safety": 0.18 * safety,
+        "smoothness": 0.08 * smoothness,
+        "memory": 0.18 * memory,
     }
 
 
@@ -161,6 +174,50 @@ def _smoothness_score(waypoints: List[List[float]]) -> float:
         return 1.0
     avg_cos = sum(curvatures) / len(curvatures)
     return max(0.0, min(1.0, (avg_cos + 1.0) / 2.0))
+
+
+def _memory_score(cand: CandidateTrajectory, memory_context: dict | None) -> float:
+    if not memory_context or not bool(memory_context.get("enabled", False)):
+        return 0.5
+    target = memory_context.get("target_body") or []
+    if len(target) < 3:
+        return 0.5
+    endpoint = cand.waypoints[-1] if cand.waypoints else [0.0, 0.0, 0.0]
+    relation = str(memory_context.get("relation", "near") or "near").lower()
+    uncertainty = max(0.0, float(memory_context.get("uncertainty_m", 0.0) or 0.0))
+    footprint = max(0.5, float(memory_context.get("footprint_radius_m", 1.5) or 1.5))
+    dx = float(endpoint[0]) - float(target[0])
+    dy = float(endpoint[1]) - float(target[1])
+    dz = float(endpoint[2]) - float(target[2])
+    horizontal = math.sqrt(dx * dx + dy * dy)
+
+    if relation == "above":
+        desired_radius = footprint + 1.5 + min(uncertainty, 4.0)
+        primary_score = 1.0 - min(horizontal / max(desired_radius, 1.0), 1.5)
+        # “上方”优先水平对齐，不鼓励候选点大幅向下扎到目标中心。
+        vertical_penalty = min(max(dz, 0.0) / 6.0, 1.0)
+        primary_score -= 0.25 * vertical_penalty
+    else:
+        desired_radius = footprint + 2.0 + min(uncertainty, 4.0)
+        primary_score = 1.0 - min(horizontal / max(desired_radius, 1.0), 1.5)
+        height_penalty = min(abs(dz) / 10.0, 1.0)
+        primary_score -= 0.20 * height_penalty
+
+    non_primary_penalty = 0.0
+    for other in memory_context.get("non_primary_bodies", []) or []:
+        if len(other) < 3:
+            continue
+        odx = float(endpoint[0]) - float(other[0])
+        ody = float(endpoint[1]) - float(other[1])
+        other_dist = math.sqrt(odx * odx + ody * ody)
+        if other_dist + 0.75 < horizontal:
+            non_primary_penalty = max(non_primary_penalty, 0.45)
+        elif other_dist < footprint + 2.0:
+            non_primary_penalty = max(non_primary_penalty, 0.25)
+
+    confidence = max(0.0, min(1.0, float(memory_context.get("confidence", 0.0) or 0.0)))
+    score = 0.5 + confidence * (primary_score - non_primary_penalty)
+    return max(-0.5, min(1.0, score))
 
 
 def _path_length(waypoints: List[List[float]]) -> float:
