@@ -13,11 +13,14 @@ from agent.functions.fast_slow.runtime import (
     _apply_memory_path_guard,
     _handle_background_target_lost,
     _memory_distance_trigger_radius,
+    _sync_path_if_ready,
 )
 from agent.functions.memory import MissionMemory
 from agent.functions.memory.appearance_signature import build_appearance_signature
 from agent.functions.memory.schemas import TargetInstanceBelief, TargetMemory
+from agent.functions.memory.spatial_reasoning import relation_kind
 from agent.functions.obstacle_avoidance import DepthObstacleAvoider
+from agent.functions.planning.direction_hint import direction_hint_from_locked_body_target
 from agent.functions.task_parser.vlm_task_parser import parse_task_parser_to_stages
 
 
@@ -109,6 +112,47 @@ def test_ordinal_lock_survives_after_first_instance_leaves_view():
     assert primary_after is not None
     assert primary_before.instance_id == primary_after.instance_id
     assert primary_after.encounter_order == 2
+
+
+def test_completed_instance_remains_available_for_later_return_stage():
+    memory = _memory()
+    target = TargetMemory(
+        target_key="white car",
+        target_name="white car",
+        primary_instance_id="white car:1",
+    )
+    original = TargetInstanceBelief(
+        instance_id="white car:1",
+        encounter_order=1,
+        target_world=[20.0, -3.0, -2.0],
+        confidence=0.99,
+        observation_count=3,
+    )
+    target.instances[original.instance_id] = original
+    memory.target_memories["white car"] = target
+    first_stage = _stage(
+        index=0,
+        instruction="Fly to the first white car",
+        target="white car",
+        relation="near",
+        ordinal=1,
+        selection_rule="ordinal",
+    )
+    return_stage = _stage(
+        index=2,
+        instruction="Fly back to the first white car passed",
+        target="white car",
+        relation="near",
+        ordinal=1,
+        selection_rule="ordinal",
+    )
+
+    memory.archive_stage(first_stage, "complete_near_target")
+    recalled = memory.primary_instance(return_stage)
+
+    assert original.status == "completed"
+    assert recalled is original
+    assert memory.stage_summaries[-1].primary_instance_id == "white car:1"
 
 
 def test_near_completion_rejects_large_height_difference():
@@ -298,6 +342,130 @@ def test_memory_path_guard_replaces_when_target_is_behind():
 
     assert "target_behind" in reason
     assert guarded and guarded[0][0] < 0.0
+
+
+def test_return_to_previously_passed_target_is_near_not_pass_relation():
+    stages = parse_task_parser_to_stages(
+        """
+        {"stages": [
+          {"instruction": "Fly back to the first white car passed", "mode": "target", "target": "white car", "relation": "pass", "ordinal": 1}
+        ]}
+        """,
+        original_instruction="飞回第一次经过的白车旁边",
+    )
+
+    assert len(stages) == 1
+    assert stages[0].relation == "near"
+    assert stages[0].ordinal == 1
+    assert relation_kind(stages[0]) == "near"
+    assert relation_kind(_stage(instruction="Pass the red car", relation="pass")) == "pass"
+
+
+def test_locked_memory_direction_reports_target_behind():
+    hint = direction_hint_from_locked_body_target([-18.9, -2.4, 1.0], confidence=0.99)
+
+    assert "behind" in hint.text.lower()
+    assert hint.reason == "locked memory anchor"
+    assert abs(abs(hint.angle_deg) - 180.0) < 10.0
+    assert hint.score == 0.99
+
+
+def test_path_sync_turns_before_preserving_intentional_return_waypoint():
+    class FakeMemory:
+        config = {
+            "RETURN_TARGET_REORIENT_ENABLED": True,
+            "RETURN_TARGET_REORIENT_TRIGGER_DEG": 90.0,
+            "RETURN_TARGET_REORIENT_TIMEOUT_S": 8.0,
+        }
+
+        @staticmethod
+        def has_primary(stage):
+            return True
+
+        @staticmethod
+        def preferred_yaw_deg(stage, current_world):
+            return 180.0
+
+        @staticmethod
+        def record_pose(stage, position, yaw_deg):
+            return None
+
+        @staticmethod
+        def summary(stage):
+            return {"target": "white car:1"}
+
+    class FakeController:
+        def __init__(self):
+            self.queue = SimpleNamespace(world_waypoints=[[-10.0, 0.0, -2.0]])
+            self.planning = False
+            self.has_plan_job = False
+
+        @staticmethod
+        def mark_executed(count):
+            return None
+
+    class FakeClient:
+        def __init__(self):
+            self.yaw = 0.0
+            self.rotations = []
+
+        def get_pose(self):
+            return [0.0, 0.0, -2.0], self.yaw
+
+        def rotate_to_yaw(self, yaw_deg, timeout=5.0):
+            self.rotations.append((float(yaw_deg), float(timeout)))
+            self.yaw = float(yaw_deg)
+
+    class FakePathStream:
+        active = False
+
+        def __init__(self):
+            self.synced = []
+
+        @staticmethod
+        def poll(queue_waypoints, current_pos):
+            return SimpleNamespace(consumed=0, collided=False)
+
+        def stop(self):
+            self.active = False
+
+        def sync(self, waypoints, current_pos, velocity):
+            self.synced = [list(point) for point in waypoints]
+            self.active = True
+            return True
+
+    class FakeState:
+        def __init__(self):
+            self.updates = []
+
+        def update(self, **kwargs):
+            self.updates.append(kwargs)
+
+    client = FakeClient()
+    path_stream = FakePathStream()
+    controller = FakeController()
+    objects = SimpleNamespace(
+        mission_memory=FakeMemory(),
+        controller=controller,
+    )
+
+    consumed = _sync_path_if_ready(
+        objects,
+        path_stream,
+        client,
+        FakeState(),
+        stage=_stage(
+            instruction="Fly back to the first white car passed",
+            target="white car",
+            relation="near",
+            ordinal=1,
+        ),
+    )
+
+    assert consumed == 0
+    assert client.rotations == [(180.0, 8.0)]
+    assert controller.queue.world_waypoints == [[-10.0, 0.0, -2.0]]
+    assert path_stream.synced == [[-10.0, 0.0, -2.0]]
 
 
 def test_memory_path_guard_uses_inner_approach_not_outer_circle():

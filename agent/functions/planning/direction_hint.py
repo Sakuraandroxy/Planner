@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Sequence
 
 from agent.functions.common.config_access import first_value, function_section
 from config import cfg
@@ -16,6 +17,42 @@ class DirectionHintResult:
     angle_deg: float | None = None
     bbox: list[int] | None = None
     score: float = 0.0
+
+
+def direction_hint_from_locked_body_target(
+    target_body_xyz: Sequence[float] | None,
+    *,
+    confidence: float = 0.0,
+) -> DirectionHintResult:
+    """Build an identity-safe hint from the locked memory instance.
+
+    A class-only front-view detection (for example, ``white car``) cannot
+    prove that the visible object is the instance locked by an earlier stage.
+    Once memory has a world-space lock, its body-frame bearing is therefore
+    the authoritative direction hint.
+    """
+    values = list(target_body_xyz or [])
+    if len(values) < 2:
+        return DirectionHintResult(reason="locked memory target unavailable")
+    try:
+        x = float(values[0])
+        y = float(values[1])
+    except (TypeError, ValueError):
+        return DirectionHintResult(reason="invalid locked memory target")
+    if not math.isfinite(x) or not math.isfinite(y) or math.hypot(x, y) <= 1e-6:
+        return DirectionHintResult(reason="invalid locked memory target")
+
+    angle = math.degrees(math.atan2(y, x))
+    if x < 0.0:
+        text = "The locked target is behind the drone. Turn around toward it before moving forward."
+    else:
+        text = _format_direction_text(angle, use_angle=_direction_hint_use_angle())
+    return DirectionHintResult(
+        text=text,
+        reason="locked memory anchor",
+        angle_deg=angle,
+        score=max(0.0, min(1.0, float(confidence or 0.0))),
+    )
 
 
 def direction_hint_from_front_detection(detector: Any, front_image: Any, target: str) -> DirectionHintResult:

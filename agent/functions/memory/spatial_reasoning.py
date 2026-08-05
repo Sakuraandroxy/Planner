@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from typing import Any, Optional, Sequence
 
 from agent.functions.memory.geometry import (
@@ -31,11 +32,37 @@ def relation_kind(stage: Any) -> str:
         return "land"
     if relation in ABOVE_RELATIONS or any(token in merged for token in ("above", "over", "on top", "上方", "上面")):
         return "above"
-    if relation in PASS_RELATIONS or any(token in merged for token in ("pass", "via", "through", "经过", "路过")):
+    # "Fly back to the first white car passed" uses "passed" to identify a
+    # previously visited car; it is not a request to pass the car again.
+    # Return-to intent must win even if an LLM parser emitted relation=pass.
+    if _has_return_to_intent(merged):
+        return "near"
+    if relation in NEAR_RELATIONS:
+        return "near"
+    if relation in PASS_RELATIONS or _has_explicit_pass_intent(instruction, completion):
         return "pass"
-    if relation in NEAR_RELATIONS or any(token in merged for token in ("near", "beside", "next to", "旁", "附近")):
+    if any(token in merged for token in ("near", "beside", "next to", "旁", "附近")):
         return "near"
     return "near"
+
+
+def _has_return_to_intent(text: str) -> bool:
+    lower = str(text or "").lower()
+    return bool(
+        re.search(r"\b(?:fly|go|come|head|navigate)?\s*back\s+to\b", lower)
+        or re.search(r"\breturn\s+to\b", lower)
+        or any(token in lower for token in ("飞回", "返回", "回到", "回去"))
+    )
+
+
+def _has_explicit_pass_intent(instruction: str, completion: str) -> bool:
+    text = f"{instruction} {completion}".lower()
+    # Word boundaries deliberately exclude the attributive word "passed".
+    if re.search(r"\b(?:pass|via|through)\b", text):
+        return True
+    if _has_return_to_intent(text):
+        return False
+    return any(token in text for token in ("经过", "路过"))
 
 
 def has_landing_intent(stage: Any) -> bool:

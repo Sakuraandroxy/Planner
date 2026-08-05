@@ -32,8 +32,13 @@ from agent.functions.fast_slow.completion_pipeline import DetectionDepthBundle
 from agent.functions.fast_slow.controller import FastSlowController
 from agent.functions.fast_slow.path_stream import ContinuousPathStream
 from agent.functions.memory import MissionMemory, build_mission_memory
+from agent.functions.memory.geometry import world_to_body
+from agent.functions.memory.spatial_reasoning import relation_kind
 from agent.functions.obstacle_avoidance import DepthObstacleAvoider, build_depth_obstacle_avoider
-from agent.functions.planning.direction_hint import direction_hint_from_front_detection
+from agent.functions.planning.direction_hint import (
+    direction_hint_from_front_detection,
+    direction_hint_from_locked_body_target,
+)
 from agent.functions.planning.sliding_window_planning import SlidingWindowPlanningFunction
 from agent.functions.recovery.collision_recovery import CollisionRecovery
 from agent.functions.relocalization import TargetRelocalizer
@@ -1127,7 +1132,6 @@ def _submit_plan_if_needed(
         or getattr(stage, "instruction", None)
         or instruction,
     )
-    direction_text = direction_hint.text
     memory_hint = ""
     if getattr(objects, "mission_memory", None) is not None:
         memory_hint = objects.mission_memory.planner_hint(
@@ -1135,6 +1139,24 @@ def _submit_plan_if_needed(
             current_world=pos_now,
             yaw_deg=yaw_now,
         )
+        locked_estimate = objects.mission_memory.estimate_distance(stage, pos_now)
+        if locked_estimate is not None:
+            locked_confidence = float(locked_estimate.get("confidence", 0.0) or 0.0)
+            lock_min_confidence = float(
+                objects.mission_memory.config.get("LOCK_MIN_CONFIDENCE", 0.35)
+            )
+            if locked_confidence >= lock_min_confidence:
+                locked_direction = direction_hint_from_locked_body_target(
+                    world_to_body(
+                        locked_estimate.get("target_world", []),
+                        pos_now,
+                        yaw_now,
+                    ),
+                    confidence=locked_confidence,
+                )
+                if locked_direction.text:
+                    direction_hint = locked_direction
+    direction_text = direction_hint.text
     print(
         f"  [PlanInput] instruction={inst!r} pending={len(pending_for_model)} "
         f"pending_wp={_format_waypoints(pending_for_model)} "
@@ -2469,6 +2491,71 @@ def _completion_needs_relocalization(completion) -> bool:
     return bool(completion is None or getattr(completion, "target_detected", None) is not True)
 
 
+def _signed_yaw_delta_deg(target_yaw_deg: float, current_yaw_deg: float) -> float:
+    return (float(target_yaw_deg) - float(current_yaw_deg) + 180.0) % 360.0 - 180.0
+
+
+def _reorient_to_locked_target_if_behind(
+    objects,
+    client,
+    path_stream,
+    state,
+    stage,
+    *,
+    allow_queued: bool = False,
+) -> bool:
+    """Turn toward a locked target before a ForwardOnly path is planned/issued."""
+    memory = getattr(objects, "mission_memory", None)
+    controller = getattr(objects, "controller", None)
+    if memory is None or controller is None or stage is None:
+        return False
+    memory_cfg = getattr(memory, "config", {}) or {}
+    if not bool(memory_cfg.get("RETURN_TARGET_REORIENT_ENABLED", True)):
+        return False
+    if getattr(stage, "mode", "") not in {"target", "detect"} or relation_kind(stage) == "pass":
+        return False
+    if not memory.has_primary(stage):
+        return False
+    if bool(getattr(controller, "planning", False)) or bool(getattr(controller, "has_plan_job", False)):
+        return False
+    queued = list(getattr(getattr(controller, "queue", None), "world_waypoints", []) or [])
+    if queued and not allow_queued:
+        return False
+
+    current_pos, current_yaw = client.get_pose()
+    preferred_yaw = memory.preferred_yaw_deg(stage, current_pos)
+    if preferred_yaw is None:
+        return False
+    yaw_delta = _signed_yaw_delta_deg(preferred_yaw, current_yaw)
+    trigger_deg = max(45.0, float(memory_cfg.get("RETURN_TARGET_REORIENT_TRIGGER_DEG", 90.0)))
+    if abs(yaw_delta) < trigger_deg:
+        return False
+
+    path_stream.stop()
+    print(
+        f"  [MemoryReorient] target_behind yaw={float(current_yaw):.1f}->"
+        f"{float(preferred_yaw):.1f} delta={yaw_delta:.1f}deg"
+    )
+    try:
+        state.update(status="reorienting", pose=list(current_pos), yaw=float(current_yaw))
+        timeout = float(memory_cfg.get("RETURN_TARGET_REORIENT_TIMEOUT_S", 8.0))
+        client.rotate_to_yaw(float(preferred_yaw), timeout=timeout)
+        new_pos, new_yaw = client.get_pose()
+        memory.record_pose(stage, new_pos, new_yaw)
+        state.update(
+            status="running",
+            pose=list(new_pos),
+            yaw=float(new_yaw),
+            memory_summary=memory.summary(stage),
+        )
+        print(f"  [MemoryReorient] complete yaw={float(new_yaw):.1f}")
+        return True
+    except Exception as exc:
+        state.update(status="running")
+        print(f"  [MemoryReorient] failed: {exc}")
+        return False
+
+
 def _drop_path_points_behind_vehicle(objects, current_pos, current_yaw_deg) -> int:
     """Remove queue-head points that are behind the current vehicle heading."""
     waypoints = objects.controller.queue.world_waypoints
@@ -2502,6 +2589,7 @@ def _sync_path_if_ready(
     path_stream,
     client,
     state,
+    stage=None,
 ) -> int:
     current_pos, current_yaw = client.get_pose()
     progress = path_stream.poll(objects.controller.queue.world_waypoints, current_pos)
@@ -2528,6 +2616,18 @@ def _sync_path_if_ready(
         state.update(collided=True, trajectory_queue=[])
         return progress.consumed
 
+    # A newly planned return waypoint may intentionally be behind the old
+    # heading. Rotate first so the generic stale-prefix filter does not delete
+    # that valid waypoint as if it had already been passed.
+    if _reorient_to_locked_target_if_behind(
+        objects,
+        client,
+        path_stream,
+        state,
+        stage,
+        allow_queued=True,
+    ):
+        current_pos, current_yaw = client.get_pose()
     dropped_behind = _drop_path_points_behind_vehicle(objects, current_pos, current_yaw)
     waypoints = objects.controller.queue.world_waypoints
     if not waypoints:
@@ -2738,6 +2838,21 @@ def run_fast_slow_loop(
                 break
             continue
 
+        # A locked target from an earlier stage can legitimately be behind the
+        # drone. Turn before capturing the next planner images so Qwen sees the
+        # correct instance in front instead of inventing another forward path.
+        with web_helpers.pause_background_capture(capturer):
+            reoriented = _reorient_to_locked_target_if_behind(
+                objects,
+                client,
+                path_stream,
+                state,
+                stage,
+            )
+        if reoriented:
+            time.sleep(max(0.01, stream_poll_interval))
+            continue
+
         frame = down_frame = None
         with web_helpers.pause_background_capture(capturer):
             state.update(step=step, status="running", error="")
@@ -2817,7 +2932,7 @@ def run_fast_slow_loop(
             # synced first (planning=False → 2.0 m/s) then submitted Qwen,
             # so the drone burned path-prefix capacity at full speed for one
             # whole iteration before the velocity drop took effect.
-            synced_consumed = _sync_path_if_ready(objects, path_stream, client, state)
+            synced_consumed = _sync_path_if_ready(objects, path_stream, client, state, stage=stage)
             step += synced_consumed
             if synced_consumed > 0:
                 distance_check_pending = True

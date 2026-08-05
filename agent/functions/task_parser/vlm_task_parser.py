@@ -80,6 +80,7 @@ The "instruction" field is a simple English command. Examples:
   "飞到房子上方" -> {"instruction": "Fly above the house", "target": "house", "relation": "above"}
   "飞到第2辆红车旁" -> {"instruction": "Fly to the second red car", "target": "red car", "relation": "beside", "ordinal": 2, "selection_rule": "ordinal"}
   "飞到灌木丛旁边的红车旁" -> {"instruction": "Fly to the red car near the bushes", "target": "red car", "relation": "beside", "auxiliary_targets": ["bushes"], "selection_rule": "anchored"}
+  "飞回第一次经过的白车旁边" -> {"instruction": "Fly back to the first previously visited white car", "target": "white car", "relation": "near", "ordinal": 1, "selection_rule": "ordinal"}
 
 JSON schema:
 {
@@ -341,6 +342,10 @@ def _coerce_spatial_action_stage(
     source = f"{original_instruction} {instruction}".lower()
     if _has_above_relation(source) and target:
         return "target", target, "above"
+    if _has_return_to_intent(source) and target:
+        # "previously passed/经过的" identifies an old instance.  The desired
+        # spatial relation is returning near it, not passing it again.
+        return "target", target, "near"
     if mode not in {"action", "detect", "target"}:
         mode = "target"
     if mode == "action" and action not in _ACTION_VALUE_DEFAULTS:
@@ -351,6 +356,15 @@ def _coerce_spatial_action_stage(
 def _has_above_relation(text: str) -> bool:
     lower = (text or "").lower()
     return any(token in lower for token in ("above", "over", "on top", "top of", "上方", "上面", "顶部"))
+
+
+def _has_return_to_intent(text: str) -> bool:
+    lower = (text or "").lower()
+    return bool(
+        re.search(r"\b(?:fly|go|come|head|navigate)?\s*back\s+to\b", lower)
+        or re.search(r"\breturn\s+to\b", lower)
+        or any(token in lower for token in ("飞回", "返回", "回到", "回去"))
+    )
 
 
 def _has_landing_intent(text: str) -> bool:

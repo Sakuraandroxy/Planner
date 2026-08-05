@@ -86,6 +86,9 @@ FUNCTIONS:
     PATH_DIVERGE_RATIO: 0.90              # 候选终点比当前位置更远离memory目标时，用直达目标附近的短路径替换
     PATH_CLOSE_MISS_RATIO: 1.35           # 轨迹擦过目标附近但没进半径时，也按最近点截断/替换，防止高速掠过
     PATH_TARGET_BEHIND_X_M: 2.0           # 目标已在机体后方超过该距离时，不再接受继续向前的Qwen轨迹
+    RETURN_TARGET_REORIENT_ENABLED: true  # 返回历史目标且目标在机身后方时，先原地掉头再抓图规划
+    RETURN_TARGET_REORIENT_TRIGGER_DEG: 90.0 # 锁定目标与当前机头夹角达到该值时触发记忆引导转向
+    RETURN_TARGET_REORIENT_TIMEOUT_S: 8.0 # AirSim原地转向锁定历史目标的超时时间
     NEAR_STANDOFF_M: 6.0                  # 低空“到车/箱子旁边”的完成外圈半径，不再作为固定停车圆周
     NEAR_TARGET_EXTRA_STANDOFF_M: 3.0     # 根据目标footprint额外留出的旁停距离
     LOW_ALTITUDE_Z_DELTA_M: 3.0           # 当前高度与目标中心差值小于该值时认为是低空贴近目标
