@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 from types import SimpleNamespace
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 
 from config import cfg, get_cfg
 
@@ -60,6 +60,8 @@ class RuntimeObjects:
     collision_recovery: CollisionRecovery
     detect_executor: ThreadPoolExecutor
     slow_executor: ThreadPoolExecutor
+    future_detect_executor: ThreadPoolExecutor
+    future_scan_executor: ThreadPoolExecutor
     distance_estimator: Any
     arrival_completion: Any
     navigation_metrics: NavigationMetricsTracker
@@ -73,6 +75,38 @@ class RuntimeObjects:
     # future_scan_index/last_future_scan_s 控制低频轮询未来目标，避免每帧都检测所有目标。
     future_scan_index: int = 0
     last_future_scan_s: float = 0.0
+    future_scan_job: Any = None
+
+
+@dataclass(frozen=True)
+class MemoryScanSnapshot:
+    """One timestamp-aligned RGB/depth/pose snapshot for background memory scans."""
+
+    frame: Any
+    down_frame: Any
+    front_depth: Any
+    down_depth: Any
+    observer_world: tuple[float, float, float]
+    observer_yaw_deg: float
+
+
+@dataclass(frozen=True)
+class FutureMemoryObservation:
+    stage: Any
+    front_detections: list
+    down_detections: list
+    detect_elapsed: float
+
+
+@dataclass
+class FutureMemoryScanJob:
+    future: Future
+    snapshot: MemoryScanSnapshot
+    root_instruction: str
+    source_stage_key: tuple
+    target_names: tuple[str, ...]
+    submitted_at: float
+    warned_slow: bool = False
 
 
 def _debug_logs_enabled() -> bool:
@@ -106,6 +140,17 @@ def _build_runtime_objects() -> RuntimeObjects:
         max_workers=int(fast_slow_cfg.get("SLOW_WORKERS", 2)),
         thread_name_prefix="fast_slow_slow",
     )
+    # Future-target work must never occupy the current-stage detector workers.
+    # One scan worker plus a small dedicated detector pool also provides hard
+    # backpressure: at most one opportunistic scan can be active at a time.
+    future_detect_executor = ThreadPoolExecutor(
+        max_workers=max(1, int(fast_slow_cfg.get("FUTURE_DETECT_WORKERS", 1))),
+        thread_name_prefix="future_memory_detect",
+    )
+    future_scan_executor = ThreadPoolExecutor(
+        max_workers=1,
+        thread_name_prefix="future_memory_scan",
+    )
     arrival_completion = build_distance_arrival_completion(cfg)
     return RuntimeObjects(
         detector=detector,
@@ -118,6 +163,8 @@ def _build_runtime_objects() -> RuntimeObjects:
         collision_recovery=CollisionRecovery.from_config(collision_cfg),
         detect_executor=detect_executor,
         slow_executor=slow_executor,
+        future_detect_executor=future_detect_executor,
+        future_scan_executor=future_scan_executor,
         distance_estimator=build_distance_estimator(),
         arrival_completion=arrival_completion,
         navigation_metrics=NavigationMetricsTracker(arrival_completion.arrival_radius_m),
@@ -378,7 +425,15 @@ def _select_reliable_detection(stage: Any, front_det: Any, down_det: Any, frame:
     return max(candidates, key=lambda item: item[0])[1]
 
 
-def _detect_dual_view(objects: RuntimeObjects, stage, task_text, frame, down_frame):
+def _detect_dual_view(
+    objects: RuntimeObjects,
+    stage,
+    task_text,
+    frame,
+    down_frame,
+    *,
+    detect_executor: ThreadPoolExecutor | None = None,
+):
     from agent.models.detection.base import DetectionResult
 
     caption = _caption_for_stage(stage, task_text)
@@ -392,10 +447,18 @@ def _detect_dual_view(objects: RuntimeObjects, stage, task_text, frame, down_fra
         return [result] if result and result.visible else []
 
     t0 = time.perf_counter()
-    front_future = objects.detect_executor.submit(detect_one, frame, "front")
-    down_future = objects.detect_executor.submit(detect_one, down_frame, "down")
-    front_all = front_future.result()
-    down_all = down_future.result()
+    executor = detect_executor or objects.detect_executor
+    front_future = executor.submit(detect_one, frame, "front")
+    down_future = executor.submit(detect_one, down_frame, "down")
+    try:
+        front_all = front_future.result()
+        down_all = down_future.result()
+    except Exception:
+        # Avoid leaving a queued second-view request behind after the first
+        # request fails, especially in the single-worker future-scan pool.
+        front_future.cancel()
+        down_future.cancel()
+        raise
     for det in front_all:
         _suppress_unreliable_detection(stage, det, frame)
     for det in down_all:
@@ -757,58 +820,161 @@ def _bootstrap_mission_memory(objects: RuntimeObjects, client, state, task_text:
     )
 
 
-def _maybe_scan_future_memory(
+def _detect_future_memory_snapshot(
     objects: RuntimeObjects,
-    client,
-    state,
+    query_stages: list,
+    snapshot: MemoryScanSnapshot,
+    task_text: str,
+) -> list[FutureMemoryObservation]:
+    """Detect future targets without touching AirSim or MissionMemory."""
+
+    observations: list[FutureMemoryObservation] = []
+    for query_stage in query_stages:
+        _best_det, _front_det, _down_det, detect_elapsed, front_all, down_all = _detect_dual_view(
+            objects,
+            query_stage,
+            task_text,
+            snapshot.frame,
+            snapshot.down_frame,
+            detect_executor=objects.future_detect_executor,
+        )
+        _attach_depth_to_detection_lists(
+            front_all,
+            down_all,
+            snapshot.frame,
+            snapshot.down_frame,
+            snapshot.front_depth,
+            snapshot.down_depth,
+        )
+        observations.append(
+            FutureMemoryObservation(
+                stage=query_stage,
+                front_detections=front_all,
+                down_detections=down_all,
+                detect_elapsed=detect_elapsed,
+            )
+        )
+    return observations
+
+
+def _maybe_submit_future_memory_scan(
+    objects: RuntimeObjects,
     stage,
     task_text: str,
-    capture_mode: str,
-    *,
-    frame,
-    down_frame,
-) -> None:
+    snapshot: MemoryScanSnapshot | None,
+) -> bool:
+    """Submit one bounded future-target scan and return immediately."""
+
     memory = getattr(objects, "mission_memory", None)
     if memory is None or not memory.enabled or not bool(memory.config.get("OPPORTUNISTIC_SCAN_ENABLED", True)):
-        return
-    if frame is None:
-        return
+        return False
+    if snapshot is None or snapshot.frame is None:
+        return False
+    # Depth must belong to the same capture batch as RGB. Never restore the old
+    # behavior of recapturing depth later while the vehicle keeps moving.
+    if snapshot.front_depth is None and snapshot.down_depth is None:
+        _debug_print("  [FutureScan] skipped: same-frame depth unavailable")
+        return False
+    if objects.future_scan_job is not None:
+        return False
     now = time.perf_counter()
     interval = float(memory.config.get("OPPORTUNISTIC_SCAN_INTERVAL_S", 4.0))
     if now - float(objects.last_future_scan_s or 0.0) < interval:
-        return
+        return False
     query_stages = _memory_observation_stages(objects, current_stage=stage, future_only=True)
     if not query_stages:
-        return
-    per_scan = max(1, int(memory.config.get("OPPORTUNISTIC_TARGETS_PER_SCAN", 2)))
+        return False
+    per_scan = max(1, int(memory.config.get("OPPORTUNISTIC_TARGETS_PER_SCAN", 1)))
     start = int(objects.future_scan_index) % len(query_stages)
     ordered = query_stages[start:] + query_stages[:start]
     selected = ordered[:per_scan]
     objects.future_scan_index = (start + len(selected)) % len(query_stages)
     objects.last_future_scan_s = now
-    try:
-        front_depth, down_depth, _depth_elapsed = _capture_completion_depth(
-            client,
-            objects.completion_checker,
-            capture_mode,
-        )
-        observer_world, observer_yaw_deg = client.get_pose()
-    except Exception as exc:
-        print(f"  [MemoryScan] future scan skipped: {exc}")
-        return
-    _run_memory_observation_scan(
+    target_names = tuple(_caption_for_stage(query_stage, task_text) for query_stage in selected)
+    future = objects.future_scan_executor.submit(
+        _detect_future_memory_snapshot,
         objects,
-        state,
-        query_stages=selected,
-        frame=frame,
-        down_frame=down_frame,
-        front_depth=front_depth,
-        down_depth=down_depth,
-        observer_world=observer_world,
-        observer_yaw_deg=observer_yaw_deg,
-        task_text=task_text,
-        reason="future",
-        max_queries=per_scan,
+        list(selected),
+        snapshot,
+        task_text,
+    )
+    objects.future_scan_job = FutureMemoryScanJob(
+        future=future,
+        snapshot=snapshot,
+        root_instruction=str(memory.root_instruction or ""),
+        source_stage_key=CompletionPipeline.stage_key(stage),
+        target_names=target_names,
+        submitted_at=now,
+    )
+    print(f"  [FutureScan] submitted targets={list(target_names)}")
+    return True
+
+
+def _poll_future_memory_scan(objects: RuntimeObjects, state, current_stage) -> None:
+    """Commit a completed scan on the main loop; never wait for it."""
+
+    job = objects.future_scan_job
+    if job is None:
+        return
+    elapsed = max(0.0, time.perf_counter() - float(job.submitted_at))
+    if not job.future.done():
+        memory = getattr(objects, "mission_memory", None)
+        warn_after = float((getattr(memory, "config", {}) or {}).get("OPPORTUNISTIC_SCAN_WARN_AFTER_S", 10.0))
+        if not job.warned_slow and elapsed >= warn_after:
+            job.warned_slow = True
+            print(f"  [FutureScan] still_running elapsed={elapsed:.1f}s; current flight continues")
+        return
+
+    objects.future_scan_job = None
+    try:
+        observations = list(job.future.result() or [])
+    except Exception as exc:
+        print(f"  [FutureScan] failed elapsed={elapsed:.1f}s error={exc}")
+        return
+
+    memory = getattr(objects, "mission_memory", None)
+    if (
+        memory is None
+        or current_stage is None
+        or str(memory.root_instruction or "") != job.root_instruction
+    ):
+        print(f"  [FutureScan] discarded stale_task elapsed={elapsed:.1f}s")
+        return
+
+    current_index = int(getattr(current_stage, "index", 0))
+    updated_total = 0
+    discarded = 0
+    for observation in observations:
+        query_stage = observation.stage
+        if int(getattr(query_stage, "index", -1)) < current_index:
+            discarded += 1
+            continue
+        events = memory.update_from_detections(
+            stage=query_stage,
+            detections_by_view={
+                "front": observation.front_detections,
+                "down": observation.down_detections,
+            },
+            images_by_view={
+                "front": job.snapshot.frame,
+                "down": job.snapshot.down_frame,
+            },
+            observer_world=job.snapshot.observer_world,
+            observer_yaw_deg=job.snapshot.observer_yaw_deg,
+        )
+        updated_total += len(events)
+        if events:
+            primary = memory.primary_instance(query_stage)
+            print(
+                f"  [MemoryScan] reason=future target={_caption_for_stage(query_stage, '')!r} "
+                f"updates={len(events)} primary={(primary.instance_id if primary else 'none')} "
+                f"detect={observation.detect_elapsed:.2f}s"
+            )
+    if updated_total:
+        state.update(memory_summary=memory.summary(current_stage))
+    print(
+        f"  [FutureScan] completed elapsed={elapsed:.1f}s "
+        f"updates={updated_total} discarded={discarded}"
     )
 
 
@@ -1584,8 +1750,19 @@ def _capture_and_submit_plan(
     planning_cfg = function_section(cfg, "PLANNING")
     planning_capture_mode = str(planning_cfg.get("CAPTURE_MODE", "batch"))
     avoider = getattr(objects, "obstacle_avoider", None)
-    need_depth = bool(avoider is not None and getattr(avoider, "needs_plan_depth", lambda: False)())
+    memory = getattr(objects, "mission_memory", None)
+    future_scan_enabled = bool(
+        memory is not None
+        and memory.enabled
+        and bool(memory.config.get("OPPORTUNISTIC_SCAN_ENABLED", True))
+    )
+    need_depth = bool(
+        (avoider is not None and getattr(avoider, "needs_plan_depth", lambda: False)())
+        or future_scan_enabled
+    )
     front_depth = down_depth = None
+    snapshot_pos = snapshot_yaw = None
+    snapshot_depth_aligned = False
     if isolated_capture and planning_capture_mode == "batch":
         profile = str(planning_cfg.get("CAPTURE_PROFILE", "front_down") or "front_down")
         if need_depth and profile == "front_down":
@@ -1599,11 +1776,14 @@ def _capture_and_submit_plan(
             capture_pos,
             capture_yaw,
         ) = web_helpers.capture_profile_isolated_with_pose(client, profile)
+        snapshot_pos = list(capture_pos)
+        snapshot_yaw = float(capture_yaw)
+        snapshot_depth_aligned = front_depth is not None or down_depth is not None
         if hasattr(client, "get_pose_full"):
-            capture_pos, capture_yaw, capture_rot = client.get_pose_full()
+            _current_pos, _current_yaw, capture_rot = client.get_pose_full()
         else:
             print("  [Capture] full body rotation unavailable for Qwen plan, retry later")
-            return None, None, False
+            return None, None, False, None
     elif (
         planning_capture_mode == "batch"
         and need_depth
@@ -1613,11 +1793,16 @@ def _capture_and_submit_plan(
         frame, down_frame, front_depth, down_depth, capture_pos, capture_yaw, capture_rot, _timing = (
             client.capture_planning_views_depth_with_pose(camera_offset=camera_offset)
         )
+        snapshot_pos = list(capture_pos)
+        snapshot_yaw = float(capture_yaw)
+        snapshot_depth_aligned = front_depth is not None or down_depth is not None
     elif planning_capture_mode == "batch" and hasattr(client, "capture_planning_views_with_pose"):
         camera_offset = planning_cfg.get("FRONT_CAMERA_OFFSET", [1.0, 0.0, 0.0])
         frame, down_frame, capture_pos, capture_yaw, capture_rot, _timing = (
             client.capture_planning_views_with_pose(camera_offset=camera_offset)
         )
+        snapshot_pos = list(capture_pos)
+        snapshot_yaw = float(capture_yaw)
     else:
         if need_depth:
             frame, down_frame, front_depth, down_depth, _timing = client.capture_views(
@@ -1637,6 +1822,11 @@ def _capture_and_submit_plan(
         else:
             capture_pos, capture_yaw = client.get_pose()
             capture_rot = None
+        snapshot_pos = list(capture_pos)
+        snapshot_yaw = float(capture_yaw)
+        snapshot_depth_aligned = front_depth is not None or down_depth is not None
+    snapshot_front_depth = front_depth if snapshot_depth_aligned else None
+    snapshot_down_depth = down_depth if snapshot_depth_aligned else None
     if need_depth and front_depth is None:
         try:
             front_depth, down_depth, _depth_timing = _capture_completion_depth(
@@ -1648,10 +1838,10 @@ def _capture_and_submit_plan(
             print(f"  [ObstacleMemory] depth capture skipped: {exc}")
     if frame is None:
         print("  [Capture] no frame for Qwen plan, retry later")
-        return None, None, False
+        return None, None, False, None
     if capture_rot is None:
         print("  [Capture] full body rotation unavailable for Qwen plan, retry later")
-        return None, None, False
+        return None, None, False, None
     submitted = _submit_plan_if_needed(
         objects,
         client,
@@ -1665,7 +1855,22 @@ def _capture_and_submit_plan(
         plan_yaw=capture_yaw,
         plan_rot=capture_rot,
     )
-    return frame, down_frame, submitted
+    memory_snapshot = None
+    if (
+        snapshot_pos is not None
+        and snapshot_yaw is not None
+        and snapshot_depth_aligned
+        and (snapshot_front_depth is not None or snapshot_down_depth is not None)
+    ):
+        memory_snapshot = MemoryScanSnapshot(
+            frame=frame,
+            down_frame=down_frame,
+            front_depth=snapshot_front_depth,
+            down_depth=snapshot_down_depth,
+            observer_world=tuple(float(v) for v in snapshot_pos[:3]),
+            observer_yaw_deg=float(snapshot_yaw),
+        )
+    return frame, down_frame, submitted, memory_snapshot
 
 
 def _complete_stage_from_vlm(objects, path_stream, state, completion, distance_m: float) -> bool:
@@ -2415,6 +2620,10 @@ def run_fast_slow_loop(
             objects.navigation_metrics.start_stage(CompletionPipeline.stage_key(stage))
             print(f"\n[Stage {stage.index + 1}/{len(objects.task_manager.stages)}] {instruction}")
 
+        # Future-target work is polled without waiting. MissionMemory remains
+        # single-writer because completed observations are committed here.
+        _poll_future_memory_scan(objects, state, stage)
+
         if stage.mode == "action":
             path_stream.stop()
             objects.controller.clear()
@@ -2551,7 +2760,7 @@ def run_fast_slow_loop(
                     f"after_next={planning_decision.after_next_time_s:.2f}s"
                 )
                 state.update(status="capturing")
-                frame, down_frame, _submitted = _capture_and_submit_plan(
+                frame, down_frame, _submitted, memory_snapshot = _capture_and_submit_plan(
                     objects,
                     client,
                     stage,
@@ -2559,15 +2768,11 @@ def run_fast_slow_loop(
                     capture_mode,
                     isolated_capture=isolated_planning_capture,
                 )
-                _maybe_scan_future_memory(
+                _maybe_submit_future_memory_scan(
                     objects,
-                    client,
-                    state,
                     stage,
                     task_text,
-                    capture_mode,
-                    frame=frame,
-                    down_frame=down_frame,
+                    memory_snapshot,
                 )
 
             # Sync path AFTER Qwen submission so _continuous_path_velocity
@@ -2608,6 +2813,8 @@ def run_fast_slow_loop(
     objects.controller.shutdown()
     objects.detect_executor.shutdown(wait=False, cancel_futures=True)
     objects.slow_executor.shutdown(wait=False, cancel_futures=True)
+    objects.future_scan_executor.shutdown(wait=False, cancel_futures=True)
+    objects.future_detect_executor.shutdown(wait=False, cancel_futures=True)
 
 
 def print_last_navigation_summary(*, task_completed: bool = False) -> None:

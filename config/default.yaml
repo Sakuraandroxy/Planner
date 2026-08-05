@@ -79,7 +79,8 @@ FUNCTIONS:
     BOOTSTRAP_MAX_TARGETS: 8              # 启动扫描最多检测多少个任务目标/锚点，控制首帧额外耗时
     OPPORTUNISTIC_SCAN_ENABLED: true      # 飞行中低频扫描未来小任务目标，避免视角转开后未来目标完全丢失
     OPPORTUNISTIC_SCAN_INTERVAL_S: 4.0    # 机会扫描最小间隔；越小越积极但会增加检测/深度开销
-    OPPORTUNISTIC_TARGETS_PER_SCAN: 2     # 每次机会扫描检测几个未来目标，采用轮询避免一次性太重
+    OPPORTUNISTIC_TARGETS_PER_SCAN: 1     # 后台每次只检测一个未来目标，轮询其余目标，避免挤占当前阶段服务容量
+    OPPORTUNISTIC_SCAN_WARN_AFTER_S: 10.0 # 后台扫描超过该时长时打印一次提示，但不暂停当前飞行
     PATH_CLIP_ENABLED: true               # 已知锁定目标坐标时，裁剪/替换明显飞过目标的Qwen轨迹
     PATH_CLIP_RADIUS_M: 6.0               # memory路径守卫的外圈基准半径；实际飞行目标会再收进NEAR_APPROACH内圈
     PATH_DIVERGE_RATIO: 0.90              # 候选终点比当前位置更远离memory目标时，用直达目标附近的短路径替换
@@ -210,6 +211,7 @@ FUNCTIONS:
     DISTANCE_VIEW_POLICY: relation_aware  # completion距离视图策略: relation_aware | front_only | down_only | best_reliable
     SLOW_WORKERS: 2                       # 慢系统后台线程数：depth/VLM/Qwen 周边任务
     DETECT_WORKERS: 2                     # front/down 检测线程数
+    FUTURE_DETECT_WORKERS: 1              # 未来目标专用检测线程；与当前阶段检测隔离，并限制后台服务压力
 
 AGENT:
   # 任务解析器: vlm_parser | simple_parser
