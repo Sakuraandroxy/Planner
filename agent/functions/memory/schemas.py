@@ -80,6 +80,15 @@ class TargetInstanceBelief:
     uncertainty_m: float = 2.0
     # footprint_radius_m 近似目标在水平面的尺寸半径，用于“上方/旁边”的几何关系判定。
     footprint_radius_m: float = 1.5
+    # Bounded target-surface memory.  ``target_world`` remains an identity
+    # anchor for compatibility; navigation and completion should prefer these
+    # observed surfaces so a large object's center never becomes the goal.
+    surface_points_world: List[List[float]] = field(default_factory=list)
+    surface_bounds_world: Optional[List[List[float]]] = None
+    surface_observation_count: int = 0
+    geometry_kind: str = "point"
+    is_large_structure: bool = False
+    last_bbox_span: float = 0.0
     depth_median: Optional[float] = None
     bbox_quality: float = 0.0
     last_seen_view: str = "unknown"
@@ -104,6 +113,18 @@ class TargetInstanceBelief:
             "observations": int(self.observation_count),
             "uncertainty_m": round(float(self.uncertainty_m), 2),
             "footprint_radius_m": round(float(self.footprint_radius_m), 2),
+            "geometry": self.geometry_kind,
+            "surface_points": len(self.surface_points_world),
+            "surface_observations": int(self.surface_observation_count),
+            "surface_bounds": (
+                None
+                if not self.surface_bounds_world
+                else [
+                    [round(float(v), 2) for v in self.surface_bounds_world[0][:3]],
+                    [round(float(v), 2) for v in self.surface_bounds_world[1][:3]],
+                ]
+            ),
+            "large_structure": bool(self.is_large_structure),
             "view": self.last_seen_view,
             "age_s": round(self.age_s(), 1),
             "status": self.status,

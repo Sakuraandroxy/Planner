@@ -2015,12 +2015,29 @@ def _handle_background_target_lost(
     if getattr(objects, "mission_memory", None) is not None and objects.mission_memory.has_primary(stage):
         pos_now, _yaw_now = client.get_pose()
         mem_distance = objects.mission_memory.estimate_distance(stage, pos_now)
+        instance = objects.mission_memory.primary_instance(stage)
+        memory_cfg = getattr(objects.mission_memory, "config", {}) or {}
         confidence = float((mem_distance or {}).get("confidence", 0.0) or 0.0)
         uncertainty = float((mem_distance or {}).get("uncertainty_m", 999.0) or 999.0)
-        if confidence >= 0.65 and uncertainty <= float(objects.mission_memory.config.get("MAX_COMPLETION_UNCERTAINTY_M", 5.0)):
+        uses_surface = str((mem_distance or {}).get("distance_kind", "point")) == "surface"
+        min_confidence = 0.65
+        if uses_surface:
+            min_confidence = float(memory_cfg.get("SURFACE_MEMORY_ONLY_MIN_CONFIDENCE", 0.65))
+            if bool(getattr(instance, "is_large_structure", False)):
+                min_confidence = float(memory_cfg.get("LARGE_STRUCTURE_MEMORY_ONLY_MIN_CONFIDENCE", 0.55))
+        surface_fresh = not uses_surface or (
+            instance is not None
+            and instance.age_s() <= float(memory_cfg.get("SURFACE_COMPLETION_MAX_AGE_S", 120.0))
+        )
+        if (
+            confidence >= min_confidence
+            and uncertainty <= float(memory_cfg.get("MAX_COMPLETION_UNCERTAINTY_M", 5.0))
+            and surface_fresh
+        ):
             # 有稳定锁定实例时，单帧/单轮检测丢失不立刻停车清空；继续用memory引导规划。
             print(
-                f"  [TargetLost] ignored_once_by_memory confidence={confidence:.2f} "
+                f"  [TargetLost] ignored_by_memory geometry={'surface' if uses_surface else 'point'} "
+                f"confidence={confidence:.2f} "
                 f"uncertainty={uncertainty:.1f}m reason={reason}"
             )
             state.update(memory_summary=objects.mission_memory.summary(stage))
@@ -2336,6 +2353,17 @@ def _memory_distance_trigger_radius(objects, stage, trigger_radius_m: float) -> 
     max_uncertainty = float(memory_cfg.get("MAX_COMPLETION_UNCERTAINTY_M", 5.0))
     if _is_above_stage(stage):
         return float(trigger_radius_m)
+    uses_surface = bool(
+        getattr(instance, "surface_bounds_world", None)
+        and int(getattr(instance, "surface_observation_count", 0) or 0) > 0
+    )
+    if uses_surface:
+        # Memory distance is already measured to the nearest observed surface.
+        # Do not add the building/car footprint a second time.
+        return max(
+            float(trigger_radius_m),
+            float(memory_cfg.get("SURFACE_APPROACH_RADIUS_M", memory_cfg.get("NEAR_APPROACH_RADIUS_M", 4.5))),
+        )
     outer_radius = max(
         float(memory_cfg.get("NEAR_STANDOFF_M", trigger_radius_m))
         + float(memory_cfg.get("LOW_ALTITUDE_EXTRA_STANDOFF_M", 0.0)),
@@ -2371,6 +2399,15 @@ def _memory_completion_outer_radius(objects, stage, trigger_radius_m: float) -> 
             float(getattr(instance, "footprint_radius_m", 1.5) or 1.5)
             + float(memory_cfg.get("ABOVE_HORIZONTAL_RADIUS_M", 3.5))
             + min(max(float(uncertainty), 0.0), float(memory_cfg.get("MAX_COMPLETION_UNCERTAINTY_M", 5.0)))
+        )
+    uses_surface = bool(
+        getattr(instance, "surface_bounds_world", None)
+        and int(getattr(instance, "surface_observation_count", 0) or 0) > 0
+    )
+    if uses_surface:
+        return max(
+            float(trigger_radius_m),
+            float(memory_cfg.get("SURFACE_NEAR_RADIUS_M", memory_cfg.get("NEAR_STANDOFF_M", 6.0))),
         )
     return max(
         float(memory_cfg.get("NEAR_STANDOFF_M", trigger_radius_m))

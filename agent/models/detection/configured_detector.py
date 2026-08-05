@@ -23,6 +23,11 @@ class ConfiguredDetectorModel(DetectionModel):
             score=float(result.score or 0.0),
             label=str(result.label or text or ""),
             depth_median=result.depth_median,
+            surface_depth_samples=(
+                [list(sample) for sample in result.surface_depth_samples]
+                if getattr(result, "surface_depth_samples", None)
+                else None
+            ),
             source=self.detector.__class__.__name__,
             raw=result,
         )

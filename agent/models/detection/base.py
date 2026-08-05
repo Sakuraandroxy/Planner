@@ -18,6 +18,9 @@ class DetectionResult:
     label: str = ""
     depth_median: Optional[float] = None
     depth_bbox: Optional[List[int]] = None
+    # Normalized image coordinates plus radial depth: [u, v, depth_m].
+    # Populated when a completion/memory depth frame is attached.
+    surface_depth_samples: Optional[List[List[float]]] = None
     camera: str = "front"
 
 

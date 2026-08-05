@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import Any, Optional, Sequence
+from typing import Any, Iterable, Optional, Sequence
 
 
 def point3(value: Sequence[float]) -> list[float]:
@@ -98,14 +98,44 @@ def estimate_detection_world(
         return None
     center_x = (float(bbox[0]) + float(bbox[2])) * 0.5
     center_y = (float(bbox[1]) + float(bbox[3])) * 0.5
-    camera = str(getattr(detection, "camera", "front") or "front").strip().lower()
+    return project_image_depth_world(
+        pixel_x=center_x,
+        pixel_y=center_y,
+        depth_m=depth,
+        image_size=(width, height),
+        camera=str(getattr(detection, "camera", "front") or "front"),
+        observer_world=observer_world,
+        observer_yaw_deg=observer_yaw_deg,
+        memory_config=memory_config,
+        sim_config=sim_config,
+    )
+
+
+def project_image_depth_world(
+    *,
+    pixel_x: float,
+    pixel_y: float,
+    depth_m: float,
+    image_size: Sequence[float],
+    camera: str,
+    observer_world: Sequence[float],
+    observer_yaw_deg: float,
+    memory_config: Optional[dict] = None,
+    sim_config: Optional[dict] = None,
+) -> list[float]:
+    """Project one radial/planar image-depth sample into AirSim world NED."""
+    memory_config = memory_config or {}
+    sim_config = sim_config or {}
+    width, height = float(image_size[0]), float(image_size[1])
+    depth = float(depth_m)
+    camera = str(camera or "front").strip().lower()
     front_fov = float(memory_config.get("FRONT_FOV_DEG", sim_config.get("FRONT_FOV", 90.0)))
     down_fov = float(memory_config.get("DOWN_FOV_DEG", sim_config.get("DOWN_FOV", 90.0)))
     fov_deg = down_fov if camera == "down" else front_fov
     fx = width / (2.0 * math.tan(math.radians(fov_deg) * 0.5))
     fy = fx
 
-    ray_camera = [1.0, (center_x - width * 0.5) / fx, (center_y - height * 0.5) / fy]
+    ray_camera = [1.0, (float(pixel_x) - width * 0.5) / fx, (float(pixel_y) - height * 0.5) / fy]
     depth_is_radial = str(memory_config.get("DEPTH_MODE", "radial")).strip().lower() != "planar"
     if depth_is_radial:
         norm = math.sqrt(sum(value * value for value in ray_camera))
@@ -132,6 +162,148 @@ def estimate_detection_world(
         observer[1] + sin_yaw * point_body[0] + cos_yaw * point_body[1],
         observer[2] + point_body[2],
     ]
+
+
+def estimate_detection_surface_world(
+    detection: Any,
+    image: Any,
+    observer_world: Sequence[float],
+    observer_yaw_deg: float,
+    *,
+    memory_config: Optional[dict] = None,
+    sim_config: Optional[dict] = None,
+) -> list[list[float]]:
+    """Project the bounded sparse depth samples attached to a detection."""
+    if detection is None or image is None or not hasattr(image, "size"):
+        return []
+    samples = list(getattr(detection, "surface_depth_samples", None) or [])
+    if not samples:
+        point = estimate_detection_world(
+            detection,
+            image,
+            observer_world,
+            observer_yaw_deg,
+            memory_config=memory_config,
+            sim_config=sim_config,
+        )
+        return [point] if point is not None else []
+    memory_config = memory_config or {}
+    max_depth_m = float(memory_config.get("MAX_DEPTH_M", 200.0))
+    width, height = float(image.size[0]), float(image.size[1])
+    out = []
+    for sample in samples:
+        if not isinstance(sample, (list, tuple)) or len(sample) < 3:
+            continue
+        u, v, depth = float(sample[0]), float(sample[1]), float(sample[2])
+        if not all(math.isfinite(value) for value in (u, v, depth)):
+            continue
+        if depth <= 0.0 or depth > max_depth_m:
+            continue
+        out.append(project_image_depth_world(
+            pixel_x=u * width,
+            pixel_y=v * height,
+            depth_m=depth,
+            image_size=(width, height),
+            camera=str(getattr(detection, "camera", "front") or "front"),
+            observer_world=observer_world,
+            observer_yaw_deg=observer_yaw_deg,
+            memory_config=memory_config,
+            sim_config=sim_config,
+        ))
+    return out
+
+
+def bounds_from_points(points: Iterable[Sequence[float]]) -> Optional[list[list[float]]]:
+    valid = [point3(point) for point in points if point is not None and len(point) >= 3]
+    if not valid:
+        return None
+    return [
+        [min(point[axis] for point in valid) for axis in range(3)],
+        [max(point[axis] for point in valid) for axis in range(3)],
+    ]
+
+
+def valid_bounds(bounds: Any) -> bool:
+    return bool(
+        isinstance(bounds, (list, tuple))
+        and len(bounds) >= 2
+        and isinstance(bounds[0], (list, tuple))
+        and isinstance(bounds[1], (list, tuple))
+        and len(bounds[0]) >= 3
+        and len(bounds[1]) >= 3
+    )
+
+
+def nearest_point_on_bounds(point: Sequence[float], bounds: Sequence[Sequence[float]]) -> list[float]:
+    current = point3(point)
+    if not valid_bounds(bounds):
+        return current
+    lower, upper = point3(bounds[0]), point3(bounds[1])
+    return [max(lower[i], min(upper[i], current[i])) for i in range(3)]
+
+
+def distance_to_bounds(point: Sequence[float], bounds: Sequence[Sequence[float]]) -> float:
+    nearest = nearest_point_on_bounds(point, bounds)
+    return distance3(point, nearest)
+
+
+def horizontal_distance_to_bounds(point: Sequence[float], bounds: Sequence[Sequence[float]]) -> float:
+    if not valid_bounds(bounds):
+        return 0.0
+    nearest = nearest_point_on_bounds(point, bounds)
+    dx = float(point[0]) - nearest[0]
+    dy = float(point[1]) - nearest[1]
+    return math.sqrt(dx * dx + dy * dy)
+
+
+def vertical_distance_to_bounds(point: Sequence[float], bounds: Sequence[Sequence[float]]) -> float:
+    if not valid_bounds(bounds):
+        return 0.0
+    nearest = nearest_point_on_bounds(point, bounds)
+    return abs(float(point[2]) - nearest[2])
+
+
+def instance_surface_bounds(instance: Any) -> Optional[list[list[float]]]:
+    bounds = getattr(instance, "surface_bounds_world", None)
+    if valid_bounds(bounds):
+        return [point3(bounds[0]), point3(bounds[1])]
+    points = getattr(instance, "surface_points_world", None) or []
+    return bounds_from_points(points)
+
+
+def has_surface_geometry(instance: Any) -> bool:
+    return instance_surface_bounds(instance) is not None and int(
+        getattr(instance, "surface_observation_count", 0) or 0
+    ) > 0
+
+
+def nearest_instance_surface_point(point: Sequence[float], instance: Any) -> list[float]:
+    bounds = instance_surface_bounds(instance)
+    if bounds is not None:
+        return nearest_point_on_bounds(point, bounds)
+    return point3(getattr(instance, "target_world", [0.0, 0.0, 0.0]))
+
+
+def distance_to_instance_geometry(point: Sequence[float], instance: Any) -> float:
+    bounds = instance_surface_bounds(instance)
+    if bounds is not None:
+        return distance_to_bounds(point, bounds)
+    return distance3(point, getattr(instance, "target_world", [0.0, 0.0, 0.0]))
+
+
+def horizontal_distance_to_instance_geometry(point: Sequence[float], instance: Any) -> float:
+    bounds = instance_surface_bounds(instance)
+    if bounds is not None:
+        return horizontal_distance_to_bounds(point, bounds)
+    return horizontal_distance(point, getattr(instance, "target_world", [0.0, 0.0, 0.0]))
+
+
+def vertical_distance_to_instance_geometry(point: Sequence[float], instance: Any) -> float:
+    bounds = instance_surface_bounds(instance)
+    if bounds is not None:
+        return vertical_distance_to_bounds(point, bounds)
+    target = getattr(instance, "target_world", [0.0, 0.0, 0.0])
+    return abs(float(point[2]) - float(target[2]))
 
 
 def footprint_radius_from_detection(

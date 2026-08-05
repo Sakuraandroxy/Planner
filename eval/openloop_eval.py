@@ -30,6 +30,7 @@ sys.path.insert(0, str(_root))
 from config import cfg, get_cfg
 get_cfg(str(_root / "config" / "default.yaml"))
 
+from eval.goal_geometry import object_target_position, success_goal_position
 from agent.functions.candidate import prepare_candidates_for_world_model, select_best_candidate
 from agent.functions.common.config_access import function_section
 from agent.functions.planning.sliding_window_planning import SlidingWindowPlanningFunction
@@ -39,6 +40,7 @@ from agent.models.world_model import build_world_model
 from PIL import Image
 
 SUCCESS_RADIUS = float(cfg.get("EVAL", {}).get("SUCCESS_RADIUS", 10.0))
+SUCCESS_REFERENCE = str(cfg.get("EVAL", {}).get("SUCCESS_REFERENCE", "end") or "end")
 
 
 def quat_to_rot(q: list) -> np.ndarray:
@@ -98,8 +100,8 @@ def load_episodes(dataset_path: str) -> List[Dict]:
                     if "orientation" in state:
                         start_orientation = state["orientation"]
 
-            target_info = mark.get("target", {})
-            gt_target = target_info.get("position", [0, 0, 0]) if isinstance(target_info, dict) else target_info
+            gt_target = object_target_position(mark)
+            gt_goal = success_goal_position(mark, SUCCESS_REFERENCE)
 
             episodes.append({
                 "name": traj_dir.name,
@@ -107,6 +109,7 @@ def load_episodes(dataset_path: str) -> List[Dict]:
                 "start_pos": start_pos,
                 "start_orientation": start_orientation,
                 "gt_target": gt_target,
+                "gt_goal": gt_goal,
                 "instruction": instruction,
                 "front_img": str(front_img),
                 "down_img": str(down_img) if down_img.exists() else str(front_img),
@@ -121,7 +124,10 @@ def evaluate(episodes: List[Dict]):
     planner = SlidingWindowPlanningFunction(function_section(cfg, "PLANNING"))
     world_model = build_world_model()
 
-    results = {"ne": [], "sr": 0, "osr": 0, "spl": [], "total": len(episodes)}
+    results = {
+        "ne": [], "sr": 0, "osr": 0, "spl": [], "total": len(episodes),
+        "legacy_center_ne": [], "legacy_center_sr": 0,
+    }
     waypoints_all = []
 
     for idx, ep in enumerate(episodes):
@@ -239,10 +245,11 @@ def evaluate(episodes: List[Dict]):
         R_start = quat_to_rot(ep["start_orientation"])
         world_final = start_pos + R_start @ np.array(wp_final[:3])
 
-        gt_target = np.array(ep["gt_target"])
-        ne = float(np.linalg.norm(world_final - gt_target))
+        gt_goal = np.array(ep.get("gt_goal", ep["gt_target"]))
+        ne = float(np.linalg.norm(world_final - gt_goal))
         sr = ne <= SUCCESS_RADIUS
-        sl = float(np.linalg.norm(start_pos - gt_target))
+        sl = float(np.linalg.norm(start_pos - gt_goal))
+        legacy_center_ne = float(np.linalg.norm(world_final - np.array(ep["gt_target"])))
 
         # TL 用 waypoints 累计路径长度估算
         prev = np.zeros(3)
@@ -256,10 +263,13 @@ def evaluate(episodes: List[Dict]):
 
         results["ne"].append(ne)
         results["sr"] += 1 if sr else 0
+        results["legacy_center_ne"].append(legacy_center_ne)
+        results["legacy_center_sr"] += 1 if legacy_center_ne <= SUCCESS_RADIUS else 0
         results["spl"].append(spl)
         waypoints_all.append(wps)
 
-        print(f"  [RESULT] NE={ne:.1f}m SR={'✅' if sr else '❌'} SPL={spl:.3f} "
+        print(f"  [RESULT] NE={ne:.1f}m SR={'✅' if sr else '❌'} "
+              f"center_NE={legacy_center_ne:.1f}m SPL={spl:.3f} "
               f"TL={tl:.1f}m SL={sl:.1f}m")
 
     # 汇总
@@ -275,6 +285,9 @@ def evaluate(episodes: List[Dict]):
         return
     print(f"  SR  (Success Rate):          {results['sr']/n_total*100:.2f}%")
     print(f"  NE  (Navigation Error):      {np.mean(valid_ne):.2f}m" if valid_ne else "  NE: N/A")
+    print(f"  Legacy center SR:            {results['legacy_center_sr']/n_total*100:.2f}%")
+    if results["legacy_center_ne"]:
+        print(f"  Legacy center NE:            {np.mean(results['legacy_center_ne']):.2f}m")
     print(f"  SPL (Path Length Weighted):  {np.mean(valid_spl):.4f}" if valid_spl else "  SPL: N/A")
     print(f"  无效轨迹(检测/规划失败):      {n_total - len(valid_ne)}")
     print("=" * 60)

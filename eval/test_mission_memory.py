@@ -8,7 +8,12 @@ from PIL import Image
 
 from agent.functions.candidate.base import CandidateTrajectory
 from agent.functions.candidate.scorer import score_candidates
-from agent.functions.fast_slow.runtime import _apply_memory_path_guard
+from agent.functions.common.web_runtime_helpers import target_depth_text
+from agent.functions.fast_slow.runtime import (
+    _apply_memory_path_guard,
+    _handle_background_target_lost,
+    _memory_distance_trigger_radius,
+)
 from agent.functions.memory import MissionMemory
 from agent.functions.memory.appearance_signature import build_appearance_signature
 from agent.functions.memory.schemas import TargetInstanceBelief, TargetMemory
@@ -410,3 +415,156 @@ def test_depth_obstacle_avoider_stops_before_front_obstacle():
     assert result.changed
     assert result.waypoints
     assert result.waypoints[-1][0] < 5.0
+
+
+def test_large_building_completes_from_surface_memory_after_detection_is_lost():
+    memory = _memory()
+    stage = _stage(
+        instruction="Fly near the high-rise building",
+        target="high-rise building",
+        relation="near",
+    )
+    target = TargetMemory(
+        target_key="high rise building",
+        target_name="high-rise building",
+        primary_instance_id="high-rise building:1",
+    )
+    target.instances["high-rise building:1"] = TargetInstanceBelief(
+        instance_id="high-rise building:1",
+        encounter_order=1,
+        # Deliberately place the identity anchor deep inside the building.
+        target_world=[30.0, 0.0, 5.0],
+        confidence=0.72,
+        observation_count=1,
+        uncertainty_m=1.2,
+        footprint_radius_m=8.0,
+        surface_points_world=[
+            [0.0, -15.0, -20.0],
+            [0.0, 15.0, -20.0],
+            [0.0, -15.0, 30.0],
+            [0.0, 15.0, 30.0],
+        ],
+        surface_bounds_world=[[0.0, -15.0, -20.0], [0.0, 15.0, 30.0]],
+        surface_observation_count=1,
+        geometry_kind="large_surface",
+        is_large_structure=True,
+    )
+    memory.target_memories["high rise building"] = target
+
+    estimate = memory.estimate_distance(stage, current_world=[-4.5, 6.0, 0.0])
+    decision = memory.evaluate_completion(
+        stage=stage,
+        current_world=[-4.5, 6.0, 0.0],
+        fresh_visual_support=False,
+        stop_radius_m=4.0,
+    )
+
+    assert estimate is not None
+    assert estimate["distance_kind"] == "surface"
+    assert abs(estimate["distance_m"] - 4.5) < 1e-6
+    assert estimate["nearest_surface_world"] == [0.0, 6.0, 0.0]
+    assert decision.done
+    assert decision.reason == "memory_surface_near_complete"
+
+
+def test_sparse_depth_samples_build_a_bounded_surface_instead_of_one_point():
+    memory = _memory()
+    stage = _stage(target="warehouse", instruction="Fly near the warehouse")
+    image = Image.new("RGB", (640, 480), (120, 120, 120))
+    detection = _det([160, 100, 480, 380], 20.0, score=0.85, label="warehouse")
+    detection.surface_depth_samples = [
+        [0.30, 0.30, 20.0],
+        [0.70, 0.30, 20.0],
+        [0.30, 0.70, 20.0],
+        [0.70, 0.70, 20.0],
+    ]
+
+    memory.update_from_detections(
+        stage=stage,
+        detections_by_view={"front": [detection]},
+        images_by_view={"front": image},
+        observer_world=[0.0, 0.0, 0.0],
+        observer_yaw_deg=0.0,
+    )
+
+    instance = memory.primary_instance(stage)
+    assert instance is not None
+    assert instance.geometry_kind == "large_surface"
+    assert instance.surface_observation_count == 1
+    assert len(instance.surface_points_world) == 4
+    assert instance.surface_bounds_world is not None
+    assert instance.surface_bounds_world[1][1] > instance.surface_bounds_world[0][1]
+    assert instance.surface_bounds_world[1][2] > instance.surface_bounds_world[0][2]
+
+
+def test_depth_attachment_extracts_bounded_normalized_surface_samples():
+    import numpy as np
+
+    image = Image.new("RGB", (640, 480), (120, 120, 120))
+    depth = np.full((48, 64), 20.0, dtype=np.float32)
+    detection = _det([160, 120, 480, 360], 20.0, score=0.8, label="building")
+
+    target_depth_text("front", detection, image, depth)
+
+    assert detection.depth_median == 20.0
+    assert 4 <= len(detection.surface_depth_samples) <= 36
+    assert all(0.0 <= sample[0] <= 1.0 for sample in detection.surface_depth_samples)
+    assert all(0.0 <= sample[1] <= 1.0 for sample in detection.surface_depth_samples)
+    assert all(sample[2] == 20.0 for sample in detection.surface_depth_samples)
+
+
+def test_surface_trigger_does_not_add_large_building_footprint_twice():
+    instance = TargetInstanceBelief(
+        instance_id="building:1",
+        encounter_order=1,
+        target_world=[20.0, 0.0, 0.0],
+        confidence=0.8,
+        footprint_radius_m=8.0,
+        surface_points_world=[[10.0, -5.0, -5.0], [10.0, 5.0, 5.0]],
+        surface_bounds_world=[[10.0, -5.0, -5.0], [10.0, 5.0, 5.0]],
+        surface_observation_count=1,
+        geometry_kind="large_surface",
+        is_large_structure=True,
+    )
+    memory = SimpleNamespace(
+        config={"SURFACE_APPROACH_RADIUS_M": 4.5, "NEAR_APPROACH_RADIUS_M": 4.5},
+        primary_instance=lambda stage: instance,
+    )
+    objects = SimpleNamespace(mission_memory=memory)
+
+    assert _memory_distance_trigger_radius(objects, _stage(target="building"), 4.0) == 4.5
+
+
+def test_background_detector_loss_keeps_flying_with_fresh_building_surface_memory():
+    memory = _memory()
+    stage = _stage(target="building", instruction="Fly near the building")
+    target = TargetMemory(target_key="building", target_name="building", primary_instance_id="building:1")
+    target.instances["building:1"] = TargetInstanceBelief(
+        instance_id="building:1",
+        encounter_order=1,
+        target_world=[20.0, 0.0, 0.0],
+        confidence=0.72,
+        observation_count=1,
+        uncertainty_m=1.0,
+        surface_points_world=[[10.0, -5.0, -5.0], [10.0, 5.0, 5.0]],
+        surface_bounds_world=[[10.0, -5.0, -5.0], [10.0, 5.0, 5.0]],
+        surface_observation_count=1,
+        geometry_kind="large_surface",
+        is_large_structure=True,
+    )
+    memory.target_memories["building"] = target
+    objects = SimpleNamespace(mission_memory=memory)
+    client = SimpleNamespace(get_pose=lambda: ([0.0, 0.0, 0.0], 0.0))
+    state = SimpleNamespace(update=lambda **kwargs: None)
+
+    should_stop_stage = _handle_background_target_lost(
+        objects,
+        client,
+        path_stream=None,
+        state=state,
+        stage=stage,
+        capture_mode="batch",
+        reason="target fills view and detector returned no bbox",
+    )
+
+    assert not should_stop_stage

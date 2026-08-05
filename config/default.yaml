@@ -116,6 +116,21 @@ FUNCTIONS:
     ANCHOR_SWITCH_ENABLED: true           # 锚点关系强时允许纠正已锁定实例，避免先锁错同类目标
     DEFAULT_FOOTPRINT_RADIUS_M: 1.5       # 无法从bbox估计尺寸时的默认目标半径
     MAX_FOOTPRINT_RADIUS_M: 8.0           # 目标半径上限，避免异常大框把完成半径放得过宽
+    MAX_SURFACE_POINTS_PER_INSTANCE: 96   # 每个目标最多保存多少个稀疏三维表面点，不保存原始深度图
+    SURFACE_VOXEL_SIZE_M: 0.75            # 表面点体素去重分辨率，控制长期任务内存和深度噪声
+    SURFACE_LOCAL_FOOTPRINT_RADIUS_M: 0.5 # 已有表面时，路径以最近表面为锚点，不再重复叠加整个物体半径
+    SURFACE_APPROACH_RADIUS_M: 4.5        # 无人机到已观测表面的距离小于该值时触发最终完成确认
+    SURFACE_NEAR_RADIUS_M: 6.0            # “附近/旁边”允许的最大表面距离；高楼不再要求接近楼心
+    SURFACE_COMPLETION_UNCERTAINTY_CAP_M: 2.0 # 表面完成半径最多吸收多少定位不确定性
+    SURFACE_COMPLETION_UNCERTAINTY_RATIO: 0.15 # 不确定性只少量放宽完成区，主要仍用于安全边界
+    SURFACE_MEMORY_ONLY_COMPLETION_ENABLED: true # 近距离检测失败时允许由深度表面记忆完成
+    SURFACE_MEMORY_ONLY_MIN_CONFIDENCE: 0.65 # 普通物体仅凭表面记忆完成所需置信度
+    SURFACE_MEMORY_ONLY_MIN_OBSERVATIONS: 2 # 普通物体仅凭表面记忆至少需要几次深度观测
+    SURFACE_COMPLETION_MAX_AGE_S: 120.0   # 表面记忆超过该时长后不能在无新视觉证据时直接完成
+    LARGE_STRUCTURE_MIN_FOOTPRINT_M: 4.5 # 超过该粗略尺寸时按建筑/大型结构处理
+    LARGE_STRUCTURE_ASSOCIATION_RADIUS_M: 25.0 # 同一建筑不同墙面观测允许的关联距离
+    LARGE_STRUCTURE_MEMORY_ONLY_MIN_CONFIDENCE: 0.55 # 建筑铺满视角后使用历史表面所需置信度
+    LARGE_STRUCTURE_MEMORY_ONLY_MIN_OBSERVATIONS: 1 # 一次高质量深度墙面观测即可建立可达表面
     DEPTH_UNCERTAINTY_RATIO: 0.06         # 深度越远，不确定性越大；该值控制增长比例
     STALE_UNCERTAINTY_GROWTH_MPS: 0.03    # 记忆越旧，不确定性每秒增长多少米
     MEMORY_ONLY_COMPLETION_ENABLED: true  # 允许高置信memory在检测/VLM失效时完成当前小任务
@@ -292,6 +307,7 @@ WEB:
 
 EVAL:
   SUCCESS_RADIUS: 10.0
+  SUCCESS_REFERENCE: end                 # end=示范无人机安全终点；target=兼容旧物体中心球指标
   MAX_STEPS: 100
   INIT_MOVE_VELOCITY: 5.0
   INIT_MOVE_TIMEOUT: 30.0

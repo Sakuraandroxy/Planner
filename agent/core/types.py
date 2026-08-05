@@ -27,6 +27,10 @@ class Detection:
     score: float = 0.0
     label: str = ""
     depth_median: Optional[float] = None
+    # Sparse normalized image samples ``[u, v, depth_m]`` extracted from the
+    # depth image.  They preserve target surface geometry without retaining a
+    # full frame or point cloud in long-lived memory.
+    surface_depth_samples: Optional[List[List[float]]] = None
     source: str = ""
     raw: Any = None
 

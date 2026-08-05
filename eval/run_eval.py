@@ -43,11 +43,13 @@ from agent.functions.common.task_manager import TaskManager
 from agent.functions.planning.sliding_window_planning import SlidingWindowPlanningFunction
 from agent.functions.relocalization import TargetRelocalizer
 from agent.models.planner.sliding_window_planner import incremental_to_cumulative
+from eval.goal_geometry import object_target_position, success_goal_position
 from eval.metrics import MetricsTracker
 from sim.airsim_client import AirSimClient
 
 
 SUCCESS_RADIUS = float(cfg.get("EVAL", {}).get("SUCCESS_RADIUS", 10.0))
+SUCCESS_REFERENCE = str(cfg.get("EVAL", {}).get("SUCCESS_REFERENCE", "end") or "end")
 MAX_STEPS = int(cfg.get("EVAL", {}).get("MAX_STEPS", 100))
 INIT_MOVE_VELOCITY = float(cfg.get("EVAL", {}).get("INIT_MOVE_VELOCITY", 5.0))
 INIT_MOVE_TIMEOUT = float(cfg.get("EVAL", {}).get("INIT_MOVE_TIMEOUT", 30.0))
@@ -202,8 +204,8 @@ def discover_episodes(dataset_path: str) -> List[Dict]:
                 start_pos = logged_pos
             if logged_ori is not None:
                 start_orientation = logged_ori
-            target_info = meta.get("target", {})
-            target_pos = target_info.get("position", [0, 0, 0]) if isinstance(target_info, dict) else target_info
+            target_pos = object_target_position(meta)
+            goal_pos = success_goal_position(meta, SUCCESS_REFERENCE)
 
             # 指令从 obj_des.json 读取
             obj_des_file = ep_dir / "obj_des.json"
@@ -226,6 +228,7 @@ def discover_episodes(dataset_path: str) -> List[Dict]:
                 "start_orientation": start_orientation,
                 "start_frame": start_frame,
                 "target": target_pos,
+                "goal": goal_pos,
                 "instruction": instruction,
                 "target_obj": target_obj,
             })
@@ -273,14 +276,18 @@ def evaluate(episodes: List[Dict], scene_filter: str = None,
 
     all_metrics = {
         "sr": 0, "osr": 0,
+        "legacy_center_sr": 0,
         "ne_list": [], "spl_list": [],
+        "legacy_center_ne_list": [],
         "trajectory_lengths": [],
     }
 
     for idx, ep in enumerate(episodes):
         print(f"\n[{idx+1}/{len(episodes)}] {ep['scene']}/{ep['name']}")
         print(f"  指令: {ep['instruction']}")
-        print(f"  目标: {ep['target']}")
+        print(f"  物体参考点: {ep['target']}")
+        goal_position = ep.get("goal", ep["target"])
+        print(f"  安全完成点({SUCCESS_REFERENCE}): {goal_position}")
 
         # ── 场景切换检测 ──
         if scene_manager is not None and ep["scene"] != current_scene:
@@ -303,7 +310,7 @@ def evaluate(episodes: List[Dict], scene_filter: str = None,
             print(f"  [SceneManager] 已切换到 {current_scene}")
 
         # 创建指标跟踪器
-        metrics = MetricsTracker(ep["target"], success_radius=SUCCESS_RADIUS)
+        metrics = MetricsTracker(goal_position, success_radius=SUCCESS_RADIUS)
         task_finished = False
         task_manager = _build_eval_task_manager(task_parser, ep["instruction"])
 
@@ -407,11 +414,11 @@ def evaluate(episodes: List[Dict], scene_filter: str = None,
                         break
                 continue
 
-            # 停止判断：GT 世界坐标距离
+            # 默认使用示范无人机安全终点，而不是可能在物体内部的中心点。
             pos = client.get_pose()[0]
-            dist_to_gt = _distance(pos, ep["target"])
-            if dist_to_gt < SUCCESS_RADIUS:
-                print(f"  [Done] world_dist={dist_to_gt:.1f}m < {SUCCESS_RADIUS}m")
+            dist_to_goal = _distance(pos, goal_position)
+            if dist_to_goal < SUCCESS_RADIUS:
+                print(f"  [Done] goal_dist={dist_to_goal:.1f}m < {SUCCESS_RADIUS}m")
                 if current_stage:
                     task_manager.complete_current("reached target radius")
                     print(f"  [TASK] {task_manager.summary()}")
@@ -548,10 +555,11 @@ def evaluate(episodes: List[Dict], scene_filter: str = None,
                 pos_final, _, collided = client.execute_waypoints(exec_waypoints)
                 _te = time.perf_counter() - _te0
                 metrics.record_step(pos_final)
+                final_goal_distance = _distance(pos_final, goal_position)
                 wp_count = sum(1 for wp in exec_waypoints if not all(abs(v) < 1e-6 for v in wp))
                 print(f"  [Step {step:3d}] plan={_tp:.1f}s  exec={_te:.1f}s  "
-                      f"wp={wp_count}  GT_dist={dist_to_gt:.1f}m"
-                      f"{' ✅' if dist_to_gt < SUCCESS_RADIUS else ''}")
+                      f"wp={wp_count}  goal_dist={final_goal_distance:.1f}m"
+                      f"{' ✅' if final_goal_distance < SUCCESS_RADIUS else ''}")
             else:
                 print(f"  [Step {step:3d}] no valid waypoints, stopping")
                 break
@@ -576,9 +584,18 @@ def evaluate(episodes: List[Dict], scene_filter: str = None,
             all_metrics["ne_list"].append(ne)
         all_metrics["spl_list"].append(spl)
         all_metrics["trajectory_lengths"].append(metrics.trajectory_length)
+        final_recorded_position = metrics.positions[-1] if metrics.positions else None
+        legacy_center_ne = (
+            _distance(final_recorded_position, ep["target"])
+            if final_recorded_position is not None
+            else None
+        )
+        if legacy_center_ne is not None:
+            all_metrics["legacy_center_ne_list"].append(legacy_center_ne)
+            all_metrics["legacy_center_sr"] += 1 if legacy_center_ne < SUCCESS_RADIUS else 0
 
         print(f"  NE={ne:.1f}m SR={'✅' if sr else '❌'} OSR={osr_flag} SPL={spl:.2f} "
-              f"finished={task_finished}")
+              f"legacy_center_NE={legacy_center_ne:.1f}m finished={task_finished}")
 
     # 汇总
     n = len(episodes)
@@ -589,6 +606,9 @@ def evaluate(episodes: List[Dict], scene_filter: str = None,
         print(f"  OSR (Oracle Success Rate):   {all_metrics['osr']/n*100:.2f}%")
         if all_metrics['ne_list']:
             print(f"  NE  (Navigation Error):      {np.mean(all_metrics['ne_list']):.2f}m")
+        if all_metrics['legacy_center_ne_list']:
+            print(f"  Legacy center SR:            {all_metrics['legacy_center_sr']/n*100:.2f}%")
+            print(f"  Legacy center NE:            {np.mean(all_metrics['legacy_center_ne_list']):.2f}m")
         print(f"  SPL (Path Length Weighted):  {np.mean(all_metrics['spl_list']):.4f}")
         print(f"  平均路径长度:                {np.mean(all_metrics['trajectory_lengths']):.1f}m")
         print("=" * 50)

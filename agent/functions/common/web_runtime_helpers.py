@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import math
 import socket
 import time
 
@@ -61,6 +62,12 @@ def target_depth_text(name, detection, image, depth_meters) -> str:
         robust_depth = float(np.median(center_valid)) if center_valid.size else median_depth
         detection.depth_median = robust_depth if np.isfinite(robust_depth) else None
         detection.depth_bbox = db
+        detection.surface_depth_samples = _surface_depth_samples(
+            depth_meters,
+            db,
+            robust_depth,
+            max_samples=36,
+        )
         median_text = f"{median_depth:.1f}m" if np.isfinite(median_depth) else "N/A"
         robust_text = f"{robust_depth:.1f}m" if np.isfinite(robust_depth) else "N/A"
         return (
@@ -72,6 +79,66 @@ def target_depth_text(name, detection, image, depth_meters) -> str:
             f"{name}:bbox={getattr(detection, 'bbox', None)} "
             f"score={float(getattr(detection, 'score', 0.0) or 0.0):.2f} depth=ERR({exc})"
         )
+
+
+def _surface_depth_samples(depth_meters, depth_bbox, anchor_depth, *, max_samples: int = 36):
+    """Return a bounded foreground-like sample set from one detected bbox.
+
+    Bounding boxes often include sky, road, or objects behind the target.  A
+    small regular grid is therefore filtered around the robust central depth.
+    Coordinates are normalized to the depth image so the memory projection is
+    independent of RGB/depth resolution differences.
+    """
+    import numpy as np
+
+    if depth_meters is None or depth_bbox is None or len(depth_bbox) < 4:
+        return []
+    if anchor_depth is None or not np.isfinite(anchor_depth) or float(anchor_depth) <= 0.0:
+        return []
+    h, w = depth_meters.shape
+    x1, y1, x2, y2 = [int(v) for v in depth_bbox[:4]]
+    x1, x2 = sorted((max(0, min(w - 1, x1)), max(0, min(w - 1, x2))))
+    y1, y2 = sorted((max(0, min(h - 1, y1)), max(0, min(h - 1, y2))))
+    if x2 < x1 or y2 < y1:
+        return []
+
+    # Stay slightly inside the box to reduce background leakage at detector
+    # edges, while retaining enough facade extent for large structures.
+    margin_x = int((x2 - x1) * 0.06)
+    margin_y = int((y2 - y1) * 0.06)
+    sx1, sx2 = min(x2, x1 + margin_x), max(x1, x2 - margin_x)
+    sy1, sy2 = min(y2, y1 + margin_y), max(y1, y2 - margin_y)
+    side = max(2, int(math.ceil(math.sqrt(max(1, int(max_samples))))))
+    xs = np.unique(np.rint(np.linspace(sx1, sx2, side)).astype(int))
+    ys = np.unique(np.rint(np.linspace(sy1, sy2, side)).astype(int))
+
+    candidates = []
+    anchor = float(anchor_depth)
+    tolerance = max(2.0, 0.18 * anchor)
+    for py in ys:
+        for px in xs:
+            depth = float(depth_meters[int(py), int(px)])
+            if not np.isfinite(depth) or depth <= 0.0:
+                continue
+            candidates.append((abs(depth - anchor), int(px), int(py), depth))
+    if not candidates:
+        return []
+
+    selected = [item for item in candidates if item[0] <= tolerance]
+    # Thin or oblique targets can have a broad depth range.  Keep the samples
+    # nearest to the robust central depth rather than returning no geometry.
+    if len(selected) < min(4, len(candidates)):
+        selected = sorted(candidates, key=lambda item: item[0])[: min(max_samples, len(candidates))]
+    else:
+        selected = selected[:max_samples]
+    return [
+        [
+            (float(px) + 0.5) / max(float(w), 1.0),
+            (float(py) + 0.5) / max(float(h), 1.0),
+            float(depth),
+        ]
+        for _delta, px, py, depth in selected
+    ]
 
 
 def push_pil_png_to_frontend(state, frame, *, view: str = "front"):

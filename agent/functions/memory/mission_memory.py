@@ -17,10 +17,15 @@ from agent.functions.memory.geometry import (
     bearing_yaw_deg,
     bbox_area_ratio,
     bbox_quality,
+    bounds_from_points,
     distance3,
+    distance_to_instance_geometry,
     estimate_detection_world,
+    estimate_detection_surface_world,
     footprint_radius_from_detection,
+    has_surface_geometry,
     horizontal_distance,
+    nearest_instance_surface_point,
     world_to_body,
 )
 from agent.functions.memory.schemas import (
@@ -57,6 +62,11 @@ _ZH_NUMERALS = {
     "八": 8,
     "九": 9,
 }
+_LARGE_STRUCTURE_TOKENS = (
+    "building", "tower", "skyscraper", "warehouse", "hangar", "factory",
+    "apartment", "office block", "高楼", "楼房", "建筑", "大厦", "塔",
+    "仓库", "厂房",
+)
 
 
 @dataclass
@@ -183,10 +193,22 @@ class MissionMemory:
         if instance is None:
             return None
         current = [float(v) for v in current_world[:3]]
+        # Partial facades are reliable for near/beside distance, but not yet a
+        # complete roof footprint for "above" semantics.
+        surface_geometry = has_surface_geometry(instance) and relation_kind(stage) == "near"
+        nearest_surface = nearest_instance_surface_point(current, instance)
+        navigation_target = nearest_surface if surface_geometry else instance.target_world
         return {
             "stage_key": stage_key_tuple(stage),
-            "distance_m": distance3(current, instance.target_world),
-            "target_world": list(instance.target_world),
+            "distance_m": (
+                distance_to_instance_geometry(current, instance)
+                if surface_geometry
+                else distance3(current, instance.target_world)
+            ),
+            "target_world": list(navigation_target),
+            "identity_anchor_world": list(instance.target_world),
+            "nearest_surface_world": list(nearest_surface) if surface_geometry else None,
+            "distance_kind": "surface" if surface_geometry else "point",
             "current_world": current,
             "observation_age_s": instance.age_s(),
             "source": "mission_memory",
@@ -267,7 +289,12 @@ class MissionMemory:
         instance = self.primary_instance(stage)
         if instance is None:
             return None
-        return bearing_yaw_deg(current_world, instance.target_world)
+        target = (
+            nearest_instance_surface_point(current_world, instance)
+            if has_surface_geometry(instance) and relation_kind(stage) == "near"
+            else instance.target_world
+        )
+        return bearing_yaw_deg(current_world, target)
 
     def planner_hint(
         self,
@@ -281,14 +308,21 @@ class MissionMemory:
         instance = self.primary_instance(stage)
         if instance is None:
             return ""
-        body = world_to_body(instance.target_world, current_world, yaw_deg)
         relation = relation_kind(stage)
+        surface_geometry = has_surface_geometry(instance) and relation == "near"
+        navigation_target = (
+            nearest_instance_surface_point(current_world, instance)
+            if surface_geometry
+            else instance.target_world
+        )
+        body = world_to_body(navigation_target, current_world, yaw_deg)
         anchor_hint = self._anchor_hint(stage, current_world, yaw_deg)
         return (
             "Memory hint: keep the locked target instance. "
             f"Target='{target_name_for_stage(stage)}', instance={instance.instance_id}, "
             f"encounter_order={instance.encounter_order}, relation={relation}, "
-            f"body_xyz=[{body[0]:.1f},{body[1]:.1f},{body[2]:.1f}], "
+            f"navigation_anchor_body_xyz=[{body[0]:.1f},{body[1]:.1f},{body[2]:.1f}], "
+            f"geometry={instance.geometry_kind}, "
             f"confidence={instance.confidence:.2f}, uncertainty={instance.uncertainty_m:.1f}m. "
             f"{anchor_hint}"
             "Do not switch to another same-class object unless the locked instance is clearly impossible."
@@ -308,6 +342,13 @@ class MissionMemory:
         instance = self.primary_instance(stage)
         if memory is None or instance is None:
             return {}
+        relation = relation_kind(stage)
+        surface_geometry = has_surface_geometry(instance) and relation == "near"
+        navigation_target = (
+            nearest_instance_surface_point(current_world, instance)
+            if surface_geometry
+            else instance.target_world
+        )
         non_primary = []
         for other in memory.instances.values():
             if other.instance_id == instance.instance_id:
@@ -315,14 +356,29 @@ class MissionMemory:
             non_primary.append(world_to_body(other.target_world, current_world, yaw_deg))
         return {
             "enabled": True,
-            "target_body": world_to_body(instance.target_world, current_world, yaw_deg),
-            "target_world": list(instance.target_world),
-            "relation": relation_kind(stage),
+            "target_body": world_to_body(navigation_target, current_world, yaw_deg),
+            "target_world": list(navigation_target),
+            "identity_anchor_world": list(instance.target_world),
+            "relation": relation,
             "confidence": float(instance.confidence),
             "uncertainty_m": instance.effective_uncertainty(
                 stale_growth_per_s=float(self.config.get("STALE_UNCERTAINTY_GROWTH_MPS", 0.03))
             ),
-            "footprint_radius_m": float(instance.footprint_radius_m),
+            # Once a surface is known, target_body already lies on the nearest
+            # facade/body surface.  Do not add the whole object's radius again.
+            "footprint_radius_m": (
+                float(self.config.get("SURFACE_LOCAL_FOOTPRINT_RADIUS_M", 0.5))
+                if surface_geometry
+                else float(instance.footprint_radius_m)
+            ),
+            "uses_surface_geometry": surface_geometry,
+            "geometry_kind": instance.geometry_kind,
+            "is_large_structure": bool(instance.is_large_structure),
+            "surface_bounds_world": (
+                [list(bound) for bound in instance.surface_bounds_world]
+                if instance.surface_bounds_world
+                else None
+            ),
             "non_primary_bodies": non_primary,
             "instance_id": instance.instance_id,
             "encounter_order": int(instance.encounter_order),
@@ -428,6 +484,14 @@ class MissionMemory:
                 )
                 if world is None:
                     continue
+                surface_world = estimate_detection_surface_world(
+                    detection,
+                    image,
+                    observer_world,
+                    observer_yaw_deg,
+                    memory_config=self.config,
+                    sim_config=self.sim_config,
+                )
                 score = float(getattr(detection, "score", 0.0) or 0.0)
                 if score < float(self.config.get("MIN_DETECTION_SCORE", 0.35)):
                     continue
@@ -437,6 +501,30 @@ class MissionMemory:
                     image,
                     getattr(detection, "bbox", None),
                     view=str(view_name or getattr(detection, "camera", "unknown")),
+                )
+                footprint = footprint_radius_from_detection(
+                    detection,
+                    image,
+                    memory_config=self.config,
+                    sim_config=self.sim_config,
+                )
+                bbox = list(getattr(detection, "bbox", []) or [])
+                bbox_span = 0.0
+                if len(bbox) >= 4 and image is not None and hasattr(image, "size"):
+                    width, height = float(image.size[0]), float(image.size[1])
+                    if width > 1.0 and height > 1.0:
+                        bbox_span = max(
+                            max(0.0, float(bbox[2]) - float(bbox[0])) / width,
+                            max(0.0, float(bbox[3]) - float(bbox[1])) / height,
+                        )
+                target_text = " ".join((
+                    str(getattr(stage, "target", "") or ""),
+                    str(getattr(stage, "instruction", "") or ""),
+                    str(getattr(detection, "label", "") or ""),
+                )).lower()
+                is_large_structure = (
+                    footprint >= float(self.config.get("LARGE_STRUCTURE_MIN_FOOTPRINT_M", 4.5))
+                    or any(token in target_text for token in _LARGE_STRUCTURE_TOKENS)
                 )
                 observations.append(
                     {
@@ -448,12 +536,10 @@ class MissionMemory:
                         "quality": quality,
                         "area_ratio": bbox_area_ratio(detection, image),
                         "depth": getattr(detection, "depth_median", None),
-                        "footprint": footprint_radius_from_detection(
-                            detection,
-                            image,
-                            memory_config=self.config,
-                            sim_config=self.sim_config,
-                        ),
+                        "footprint": footprint,
+                        "surface_world": surface_world,
+                        "bbox_span": bbox_span,
+                        "is_large_structure": is_large_structure,
                         "signature": signature,
                         "distance_from_observer": distance3(observer_world, world),
                         "forward_projection": dx * forward[0] + dy * forward[1],
@@ -465,11 +551,18 @@ class MissionMemory:
         best = None
         best_score = -1.0
         for instance in memory.instances.values():
-            geo_dist = distance3(obs["world"], instance.target_world)
+            geo_dist = distance_to_instance_geometry(obs["world"], instance)
             assoc_radius = max(
                 float(self.config.get("MIN_ASSOCIATION_RADIUS_M", 2.0)),
                 float(instance.footprint_radius_m) + float(instance.uncertainty_m) + 1.2,
             )
+            if bool(instance.is_large_structure) or bool(obs.get("is_large_structure", False)):
+                # Observations of the same facade can be many metres apart;
+                # compare against the accumulated surface and use a wider gate.
+                assoc_radius = max(
+                    assoc_radius,
+                    float(self.config.get("LARGE_STRUCTURE_ASSOCIATION_RADIUS_M", 25.0)),
+                )
             if geo_dist > assoc_radius:
                 continue
             geo_score = 1.0 - min(1.0, geo_dist / max(assoc_radius, 1e-6))
@@ -494,6 +587,11 @@ class MissionMemory:
             sigma_z=1.2,
             uncertainty_m=self._initial_uncertainty(obs),
             footprint_radius_m=float(obs["footprint"]),
+            surface_points_world=[],
+            surface_observation_count=0,
+            geometry_kind="point",
+            is_large_structure=bool(obs.get("is_large_structure", False)),
+            last_bbox_span=float(obs.get("bbox_span", 0.0) or 0.0),
             depth_median=None if obs["depth"] is None else float(obs["depth"]),
             bbox_quality=float(obs["quality"]),
             last_seen_view=str(obs["view"]),
@@ -508,7 +606,8 @@ class MissionMemory:
         alpha = max(0.18, min(0.65, obs_quality))
         if instance.observation_count <= 0:
             alpha = 1.0
-        # target_world 使用指数平滑，降低单帧深度噪声对完成半径的影响。
+        # target_world 仍作为实例关联/旧接口锚点；导航完成优先使用不被
+        # 多视角平均到物体内部的 surface_points_world。
         instance.target_world = [
             round((1.0 - alpha) * float(instance.target_world[i]) + alpha * float(obs["world"][i]), 4)
             for i in range(3)
@@ -528,6 +627,24 @@ class MissionMemory:
             max(0.5, 0.70 * float(instance.footprint_radius_m) + 0.30 * float(obs["footprint"])),
             3,
         )
+        new_surface = list(obs.get("surface_world") or [])
+        if new_surface:
+            instance.surface_points_world = self._merge_surface_points(
+                instance.surface_points_world,
+                new_surface,
+            )
+            instance.surface_bounds_world = bounds_from_points(instance.surface_points_world)
+            instance.surface_observation_count += 1
+            instance.geometry_kind = "large_surface" if (
+                instance.is_large_structure or bool(obs.get("is_large_structure", False))
+            ) else "surface_bounds"
+        instance.is_large_structure = bool(
+            instance.is_large_structure or obs.get("is_large_structure", False)
+        )
+        instance.last_bbox_span = max(
+            float(instance.last_bbox_span),
+            float(obs.get("bbox_span", 0.0) or 0.0),
+        )
         instance.depth_median = None if obs["depth"] is None else float(obs["depth"])
         instance.bbox_quality = float(obs["quality"])
         instance.last_seen_view = str(obs["view"])
@@ -542,6 +659,41 @@ class MissionMemory:
             max_prototypes=int(self.config.get("MAX_APPEARANCE_PROTOTYPES", 5)),
             merge_threshold=float(self.config.get("APPEARANCE_MERGE_THRESHOLD", 0.78)),
         )
+
+    def _merge_surface_points(
+        self,
+        existing: Sequence[Sequence[float]],
+        observed: Sequence[Sequence[float]],
+    ) -> List[List[float]]:
+        """Voxel-deduplicate and cap per-instance surface memory."""
+        resolution = max(0.1, float(self.config.get("SURFACE_VOXEL_SIZE_M", 0.75)))
+        max_points = max(8, int(self.config.get("MAX_SURFACE_POINTS_PER_INSTANCE", 96)))
+        cells: Dict[tuple[int, int, int], List[float]] = {}
+        for point in list(existing or []) + list(observed or []):
+            if point is None or len(point) < 3:
+                continue
+            value = [float(point[0]), float(point[1]), float(point[2])]
+            if not all(math.isfinite(v) for v in value):
+                continue
+            key = tuple(int(round(v / resolution)) for v in value)
+            cells[key] = [round(v, 4) for v in value]
+        points = list(cells.values())
+        if len(points) <= max_points:
+            return points
+
+        # Preserve geometric extrema, then sample evenly from the remaining
+        # voxels.  This keeps facade/vehicle bounds stable under long missions.
+        keep_indices = set()
+        for axis in range(3):
+            keep_indices.add(min(range(len(points)), key=lambda i: points[i][axis]))
+            keep_indices.add(max(range(len(points)), key=lambda i: points[i][axis]))
+        remaining = [i for i in range(len(points)) if i not in keep_indices]
+        slots = max(0, max_points - len(keep_indices))
+        if slots and remaining:
+            stride = len(remaining) / float(slots)
+            for index in range(slots):
+                keep_indices.add(remaining[min(len(remaining) - 1, int(index * stride))])
+        return [points[index] for index in sorted(keep_indices)[:max_points]]
 
     def _initial_uncertainty(self, obs: dict) -> float:
         depth = obs.get("depth")
@@ -613,7 +765,7 @@ class MissionMemory:
         if anchored is not None and rule in {"anchored", "stable", "nearest"}:
             return anchored
         if rule in {"nearest", "closest"}:
-            return min(instances, key=lambda inst: distance3(current_world, inst.target_world))
+            return min(instances, key=lambda inst: distance_to_instance_geometry(current_world, inst))
         if bool(self.config.get("LOCK_ON_FIRST_STABLE_INSTANCE", True)):
             stable = [
                 inst for inst in instances
