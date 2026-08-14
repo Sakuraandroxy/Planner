@@ -31,6 +31,7 @@ class NavigationMetricsTracker:
         self._stage_key = None
         self._stage_start: Optional[list[float]] = None
         self._stage_reference_added = False
+        self._stage_reference_distance_m = 0.0
         self._ever_in_radius = False
         self.task_completed = False
         self.plan_steps = 0
@@ -84,16 +85,30 @@ class NavigationMetricsTracker:
         self._stage_key = stage_key
         self._stage_start = list(self.positions[-1]) if self.positions else None
         self._stage_reference_added = False
+        self._stage_reference_distance_m = 0.0
         self.target_world = None
         self.target_distance_m = None
         self.first_target_distance_m = None
 
-    def update_target(self, stage_key, target_world, confidence: Optional[float] = None) -> None:
+    def update_target(
+        self,
+        stage_key,
+        target_world,
+        confidence: Optional[float] = None,
+        *,
+        replace_stage_reference: bool = False,
+    ) -> None:
         self.start_stage(stage_key)
         self.target_world = _point(target_world)
         self.latest_confidence = None if confidence is None else float(confidence)
-        if self._stage_start is not None and not self._stage_reference_added:
-            self.straight_line_distance_m += _distance(self._stage_start, self.target_world)
+        if self._stage_start is not None and (
+            not self._stage_reference_added or replace_stage_reference
+        ):
+            reference_distance = _distance(self._stage_start, self.target_world)
+            if self._stage_reference_added:
+                self.straight_line_distance_m -= self._stage_reference_distance_m
+            self.straight_line_distance_m += reference_distance
+            self._stage_reference_distance_m = reference_distance
             self._stage_reference_added = True
         if self.positions:
             self.record_distance(_distance(self.positions[-1], self.target_world))
@@ -136,7 +151,7 @@ class NavigationMetricsTracker:
         self.summary_printed = True
         ne = "N/A" if self.ne_m is None else f"{self.ne_m:.2f}m"
         print("\n" + "=" * 55)
-        print("  导航全程汇总（目标位置来自距离估算模块）")
+        print("  导航全程汇总（目标位置来自锁定目标几何）")
         print("=" * 55)
         print(f"  总规划步数:         {self.plan_steps}")
         print(f"  总耗时:             {self.elapsed_s:.1f}s")

@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional, Tuple
 from openai import OpenAI
 from PIL import ImageDraw
 
+from agent.functions.common.detection_policy import allows_clipped_large_structure
 from agent.models.detection.base import DetectionResult
 
 
@@ -233,9 +234,9 @@ class TaskCompletionChecker:
         # If a bbox spans >90 % of its image, zero that detection's score.
         # Score-zero proposals are not sent to the VLM final judge.
         if front_detection and front_detection.visible:
-            self._zero_giant_bbox_score(front_detection, front_image)
+            self._zero_giant_bbox_score(stage, front_detection, front_image)
         if down_detection and down_detection.visible:
-            self._zero_giant_bbox_score(down_detection, down_image)
+            self._zero_giant_bbox_score(stage, down_detection, down_image)
 
         front_ok = front_detection is not None and front_detection.visible
         down_ok = down_detection is not None and down_detection.visible
@@ -247,8 +248,8 @@ class TaskCompletionChecker:
                 elapsed=time.perf_counter() - started,
             )
 
-        reliable_front = front_detection if self._has_reliable_fresh_evidence(front_detection, front_image) else None
-        reliable_down = down_detection if self._has_reliable_fresh_evidence(down_detection, down_image) else None
+        reliable_front = front_detection if self._has_reliable_fresh_evidence(front_detection, front_image, stage) else None
+        reliable_down = down_detection if self._has_reliable_fresh_evidence(down_detection, down_image, stage) else None
 
         # ── VLM final judge (only reliable detector-backed image evidence) ──
         if self._can_use_vlm_final_judge():
@@ -421,7 +422,7 @@ class TaskCompletionChecker:
             return None
         return prepared
 
-    def _has_reliable_fresh_evidence(self, detection: Optional[DetectionResult], image) -> bool:
+    def _has_reliable_fresh_evidence(self, detection: Optional[DetectionResult], image, stage: Any = None) -> bool:
         if detection is None or not detection.visible or not detection.bbox:
             return False
         if float(detection.score or 0.0) < self.min_detection_confidence:
@@ -436,9 +437,15 @@ class TaskCompletionChecker:
         box_h = max(0.0, min(height, y2) - max(0.0, y1))
         if box_w <= 1.0 or box_h <= 1.0:
             return False
-        return not (
-            box_w / width >= self.max_detection_span
-            or box_h / height >= self.max_detection_span
+        exceeds_span = box_w / width >= self.max_detection_span or box_h / height >= self.max_detection_span
+        return bool(
+            not exceeds_span
+            or allows_clipped_large_structure(
+                stage,
+                detection,
+                image,
+                max_span=self.max_detection_span,
+            )
         )
 
     def _select_best_detection(
@@ -480,7 +487,7 @@ class TaskCompletionChecker:
         return float(detection.depth_median) <= self.stop_depth
 
     @staticmethod
-    def _zero_giant_bbox_score(detection: DetectionResult, image) -> None:
+    def _zero_giant_bbox_score(stage: Any, detection: DetectionResult, image) -> None:
         """Zero detection.score when the bbox covers >90 % of the image.
 
         The detection object is kept for logs/debug evidence, but score=0
@@ -495,6 +502,8 @@ class TaskCompletionChecker:
         box_w = max(0.0, min(width, x2) - max(0.0, x1))
         box_h = max(0.0, min(height, y2) - max(0.0, y1))
         if box_w / width >= 0.90 or box_h / height >= 0.90:
+            if allows_clipped_large_structure(stage, detection, image, max_span=0.90):
+                return
             detection.score = 0.0
 
     @staticmethod

@@ -25,7 +25,10 @@ from agent.functions.memory.geometry import (
     footprint_radius_from_detection,
     has_surface_geometry,
     horizontal_distance,
+    horizontal_distance_to_instance_surface_samples,
+    has_surface_samples,
     nearest_instance_surface_point,
+    nearest_instance_surface_sample_point,
     world_to_body,
 )
 from agent.functions.memory.schemas import (
@@ -67,6 +70,11 @@ _LARGE_STRUCTURE_TOKENS = (
     "apartment", "office block", "高楼", "楼房", "建筑", "大厦", "塔",
     "仓库", "厂房",
 )
+_SMALL_TARGET_TOKENS = (
+    "car", "automobile", "vehicle", "truck", "bus", "van", "fountain",
+    "statue", "bench", "chair", "cone", "汽车", "轿车", "车辆", "卡车",
+    "公交车", "面包车", "喷泉", "雕像", "长椅", "椅子", "路锥",
+)
 
 
 @dataclass
@@ -107,6 +115,11 @@ class MissionMemory:
         self.target_memories: Dict[str, TargetMemory] = {}
         # stage_locks 保证每个小任务锁定同一个物体实例，避免视野变化后把“第2辆”重新编号。
         self.stage_locks: Dict[str, str] = {}
+        # 延迟绑定阶段只在激活时观测到的局部候选中编号，不复用全局同类目标顺序。
+        self.stage_local_instances: Dict[str, List[str]] = {}
+        # Save the stage activation frame so delayed detections keep the
+        # original meaning of "left/right/front" after the UAV moves.
+        self.stage_activation_views: Dict[str, dict] = {}
         self.pose_history: List[PoseRecord] = []
         self.stage_summaries: List[StageSummary] = []
         self.events: List[dict] = []
@@ -117,11 +130,75 @@ class MissionMemory:
         self.root_instruction = (root_instruction or "").strip()
         self.target_memories.clear()
         self.stage_locks.clear()
+        self.stage_local_instances.clear()
+        self.stage_activation_views.clear()
         self.pose_history.clear()
         self.stage_summaries.clear()
         self.events.clear()
         self._switch_candidates.clear()
         self.last_completion_decision = None
+
+    def local_instance_ids(self, stage: Any) -> List[str]:
+        """Return the activation-view candidates owned by one stage."""
+        return list(self.stage_local_instances.get(stage_key(stage), []))
+
+    def reset_view_relative_binding(self, stage: Any) -> List[str]:
+        """Clear a stage-local binding without deleting global mission memory."""
+        if not is_view_relative_stage(stage):
+            return []
+        key = stage_key(stage)
+        cleared = list(self.stage_local_instances.pop(key, []))
+        self.stage_activation_views.pop(key, None)
+        locked_id = self.stage_locks.pop(key, "")
+        target_key = normalize_target_key(target_name_for_stage(stage))
+        memory = self.target_memories.get(target_key)
+        if memory is not None and memory.primary_instance_id in set(cleared + [locked_id]):
+            memory.primary_instance_id = ""
+        self._switch_candidates.pop(key, None)
+        self._append_event({
+            "type": "view_relative_reset",
+            "stage": key,
+            "target": target_key,
+            "cleared": cleared,
+        })
+        return cleared
+
+    def begin_view_relative_binding(
+        self,
+        stage: Any,
+        observer_world: Sequence[float],
+        observer_yaw_deg: float,
+    ) -> None:
+        """Freeze the coordinate frame used by one delayed-binding stage."""
+        if not is_view_relative_stage(stage):
+            return
+        key = stage_key(stage)
+        self.stage_activation_views[key] = {
+            "observer_world": [float(v) for v in observer_world[:3]],
+            "observer_yaw_deg": float(observer_yaw_deg),
+            "started_at": time.perf_counter(),
+        }
+        self._append_event({
+            "type": "view_relative_activation",
+            "stage": key,
+            "observer_world": [round(float(v), 3) for v in observer_world[:3]],
+            "observer_yaw_deg": round(float(observer_yaw_deg), 2),
+        })
+
+    def view_relative_binding_expired(self, stage: Any, current_world: Sequence[float]) -> tuple[bool, str]:
+        """Bound exploratory delayed binding by both elapsed time and distance."""
+        activation = self.stage_activation_views.get(stage_key(stage))
+        if activation is None:
+            return False, "activation view unavailable"
+        elapsed = max(0.0, time.perf_counter() - float(activation.get("started_at", 0.0)))
+        traveled = distance3(current_world, activation.get("observer_world", current_world))
+        max_age = float(self.config.get("VIEW_RELATIVE_DELAY_BIND_MAX_AGE_S", 45.0))
+        max_distance = float(self.config.get("VIEW_RELATIVE_DELAY_BIND_MAX_DISTANCE_M", 30.0))
+        if elapsed > max_age:
+            return True, f"delayed binding timed out after {elapsed:.1f}s"
+        if traveled > max_distance:
+            return True, f"delayed binding exceeded {traveled:.1f}m exploration limit"
+        return False, f"waiting for delayed binding elapsed={elapsed:.1f}s traveled={traveled:.1f}m"
 
     def record_pose(self, stage: Any, position: Sequence[float], yaw_deg: float) -> None:
         if not self.enabled:
@@ -169,9 +246,29 @@ class MissionMemory:
         # 同一帧内先按无人机前进方向排序，新的实例 encounter_order 才更接近“路上遇到的第N个”。
         observations.sort(key=lambda obs: (obs["forward_projection"], obs["distance_from_observer"]))
         events: List[MemoryUpdateEvent] = []
+        binding_frame_instances = set()
+        binding_unlocked = bool(
+            is_view_relative_stage(stage)
+            and not self.stage_locks.get(stage_key(stage), "")
+        )
         for obs in observations:
-            instance, kind = self._match_or_create_instance(memory, obs, stage)
+            instance, kind = self._match_or_create_instance(
+                memory,
+                obs,
+                stage,
+                exclude_instance_ids=binding_frame_instances if binding_unlocked else None,
+            )
+            if instance is None:
+                # A view-relative identity is immutable after activation. A
+                # same-class detection outside the locked geometry belongs to
+                # another object and must not extend this stage's local set.
+                continue
             self._update_instance(instance, obs, stage)
+            binding_frame_instances.add(instance.instance_id)
+            if is_view_relative_stage(stage) and binding_unlocked:
+                local_ids = self.stage_local_instances.setdefault(stage_key(stage), [])
+                if instance.instance_id not in local_ids:
+                    local_ids.append(instance.instance_id)
             events.append(
                 MemoryUpdateEvent(
                     target_key=target_key,
@@ -182,7 +279,7 @@ class MissionMemory:
                     view=instance.last_seen_view,
                 )
             )
-        self._ensure_stage_lock(stage, memory, observer_world)
+        self._ensure_stage_lock(stage, memory, observer_world, observer_yaw_deg)
         self._prune_memory()
         for event in events:
             self._append_event(event.to_summary_dict())
@@ -197,11 +294,16 @@ class MissionMemory:
         # complete roof footprint for "above" semantics.
         surface_geometry = has_surface_geometry(instance) and relation_kind(stage) == "near"
         nearest_surface = nearest_instance_surface_point(current, instance)
+        surface_sample_distance = (
+            horizontal_distance_to_instance_surface_samples(current, instance)
+            if surface_geometry
+            else None
+        )
         navigation_target = nearest_surface if surface_geometry else instance.target_world
         return {
             "stage_key": stage_key_tuple(stage),
             "distance_m": (
-                distance_to_instance_geometry(current, instance)
+                surface_sample_distance
                 if surface_geometry
                 else distance3(current, instance.target_world)
             ),
@@ -209,6 +311,7 @@ class MissionMemory:
             "identity_anchor_world": list(instance.target_world),
             "nearest_surface_world": list(nearest_surface) if surface_geometry else None,
             "distance_kind": "surface" if surface_geometry else "point",
+            "distance_plane": "xy" if surface_geometry else "3d",
             "current_world": current,
             "observation_age_s": instance.age_s(),
             "source": "mission_memory",
@@ -217,6 +320,154 @@ class MissionMemory:
                 stale_growth_per_s=float(self.config.get("STALE_UNCERTAINTY_GROWTH_MPS", 0.03))
             ),
             "instance_id": instance.instance_id,
+        }
+
+    def trusted_near_large_surface_estimate(
+        self,
+        stage: Any,
+        current_world: Sequence[float],
+    ) -> Optional[dict]:
+        """Return a locked facade estimate that is safe to trust near a building."""
+        if not self.enabled or not bool(
+            self.config.get("LARGE_STRUCTURE_NEAR_MEMORY_TRUST_ENABLED", True)
+        ):
+            return None
+        instance = self.primary_instance(stage)
+        if instance is None:
+            return None
+        locked_id = self.stage_locks.get(stage_key(stage), "")
+        if locked_id != instance.instance_id:
+            return None
+        if (
+            relation_kind(stage) != "near"
+            or not bool(instance.is_large_structure)
+            or not has_surface_geometry(instance)
+        ):
+            return None
+        if int(instance.surface_observation_count) < int(
+            self.config.get("LARGE_STRUCTURE_NEAR_MEMORY_TRUST_MIN_OBSERVATIONS", 1)
+        ):
+            return None
+
+        estimate = self.estimate_distance(stage, current_world)
+        if estimate is None or str(estimate.get("distance_kind", "")) != "surface":
+            return None
+        trust_radius = max(
+            float(self.config.get("SURFACE_NEAR_RADIUS_M", 6.0)),
+            float(self.config.get("LARGE_STRUCTURE_NEAR_MEMORY_TRUST_RADIUS_M", 12.0)),
+        )
+        if float(estimate.get("distance_m", float("inf"))) > trust_radius:
+            return None
+        if float(estimate.get("confidence", 0.0)) < float(
+            self.config.get(
+                "LARGE_STRUCTURE_NEAR_MEMORY_TRUST_MIN_CONFIDENCE",
+                self.config.get("LOCK_MIN_CONFIDENCE", 0.35),
+            )
+        ):
+            return None
+        if float(estimate.get("uncertainty_m", float("inf"))) > float(
+            self.config.get("LARGE_STRUCTURE_NEAR_MEMORY_TRUST_MAX_UNCERTAINTY_M", 3.0)
+        ):
+            return None
+        if float(estimate.get("observation_age_s", float("inf"))) > float(
+            self.config.get("SURFACE_COMPLETION_MAX_AGE_S", 120.0)
+        ):
+            return None
+
+        trusted = dict(estimate)
+        trusted["trust_radius_m"] = trust_radius
+        trusted["trust_reason"] = "locked_near_large_surface"
+        return trusted
+
+    def record_locked_large_surface_contact(
+        self,
+        stage: Any,
+        *,
+        observer_world: Sequence[float],
+        observer_yaw_deg: float,
+        obstacle_body: Sequence[float],
+        contact_kind: str = "depth",
+    ) -> Optional[dict]:
+        """Fuse a near depth barrier into the currently locked building facade."""
+        instance = self.primary_instance(stage)
+        if (
+            instance is None
+            or self.stage_locks.get(stage_key(stage), "") != instance.instance_id
+            or relation_kind(stage) != "near"
+            or not bool(instance.is_large_structure)
+            or not has_surface_geometry(instance)
+            or obstacle_body is None
+            or len(obstacle_body) < 3
+        ):
+            return None
+        body = [float(obstacle_body[0]), float(obstacle_body[1]), float(obstacle_body[2])]
+        contact_range = distance3([0.0, 0.0, 0.0], body)
+        if body[0] <= 0.0 or contact_range > float(
+            self.config.get("LARGE_STRUCTURE_DEPTH_CONTACT_MAX_RANGE_M", 8.0)
+        ):
+            return None
+
+        yaw = math.radians(float(observer_yaw_deg))
+        cos_yaw = math.cos(yaw)
+        sin_yaw = math.sin(yaw)
+        contact_world = [
+            round(float(observer_world[0]) + cos_yaw * body[0] - sin_yaw * body[1], 4),
+            round(float(observer_world[1]) + sin_yaw * body[0] + cos_yaw * body[1], 4),
+            round(float(observer_world[2]) + body[2], 4),
+        ]
+        instance.surface_patches_world.append([contact_world])
+        max_patches = max(1, int(self.config.get("MAX_SURFACE_PATCHES_PER_INSTANCE", 12)))
+        del instance.surface_patches_world[:-max_patches]
+        instance.surface_points_world = self._merge_surface_points(
+            instance.surface_points_world,
+            [contact_world],
+        )
+        instance.surface_bounds_world = bounds_from_points(instance.surface_points_world)
+        instance.surface_observation_count += 1
+        instance.observation_count += 1
+        instance.last_seen_s = time.perf_counter()
+        instance.last_surface_contact_s = instance.last_seen_s
+        instance.last_surface_contact_kind = str(contact_kind or "depth")
+        instance.confidence = max(
+            float(instance.confidence),
+            float(self.config.get("LARGE_STRUCTURE_DEPTH_CONTACT_MIN_CONFIDENCE", 0.38)),
+        )
+        instance.uncertainty_m = min(
+            float(instance.uncertainty_m),
+            float(self.config.get("LARGE_STRUCTURE_DEPTH_CONTACT_UNCERTAINTY_M", 1.5)),
+        )
+        instance.sigma_xy = round(max(0.35, instance.uncertainty_m * 0.75), 3)
+        instance.sigma_z = round(max(0.25, instance.uncertainty_m * 0.45), 3)
+        estimate = self.estimate_distance(stage, observer_world)
+        if estimate is not None:
+            estimate = dict(estimate)
+            estimate["contact_world"] = contact_world
+            estimate["contact_range_m"] = contact_range
+        return estimate
+
+    def recent_locked_large_surface_contact(self, stage: Any, *, max_age_s: Optional[float] = None) -> Optional[dict]:
+        """Return a short-lived facade contact tied to this stage's locked instance."""
+        instance = self.primary_instance(stage)
+        if (
+            instance is None
+            or not self.is_primary_locked(stage)
+            or not bool(instance.is_large_structure)
+            or not has_surface_geometry(instance)
+            or float(instance.last_surface_contact_s) <= 0.0
+        ):
+            return None
+        limit = float(
+            max_age_s
+            if max_age_s is not None
+            else self.config.get("LARGE_STRUCTURE_CONTACT_COMPLETION_MAX_AGE_S", 8.0)
+        )
+        age = max(0.0, time.perf_counter() - float(instance.last_surface_contact_s))
+        if age > limit:
+            return None
+        return {
+            "instance_id": instance.instance_id,
+            "age_s": age,
+            "kind": instance.last_surface_contact_kind,
         }
 
     def evaluate_completion(
@@ -232,14 +483,136 @@ class MissionMemory:
             decision = MemoryCompletionDecision.not_complete(reason="memory disabled")
             self.last_completion_decision = decision
             return decision
+        large_surface_arrival = self.evaluate_large_surface_arrival(
+            stage,
+            current_world,
+            radius_m=float(self.config.get("SURFACE_APPROACH_RADIUS_M", 4.5)),
+        )
+        if large_surface_arrival is not None:
+            return large_surface_arrival
+        instance = self.primary_instance(stage)
+        if (
+            instance is not None
+            and self.is_primary_locked(stage)
+            and bool(instance.is_large_structure)
+            and has_surface_samples(instance)
+            and relation_kind(stage) == "near"
+        ):
+            # For large structures the direct XY surface rule is the complete
+            # contract.  Do not fall back to SURFACE_NEAR_RADIUS_M (which may
+            # be wider than 4.5m) and accidentally complete early.
+            distance_m = horizontal_distance_to_instance_surface_samples(current_world, instance)
+            nearest = nearest_instance_surface_sample_point(current_world, instance)
+            radius = max(0.0, float(self.config.get("SURFACE_APPROACH_RADIUS_M", 4.5)))
+            decision = MemoryCompletionDecision.not_complete(
+                instance_id=instance.instance_id,
+                confidence=float(instance.confidence),
+                distance_m=float(distance_m),
+                horizontal_distance_m=float(distance_m),
+                vertical_delta_m=abs(float(current_world[2]) - float(nearest[2])),
+                target_world=list(nearest),
+                uncertainty_m=float(instance.effective_uncertainty(
+                    stale_growth_per_s=float(self.config.get("STALE_UNCERTAINTY_GROWTH_MPS", 0.03))
+                )),
+                required_radius_m=radius,
+                reason="outside_large_surface_xy_radius",
+                details={
+                    "geometry": instance.geometry_kind,
+                    "large_structure": True,
+                    "uses_surface_samples": True,
+                    "xy_only": True,
+                },
+            )
+            self.last_completion_decision = decision
+            self._append_event({"type": "completion_decision", **decision.to_summary_dict()})
+            return decision
+        trusted_surface = self.trusted_near_large_surface_estimate(stage, current_world)
+        completion_config = self.config
+        if trusted_surface is not None:
+            # A facade can cease to look like a whole building at close range.
+            # Once its stage-specific lock and surface geometry are stable,
+            # detector confidence must not block geometrically valid arrival.
+            completion_config = dict(self.config)
+            trust_min_confidence = float(
+                self.config.get(
+                    "LARGE_STRUCTURE_NEAR_MEMORY_TRUST_MIN_CONFIDENCE",
+                    self.config.get("LOCK_MIN_CONFIDENCE", 0.35),
+                )
+            )
+            trust_min_observations = int(
+                self.config.get("LARGE_STRUCTURE_NEAR_MEMORY_TRUST_MIN_OBSERVATIONS", 1)
+            )
+            completion_config["LARGE_STRUCTURE_MEMORY_ONLY_MIN_CONFIDENCE"] = trust_min_confidence
+            completion_config["LARGE_STRUCTURE_MEMORY_ONLY_MIN_OBSERVATIONS"] = trust_min_observations
         decision = evaluate_memory_completion(
             stage=stage,
-            instance=self.primary_instance(stage),
+            instance=instance,
             current_world=current_world,
-            config=self.config,
+            config=completion_config,
             fresh_visual_support=fresh_visual_support,
             visual_score=visual_score,
             stop_radius_m=stop_radius_m,
+        )
+        if trusted_surface is not None:
+            decision.details = dict(decision.details or {})
+            decision.details["trusted_near_surface_memory"] = True
+            decision.details["trust_radius_m"] = round(
+                float(trusted_surface["trust_radius_m"]), 2
+            )
+        self.last_completion_decision = decision
+        self._append_event({"type": "completion_decision", **decision.to_summary_dict()})
+        return decision
+
+    def evaluate_large_surface_arrival(
+        self,
+        stage: Any,
+        current_world: Sequence[float],
+        *,
+        radius_m: float = 4.5,
+    ) -> Optional[MemoryCompletionDecision]:
+        """Complete a locked large target from observed surface XY geometry.
+
+        Large structures commonly become partial facade detections at close
+        range.  Once their identity and surface memory are locked, a fresh VLM
+        judgment is not useful for deciding arrival.  This rule intentionally
+        uses only the nearest retained surface sample in XY and ignores Z.
+        Small objects continue through the normal detector/VLM completion path.
+        """
+        if not self.enabled:
+            return None
+        instance = self.primary_instance(stage)
+        if (
+            instance is None
+            or not self.is_primary_locked(stage)
+            or not bool(instance.is_large_structure)
+            or not has_surface_samples(instance)
+            or relation_kind(stage) != "near"
+        ):
+            return None
+        distance_m = horizontal_distance_to_instance_surface_samples(current_world, instance)
+        radius = max(0.0, float(radius_m))
+        if distance_m > radius:
+            return None
+        nearest = nearest_instance_surface_sample_point(current_world, instance)
+        decision = MemoryCompletionDecision.complete(
+            instance_id=instance.instance_id,
+            confidence=float(instance.confidence),
+            distance_m=float(distance_m),
+            horizontal_distance_m=float(distance_m),
+            vertical_delta_m=abs(float(current_world[2]) - float(nearest[2])),
+            target_world=list(nearest),
+            uncertainty_m=float(instance.effective_uncertainty(
+                stale_growth_per_s=float(self.config.get("STALE_UNCERTAINTY_GROWTH_MPS", 0.03))
+            )),
+            required_radius_m=radius,
+            reason="large_surface_xy_radius_complete",
+            details={
+                "geometry": instance.geometry_kind,
+                "large_structure": True,
+                "uses_surface_samples": True,
+                "xy_only": True,
+                "nearest_surface_sample_world": [round(float(v), 2) for v in nearest[:3]],
+            },
         )
         self.last_completion_decision = decision
         self._append_event({"type": "completion_decision", **decision.to_summary_dict()})
@@ -269,6 +642,14 @@ class MissionMemory:
         locked_id = self.stage_locks.get(stage_key(stage), "")
         if locked_id:
             return memory.instances.get(locked_id)
+        if is_view_relative_stage(stage):
+            local_ids = self.local_instance_ids(stage)
+            ordinal = max(1, int(ordinal or 1))
+            if ordinal <= len(local_ids):
+                return memory.instances.get(local_ids[ordinal - 1])
+            # Never fall through to a mission-global building/car for a target
+            # whose identity is defined by this stage's activation view.
+            return None
         if ordinal:
             for instance in memory.instances.values():
                 if int(instance.encounter_order) == int(ordinal):
@@ -284,6 +665,13 @@ class MissionMemory:
 
     def has_primary(self, stage: Any) -> bool:
         return self.primary_instance(stage) is not None
+
+    def is_primary_locked(self, stage: Any) -> bool:
+        instance = self.primary_instance(stage)
+        return bool(
+            instance is not None
+            and self.stage_locks.get(stage_key(stage), "") == instance.instance_id
+        )
 
     def preferred_yaw_deg(self, stage: Any, current_world: Sequence[float]) -> Optional[float]:
         instance = self.primary_instance(stage)
@@ -408,6 +796,7 @@ class MissionMemory:
             "enabled": True,
             "root_instruction": self.root_instruction,
             "active_stage_key": stage_key_text,
+            "active_stage_local_instances": list(self.stage_local_instances.get(stage_key_text, [])),
             "targets": memories,
             "pose_records": len(self.pose_history),
             "stage_summaries": [
@@ -497,6 +886,20 @@ class MissionMemory:
                     continue
                 dx = world[0] - float(observer_world[0])
                 dy = world[1] - float(observer_world[1])
+                forward_projection = dx * forward[0] + dy * forward[1]
+                lateral_projection = -dx * forward[1] + dy * forward[0]
+                binding_observation = {
+                    "view": str(view_name or getattr(detection, "camera", "unknown")),
+                    "world": [float(v) for v in world[:3]],
+                    "forward_projection": forward_projection,
+                    "lateral_projection": lateral_projection,
+                }
+                if (
+                    is_view_relative_stage(stage)
+                    and not self.stage_locks.get(stage_key(stage), "")
+                    and not self._view_relative_observation_allowed(stage, binding_observation)
+                ):
+                    continue
                 signature = build_appearance_signature(
                     image,
                     getattr(detection, "bbox", None),
@@ -517,14 +920,23 @@ class MissionMemory:
                             max(0.0, float(bbox[2]) - float(bbox[0])) / width,
                             max(0.0, float(bbox[3]) - float(bbox[1])) / height,
                         )
-                target_text = " ".join((
+                target_identity_text = " ".join((
                     str(getattr(stage, "target", "") or ""),
-                    str(getattr(stage, "instruction", "") or ""),
                     str(getattr(detection, "label", "") or ""),
                 )).lower()
+                target_text = " ".join((
+                    target_identity_text,
+                    str(getattr(stage, "instruction", "") or ""),
+                )).lower()
+                explicitly_small = any(
+                    token in target_identity_text for token in _SMALL_TARGET_TOKENS
+                )
                 is_large_structure = (
-                    footprint >= float(self.config.get("LARGE_STRUCTURE_MIN_FOOTPRINT_M", 4.5))
-                    or any(token in target_text for token in _LARGE_STRUCTURE_TOKENS)
+                    not explicitly_small
+                    and (
+                        footprint >= float(self.config.get("LARGE_STRUCTURE_MIN_FOOTPRINT_M", 4.5))
+                        or any(token in target_text for token in _LARGE_STRUCTURE_TOKENS)
+                    )
                 )
                 observations.append(
                     {
@@ -542,15 +954,63 @@ class MissionMemory:
                         "is_large_structure": is_large_structure,
                         "signature": signature,
                         "distance_from_observer": distance3(observer_world, world),
-                        "forward_projection": dx * forward[0] + dy * forward[1],
+                        "forward_projection": forward_projection,
+                        "lateral_projection": lateral_projection,
                     }
                 )
         return observations
 
-    def _match_or_create_instance(self, memory: TargetMemory, obs: dict, stage: Any):
+    def _view_relative_observation_allowed(self, stage: Any, observation: dict) -> bool:
+        """Apply the activation-view direction before a local instance exists."""
+        view = str(observation.get("view", "") or "").strip().lower()
+        if view and not view.startswith("front"):
+            return False
+        forward = float(observation.get("forward_projection", 0.0) or 0.0)
+        lateral = float(observation.get("lateral_projection", 0.0) or 0.0)
+        activation = self.stage_activation_views.get(stage_key(stage))
+        world = observation.get("world") or []
+        if activation is not None and len(world) >= 3:
+            activation_body = world_to_body(
+                world,
+                activation.get("observer_world", [0.0, 0.0, 0.0]),
+                float(activation.get("observer_yaw_deg", 0.0) or 0.0),
+            )
+            forward = float(activation_body[0])
+            lateral = float(activation_body[1])
+        min_forward = float(self.config.get("VIEW_RELATIVE_MIN_FORWARD_M", 0.5))
+        max_behind = max(0.0, float(self.config.get("VIEW_RELATIVE_MAX_BEHIND_M", 1.0)))
+        lateral_margin = max(0.0, float(self.config.get("VIEW_RELATIVE_LATERAL_MARGIN_M", 0.5)))
+        direction = view_relative_direction(stage)
+        if direction == "front_left":
+            return forward >= min_forward and lateral <= -lateral_margin
+        if direction == "front_right":
+            return forward >= min_forward and lateral >= lateral_margin
+        if direction == "left":
+            return forward >= -max_behind and lateral <= -lateral_margin
+        if direction == "right":
+            return forward >= -max_behind and lateral >= lateral_margin
+        return forward >= min_forward
+
+    def _match_or_create_instance(
+        self,
+        memory: TargetMemory,
+        obs: dict,
+        stage: Any,
+        *,
+        exclude_instance_ids: Optional[set[str]] = None,
+    ):
         best = None
         best_score = -1.0
+        excluded_ids = exclude_instance_ids or set()
+        local_ids = set(self.local_instance_ids(stage)) if is_view_relative_stage(stage) else None
+        locked_id = self.stage_locks.get(stage_key(stage), "")
+        if local_ids is not None and locked_id:
+            local_ids = {locked_id}
         for instance in memory.instances.values():
+            if instance.instance_id in excluded_ids:
+                continue
+            if local_ids is not None and instance.instance_id not in local_ids:
+                continue
             geo_dist = distance_to_instance_geometry(obs["world"], instance)
             assoc_radius = max(
                 float(self.config.get("MIN_ASSOCIATION_RADIUS_M", 2.0)),
@@ -562,6 +1022,19 @@ class MissionMemory:
                 assoc_radius = max(
                     assoc_radius,
                     float(self.config.get("LARGE_STRUCTURE_ASSOCIATION_RADIUS_M", 25.0)),
+                )
+            if (
+                locked_id
+                and is_view_relative_stage(stage)
+                and instance.instance_id == locked_id
+                and has_surface_geometry(instance)
+            ):
+                # Locked facades grow through overlapping observations. Do not
+                # jump across a street/gap merely because both detections have
+                # the generic class "building".
+                assoc_radius = min(
+                    assoc_radius,
+                    float(self.config.get("VIEW_RELATIVE_LOCKED_SURFACE_CONTINUITY_M", 8.0)),
                 )
             if geo_dist > assoc_radius:
                 continue
@@ -575,6 +1048,11 @@ class MissionMemory:
                 best = instance
         if best is not None and best_score >= float(self.config.get("ASSOCIATION_MIN_SCORE", 0.28)):
             return best, "update"
+        if locked_id and is_view_relative_stage(stage):
+            # Never create a replacement for an activation-time lock. Near a
+            # building, the detector commonly finds a complete but distant
+            # building while the locked facade only appears as a partial wall.
+            return None, "reject_locked_mismatch"
         instance_id = f"{memory.target_key}:{memory.next_encounter_order}"
         memory.next_encounter_order += 1
         instance = TargetInstanceBelief(
@@ -629,6 +1107,11 @@ class MissionMemory:
         )
         new_surface = list(obs.get("surface_world") or [])
         if new_surface:
+            patch = self._merge_surface_points([], new_surface)
+            if patch:
+                max_patches = max(1, int(self.config.get("MAX_SURFACE_PATCHES_PER_INSTANCE", 12)))
+                instance.surface_patches_world.append(patch)
+                del instance.surface_patches_world[:-max_patches]
             instance.surface_points_world = self._merge_surface_points(
                 instance.surface_points_world,
                 new_surface,
@@ -705,12 +1188,20 @@ class MissionMemory:
         quality_term = (1.0 - quality) * 2.0
         return round(max(0.7, min(8.0, depth_term + small_box_term + quality_term)), 3)
 
-    def _ensure_stage_lock(self, stage: Any, memory: TargetMemory, current_world: Sequence[float]) -> None:
+    def _ensure_stage_lock(
+        self,
+        stage: Any,
+        memory: TargetMemory,
+        current_world: Sequence[float],
+        current_yaw_deg: Optional[float] = None,
+    ) -> None:
         if not bool(self.config.get("INSTANCE_LOCK_ENABLED", True)):
             return
         key = stage_key(stage)
         current_lock = self.stage_locks.get(key, "")
         if current_lock and current_lock in memory.instances:
+            if is_view_relative_stage(stage):
+                return
             desired = self._desired_instance_for_stage(stage, memory, current_world)
             if desired is not None and desired.instance_id != current_lock:
                 if auxiliary_target_keys(stage) and bool(self.config.get("ANCHOR_SWITCH_ENABLED", True)):
@@ -733,7 +1224,20 @@ class MissionMemory:
         desired = self._desired_instance_for_stage(stage, memory, current_world)
         if desired is None:
             return
-        if desired.confidence < float(self.config.get("LOCK_MIN_CONFIDENCE", 0.35)):
+        min_lock_confidence = float(self.config.get("LOCK_MIN_CONFIDENCE", 0.35))
+        if (
+            is_view_relative_stage(stage)
+            and bool(desired.is_large_structure)
+            and has_surface_geometry(desired)
+        ):
+            # The activation view already resolves an ordinal target within
+            # the local candidate list. Multiple buildings in that view do
+            # not make the selected ordinal ambiguous.
+            min_lock_confidence = min(
+                min_lock_confidence,
+                float(self.config.get("LARGE_STRUCTURE_SURFACE_LOCK_MIN_CONFIDENCE", 0.15)),
+            )
+        if desired.confidence < min_lock_confidence:
             return
         self.stage_locks[key] = desired.instance_id
         memory.primary_instance_id = desired.instance_id
@@ -751,6 +1255,16 @@ class MissionMemory:
         memory: TargetMemory,
         current_world: Sequence[float],
     ) -> Optional[TargetInstanceBelief]:
+        if is_view_relative_stage(stage):
+            local_instances = [
+                memory.instances[instance_id]
+                for instance_id in self.local_instance_ids(stage)
+                if instance_id in memory.instances
+            ]
+            if not local_instances:
+                return None
+            ordinal = max(1, int(getattr(stage, "ordinal", None) or 1))
+            return local_instances[ordinal - 1] if ordinal <= len(local_instances) else None
         ordinal = getattr(stage, "ordinal", None)
         if ordinal:
             for instance in memory.instances.values():
@@ -866,6 +1380,76 @@ def target_name_for_stage(stage: Any) -> str:
         or str(getattr(stage, "target", "") or "")
         or str(getattr(stage, "instruction", "") or "")
     ).strip()
+
+
+def is_return_target_stage(stage: Any) -> bool:
+    if bool(getattr(stage, "return_target", False)):
+        return True
+    text = _stage_direction_text(stage)
+    return bool(
+        re.search(r"\b(?:fly|go|come|head|navigate)?\s*back\s+to\b", text)
+        or re.search(r"\breturn\s+to\b", text)
+        or any(
+            token in text
+            for token in (
+                "previously visited",
+                "visited before",
+                "previously passed",
+                "飞回",
+                "返回",
+                "回到",
+                "回去",
+                "之前经过",
+                "先前经过",
+            )
+        )
+    )
+
+
+def is_view_relative_stage(stage: Any) -> bool:
+    if stage is None or is_return_target_stage(stage):
+        return False
+    if bool(getattr(stage, "view_relative", False)):
+        return True
+    rule = str(getattr(stage, "selection_rule", "") or "").strip().lower()
+    return rule in {"view_relative", "viewpoint", "current_view", "viewpoint_ordinal"}
+
+
+def view_relative_direction(stage: Any) -> str:
+    text = _stage_direction_text(stage)
+    compact = text.replace(" ", "")
+    has_front = any(token in text for token in ("ahead", "in front", "forward")) or "前方" in compact
+    has_left = any(token in text for token in ("on the left", "to the left", "left side")) or any(
+        token in compact for token in ("左侧", "左边")
+    )
+    has_right = any(token in text for token in ("on the right", "to the right", "right side")) or any(
+        token in compact for token in ("右侧", "右边")
+    )
+    if (
+        any(token in text for token in ("front left", "left front"))
+        or "左前方" in compact
+        or (has_front and has_left)
+    ):
+        return "front_left"
+    if (
+        any(token in text for token in ("front right", "right front"))
+        or "右前方" in compact
+        or (has_front and has_right)
+    ):
+        return "front_right"
+    if has_left:
+        return "left"
+    if has_right:
+        return "right"
+    return "front"
+
+
+def _stage_direction_text(stage: Any) -> str:
+    text = " ".join((
+        str(getattr(stage, "instruction", "") or ""),
+        str(getattr(stage, "completion_condition", "") or ""),
+    )).lower()
+    return re.sub(r"[-_/]+", " ", text)
 
 
 def normalize_target_key(target: str) -> str:

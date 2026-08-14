@@ -12,6 +12,11 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from agent.functions.common import web_runtime_helpers as web_helpers
+from agent.functions.common.detection_policy import (
+    allows_clipped_large_structure,
+    detection_caption_for_stage,
+    detection_reliability,
+)
 from agent.models.detection.base import DetectionResult
 
 
@@ -194,13 +199,7 @@ class CompletionPipeline:
         )
 
     def _detect_dual_view(self, stage: Any, task_text: str, frame: Any, down_frame: Any):
-        caption = (
-            getattr(stage, "target_query", None)
-            or getattr(stage, "target", None)
-            or getattr(stage, "instruction", None)
-            or task_text
-            or ""
-        )
+        caption = detection_caption_for_stage(stage, task_text)
 
         def detect_one(image, camera_name: str):
             if image is None:
@@ -216,9 +215,9 @@ class CompletionPipeline:
         front_all = front_future.result()
         down_all = down_future.result()
         for det in front_all:
-            self._suppress_giant_bbox(det, frame)
+            self._suppress_giant_bbox(stage, det, frame)
         for det in down_all:
-            self._suppress_giant_bbox(det, down_frame)
+            self._suppress_giant_bbox(stage, det, down_frame)
         front_det = self._best_from_list(stage, front_all, frame, require_depth=False, camera_name="front")
         down_det = self._best_from_list(stage, down_all, down_frame, require_depth=False, camera_name="down")
         return front_det, down_det, front_all, down_all, time.perf_counter() - t0
@@ -476,41 +475,11 @@ class CompletionPipeline:
             web_helpers.target_depth_text(f"{name}#{index}", detection, image, depth_meters)
 
     def _detection_reliability(self, stage: Any, detection: DetectionResult, image: Any = None) -> float:
-        score = max(0.0, min(1.0, float(getattr(detection, "score", 0.0) or 0.0)))
-        if image is None or not getattr(detection, "bbox", None) or not hasattr(image, "size"):
-            return score
-
-        width, height = float(image.size[0]), float(image.size[1])
-        if width <= 1.0 or height <= 1.0:
-            return score
-
-        x1, y1, x2, y2 = [float(v) for v in detection.bbox[:4]]
-        box_w = max(0.0, min(width, x2) - max(0.0, x1))
-        box_h = max(0.0, min(height, y2) - max(0.0, y1))
-        area_ratio = (box_w * box_h) / max(width * height, 1.0)
-        span_x = box_w / width
-        span_y = box_h / height
-        touches_border = x1 <= 2.0 or y1 <= 2.0 or x2 >= width - 2.0 or y2 >= height - 2.0
-
-        quality = 1.0
-        if area_ratio <= 0.0002:
-            quality *= 0.35
-        elif area_ratio <= 0.001:
-            quality *= 0.65
-        if span_x >= 0.90 or span_y >= 0.90:
-            return 0.0
-        if area_ratio >= 0.55:
-            quality *= 0.03
-        elif area_ratio >= 0.30 or span_x >= 0.75 or span_y >= 0.75:
-            quality *= 0.20
-        elif area_ratio >= 0.18:
-            quality *= 0.45
-        if touches_border:
-            quality *= 0.45 if self._is_above_stage(stage) else 0.35
-        return score * quality
+        return detection_reliability(stage, detection, image)
 
     @staticmethod
     def _suppress_giant_bbox(
+        stage: Any,
         detection: Optional[DetectionResult],
         image,
         max_span: float = 0.90,
@@ -525,6 +494,8 @@ class CompletionPipeline:
         box_w = max(0.0, min(width, x2) - max(0.0, x1))
         box_h = max(0.0, min(height, y2) - max(0.0, y1))
         if box_w / width >= max_span or box_h / height >= max_span:
+            if allows_clipped_large_structure(stage, detection, image, max_span=max_span):
+                return
             detection.score = 0.0
             detection.visible = False
 

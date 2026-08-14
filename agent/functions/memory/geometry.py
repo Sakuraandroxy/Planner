@@ -271,13 +271,82 @@ def instance_surface_bounds(instance: Any) -> Optional[list[list[float]]]:
     return bounds_from_points(points)
 
 
+def instance_surface_patches(instance: Any) -> list[list[list[float]]]:
+    patches = []
+    for raw_patch in list(getattr(instance, "surface_patches_world", None) or []):
+        patch = [
+            point3(point)
+            for point in list(raw_patch or [])
+            if point is not None and len(point) >= 3
+        ]
+        if patch:
+            patches.append(patch)
+    return patches
+
+
+def instance_surface_sample_points(instance: Any) -> list[list[float]]:
+    """Return the finite surface samples retained for one target instance.
+
+    Completion uses these observed samples directly.  It deliberately does not
+    use ``surface_bounds_world`` or a filled/interpolated patch because those
+    can represent unobserved empty space between separate observations.
+    """
+    points: list[list[float]] = []
+    for raw_point in list(getattr(instance, "surface_points_world", None) or []):
+        if raw_point is not None and len(raw_point) >= 3:
+            try:
+                value = point3(raw_point)
+            except (TypeError, ValueError):
+                continue
+            if all(math.isfinite(v) for v in value):
+                points.append(value)
+    if points:
+        return points
+    # Older/hand-created memories may only contain patches.  Their actual
+    # samples are still valid point evidence, while bounds remain excluded.
+    for patch in instance_surface_patches(instance):
+        points.extend(patch)
+    return points
+
+
+def nearest_instance_surface_sample_point(point: Sequence[float], instance: Any) -> list[float]:
+    """Return the observed surface sample nearest in the horizontal plane."""
+    samples = instance_surface_sample_points(instance)
+    if not samples:
+        return point3(getattr(instance, "target_world", [0.0, 0.0, 0.0]))
+    return min(samples, key=lambda candidate: horizontal_distance(point, candidate))
+
+
+def horizontal_distance_to_instance_surface_samples(point: Sequence[float], instance: Any) -> float:
+    """Measure XY distance to the nearest observed surface sample, ignoring Z."""
+    samples = instance_surface_sample_points(instance)
+    if not samples:
+        return horizontal_distance(point, getattr(instance, "target_world", [0.0, 0.0, 0.0]))
+    return min(horizontal_distance(point, candidate) for candidate in samples)
+
+
 def has_surface_geometry(instance: Any) -> bool:
-    return instance_surface_bounds(instance) is not None and int(
+    return bool(instance_surface_sample_points(instance) or instance_surface_bounds(instance) is not None) and int(
+        getattr(instance, "surface_observation_count", 0) or 0
+    ) > 0
+
+
+def has_surface_samples(instance: Any) -> bool:
+    """Return whether the instance has actual retained surface samples.
+
+    Bounds are useful for legacy navigation and diagnostics, but they are not
+    sufficient evidence for the large-target XY arrival shortcut.
+    """
+    return bool(instance_surface_sample_points(instance)) and int(
         getattr(instance, "surface_observation_count", 0) or 0
     ) > 0
 
 
 def nearest_instance_surface_point(point: Sequence[float], instance: Any) -> list[float]:
+    patches = instance_surface_patches(instance)
+    if patches:
+        candidates = [_nearest_point_on_surface_patch(point, patch) for patch in patches]
+        return min(candidates, key=lambda candidate: distance3(point, candidate))
     bounds = instance_surface_bounds(instance)
     if bounds is not None:
         return nearest_point_on_bounds(point, bounds)
@@ -285,25 +354,76 @@ def nearest_instance_surface_point(point: Sequence[float], instance: Any) -> lis
 
 
 def distance_to_instance_geometry(point: Sequence[float], instance: Any) -> float:
-    bounds = instance_surface_bounds(instance)
-    if bounds is not None:
-        return distance_to_bounds(point, bounds)
-    return distance3(point, getattr(instance, "target_world", [0.0, 0.0, 0.0]))
+    return distance3(point, nearest_instance_surface_point(point, instance))
 
 
 def horizontal_distance_to_instance_geometry(point: Sequence[float], instance: Any) -> float:
-    bounds = instance_surface_bounds(instance)
-    if bounds is not None:
-        return horizontal_distance_to_bounds(point, bounds)
-    return horizontal_distance(point, getattr(instance, "target_world", [0.0, 0.0, 0.0]))
+    return horizontal_distance(point, nearest_instance_surface_point(point, instance))
 
 
 def vertical_distance_to_instance_geometry(point: Sequence[float], instance: Any) -> float:
-    bounds = instance_surface_bounds(instance)
-    if bounds is not None:
-        return vertical_distance_to_bounds(point, bounds)
-    target = getattr(instance, "target_world", [0.0, 0.0, 0.0])
+    target = nearest_instance_surface_point(point, instance)
     return abs(float(point[2]) - float(target[2]))
+
+
+def _nearest_point_on_surface_patch(point: Sequence[float], patch: Sequence[Sequence[float]]) -> list[float]:
+    """Project onto one finite planar patch without filling gaps to other patches."""
+    points = [point3(value) for value in patch if value is not None and len(value) >= 3]
+    if not points:
+        return point3(point)
+    if len(points) == 1:
+        return points[0]
+    try:
+        import numpy as np
+
+        values = np.asarray(points, dtype=float)
+        center = values.mean(axis=0)
+        centered = values - center
+        _u, singular, vh = np.linalg.svd(centered, full_matrices=True)
+        if len(singular) < 2 or float(singular[1]) <= 1e-6:
+            return _nearest_point_on_segments(point, points)
+
+        basis_u = vh[0]
+        basis_v = vh[1]
+        normal = vh[2]
+        query = np.asarray(point3(point), dtype=float)
+        relative = query - center
+        projected = query - float(relative @ normal) * normal
+        projected_relative = projected - center
+        patch_u = centered @ basis_u
+        patch_v = centered @ basis_v
+        query_u = float(projected_relative @ basis_u)
+        query_v = float(projected_relative @ basis_v)
+        clamped_u = min(max(query_u, float(patch_u.min())), float(patch_u.max()))
+        clamped_v = min(max(query_v, float(patch_v.min())), float(patch_v.max()))
+        nearest = center + clamped_u * basis_u + clamped_v * basis_v
+        return [float(nearest[0]), float(nearest[1]), float(nearest[2])]
+    except Exception:
+        # Missing/degenerate linear algebra falls back conservatively to
+        # observed points and line segments, never to a filled 3-D box.
+        return _nearest_point_on_segments(point, points)
+
+
+def _nearest_point_on_segments(point: Sequence[float], points: Sequence[Sequence[float]]) -> list[float]:
+    query = point3(point)
+    best = min((point3(value) for value in points), key=lambda value: distance3(query, value))
+    best_distance = distance3(query, best)
+    for index, start in enumerate(points):
+        a = point3(start)
+        for end in points[index + 1:]:
+            b = point3(end)
+            ab = [b[axis] - a[axis] for axis in range(3)]
+            denom = sum(value * value for value in ab)
+            if denom <= 1e-9:
+                continue
+            t = sum((query[axis] - a[axis]) * ab[axis] for axis in range(3)) / denom
+            t = max(0.0, min(1.0, t))
+            candidate = [a[axis] + t * ab[axis] for axis in range(3)]
+            candidate_distance = distance3(query, candidate)
+            if candidate_distance < best_distance:
+                best = candidate
+                best_distance = candidate_distance
+    return best
 
 
 def footprint_radius_from_detection(

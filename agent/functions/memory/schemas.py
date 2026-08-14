@@ -84,8 +84,14 @@ class TargetInstanceBelief:
     # anchor for compatibility; navigation and completion should prefer these
     # observed surfaces so a large object's center never becomes the goal.
     surface_points_world: List[List[float]] = field(default_factory=list)
+    # Each detection contributes one finite surface patch. Distances use these
+    # patches independently so empty space between observations is never
+    # filled by one global axis-aligned bounding box.
+    surface_patches_world: List[List[List[float]]] = field(default_factory=list)
     surface_bounds_world: Optional[List[List[float]]] = None
     surface_observation_count: int = 0
+    last_surface_contact_s: float = 0.0
+    last_surface_contact_kind: str = ""
     geometry_kind: str = "point"
     is_large_structure: bool = False
     last_bbox_span: float = 0.0
@@ -115,7 +121,14 @@ class TargetInstanceBelief:
             "footprint_radius_m": round(float(self.footprint_radius_m), 2),
             "geometry": self.geometry_kind,
             "surface_points": len(self.surface_points_world),
+            "surface_patches": len(self.surface_patches_world),
             "surface_observations": int(self.surface_observation_count),
+            "surface_contact_age_s": (
+                None
+                if self.last_surface_contact_s <= 0.0
+                else round(max(0.0, now_s() - self.last_surface_contact_s), 1)
+            ),
+            "surface_contact_kind": self.last_surface_contact_kind,
             "surface_bounds": (
                 None
                 if not self.surface_bounds_world

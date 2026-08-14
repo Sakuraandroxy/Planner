@@ -81,10 +81,21 @@ FUNCTIONS:
     OPPORTUNISTIC_SCAN_INTERVAL_S: 4.0    # 机会扫描最小间隔；越小越积极但会增加检测/深度开销
     OPPORTUNISTIC_TARGETS_PER_SCAN: 1     # 后台每次只检测一个未来目标，轮询其余目标，避免挤占当前阶段服务容量
     OPPORTUNISTIC_SCAN_WARN_AFTER_S: 10.0 # 后台扫描超过该时长时打印一次提示，但不暂停当前飞行
+    VIEW_RELATIVE_STAGE_BIND_ENABLED: true # 当前/新视角的第N个目标只在该阶段激活后绑定
+    VIEW_RELATIVE_BIND_CAPTURE_PROFILE: front_depth # 激活时抓前视RGB+同帧深度建立局部候选
+    VIEW_RELATIVE_LOCAL_RETRY_ENABLED: true # 满屏墙面首帧仍未绑定时只向目标侧小角度补看，不做全局环视换楼
+    VIEW_RELATIVE_LOCAL_RETRY_YAW_DEG: 18.0 # 延迟绑定局部补看的最大偏航角
+    VIEW_RELATIVE_DELAY_BIND_MAX_AGE_S: 45.0 # 激活帧未识别目标时允许飞行中继续绑定的最长时间
+    VIEW_RELATIVE_DELAY_BIND_MAX_DISTANCE_M: 30.0 # 延迟绑定最多离开激活位置的距离，超出后明确失败
+    VIEW_RELATIVE_MAX_BEHIND_M: 1.0        # 纯左/右目标最多允许轻微落在机身后方
+    VIEW_RELATIVE_MIN_FORWARD_M: 0.5       # 前方/左前/右前候选必须至少位于机身前方该距离
+    VIEW_RELATIVE_LATERAL_MARGIN_M: 0.5    # 左右候选相对中线的最小横向间隔
+    VIEW_RELATIVE_LOCKED_SURFACE_CONTINUITY_M: 8.0 # 锁定墙面只接受与已有墙面连续的更新，避免融合邻楼
     PATH_CLIP_ENABLED: true               # 已知锁定目标坐标时，裁剪/替换明显飞过目标的Qwen轨迹
     PATH_CLIP_RADIUS_M: 6.0               # memory路径守卫的外圈基准半径；实际飞行目标会再收进NEAR_APPROACH内圈
     PATH_DIVERGE_RATIO: 0.90              # 候选终点比当前位置更远离memory目标时，用直达目标附近的短路径替换
     PATH_CLOSE_MISS_RATIO: 1.35           # 轨迹擦过目标附近但没进半径时，也按最近点截断/替换，防止高速掠过
+    PATH_MAX_GUIDED_LEG_M: 18.0           # 覆盖一次慢规划延迟，避免新路径返回前航点耗尽停机
     PATH_TARGET_BEHIND_X_M: 2.0           # 目标已在机体后方超过该距离时，不再接受继续向前的Qwen轨迹
     RETURN_TARGET_REORIENT_ENABLED: true  # 返回历史目标且目标在机身后方时，先原地掉头再抓图规划
     RETURN_TARGET_REORIENT_TRIGGER_DEG: 90.0 # 锁定目标与当前机头夹角达到该值时触发记忆引导转向
@@ -110,6 +121,7 @@ FUNCTIONS:
     INSTANCE_LOCK_ENABLED: true           # 每个小任务锁定一个目标实例，避免第2辆红车被重新编号
     LOCK_ON_FIRST_STABLE_INSTANCE: true   # 普通目标默认锁定第一个稳定实例；带“第N个”时锁定对应顺序实例
     LOCK_MIN_CONFIDENCE: 0.35             # 达到该置信度后才允许锁定实例
+    LARGE_STRUCTURE_SURFACE_LOCK_MIN_CONFIDENCE: 0.15 # 激活视角选中的深度建筑表面可低分锁定，避免远楼/局部墙面导致反复重定位
     INSTANCE_SWITCH_CONFIRMATIONS: 2      # 切换锁定实例需要连续确认次数，防止单帧误检导致跳目标
     INSTANCE_SWITCH_MARGIN: 0.25          # 新实例置信度至少高出该值才考虑切换
     MIN_DETECTION_SCORE: 0.35             # 进入memory的最低检测分数
@@ -120,6 +132,7 @@ FUNCTIONS:
     DEFAULT_FOOTPRINT_RADIUS_M: 1.5       # 无法从bbox估计尺寸时的默认目标半径
     MAX_FOOTPRINT_RADIUS_M: 8.0           # 目标半径上限，避免异常大框把完成半径放得过宽
     MAX_SURFACE_POINTS_PER_INSTANCE: 96   # 每个目标最多保存多少个稀疏三维表面点，不保存原始深度图
+    MAX_SURFACE_PATCHES_PER_INSTANCE: 12  # 每次检测的有限墙面片独立保存，避免跨观测包围盒填充空域
     SURFACE_VOXEL_SIZE_M: 0.75            # 表面点体素去重分辨率，控制长期任务内存和深度噪声
     SURFACE_LOCAL_FOOTPRINT_RADIUS_M: 0.5 # 已有表面时，路径以最近表面为锚点，不再重复叠加整个物体半径
     SURFACE_APPROACH_RADIUS_M: 4.5        # 无人机到已观测表面的距离小于该值时触发最终完成确认
@@ -132,6 +145,18 @@ FUNCTIONS:
     SURFACE_COMPLETION_MAX_AGE_S: 120.0   # 表面记忆超过该时长后不能在无新视觉证据时直接完成
     LARGE_STRUCTURE_MIN_FOOTPRINT_M: 4.5 # 超过该粗略尺寸时按建筑/大型结构处理
     LARGE_STRUCTURE_ASSOCIATION_RADIUS_M: 25.0 # 同一建筑不同墙面观测允许的关联距离
+    LARGE_STRUCTURE_NEAR_MEMORY_TRUST_ENABLED: true # 锁定建筑进入近场后，局部墙面检测丢失不再打断飞行或改变航向
+    LARGE_STRUCTURE_NEAR_MEMORY_TRUST_RADIUS_M: 12.0 # 距已锁定墙面小于该距离时进入近场记忆主导区
+    LARGE_STRUCTURE_NEAR_MEMORY_TRUST_MIN_CONFIDENCE: 0.35 # 只信任已达到实例锁定门槛的建筑表面记忆
+    LARGE_STRUCTURE_NEAR_MEMORY_TRUST_MIN_OBSERVATIONS: 1 # 至少有一次带深度的墙面观测才启用近场信任
+    LARGE_STRUCTURE_NEAR_MEMORY_TRUST_MAX_UNCERTAINTY_M: 3.0 # 误差过大的墙面记忆仍需重新观测，避免盲信错误表面
+    LARGE_STRUCTURE_DEPTH_CONTACT_MAX_RANGE_M: 8.0 # 仅融合近距离路径阻挡点，远处普通障碍不能修正目标墙面
+    LARGE_STRUCTURE_DEPTH_CONTACT_MIN_CONFIDENCE: 0.38 # 实时深度确认墙面后提升到可完成判定的最低可信度
+    LARGE_STRUCTURE_DEPTH_CONTACT_UNCERTAINTY_M: 1.5 # 近距离深度墙面点比早期远距离表面估计更可靠
+    LARGE_STRUCTURE_CONTACT_COMPLETION_MAX_AGE_S: 8.0 # 新鲜深度/碰撞墙面接触可直接进入memory完成判定
+    LARGE_STRUCTURE_COLLISION_CONTACT_MAX_DISTANCE_M: 2.5 # 仅记忆已显示非常贴近锁定墙面时才把碰撞视作目标接触
+    LARGE_STRUCTURE_COLLISION_CONTACT_MAX_LATERAL_M: 4.0 # 碰撞方向与锁定墙面的最大横向偏差
+    LARGE_STRUCTURE_COLLISION_CONTACT_FORWARD_M: 0.8 # 碰撞位置前方的保守墙面接触偏移
     LARGE_STRUCTURE_MEMORY_ONLY_MIN_CONFIDENCE: 0.55 # 建筑铺满视角后使用历史表面所需置信度
     LARGE_STRUCTURE_MEMORY_ONLY_MIN_OBSERVATIONS: 1 # 一次高质量深度墙面观测即可建立可达表面
     DEPTH_UNCERTAINTY_RATIO: 0.06         # 深度越远，不确定性越大；该值控制增长比例
@@ -182,6 +207,9 @@ FUNCTIONS:
     TARGET_KEEP_OUT_VERTICAL_M: 2.2       # 与目标高度接近时才启用目标禁入
     TARGET_KEEP_OUT_STOP_BUFFER_M: 1.0    # 目标禁入触发后再向外退一点停靠
     TARGET_MATCH_MARGIN_M: 2.0            # 深度障碍点距离锁定目标多近时视作目标本体，不绕进去
+    LARGE_STRUCTURE_TARGET_MATCH_RADIUS_M: 6.0 # 建筑墙面横向很宽，目标深度点与局部墙面允许更大横向差
+    LARGE_STRUCTURE_TARGET_MATCH_RANGE_TOLERANCE_M: 3.0 # 实时墙面与旧表面沿视线距离差在此范围内视作同一楼
+    LARGE_STRUCTURE_TARGET_MATCH_VERTICAL_M: 3.0 # 建筑局部墙面与旧表面点允许的高度差
     TARGET_DEPTH_EXCLUSION_M: 0.0         # 默认不排除目标深度点，让目标本体也能阻止撞车
     USE_DOWN_DEPTH: false                 # 下视深度默认不用于前向避障，避免把地面密集写入障碍地图
 
@@ -223,7 +251,11 @@ FUNCTIONS:
     PATH_PASS_TOLERANCE_M: 1.5            # 仅在确实越过轨迹点且横向误差较小时消费，避免提前删除前方点
     PATH_REISSUE_MIN_INTERVAL_S: 0.15     # 两次路径续写命令的最小间隔
     PATH_VELOCITY_EPSILON_MPS: 0.05       # 速度变化小于该值时不重发相同路径
+    CONTINUOUS_MIN_SPEED_MPS: 1.0         # 规划返回前的连续飞行下限，禁止降到近似悬停的0.xm/s
+    COMPLETION_PATH_ENTRY_MARGIN_M: 0.25  # 路径截断点比完成半径内缩，避免终点误差停在阈值外
     COMPLETION_INTERVAL_S: 1.0            # 后台目标观测最短提交间隔；active任务未结束时不会重复堆积
+    MAX_COMPLETION_ATTEMPTS: 2            # 最多犹豫一次；第二次必须完成或明确失败
+    COMPLETION_RETRY_COOLDOWN_S: 0.2      # 第一次证据不一致时只做一次短暂复核
     STOP_RADIUS: 5.0                      # 兼容旧完成判定的停止半径；距离到达模式使用ARRIVAL_RADIUS_M
     SLOW_RADIUS: 5.0                      # 兼容旧慢速判定配置；距离到达模式不调用VLM裁决
     DISTANCE_VIEW_POLICY: relation_aware  # completion距离视图策略: relation_aware | front_only | down_only | best_reliable

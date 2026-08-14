@@ -53,6 +53,9 @@ class TaskManager:
     def is_stage_completed(self, index: int) -> bool:
         return self._stage_state.get(index, {}).get("completed", False)
 
+    def is_stage_failed(self, index: int) -> bool:
+        return self._stage_state.get(index, {}).get("failed", False)
+
     def stage_completion_reason(self, index: int) -> str:
         return self._stage_state.get(index, {}).get("reason", "")
 
@@ -62,6 +65,14 @@ class TaskManager:
             return None
         self._stage_state[stage.index] = {"completed": True, "reason": reason or ""}
         self.current_index += 1
+        return stage
+
+    def fail_current(self, reason: str = "") -> Optional[TaskStage]:
+        """Record a terminal stage failure without advancing to future stages."""
+        stage = self.current_stage()
+        if stage is None:
+            return None
+        self._stage_state[stage.index] = {"completed": False, "failed": True, "reason": reason or ""}
         return stage
 
     def current_prompt(self) -> str:
@@ -96,6 +107,8 @@ class TaskManager:
         for stage in self.stages:
             if self.is_stage_completed(stage.index):
                 marker = "done"
+            elif self.is_stage_failed(stage.index):
+                marker = "failed"
             elif stage.index == self.current_index:
                 marker = "current"
             else:
@@ -141,6 +154,10 @@ class TaskManager:
         if getattr(stage, "auxiliary_targets", None):
             anchors = ", ".join(str(t) for t in stage.auxiliary_targets)
             rule += f" Use these landmark qualifiers to disambiguate the target: {anchors}."
+        if getattr(stage, "view_relative", False):
+            rule += " Resolve and keep the target instance selected from the view captured when this stage became active."
+        if getattr(stage, "return_target", False):
+            rule += " Reuse the previously remembered target instance; do not renumber targets from the current view."
         return rule
 
     _ACTION_DEFAULTS = {
@@ -210,6 +227,8 @@ class TaskManager:
                     ordinal=ordinal,
                     selection_rule=str(item.get("selection_rule", "") or "").strip().lower(),
                     stage_kind=str(item.get("stage_kind", "") or "").strip().lower(),
+                    view_relative=bool(item.get("view_relative", False)),
+                    return_target=bool(item.get("return_target", False)),
                     auxiliary_targets=auxiliary_targets if mode in {"target", "detect"} else [],
                 )
             )

@@ -25,6 +25,12 @@ class TaskStage:
     ordinal: Optional[int] = None
     selection_rule: str = ""
     stage_kind: str = ""
+    # view_relative targets are resolved from the observation made when this
+    # stage becomes active, instead of from mission-start/future scans.
+    view_relative: bool = False
+    # return_target explicitly reuses an instance remembered by an earlier
+    # stage and therefore always takes precedence over view_relative.
+    return_target: bool = False
     # auxiliary_targets 是当前目标的空间锚点/限定物，例如“灌木丛旁边的红车”里的 bush。
     auxiliary_targets: List[str] = field(default_factory=list)
 

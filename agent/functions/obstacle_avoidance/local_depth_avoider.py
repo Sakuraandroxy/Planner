@@ -386,6 +386,23 @@ class DepthObstacleAvoider:
         target = (memory_context or {}).get("target_body") or []
         if len(target) < 3:
             return False
+        if bool((memory_context or {}).get("is_large_structure", False)) and bool(
+            (memory_context or {}).get("uses_surface_geometry", False)
+        ):
+            horizontal_delta = math.sqrt(
+                (float(obstacle_body[0]) - float(target[0])) ** 2
+                + (float(obstacle_body[1]) - float(target[1])) ** 2
+            )
+            obstacle_range = math.sqrt(float(obstacle_body[0]) ** 2 + float(obstacle_body[1]) ** 2)
+            target_range = math.sqrt(float(target[0]) ** 2 + float(target[1]) ** 2)
+            return bool(
+                float(obstacle_body[0]) > 0.0
+                and horizontal_delta <= float(self.config.get("LARGE_STRUCTURE_TARGET_MATCH_RADIUS_M", 6.0))
+                and abs(obstacle_range - target_range)
+                <= float(self.config.get("LARGE_STRUCTURE_TARGET_MATCH_RANGE_TOLERANCE_M", 3.0))
+                and abs(float(obstacle_body[2]) - float(target[2]))
+                <= float(self.config.get("LARGE_STRUCTURE_TARGET_MATCH_VERTICAL_M", 3.0))
+            )
         radius = max(
             2.0,
             float(memory_context.get("footprint_radius_m", 1.5) or 1.5)

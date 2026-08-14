@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
+from agent.functions.common.detection_policy import detection_caption_for_stage, detection_reliability
 from agent.models.detection.base import DetectionResult
 
 
@@ -65,11 +66,7 @@ class TargetRelocalizer:
         if self.detector is None:
             return RelocalizationResult(reason="detector unavailable")
 
-        target = (
-            getattr(stage, "target_query", None)
-            or getattr(stage, "target", None)
-            or getattr(stage, "instruction", "")
-        )
+        target = detection_caption_for_stage(stage)
         if not target:
             return RelocalizationResult(reason="empty target")
 
@@ -88,7 +85,7 @@ class TargetRelocalizer:
                     verbose=False,
                 )
 
-            front_det, down_det, detection = self._detect_views(frame, down, target)
+            front_det, down_det, detection = self._detect_views(stage, frame, down, target)
             accepted = None
             if validator is not None:
                 try:
@@ -124,7 +121,7 @@ class TargetRelocalizer:
             reason=f"'{target}' not found after {self.max_turns} views",
         )
 
-    def _detect_views(self, front_image, down_image, target: str):
+    def _detect_views(self, stage: Any, front_image, down_image, target: str):
         if front_image is None:
             empty = DetectionResult(visible=False, camera="none")
             return empty, empty, empty
@@ -146,7 +143,11 @@ class TargetRelocalizer:
         candidates = (front_det, down_det) if self.accept_down_view else (front_det,)
         visible = [
             d for d in candidates
-            if d and d.visible and self._bbox_is_reliable(d, front_image if d.camera == "front" else down_image)
+            if d and d.visible and self._bbox_is_reliable(
+                stage,
+                d,
+                front_image if d.camera == "front" else down_image,
+            )
         ]
         if not visible:
             return front_det, down_det, DetectionResult(visible=False, camera="none")
@@ -161,7 +162,7 @@ class TargetRelocalizer:
             )
         return front_det, down_det, best
 
-    def _bbox_is_reliable(self, detection: DetectionResult, image) -> bool:
+    def _bbox_is_reliable(self, stage: Any, detection: DetectionResult, image) -> bool:
         if not detection.bbox or image is None or not hasattr(image, "size"):
             return False
         width, height = float(image.size[0]), float(image.size[1])
@@ -173,8 +174,12 @@ class TargetRelocalizer:
         area_ratio = box_w * box_h / max(width * height, 1.0)
         return bool(
             area_ratio >= self.min_bbox_area_ratio
-            and box_w / width < self.max_bbox_span
-            and box_h / height < self.max_bbox_span
+            and detection_reliability(
+                stage,
+                detection,
+                image,
+                max_span=self.max_bbox_span,
+            ) > 0.0
         )
 
     def _front_center_offset_deg(self, detection: DetectionResult, image) -> float:

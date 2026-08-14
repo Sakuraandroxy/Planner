@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Sequence
 
 from agent.functions.common.config_access import first_value, function_section
+from agent.functions.common.detection_policy import allows_clipped_large_structure
 from config import cfg
 
 
@@ -55,7 +56,13 @@ def direction_hint_from_locked_body_target(
     )
 
 
-def direction_hint_from_front_detection(detector: Any, front_image: Any, target: str) -> DirectionHintResult:
+def direction_hint_from_front_detection(
+    detector: Any,
+    front_image: Any,
+    target: str,
+    *,
+    stage: Any = None,
+) -> DirectionHintResult:
     if not _direction_hint_enabled():
         return DirectionHintResult(reason="direction hint disabled")
     target = str(target or "").strip()
@@ -81,7 +88,7 @@ def direction_hint_from_front_detection(detector: Any, front_image: Any, target:
     if score < _min_confidence():
         return DirectionHintResult(bbox=bbox[:4], score=score, reason=f"low confidence {score:.2f}")
 
-    reliable, reason = _bbox_is_reliable(bbox, front_image)
+    reliable, reason = _bbox_is_reliable(bbox, front_image, stage=stage, detection=detection)
     if not reliable:
         return DirectionHintResult(bbox=bbox[:4], score=score, reason=reason)
 
@@ -142,7 +149,13 @@ def _camera_hfov_deg() -> float:
     return float(first_value(rcfg.get("CAMERA_HFOV_DEG"), sim.get("FRONT_FOV"), default=90.0))
 
 
-def _bbox_is_reliable(bbox: list[int], image: Any) -> tuple[bool, str]:
+def _bbox_is_reliable(
+    bbox: list[int],
+    image: Any,
+    *,
+    stage: Any = None,
+    detection: Any = None,
+) -> tuple[bool, str]:
     width, height = float(image.size[0]), float(image.size[1])
     if width <= 1.0 or height <= 1.0:
         return False, "invalid image size"
@@ -153,6 +166,13 @@ def _bbox_is_reliable(bbox: list[int], image: Any) -> tuple[bool, str]:
     max_span = _max_bbox_span()
 
     if box_w / width >= max_span or box_h / height >= max_span:
+        if detection is not None and allows_clipped_large_structure(
+            stage,
+            detection,
+            image,
+            max_span=max_span,
+        ):
+            return False, "clipped building facade; use depth-backed memory bearing"
         return False, f"bbox span too large ({box_w / width:.2f}, {box_h / height:.2f})"
     return True, "bbox accepted"
 

@@ -80,7 +80,15 @@ The "instruction" field is a simple English command. Examples:
   "飞到房子上方" -> {"instruction": "Fly above the house", "target": "house", "relation": "above"}
   "飞到第2辆红车旁" -> {"instruction": "Fly to the second red car", "target": "red car", "relation": "beside", "ordinal": 2, "selection_rule": "ordinal"}
   "飞到灌木丛旁边的红车旁" -> {"instruction": "Fly to the red car near the bushes", "target": "red car", "relation": "beside", "auxiliary_targets": ["bushes"], "selection_rule": "anchored"}
-  "飞回第一次经过的白车旁边" -> {"instruction": "Fly back to the first previously visited white car", "target": "white car", "relation": "near", "ordinal": 1, "selection_rule": "ordinal"}
+  "原地左转后，以新视角为准飞到前方可见的第二栋楼旁" -> {"instruction": "Fly near the second building visible ahead in the new view", "target": "building", "relation": "near", "ordinal": 2, "selection_rule": "ordinal", "view_relative": true, "return_target": false}
+  "飞回第一次经过的白车旁边" -> {"instruction": "Fly back to the first previously visited white car", "target": "white car", "relation": "near", "ordinal": 1, "selection_rule": "ordinal", "view_relative": false, "return_target": true}
+
+Target binding rules:
+- Set view_relative=true when the target identity or ordinal is defined by the view at the start of that stage, for example "current view", "new view", "after turning", "visible ahead", or "the first building on the left after the turn".
+- A view-relative target must not be resolved from the mission-start view or from an earlier stage.
+- Set return_target=true for explicit revisits such as "fly back", "return to", "previously visited", "飞回", "返回", or "回到".
+- return_target and view_relative are mutually exclusive. A return target must use view_relative=false even if the sentence also contains a direction.
+- Stable descriptions that do not redefine the target from a later view use view_relative=false and return_target=false.
 
 JSON schema:
 {
@@ -101,6 +109,8 @@ JSON schema:
       "ordinal": null,
       "selection_rule": "stable|ordinal|nearest|anchored",
       "stage_kind": "navigation|landing|search|action",
+      "view_relative": false,
+      "return_target": false,
       "auxiliary_targets": ["English landmark or qualifier targets, e.g. bushes"]
     }
   ]
@@ -214,6 +224,17 @@ def parse_task_parser_to_stages(response_text: str, original_instruction: str = 
                 ordinal=ordinal,
             )
         completion_condition = str(item.get("completion_condition", "") or "").strip()
+        binding_text = " ".join([instruction, target, completion_condition])
+        return_target = bool(
+            _coerce_bool(item.get("return_target"))
+            or _has_return_to_intent(binding_text)
+        )
+        view_relative = bool(
+            _coerce_bool(item.get("view_relative"))
+            or _has_view_relative_intent(binding_text, ordinal=ordinal)
+        )
+        if return_target:
+            view_relative = False
         auxiliary_targets = _coerce_auxiliary_targets(item.get("auxiliary_targets"))
         split_target, split_aux = _split_target_and_auxiliary(
             target,
@@ -258,6 +279,8 @@ def parse_task_parser_to_stages(response_text: str, original_instruction: str = 
                 ordinal=ordinal,
                 selection_rule=selection_rule if mode in {"target", "detect"} else "",
                 stage_kind=str(item.get("stage_kind", "") or "").strip().lower(),
+                view_relative=view_relative if mode in {"target", "detect"} else False,
+                return_target=return_target if mode in {"target", "detect"} else False,
                 auxiliary_targets=auxiliary_targets if mode in {"target", "detect"} else [],
             )
         )
@@ -363,8 +386,88 @@ def _has_return_to_intent(text: str) -> bool:
     return bool(
         re.search(r"\b(?:fly|go|come|head|navigate)?\s*back\s+to\b", lower)
         or re.search(r"\breturn\s+to\b", lower)
-        or any(token in lower for token in ("飞回", "返回", "回到", "回去"))
+        or any(
+            token in lower
+            for token in (
+                "previously visited",
+                "visited before",
+                "previously passed",
+                "飞回",
+                "返回",
+                "回到",
+                "回去",
+                "之前经过",
+                "先前经过",
+            )
+        )
     )
+
+
+def _coerce_bool(value, *, default: bool = False) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "y"}:
+        return True
+    if normalized in {"0", "false", "no", "n", ""}:
+        return False
+    return bool(default)
+
+
+def _has_view_relative_intent(text: str, *, ordinal: int | None = None) -> bool:
+    normalized = re.sub(r"[-_/]+", " ", str(text or "").lower())
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    compact = normalized.replace(" ", "")
+    explicit_tokens = (
+        "current view",
+        "current perspective",
+        "new view",
+        "new perspective",
+        "view after the turn",
+        "after turning",
+        "after the turn",
+        "visible ahead",
+        "visible in front",
+        "when this stage starts",
+        "at the start of this stage",
+    )
+    explicit_zh = (
+        "当前视野",
+        "当前视角",
+        "新视野",
+        "新视角",
+        "转向后",
+        "转弯后",
+        "转向完成后",
+        "前方可见",
+        "阶段开始时",
+    )
+    if any(token in normalized for token in explicit_tokens):
+        return True
+    if any(token in compact for token in explicit_zh):
+        return True
+    if not ordinal:
+        return False
+    directional_tokens = (
+        "front right",
+        "right front",
+        "front left",
+        "left front",
+        "on the left",
+        "on the right",
+        "to the left",
+        "to the right",
+        "ahead",
+        "in front",
+        "左前方",
+        "右前方",
+        "左侧",
+        "右侧",
+        "前方",
+    )
+    return any(token in normalized or token in compact for token in directional_tokens)
 
 
 def _has_landing_intent(text: str) -> bool:

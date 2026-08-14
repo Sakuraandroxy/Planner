@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import threading
 import time
 from dataclasses import dataclass
 from typing import Sequence
@@ -114,6 +115,7 @@ class ContinuousPathStream:
     def __init__(self, client, config=None):
         config = config or {}
         self.client = client
+        self._state_lock = threading.RLock()
         self.reach_tolerance_m = float(config.get("PATH_REACH_TOLERANCE_M", 0.8))
         self.final_reach_tolerance_m = float(config.get("PATH_FINAL_REACH_TOLERANCE_M", 0.2))
         self.pass_tolerance_m = float(config.get("PATH_PASS_TOLERANCE_M", 1.5))
@@ -128,60 +130,72 @@ class ContinuousPathStream:
 
     @property
     def active(self) -> bool:
-        return bool(self._commanded_remaining)
+        with self._state_lock:
+            return bool(self._commanded_remaining)
 
     def reset(self) -> None:
-        self._anchor = None
-        self._commanded_remaining = []
-        self._collision_marker = None
-        self._last_issue_at = 0.0
-        self._commanded_velocity = None
+        with self._state_lock:
+            self._anchor = None
+            self._commanded_remaining = []
+            self._collision_marker = None
+            self._last_issue_at = 0.0
+            self._commanded_velocity = None
 
     def stop(self) -> None:
-        if self.active:
-            self.client.stop_waypoint_path()
-        self.reset()
+        with self._state_lock:
+            if self._commanded_remaining:
+                self.client.stop_waypoint_path()
+            self.reset()
+
+    def emergency_stop(self) -> None:
+        """Always cancel AirSim motion, even if local stream state is stale."""
+        with self._state_lock:
+            try:
+                self.client.stop_waypoint_path()
+            finally:
+                self.reset()
 
     def poll(self, queue_waypoints: Sequence[Sequence[float]], current_pos: Sequence[float]) -> PathStreamPoll:
-        if not self.active or self._anchor is None:
-            return PathStreamPoll()
+        with self._state_lock:
+            if not self._commanded_remaining or self._anchor is None:
+                return PathStreamPoll()
 
-        consumed = reached_prefix_count(
-            current_pos,
-            self._anchor,
-            self._commanded_remaining,
-            reach_tolerance_m=self.reach_tolerance_m,
-            pass_tolerance_m=self.pass_tolerance_m,
-        )
+            consumed = reached_prefix_count(
+                current_pos,
+                self._anchor,
+                self._commanded_remaining,
+                reach_tolerance_m=self.reach_tolerance_m,
+                pass_tolerance_m=self.pass_tolerance_m,
+            )
         # Do not declare the whole path exhausted while the vehicle is still
         # inside the broad intermediate-waypoint tolerance. AirSim would still
         # be approaching the endpoint, but the scheduler would start waiting
         # for Qwen too early.
-        if consumed == len(self._commanded_remaining) and self._commanded_remaining:
-            final_distance = _distance(current_pos, self._commanded_remaining[-1])
-            final_anchor = (
-                self._anchor
-                if len(self._commanded_remaining) == 1
-                else self._commanded_remaining[-2]
-            )
-            passed_final = _passed_target(
-                current_pos,
-                final_anchor,
-                self._commanded_remaining[-1],
-                self.pass_tolerance_m,
-            )
-            if final_distance > self.final_reach_tolerance_m and not passed_final:
-                consumed -= 1
-        if consumed > 0:
-            self._anchor = list(self._commanded_remaining[consumed - 1])
-            del self._commanded_remaining[:consumed]
+            if consumed == len(self._commanded_remaining) and self._commanded_remaining:
+                final_distance = _distance(current_pos, self._commanded_remaining[-1])
+                final_anchor = (
+                    self._anchor
+                    if len(self._commanded_remaining) == 1
+                    else self._commanded_remaining[-2]
+                )
+                passed_final = _passed_target(
+                    current_pos,
+                    final_anchor,
+                    self._commanded_remaining[-1],
+                    self.pass_tolerance_m,
+                )
+                if final_distance > self.final_reach_tolerance_m and not passed_final:
+                    consumed -= 1
+            if consumed > 0:
+                self._anchor = list(self._commanded_remaining[consumed - 1])
+                del self._commanded_remaining[:consumed]
 
-        collided = self.client.has_collision_since(self._collision_marker)
-        if collided:
-            self.reset()
-        elif not self._commanded_remaining:
-            self.reset()
-        return PathStreamPoll(consumed=consumed, collided=collided)
+            collided = self.client.has_collision_since(self._collision_marker)
+            if collided:
+                self.reset()
+            elif not self._commanded_remaining:
+                self.reset()
+            return PathStreamPoll(consumed=consumed, collided=collided)
 
     def sync(
         self,
@@ -189,48 +203,44 @@ class ContinuousPathStream:
         current_pos: Sequence[float],
         velocity: float,
     ) -> bool:
-        desired = [_point3(waypoint) for waypoint in queue_waypoints]
-        if not desired:
-            return False
-        velocity = float(velocity)
-        velocity_changed = (
-            self._commanded_velocity is None
-            or abs(velocity - self._commanded_velocity) >= self.velocity_epsilon_mps
-        )
-        if self.active and desired == self._commanded_remaining and not velocity_changed:
-            return False
-        if self.active and time.perf_counter() - self._last_issue_at < self.min_reissue_interval_s:
-            return False
-
-        # Waypoints consumed from the front (desired is a suffix of
-        # commanded_remaining).  The existing AirSim path is still valid;
-        # reissuing would restart ForwardOnly with a new anchor, introducing
-        # heading drift from repeated curved-path entry calculations.
-        if self.active and len(desired) < len(self._commanded_remaining) and not velocity_changed:
-            consumed = len(self._commanded_remaining) - len(desired)
-            if desired == self._commanded_remaining[consumed:]:
-                self._commanded_remaining = desired
-                if consumed > 0 and len(self._commanded_remaining) > 0:
-                    self._anchor = list(self._commanded_remaining[0])
+        with self._state_lock:
+            desired = [_point3(waypoint) for waypoint in queue_waypoints]
+            if not desired:
+                return False
+            velocity = float(velocity)
+            velocity_changed = (
+                self._commanded_velocity is None
+                or abs(velocity - self._commanded_velocity) >= self.velocity_epsilon_mps
+            )
+            if self._commanded_remaining and desired == self._commanded_remaining and not velocity_changed:
+                return False
+            if self._commanded_remaining and time.perf_counter() - self._last_issue_at < self.min_reissue_interval_s:
                 return False
 
-        continuing = bool(
-            self.active
-            and desired[: len(self._commanded_remaining)] == self._commanded_remaining
-        )
-        mode = "extend" if continuing else "start"
-        previous_anchor = list(self._anchor) if continuing and self._anchor is not None else None
-        self._collision_marker = self.client.collision_marker()
-        self.client.start_waypoint_path(desired, velocity=velocity)
-        # Reissuing moveOnPathAsync is required when a suffix is appended or
-        # the commanded speed changes.  The remaining prefix still belongs to
-        # the original path, so its progress anchor must remain unchanged.
-        # Resetting it to the current in-segment pose turns an old queue-head
-        # waypoint into a new backwards segment.
-        self._anchor = previous_anchor or _point3(current_pos)
-        self._commanded_remaining = desired
-        self._commanded_velocity = velocity
-        self._last_issue_at = time.perf_counter()
-        if self.debug_logs:
-            print(f"  [PathStream] {mode} points={len(desired)}")
-        return True
+            # Waypoints consumed from the front (desired is a suffix of
+            # commanded_remaining). The existing AirSim path is still valid;
+            # reissuing would restart ForwardOnly with a new anchor.
+            if self._commanded_remaining and len(desired) < len(self._commanded_remaining) and not velocity_changed:
+                consumed = len(self._commanded_remaining) - len(desired)
+                if desired == self._commanded_remaining[consumed:]:
+                    self._commanded_remaining = desired
+                    if consumed > 0 and self._commanded_remaining:
+                        self._anchor = list(self._commanded_remaining[0])
+                    return False
+
+            continuing = bool(
+                self._commanded_remaining
+                and desired[: len(self._commanded_remaining)] == self._commanded_remaining
+            )
+            mode = "extend" if continuing else "start"
+            previous_anchor = list(self._anchor) if continuing and self._anchor is not None else None
+            self._collision_marker = self.client.collision_marker()
+            self.client.start_waypoint_path(desired, velocity=velocity)
+            # Preserve the original path anchor when extending the path.
+            self._anchor = previous_anchor or _point3(current_pos)
+            self._commanded_remaining = desired
+            self._commanded_velocity = velocity
+            self._last_issue_at = time.perf_counter()
+            if self.debug_logs:
+                print(f"  [PathStream] {mode} points={len(desired)}")
+            return True

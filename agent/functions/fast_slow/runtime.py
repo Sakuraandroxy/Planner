@@ -7,7 +7,7 @@ import os
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from types import SimpleNamespace
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -17,6 +17,11 @@ from config import cfg, get_cfg
 from agent.functions.candidate.pipeline import prepare_candidates_for_world_model, select_best_candidate
 from agent.models.planner.sliding_window_planner import cumulative_to_incremental, incremental_to_cumulative
 from agent.functions.common.config_access import function_section
+from agent.functions.common.detection_policy import (
+    detection_caption_for_stage,
+    detection_reliability as shared_detection_reliability,
+    is_large_structure_stage,
+)
 from agent.functions.common.task_manager import TaskManager
 from agent.functions.common.warmup import warmup_from_config
 from agent.functions.common import web_runtime_helpers as web_helpers
@@ -31,8 +36,19 @@ from agent.functions.fast_slow.completion_pipeline import CompletionPipeline
 from agent.functions.fast_slow.completion_pipeline import DetectionDepthBundle
 from agent.functions.fast_slow.controller import FastSlowController
 from agent.functions.fast_slow.path_stream import ContinuousPathStream
-from agent.functions.memory import MissionMemory, build_mission_memory
-from agent.functions.memory.geometry import world_to_body
+from agent.functions.memory import (
+    MissionMemory,
+    build_mission_memory,
+    is_view_relative_stage,
+    view_relative_direction,
+)
+from agent.functions.memory.geometry import (
+    distance_to_instance_geometry,
+    has_surface_geometry,
+    has_surface_samples,
+    instance_surface_sample_points,
+    world_to_body,
+)
 from agent.functions.memory.spatial_reasoning import relation_kind
 from agent.functions.obstacle_avoidance import DepthObstacleAvoider, build_depth_obstacle_avoider
 from agent.functions.planning.direction_hint import (
@@ -77,6 +93,8 @@ class RuntimeObjects:
     display_step: int = 0
     display_max_steps: int = 0
     task_failed: bool = False
+    completion_attempts: dict[tuple, int] = field(default_factory=dict)
+    completion_retry_after: dict[tuple, float] = field(default_factory=dict)
     # future_scan_index/last_future_scan_s 控制低频轮询未来目标，避免每帧都检测所有目标。
     future_scan_index: int = 0
     last_future_scan_s: float = 0.0
@@ -203,6 +221,39 @@ def _update_target_pose_from_bundle(objects: RuntimeObjects, stage, bundle: Dete
                 f"  [Memory] updates={len(events)} "
                 f"primary={(primary.instance_id if primary else 'none')}"
             )
+        if is_view_relative_stage(stage) and not objects.mission_memory.has_primary(stage):
+            # A detector hit is not a navigation identity until the requested
+            # activation-view ordinal has been resolved and locked.
+            objects.distance_estimator.clear()
+            objects.navigation_metrics.invalidate_target(CompletionPipeline.stage_key(stage))
+            return None
+        trusted_surface_fn = getattr(
+            objects.mission_memory,
+            "trusted_near_large_surface_estimate",
+            None,
+        )
+        trusted_surface = (
+            trusted_surface_fn(stage, bundle.observer_world)
+            if callable(trusted_surface_fn)
+            else None
+        )
+        if trusted_surface is not None:
+            # Near a locked facade, a generic detector may prefer a complete
+            # building tens of metres away. Keep both control and metrics on
+            # the locked surface instead of publishing that unrelated point.
+            objects.distance_estimator.clear()
+            objects.navigation_metrics.update_target(
+                CompletionPipeline.stage_key(stage),
+                trusted_surface["target_world"],
+                confidence=float(trusted_surface.get("confidence", 0.0) or 0.0),
+                replace_stage_reference=True,
+            )
+            objects.navigation_metrics.record_distance(trusted_surface["distance_m"])
+            _debug_print(
+                "  [DistanceEstimate] detector point ignored; "
+                f"locked near-surface memory distance={trusted_surface['distance_m']:.1f}m"
+            )
+            return SimpleNamespace(**trusted_surface)
     if not objects.distance_estimator.enabled:
         return None
     view = str(bundle.distance_view or "none").strip().lower()
@@ -350,13 +401,7 @@ def _evaluate_completion(objects: RuntimeObjects, stage, task_text, frame, down_
 
 
 def _caption_for_stage(stage, fallback_instruction: str) -> str:
-    return (
-        getattr(stage, "target_query", None)
-        or getattr(stage, "target", None)
-        or getattr(stage, "instruction", None)
-        or fallback_instruction
-        or ""
-    )
+    return detection_caption_for_stage(stage, fallback_instruction)
 
 
 def _is_above_stage(stage: Any) -> bool:
@@ -370,40 +415,7 @@ def _is_above_stage(stage: Any) -> bool:
 
 
 def _detection_reliability(stage: Any, detection: Any, image: Any = None) -> float:
-    if not detection or not getattr(detection, "visible", False):
-        return 0.0
-    score = max(0.0, min(1.0, float(getattr(detection, "score", 0.0) or 0.0)))
-    if image is None or not getattr(detection, "bbox", None) or not hasattr(image, "size"):
-        return score
-
-    width, height = float(image.size[0]), float(image.size[1])
-    if width <= 1.0 or height <= 1.0:
-        return score
-
-    x1, y1, x2, y2 = [float(v) for v in detection.bbox[:4]]
-    box_w = max(0.0, min(width, x2) - max(0.0, x1))
-    box_h = max(0.0, min(height, y2) - max(0.0, y1))
-    area_ratio = (box_w * box_h) / max(width * height, 1.0)
-    span_x = box_w / width
-    span_y = box_h / height
-    touches_border = x1 <= 2.0 or y1 <= 2.0 or x2 >= width - 2.0 or y2 >= height - 2.0
-
-    quality = 1.0
-    if area_ratio <= 0.0002:
-        quality *= 0.35
-    elif area_ratio <= 0.001:
-        quality *= 0.65
-    if span_x >= 0.90 or span_y >= 0.90:
-        return 0.0
-    if area_ratio >= 0.55:
-        quality *= 0.03
-    elif area_ratio >= 0.30 or span_x >= 0.75 or span_y >= 0.75:
-        quality *= 0.20
-    elif area_ratio >= 0.18:
-        quality *= 0.45
-    if touches_border:
-        quality *= 0.45 if _is_above_stage(stage) else 0.35
-    return score * quality
+    return shared_detection_reliability(stage, detection, image)
 
 
 def _suppress_unreliable_detection(stage: Any, detection: Any, image: Any = None) -> None:
@@ -468,8 +480,25 @@ def _detect_dual_view(
         _suppress_unreliable_detection(stage, det, frame)
     for det in down_all:
         _suppress_unreliable_detection(stage, det, down_frame)
-    front_det = _best_detection_from_list(stage, front_all, frame, camera_name="front")
-    down_det = _best_detection_from_list(stage, down_all, down_frame, camera_name="down")
+    enforce_view_relative_sector = bool(
+        is_view_relative_stage(stage)
+        and getattr(objects, "mission_memory", None) is not None
+        and objects.mission_memory.primary_instance(stage) is None
+    )
+    front_det = _best_detection_from_list(
+        stage,
+        front_all,
+        frame,
+        camera_name="front",
+        enforce_view_relative_sector=enforce_view_relative_sector,
+    )
+    down_det = _best_detection_from_list(
+        stage,
+        down_all,
+        down_frame,
+        camera_name="down",
+        enforce_view_relative_sector=enforce_view_relative_sector,
+    )
     elapsed = time.perf_counter() - t0
     visible = [d for d in (front_det, down_det) if d and d.visible]
     best = _select_reliable_detection(stage, front_det, down_det, frame, down_frame) if visible else None
@@ -491,17 +520,55 @@ def _detect_dual_view(
     return best, front_det, down_det, elapsed, front_all, down_all
 
 
-def _best_detection_from_list(stage: Any, detections: list, image: Any, *, camera_name: str):
+def _best_detection_from_list(
+    stage: Any,
+    detections: list,
+    image: Any,
+    *,
+    camera_name: str,
+    enforce_view_relative_sector: bool = False,
+):
     from agent.models.detection.base import DetectionResult
 
     visible = [
         detection for detection in list(detections or [])
         if detection and getattr(detection, "visible", False)
         and _detection_reliability(stage, detection, image) > 0.0
+        and (
+            not enforce_view_relative_sector
+            or _detection_matches_view_relative_sector(stage, detection, image, camera_name=camera_name)
+        )
     ]
     if not visible:
         return DetectionResult(visible=False, camera=camera_name)
     return max(visible, key=lambda d: float(getattr(d, "score", 0.0) or 0.0))
+
+
+def _detection_matches_view_relative_sector(
+    stage: Any,
+    detection: Any,
+    image: Any,
+    *,
+    camera_name: str,
+) -> bool:
+    if str(camera_name or "").lower() != "front":
+        return False
+    bbox = list(getattr(detection, "bbox", []) or [])
+    if len(bbox) < 4 or image is None or not hasattr(image, "size"):
+        return False
+    width = float(image.size[0])
+    if width <= 1.0:
+        return False
+    center_ratio = (float(bbox[0]) + float(bbox[2])) / (2.0 * width)
+    text = " ".join((
+        str(getattr(stage, "instruction", "") or ""),
+        str(getattr(stage, "completion_condition", "") or ""),
+    )).lower().replace("-", " ")
+    if any(token in text for token in ("front right", "right front", "on the right", "right side", "右前方", "右侧", "右边")):
+        return center_ratio > 0.5
+    if any(token in text for token in ("front left", "left front", "on the left", "left side", "左前方", "左侧", "左边")):
+        return center_ratio < 0.5
+    return True
 
 
 def _evaluate_completion_fast_slow(
@@ -721,6 +788,12 @@ def _memory_observation_stages(objects: RuntimeObjects, current_stage=None, *, f
             continue
         if future_only and int(getattr(stage, "index", 0)) <= int(current_index):
             continue
+        if is_view_relative_stage(stage):
+            # Mission bootstrap and future scans must not define what "the
+            # second building in the new view" means. Only the active stage
+            # may observe candidates for this target.
+            if current_stage is None or int(getattr(stage, "index", -1)) != int(current_index):
+                continue
         for query_stage in [stage] + _memory_auxiliary_stages(stage):
             target = _caption_for_stage(query_stage, "")
             if not target:
@@ -823,6 +896,114 @@ def _bootstrap_mission_memory(objects: RuntimeObjects, client, state, task_text:
         reason="bootstrap",
         max_queries=max_queries,
     )
+
+
+def _bind_view_relative_stage(objects: RuntimeObjects, client, state, stage, task_text: str) -> bool:
+    memory = getattr(objects, "mission_memory", None)
+    if (
+        memory is None
+        or not memory.enabled
+        or not is_view_relative_stage(stage)
+        or not bool(memory.config.get("VIEW_RELATIVE_STAGE_BIND_ENABLED", True))
+    ):
+        return False
+
+    memory.reset_view_relative_binding(stage)
+    profile = str(memory.config.get("VIEW_RELATIVE_BIND_CAPTURE_PROFILE", "front_depth") or "front_depth")
+    try:
+        (
+            frame,
+            down_frame,
+            front_depth,
+            down_depth,
+            timing,
+            observer_world,
+            observer_yaw_deg,
+        ) = web_helpers.capture_profile_isolated_with_pose(client, profile)
+    except Exception as exc:
+        print(f"  [MemoryBind] skipped target={_caption_for_stage(stage, task_text)!r}: {exc}")
+        try:
+            fallback_world, fallback_yaw = client.get_pose()
+            memory.begin_view_relative_binding(stage, fallback_world, fallback_yaw)
+        except Exception:
+            pass
+        return False
+
+    memory.begin_view_relative_binding(stage, observer_world, observer_yaw_deg)
+
+    query_stages = [stage] + _memory_auxiliary_stages(stage)
+    _run_memory_observation_scan(
+        objects,
+        state,
+        query_stages=query_stages,
+        frame=frame,
+        down_frame=down_frame,
+        front_depth=front_depth,
+        down_depth=down_depth,
+        observer_world=observer_world,
+        observer_yaw_deg=observer_yaw_deg,
+        task_text=task_text,
+        reason="view_relative_activation",
+        max_queries=len(query_stages),
+    )
+    primary = memory.primary_instance(stage)
+    capture_total_s = float((timing or {}).get("total_s", 0.0) or 0.0)
+    if (
+        primary is None
+        and is_large_structure_stage(stage)
+        and bool(memory.config.get("VIEW_RELATIVE_LOCAL_RETRY_ENABLED", True))
+    ):
+        direction = view_relative_direction(stage)
+        retry_yaw = float(memory.config.get("VIEW_RELATIVE_LOCAL_RETRY_YAW_DEG", 18.0))
+        signed_offset = -retry_yaw if direction in {"left", "front_left"} else retry_yaw
+        if direction == "front":
+            signed_offset = 0.0
+        if abs(signed_offset) > 1e-3:
+            try:
+                client.rotate_to_yaw(float(observer_yaw_deg) + signed_offset)
+                (
+                    retry_frame,
+                    retry_down_frame,
+                    retry_front_depth,
+                    retry_down_depth,
+                    retry_timing,
+                    retry_world,
+                    retry_yaw_deg,
+                ) = web_helpers.capture_profile_isolated_with_pose(client, profile)
+                capture_total_s += float((retry_timing or {}).get("total_s", 0.0) or 0.0)
+                _run_memory_observation_scan(
+                    objects,
+                    state,
+                    query_stages=query_stages,
+                    frame=retry_frame,
+                    down_frame=retry_down_frame,
+                    front_depth=retry_front_depth,
+                    down_depth=retry_down_depth,
+                    observer_world=retry_world,
+                    observer_yaw_deg=retry_yaw_deg,
+                    task_text=task_text,
+                    reason="view_relative_local_retry",
+                    max_queries=len(query_stages),
+                )
+                primary = memory.primary_instance(stage)
+                if primary is None:
+                    client.rotate_to_yaw(float(observer_yaw_deg))
+            except Exception as exc:
+                print(f"  [MemoryBind] local retry skipped: {exc}")
+                try:
+                    client.rotate_to_yaw(float(observer_yaw_deg))
+                except Exception:
+                    pass
+
+    local_ids = memory.local_instance_ids(stage)
+    print(
+        f"  [MemoryBind] view_relative target={_caption_for_stage(stage, task_text)!r} "
+        f"ordinal={getattr(stage, 'ordinal', None) or 1} local_instances={local_ids} "
+        f"primary={(primary.instance_id if primary else 'none')} "
+        f"capture={capture_total_s:.2f}s"
+    )
+    state.update(memory_summary=memory.summary(stage))
+    return primary is not None
 
 
 def _detect_future_memory_snapshot(
@@ -1127,10 +1308,8 @@ def _submit_plan_if_needed(
     direction_hint = direction_hint_from_front_detection(
         objects.detector,
         frame,
-        getattr(stage, "target_query", None)
-        or getattr(stage, "target", None)
-        or getattr(stage, "instruction", None)
-        or instruction,
+        _caption_for_stage(stage, instruction),
+        stage=stage,
     )
     memory_hint = ""
     if getattr(objects, "mission_memory", None) is not None:
@@ -1336,7 +1515,9 @@ def _apply_memory_path_guard(objects: RuntimeObjects, stage, cumulative_waypoint
         empty_if_start_inside=not start_inside_outer,
     )
     if clipped is not None:
-        return clipped, f"clip_enter_approach_{radius:.1f}m"
+        clipped, leg_limited = _limit_cumulative_path_length(clipped, memory_cfg)
+        leg_reason = f"_leg_{float(memory_cfg.get('PATH_MAX_GUIDED_LEG_M', 0.0)):.1f}m" if leg_limited else ""
+        return clipped, f"clip_enter_approach_{radius:.1f}m{leg_reason}"
 
     endpoint = [float(v) for v in cumulative_waypoints[-1][:3]]
     endpoint_dist = _distance3_body(endpoint, target)
@@ -1374,8 +1555,42 @@ def _apply_memory_path_guard(objects: RuntimeObjects, stage, cumulative_waypoint
             reason_bits.append("near_miss")
         if target_behind:
             reason_bits.append("target_behind")
+        direct, leg_limited = _limit_cumulative_path_length(direct, memory_cfg)
+        if leg_limited:
+            reason_bits.append(f"leg_{float(memory_cfg.get('PATH_MAX_GUIDED_LEG_M', 0.0)):.1f}m")
         return direct, "replace_" + "_".join(reason_bits)
+    limited, leg_limited = _limit_cumulative_path_length(cumulative_waypoints, memory_cfg)
+    if leg_limited:
+        return limited, f"clip_active_leg_{float(memory_cfg.get('PATH_MAX_GUIDED_LEG_M', 0.0)):.1f}m"
     return cumulative_waypoints, ""
+
+
+def _limit_cumulative_path_length(cumulative_waypoints: list, memory_cfg: dict) -> tuple[list, bool]:
+    """Bound one newly appended memory-guided leg while preserving its shape."""
+    max_length = float(memory_cfg.get("PATH_MAX_GUIDED_LEG_M", 0.0) or 0.0)
+    if max_length <= 0.0 or not cumulative_waypoints:
+        return cumulative_waypoints, False
+    prev = [0.0, 0.0, 0.0]
+    traveled = 0.0
+    limited = []
+    for waypoint in cumulative_waypoints:
+        cur = [float(v) for v in waypoint[:3]]
+        segment = [cur[i] - prev[i] for i in range(3)]
+        segment_length = _norm3(segment)
+        if traveled + segment_length <= max_length + 1e-6:
+            limited.append([round(v, 3) for v in cur])
+            traveled += segment_length
+            prev = cur
+            continue
+        remaining = max(0.0, max_length - traveled)
+        if remaining > 1e-3 and segment_length > 1e-6:
+            scale = remaining / segment_length
+            limited.append([
+                round(prev[i] + segment[i] * scale, 3)
+                for i in range(3)
+            ])
+        return limited, True
+    return limited, False
 
 
 def _clip_path_at_target_radius(
@@ -1550,10 +1765,10 @@ def _apply_obstacle_path_guard(
     selection_pos,
     selection_yaw: float,
     memory_context: dict,
-) -> tuple[list, str]:
+) -> tuple[list, str, Any]:
     avoider = getattr(objects, "obstacle_avoider", None)
     if avoider is None or not getattr(avoider, "enabled", False):
-        return cumulative_waypoints, ""
+        return cumulative_waypoints, "", None
     result = avoider.filter_cumulative_waypoints(
         cumulative_waypoints,
         current_world=selection_pos,
@@ -1561,10 +1776,14 @@ def _apply_obstacle_path_guard(
         memory_context=memory_context,
     )
     if not getattr(result, "changed", False):
-        return cumulative_waypoints, ""
+        return cumulative_waypoints, "", result
     obstacle = getattr(result, "obstacle_body", None)
     obstacle_text = "" if obstacle is None else f" obstacle_body={obstacle}"
-    return list(getattr(result, "waypoints", []) or []), f"{result.reason}{obstacle_text}"
+    return (
+        list(getattr(result, "waypoints", []) or []),
+        f"{result.reason}{obstacle_text}",
+        result,
+    )
 
 
 def _select_and_transform_plan(objects: RuntimeObjects, stage, result, frame, down_frame):
@@ -1651,11 +1870,13 @@ def _select_and_transform_plan(objects: RuntimeObjects, stage, result, frame, do
             f"from={_format_waypoints(chosen_cumulative)} to={_format_waypoints(guarded_cumulative)}"
         )
         chosen_cumulative = guarded_cumulative
-    obstacle_guarded, obstacle_reason = _apply_obstacle_path_guard(
+    selection_pos = getattr(result, "_selection_pos", [0.0, 0.0, 0.0])
+    selection_yaw = float(getattr(result, "_selection_yaw", 0.0) or 0.0)
+    obstacle_guarded, obstacle_reason, obstacle_result = _apply_obstacle_path_guard(
         objects,
         chosen_cumulative,
-        selection_pos=getattr(result, "_selection_pos", [0.0, 0.0, 0.0]),
-        selection_yaw=float(getattr(result, "_selection_yaw", 0.0) or 0.0),
+        selection_pos=selection_pos,
+        selection_yaw=selection_yaw,
         memory_context=memory_context,
     )
     if obstacle_reason:
@@ -1664,6 +1885,26 @@ def _select_and_transform_plan(objects: RuntimeObjects, stage, result, frame, do
             f"from={_format_waypoints(chosen_cumulative)} to={_format_waypoints(obstacle_guarded)}"
         )
         chosen_cumulative = obstacle_guarded
+    if (
+        obstacle_result is not None
+        and str(getattr(obstacle_result, "reason", "") or "") == "stop_before_target_depth_obstacle"
+        and getattr(obstacle_result, "obstacle_body", None) is not None
+        and getattr(objects, "mission_memory", None) is not None
+    ):
+        contact = objects.mission_memory.record_locked_large_surface_contact(
+            stage,
+            observer_world=selection_pos,
+            observer_yaw_deg=selection_yaw,
+            obstacle_body=obstacle_result.obstacle_body,
+        )
+        if contact is not None:
+            print(
+                "  [TargetSurfaceDepth] fused locked facade contact "
+                f"range={contact['contact_range_m']:.2f}m "
+                f"memory_distance={contact['distance_m']:.2f}m "
+                f"uncertainty={contact['uncertainty_m']:.1f}m; "
+                "completion will be checked before the next plan"
+            )
     chosen_incremental = cumulative_to_incremental(chosen_cumulative)
     print(
         f"  [Trajectory] wp={len(chosen_cumulative)} non_zero={len(chosen_incremental)} "
@@ -1916,6 +2157,10 @@ def _complete_stage_from_vlm(objects, path_stream, state, completion, distance_m
         objects.mission_memory.archive_stage(current_stage, completion.reason)
         state.update(memory_summary=objects.mission_memory.summary(current_stage))
     objects.task_manager.complete_current(completion.reason)
+    completed_key = CompletionPipeline.stage_key(current_stage) if current_stage is not None else None
+    if completed_key is not None:
+        objects.completion_attempts.pop(completed_key, None)
+        objects.completion_retry_after.pop(completed_key, None)
     print(f"  [TASK] {objects.task_manager.summary()}")
     task_done = objects.task_manager.is_done()
     if task_done:
@@ -1927,10 +2172,25 @@ def _complete_stage_from_vlm(objects, path_stream, state, completion, distance_m
 def _complete_stage_from_memory(objects, path_stream, state, stage, decision) -> bool:
     """Finish a stage when memory geometry reaches the strict completion threshold."""
     distance_text = "N/A" if decision.distance_m is None else f"{decision.distance_m:.2f}m"
+    required_text = (
+        "N/A" if decision.required_radius_m is None
+        else f"{decision.required_radius_m:.2f}m"
+    )
+    geometry = str((decision.details or {}).get("geometry", "point") or "point")
     print(
         f"  [Completion] done=True source=mission_memory instance={decision.instance_id} "
-        f"distance={distance_text} confidence={decision.confidence:.2f} reason={decision.reason}"
+        f"geometry={geometry} distance={distance_text} required<={required_text} "
+        f"confidence={decision.confidence:.2f} reason={decision.reason}"
     )
+    if decision.target_world is not None:
+        objects.navigation_metrics.update_target(
+            CompletionPipeline.stage_key(stage),
+            decision.target_world,
+            confidence=decision.confidence,
+            replace_stage_reference=True,
+        )
+    if decision.distance_m is not None:
+        objects.navigation_metrics.record_distance(decision.distance_m)
     path_stream.stop()
     objects.controller.clear()
     if objects.completion_pipeline is not None:
@@ -1944,6 +2204,9 @@ def _complete_stage_from_memory(objects, path_stream, state, stage, decision) ->
     objects.mission_memory.archive_stage(stage, decision.reason)
     state.update(memory_summary=objects.mission_memory.summary(stage))
     objects.task_manager.complete_current(decision.reason)
+    completed_key = CompletionPipeline.stage_key(stage)
+    objects.completion_attempts.pop(completed_key, None)
+    objects.completion_retry_after.pop(completed_key, None)
     print(f"  [TASK] {objects.task_manager.summary()}")
     task_done = objects.task_manager.is_done()
     if task_done:
@@ -1953,7 +2216,11 @@ def _complete_stage_from_memory(objects, path_stream, state, stage, decision) ->
 
 
 def _clear_stopped_queue(objects, path_stream, state) -> None:
-    path_stream.stop()
+    emergency_stop = getattr(path_stream, "emergency_stop", None)
+    if callable(emergency_stop):
+        emergency_stop()
+    else:
+        path_stream.stop()
     objects.controller.clear()
     if objects.completion_pipeline is not None:
         objects.completion_pipeline.clear()
@@ -1970,13 +2237,12 @@ def _fail_current_stage_after_relocalization(objects, path_stream, state, stage_
     objects.distance_estimator.clear()
     objects.navigation_metrics.invalidate_target(stage_key)
     objects.task_failed = True
-    objects.task_manager.complete_current(reason)
+    objects.task_manager.fail_current(reason)
+    objects.completion_retry_after.pop(stage_key, None)
     print(f"  [Completion] done=False source=relocalization_failed reason={reason}")
     print(f"  [TASK] {objects.task_manager.summary()}")
-    if objects.task_manager.is_done():
-        state.update(status="failed", task_done=False, step=0)
-        return True
-    return False
+    state.update(status="failed", task_done=False, step=0, error=reason)
+    return True
 
 
 def _search_with_memory_guidance(objects, client, stage, capture_mode: str, *, skip_initial_frame: bool):
@@ -2023,6 +2289,28 @@ def _evaluate_memory_completion_now(
     )
 
 
+def _fresh_visual_support_matches_locked_memory(objects, stage, completion) -> bool:
+    """Return whether completion vision supports the already locked target."""
+    if not bool(getattr(completion, "target_detected", False)):
+        return False
+    if str(getattr(completion, "accepted_view", "none") or "none").lower() not in {"front", "down"}:
+        return False
+
+    reason = str(getattr(completion, "reason", "") or "").strip().lower()
+    if reason == "target_mismatch":
+        return False
+    if reason != "outside_radius" or not is_view_relative_stage(stage):
+        return True
+
+    memory = getattr(objects, "mission_memory", None)
+    instance = memory.primary_instance(stage) if memory is not None else None
+    return not bool(
+        instance is not None
+        and getattr(instance, "is_large_structure", False)
+        and has_surface_geometry(instance)
+    )
+
+
 def _handle_background_target_lost(
     objects: RuntimeObjects,
     client,
@@ -2034,8 +2322,51 @@ def _handle_background_target_lost(
 ) -> bool:
     """Stop immediately when the slow observation loop loses the target."""
     current_stage_key = CompletionPipeline.stage_key(stage)
+    if (
+        is_view_relative_stage(stage)
+        and getattr(objects, "mission_memory", None) is not None
+        and not objects.mission_memory.has_primary(stage)
+    ):
+        pos_now, _yaw_now = client.get_pose()
+        expired_fn = getattr(objects.mission_memory, "view_relative_binding_expired", None)
+        expired, wait_reason = (
+            expired_fn(stage, pos_now)
+            if callable(expired_fn)
+            else (False, "waiting for delayed binding")
+        )
+        if expired:
+            return _fail_current_stage_after_relocalization(
+                objects,
+                path_stream,
+                state,
+                current_stage_key,
+                wait_reason,
+            )
+        print(f"  [TargetLost] delayed_binding_pending; {wait_reason}; current stage kept active")
+        state.update(memory_summary=objects.mission_memory.summary(stage))
+        return False
     if getattr(objects, "mission_memory", None) is not None and objects.mission_memory.has_primary(stage):
         pos_now, _yaw_now = client.get_pose()
+        trusted_surface_fn = getattr(
+            objects.mission_memory,
+            "trusted_near_large_surface_estimate",
+            None,
+        )
+        trusted_surface = (
+            trusted_surface_fn(stage, pos_now)
+            if callable(trusted_surface_fn)
+            else None
+        )
+        if trusted_surface is not None:
+            print(
+                "  [TargetLost] ignored_by_locked_near_surface_memory "
+                f"distance={trusted_surface['distance_m']:.2f}m "
+                f"confidence={trusted_surface['confidence']:.2f} "
+                f"uncertainty={trusted_surface['uncertainty_m']:.1f}m; "
+                "continuing without yaw change"
+            )
+            state.update(memory_summary=objects.mission_memory.summary(stage))
+            return False
         mem_distance = objects.mission_memory.estimate_distance(stage, pos_now)
         instance = objects.mission_memory.primary_instance(stage)
         memory_cfg = getattr(objects.mission_memory, "config", {}) or {}
@@ -2051,6 +2382,34 @@ def _handle_background_target_lost(
             instance is not None
             and instance.age_s() <= float(memory_cfg.get("SURFACE_COMPLETION_MAX_AGE_S", 120.0))
         )
+        controller = getattr(objects, "controller", None)
+        queue = getattr(controller, "queue", None)
+        pending_world = list(getattr(queue, "world_waypoints", []) or [])
+        navigation_active = bool(
+            getattr(path_stream, "active", False)
+            or pending_world
+            or getattr(controller, "planning", False)
+        )
+        locked_primary_fn = getattr(objects.mission_memory, "is_primary_locked", None)
+        locked_primary = bool(locked_primary_fn(stage)) if callable(locked_primary_fn) else False
+        if (
+            navigation_active
+            and locked_primary
+            and uses_surface
+            and bool(getattr(instance, "is_large_structure", False))
+            and surface_fresh
+            and confidence >= float(
+                memory_cfg.get("LARGE_STRUCTURE_SURFACE_LOCK_MIN_CONFIDENCE", 0.15)
+            )
+        ):
+            print(
+                "  [TargetLost] ignored_by_locked_surface_navigation "
+                f"distance={float((mem_distance or {}).get('distance_m', 0.0)):.2f}m "
+                f"confidence={confidence:.2f} uncertainty={uncertainty:.1f}m; "
+                "active path kept without yaw change"
+            )
+            state.update(memory_summary=objects.mission_memory.summary(stage))
+            return False
         if (
             confidence >= min_confidence
             and uncertainty <= float(memory_cfg.get("MAX_COMPLETION_UNCERTAINTY_M", 5.0))
@@ -2128,10 +2487,95 @@ def _handle_distance_completion_trigger(
         else getattr(cached_distance, "trigger_radius_m", trigger_radius_m)
     )
     _clear_stopped_queue(objects, path_stream, state)
+    source = str(
+        cached_distance.get("source", "distance_estimator")
+        if isinstance(cached_distance, dict)
+        else getattr(cached_distance, "source", "distance_estimator")
+    )
+    distance_kind = str(
+        cached_distance.get("distance_kind", "point")
+        if isinstance(cached_distance, dict)
+        else getattr(cached_distance, "distance_kind", "point")
+    )
     print(
-        f"\n  [CompletionTrigger] distance={cached_distance_m:.2f}m "
+        f"\n  [CompletionTrigger] source={source} geometry={distance_kind} "
+        f"distance={cached_distance_m:.2f}m "
         f"<= {trigger_display_m:.2f}m; stopped, cleared queue, checking fresh evidence"
     )
+
+    memory = getattr(objects, "mission_memory", None)
+    # Large structures are intentionally completed from the locked surface
+    # memory once the XY arrival radius is reached.  A close facade is often
+    # only a partial detector view, so capturing fresh RGB here would let the
+    # VLM reject a geometrically valid arrival.  Small targets fall through to
+    # the existing fresh RGB + VLM confirmation path below.
+    large_surface_arrival_fn = getattr(memory, "evaluate_large_surface_arrival", None)
+    if callable(large_surface_arrival_fn):
+        pos_now, _yaw_now = client.get_pose()
+        primary = memory.primary_instance(stage) if memory is not None else None
+        locked_fn = getattr(memory, "is_primary_locked", None) if memory is not None else None
+        locked = bool(locked_fn(stage)) if callable(locked_fn) else False
+        surface_count = len(instance_surface_sample_points(primary)) if primary is not None else 0
+        print(
+            "  [CompletionMemoryCheck] "
+            f"primary={(primary.instance_id if primary is not None else 'none')} "
+            f"locked={locked} "
+            f"large={bool(getattr(primary, 'is_large_structure', False)) if primary is not None else False} "
+            f"surface_points={surface_count} "
+            f"relation={relation_kind(stage)}"
+        )
+        large_surface_decision = large_surface_arrival_fn(
+            stage,
+            pos_now,
+            radius_m=float(memory.config.get("SURFACE_APPROACH_RADIUS_M", 4.5)),
+        )
+        if large_surface_decision is not None:
+            print(
+                "  [MemoryCompletion] large surface XY arrival; "
+                "skipping fresh RGB/VLM "
+                f"distance={large_surface_decision.distance_m:.2f}m "
+                f"reason={large_surface_decision.reason}"
+            )
+            state.update(memory_summary=memory.summary(stage))
+            return _complete_stage_from_memory(
+                objects,
+                path_stream,
+                state,
+                stage,
+                large_surface_decision,
+            )
+        if (
+            primary is not None
+            and callable(locked_fn)
+            and locked_fn(stage)
+            and bool(getattr(primary, "is_large_structure", False))
+            and has_surface_samples(primary)
+            and relation_kind(stage) == "near"
+        ):
+            # A large target that is not yet inside the fixed 4.5m circle
+            # resumes navigation; it must never fall through to fresh VLM.
+            print("  [MemoryCompletion] large surface outside 4.5m XY radius; resuming navigation")
+            state.update(memory_summary=memory.summary(stage))
+            return False
+
+    recent_contact_fn = getattr(memory, "recent_locked_large_surface_contact", None)
+    recent_contact = recent_contact_fn(stage) if callable(recent_contact_fn) else None
+    if recent_contact is not None:
+        decision = _evaluate_memory_completion_now(
+            objects,
+            client,
+            stage,
+            fresh_visual_support=False,
+            stop_radius_m=float(trigger_radius_m),
+        )
+        if decision is not None:
+            print(
+                f"  [TargetSurfaceContact] kind={recent_contact['kind']} "
+                f"age={recent_contact['age_s']:.1f}s status={decision.status} "
+                f"confidence={decision.confidence:.2f} reason={decision.reason}"
+            )
+            if decision.done:
+                return _complete_stage_from_memory(objects, path_stream, state, stage, decision)
 
     frame, down_frame, rgb_elapsed = _capture_fresh_rgb_frames(
         client,
@@ -2170,6 +2614,8 @@ def _handle_distance_completion_trigger(
             state.update(memory_summary=objects.mission_memory.summary(stage))
             if decision.done:
                 return _complete_stage_from_memory(objects, path_stream, state, stage, decision)
+        if _trusted_near_surface_completion(objects, stage, client):
+            return _handle_inconclusive_completion_attempt(objects, path_stream, state, stage)
         objects.distance_estimator.clear()
         objects.navigation_metrics.invalidate_target(current_stage_key)
         if not objects.relocalizer.enabled:
@@ -2239,6 +2685,8 @@ def _handle_distance_completion_trigger(
                 state.update(memory_summary=objects.mission_memory.summary(stage))
                 if decision.done:
                     return _complete_stage_from_memory(objects, path_stream, state, stage, decision)
+            if _trusted_near_surface_completion(objects, stage, client):
+                return _handle_inconclusive_completion_attempt(objects, path_stream, state, stage)
             return _fail_current_stage_after_relocalization(
                 objects,
                 path_stream,
@@ -2306,12 +2754,22 @@ def _handle_distance_completion_trigger(
         _detection_reliability(stage, front_det, frame),
         _detection_reliability(stage, down_det, down_frame),
     )
+    fresh_visual_support = _fresh_visual_support_matches_locked_memory(
+        objects,
+        stage,
+        completion,
+    )
+    if not fresh_visual_support and is_view_relative_stage(stage):
+        print(
+            "  [MemoryCompletion] ignoring incompatible fresh detection; "
+            "using locked surface memory"
+        )
     decision = _evaluate_memory_completion_now(
         objects,
         client,
         stage,
-        fresh_visual_support=True,
-        visual_score=visual_score,
+        fresh_visual_support=fresh_visual_support,
+        visual_score=visual_score if fresh_visual_support else 0.0,
         stop_radius_m=float(trigger_radius_m),
     )
     if decision is not None:
@@ -2323,10 +2781,58 @@ def _handle_distance_completion_trigger(
         if decision.done:
             return _complete_stage_from_memory(objects, path_stream, state, stage, decision)
 
-    objects.distance_estimator.clear()
-    objects.navigation_metrics.invalidate_target(current_stage_key)
-    print("  [CompletionVLM] not complete; replanning with empty queue")
-    return False
+    return _handle_inconclusive_completion_attempt(objects, path_stream, state, stage)
+
+
+def _completion_retry_waiting(objects, stage) -> tuple[bool, float]:
+    key = CompletionPipeline.stage_key(stage)
+    retry_after = float(objects.completion_retry_after.get(key, 0.0) or 0.0)
+    remaining = retry_after - time.perf_counter()
+    if remaining <= 0.0:
+        objects.completion_retry_after.pop(key, None)
+        return False, 0.0
+    return True, remaining
+
+
+def _record_locked_target_collision(objects, stage, collision_world, collision_yaw_deg: float):
+    """Turn a very-near collision into stage-specific facade contact evidence."""
+    memory = getattr(objects, "mission_memory", None)
+    if memory is None or not memory.has_primary(stage) or not memory.is_primary_locked(stage):
+        return None
+    context = memory.candidate_context(
+        stage=stage,
+        current_world=collision_world,
+        yaw_deg=float(collision_yaw_deg),
+    )
+    if not bool(context.get("is_large_structure", False)) or not bool(context.get("uses_surface_geometry", False)):
+        return None
+    target_body = context.get("target_body") or []
+    # Collision contact is a finite-patch safety signal.  Unlike completion,
+    # it may project onto the patch interior, because sparse corner samples
+    # can be farther than the physical facade point that blocked the vehicle.
+    instance = memory.primary_instance(stage)
+    collision_geometry_distance = (
+        distance_to_instance_geometry(collision_world, instance)
+        if instance is not None
+        else float("inf")
+    )
+    max_distance = float(memory.config.get("LARGE_STRUCTURE_COLLISION_CONTACT_MAX_DISTANCE_M", 2.5))
+    max_lateral = float(memory.config.get("LARGE_STRUCTURE_COLLISION_CONTACT_MAX_LATERAL_M", 4.0))
+    if (
+        collision_geometry_distance > max_distance
+        or len(target_body) < 3
+        or float(target_body[0]) < -1.0
+        or abs(float(target_body[1])) > max_lateral
+    ):
+        return None
+    forward_offset = float(memory.config.get("LARGE_STRUCTURE_COLLISION_CONTACT_FORWARD_M", 0.8))
+    return memory.record_locked_large_surface_contact(
+        stage,
+        observer_world=collision_world,
+        observer_yaw_deg=float(collision_yaw_deg),
+        obstacle_body=[max(0.1, forward_offset), 0.0, 0.0],
+        contact_kind="collision",
+    )
 
 
 def _cached_target_distance(objects, stage, current_world):
@@ -2336,8 +2842,34 @@ def _cached_target_distance(objects, stage, current_world):
         current_world=current_world,
     )
     memory_estimate = None
+    trusted_memory_estimate = None
+    force_locked_large_surface_memory = False
     if getattr(objects, "mission_memory", None) is not None:
-        memory_estimate = objects.mission_memory.estimate_distance(stage, current_world)
+        memory = objects.mission_memory
+        instance = memory.primary_instance(stage)
+        locked_fn = getattr(memory, "is_primary_locked", None)
+        force_locked_large_surface_memory = bool(
+            instance is not None
+            and callable(locked_fn)
+            and locked_fn(stage)
+            and bool(getattr(instance, "is_large_structure", False))
+            and has_surface_samples(instance)
+            and relation_kind(stage) == "near"
+        )
+        trusted_surface_fn = getattr(
+            memory,
+            "trusted_near_large_surface_estimate",
+            None,
+        )
+        if callable(trusted_surface_fn):
+            trusted_memory_estimate = trusted_surface_fn(stage, current_world)
+        memory_estimate = (
+            memory.estimate_distance(stage, current_world)
+            if force_locked_large_surface_memory
+            else trusted_memory_estimate
+            if trusted_memory_estimate is not None
+            else memory.estimate_distance(stage, current_world)
+        )
     if memory_estimate is not None:
         memory_ns = SimpleNamespace(**memory_estimate)
         memory_cfg = getattr(objects.mission_memory, "config", {}) or {}
@@ -2347,9 +2879,13 @@ def _cached_target_distance(objects, stage, current_world):
         max_uncertainty = float(memory_cfg.get("MAX_COMPLETION_UNCERTAINTY_M", 5.0))
         if (
             estimated is None
+            or force_locked_large_surface_memory
             or (
                 prefer_memory
-                and memory_conf >= float(memory_cfg.get("MEMORY_DISTANCE_MIN_CONFIDENCE", 0.45))
+                and (
+                    trusted_memory_estimate is not None
+                    or memory_conf >= float(memory_cfg.get("MEMORY_DISTANCE_MIN_CONFIDENCE", 0.45))
+                )
                 and memory_uncertainty <= max_uncertainty * float(memory_cfg.get("MEMORY_DISTANCE_UNCERTAINTY_RATIO", 1.5))
             )
         ):
@@ -2357,6 +2893,13 @@ def _cached_target_distance(objects, stage, current_world):
             estimated = memory_ns
     if estimated is None:
         return None
+    if str(getattr(estimated, "source", "") or "") == "mission_memory":
+        objects.navigation_metrics.update_target(
+            CompletionPipeline.stage_key(stage),
+            estimated.target_world,
+            confidence=float(getattr(estimated, "confidence", 0.0) or 0.0),
+            replace_stage_reference=True,
+        )
     objects.navigation_metrics.record_distance(estimated.distance_m)
     return estimated
 
@@ -2376,8 +2919,7 @@ def _memory_distance_trigger_radius(objects, stage, trigger_radius_m: float) -> 
     if _is_above_stage(stage):
         return float(trigger_radius_m)
     uses_surface = bool(
-        getattr(instance, "surface_bounds_world", None)
-        and int(getattr(instance, "surface_observation_count", 0) or 0) > 0
+        has_surface_geometry(instance)
     )
     if uses_surface:
         # Memory distance is already measured to the nearest observed surface.
@@ -2423,8 +2965,7 @@ def _memory_completion_outer_radius(objects, stage, trigger_radius_m: float) -> 
             + min(max(float(uncertainty), 0.0), float(memory_cfg.get("MAX_COMPLETION_UNCERTAINTY_M", 5.0)))
         )
     uses_surface = bool(
-        getattr(instance, "surface_bounds_world", None)
-        and int(getattr(instance, "surface_observation_count", 0) or 0) > 0
+        has_surface_geometry(instance)
     )
     if uses_surface:
         return max(
@@ -2466,6 +3007,190 @@ def _queue_reaches_memory_arrival(objects, stage, trigger_radius_m: float) -> bo
     return False
 
 
+def _truncate_queue_at_completion_radius(
+    objects,
+    path_stream,
+    state,
+    stage,
+    current_world,
+    cached_distance,
+    trigger_radius_m: float,
+) -> str:
+    """Stop/shorten a path before it crosses the target completion circle.
+
+    The distance trigger is evaluated from the actual pose every runtime
+    iteration, but an AirSim path may contain several future waypoints.  If a
+    segment crosses the target circle, leaving those waypoints active can send
+    the vehicle through the target while the completion check is running.
+    Keep only the prefix up to the first XY circle entry and reissue that
+    bounded path on the next scheduler pass.  ``arrived`` means the current
+    pose is already inside the circle and lets the caller start completion
+    immediately.
+    """
+    if cached_distance is None:
+        return "none"
+    relation = relation_kind(stage)
+    if relation != "near":
+        # Above/over stages still use their relation-specific 3-D completion
+        # rules; this guard is deliberately the near-target XY contract.
+        return "none"
+    queue = list(getattr(getattr(objects, "controller", None), "queue", SimpleNamespace(world_waypoints=[])).world_waypoints or [])
+    if not queue:
+        return "none"
+
+    def value(name: str, default=None):
+        if isinstance(cached_distance, dict):
+            return cached_distance.get(name, default)
+        return getattr(cached_distance, name, default)
+
+    target = value("target_world") or []
+    if len(target) < 3:
+        return "none"
+    targets = [[float(target[0]), float(target[1]), float(target[2])]]
+    source = str(value("source", "distance_estimator") or "distance_estimator")
+    memory = getattr(objects, "mission_memory", None)
+    instance = memory.primary_instance(stage) if source == "mission_memory" and memory is not None else None
+    if instance is not None and has_surface_samples(instance):
+        samples = instance_surface_sample_points(instance)
+        if samples:
+            # Completion is the union of XY circles around every retained
+            # surface sample, so path clipping must use the same geometry.
+            targets = samples
+    radius = value("trigger_radius_m", None)
+    if radius is None:
+        radius = (
+            _memory_distance_trigger_radius(objects, stage, trigger_radius_m)
+            if source == "mission_memory"
+            else float(trigger_radius_m)
+        )
+    radius = max(0.0, float(radius))
+    fast_slow_cfg = {**(cfg.get("FAST_SLOW", {}) or {}), **function_section(cfg, "FAST_SLOW")}
+    entry_margin = max(
+        0.0,
+        min(
+            float(fast_slow_cfg.get("COMPLETION_PATH_ENTRY_MARGIN_M", 0.25)),
+            max(0.0, radius - 0.1),
+        ),
+    )
+    path_entry_radius = max(0.0, radius - entry_margin)
+    current = [float(v) for v in current_world[:3]]
+    current_distance = min(
+        math.hypot(current[0] - candidate[0], current[1] - candidate[1])
+        for candidate in targets
+    )
+    if current_distance <= radius + 1e-6:
+        return "arrived"
+
+    prefix: list[list[float]] = []
+    previous = current
+    for index, waypoint in enumerate(queue):
+        if waypoint is None or len(waypoint) < 3:
+            continue
+        point = [float(waypoint[0]), float(waypoint[1]), float(waypoint[2])]
+        entries = [
+            entry
+            for candidate in targets
+            if (entry := _segment_circle_entry_xy(previous, point, candidate, path_entry_radius)) is not None
+        ]
+        entry = min(entries, key=lambda candidate: _distance3_body(previous, candidate)) if entries else None
+        endpoint_distance = min(
+            math.hypot(point[0] - candidate[0], point[1] - candidate[1])
+            for candidate in targets
+        )
+        if entry is not None or endpoint_distance <= path_entry_radius:
+            # This queue is already bounded at the circle (for example the
+            # boundary waypoint left by the previous guard pass).  Let the
+            # path stream issue/finish that one waypoint instead of stopping
+            # it on every 50 ms scheduler tick.
+            tail_has_outside_point = any(
+                min(
+                    math.hypot(float(rest[0]) - candidate[0], float(rest[1]) - candidate[1])
+                    for candidate in targets
+                ) > path_entry_radius + 1e-6
+                for rest in queue[index:]
+                if rest is not None and len(rest) >= 3
+            )
+            if (
+                endpoint_distance <= path_entry_radius
+                and not tail_has_outside_point
+            ):
+                return "none"
+            boundary = entry or point
+            prefix.append([round(float(v), 3) for v in boundary])
+            # The path stream owns AirSim's active command. Stop it before
+            # mutating the queue so its old remaining list cannot be polled
+            # against the shortened queue on the next iteration.
+            emergency_stop = getattr(path_stream, "emergency_stop", None)
+            if callable(emergency_stop):
+                emergency_stop()
+            else:
+                path_stream.stop()
+            controller = getattr(objects, "controller", None)
+            if controller is not None:
+                discard = getattr(controller, "discard_plan", None)
+                if callable(discard):
+                    discard()
+                controller.queue.world_waypoints[:] = prefix
+            state.update(
+                trajectory_queue=[list(wp) for wp in prefix],
+                qwen_waypoints=[],
+            )
+            print(
+                "  [CompletionPathGuard] truncated at first XY radius entry "
+                f"completion_radius={radius:.2f}m path_entry={path_entry_radius:.2f}m "
+                f"boundary={prefix[-1]} discarded={max(0, len(queue) - len(prefix))}"
+            )
+            return "truncated"
+        prefix.append([round(float(v), 3) for v in point])
+        previous = point
+    return "none"
+
+
+def _active_queue_overshoots_locked_surface(objects, stage, current_world, trigger_radius_m: float) -> bool:
+    """Detect a stale world queue that enters a locked facade radius and then exits it."""
+    memory = getattr(objects, "mission_memory", None)
+    if memory is None or not memory.has_primary(stage) or not memory.is_primary_locked(stage):
+        return False
+    instance = memory.primary_instance(stage)
+    if (
+        instance is None
+        or not bool(getattr(instance, "is_large_structure", False))
+        or not has_surface_geometry(instance)
+        or relation_kind(stage) != "near"
+    ):
+        return False
+    waypoints = list(getattr(getattr(objects, "controller", None), "queue", SimpleNamespace(world_waypoints=[])).world_waypoints or [])
+    if not waypoints:
+        return False
+    estimate = memory.estimate_distance(stage, current_world)
+    target = list((estimate or {}).get("target_world") or [])
+    if len(target) < 3:
+        return False
+    radius = _memory_distance_trigger_radius(objects, stage, trigger_radius_m)
+    exit_margin = max(0.2, float((getattr(memory, "config", {}) or {}).get("PATH_EXIT_MARGIN_M", 2.0)))
+    exit_radius = radius + exit_margin
+    prev = [float(v) for v in current_world[:3]]
+    entered = math.sqrt((prev[0] - target[0]) ** 2 + (prev[1] - target[1]) ** 2) <= radius
+    for waypoint in waypoints:
+        cur = [float(v) for v in waypoint[:3]]
+        segment_enters = _segment_point_distance_xy(prev, cur, target) <= radius
+        endpoint_distance = math.sqrt((cur[0] - target[0]) ** 2 + (cur[1] - target[1]) ** 2)
+        if not entered and segment_enters:
+            entered = True
+        if entered and endpoint_distance > exit_radius:
+            return True
+        prev = cur
+    return False
+
+
+def _invalidate_unsafe_locked_surface_queue(objects, path_stream, state, stage, current_world, trigger_radius_m: float) -> bool:
+    if not _active_queue_overshoots_locked_surface(objects, stage, current_world, trigger_radius_m):
+        return False
+    _clear_stopped_queue(objects, path_stream, state)
+    print("  [MemoryPathGuard] stopped stale active queue that crossed the locked facade arrival radius")
+    return True
+
+
 def _should_trigger_idle_memory_completion(objects, stage, estimated, trigger_radius_m: float) -> bool:
     if estimated is None:
         return False
@@ -2478,7 +3203,23 @@ def _should_trigger_idle_memory_completion(objects, stage, estimated, trigger_ra
         return False
     if objects.controller.queue.world_waypoints:
         return False
-    outer_radius = _memory_completion_outer_radius(objects, stage, trigger_radius_m)
+    instance = memory.primary_instance(stage)
+    locked_fn = getattr(memory, "is_primary_locked", None)
+    if (
+        instance is not None
+        and callable(locked_fn)
+        and locked_fn(stage)
+        and bool(getattr(instance, "is_large_structure", False))
+        and has_surface_samples(instance)
+        and relation_kind(stage) == "near"
+    ):
+        # Large structures bypass VLM entirely.  Do not use the wider outer
+        # radius as a reason to launch a visual confirmation before 4.5m.
+        outer_radius = float(
+            memory.config.get("SURFACE_APPROACH_RADIUS_M", 4.5)
+        )
+    else:
+        outer_radius = _memory_completion_outer_radius(objects, stage, trigger_radius_m)
     try:
         estimated.trigger_radius_m = outer_radius
     except Exception:
@@ -2489,6 +3230,44 @@ def _should_trigger_idle_memory_completion(objects, stage, estimated, trigger_ra
 def _completion_needs_relocalization(completion) -> bool:
     """Relocalize only when fresh dual-view completion evidence lost the target."""
     return bool(completion is None or getattr(completion, "target_detected", None) is not True)
+
+
+def _trusted_near_surface_completion(objects, stage, client) -> bool:
+    """Whether completion is close enough to trust the locked facade without a turn."""
+    memory = getattr(objects, "mission_memory", None)
+    if memory is None or not hasattr(memory, "trusted_near_large_surface_estimate"):
+        return False
+    try:
+        pos_now, _yaw_now = client.get_pose()
+        return memory.trusted_near_large_surface_estimate(stage, pos_now) is not None
+    except Exception:
+        return False
+
+
+def _handle_inconclusive_completion_attempt(objects, path_stream, state, stage) -> bool:
+    """Count a stopped completion check; the second check must terminate the stage."""
+    current_stage_key = CompletionPipeline.stage_key(stage)
+    objects.distance_estimator.clear()
+    objects.navigation_metrics.invalidate_target(current_stage_key)
+    attempts = int(objects.completion_attempts.get(current_stage_key, 0)) + 1
+    objects.completion_attempts[current_stage_key] = attempts
+    completion_cfg = function_section(cfg, "FAST_SLOW")
+    max_attempts = max(1, int(completion_cfg.get("MAX_COMPLETION_ATTEMPTS", 2)))
+    if attempts >= max_attempts:
+        return _fail_current_stage_after_relocalization(
+            objects,
+            path_stream,
+            state,
+            current_stage_key,
+            f"completion evidence remained inconsistent after {attempts} stopped checks",
+        )
+    cooldown = max(0.1, float(completion_cfg.get("COMPLETION_RETRY_COOLDOWN_S", 0.2)))
+    objects.completion_retry_after[current_stage_key] = time.perf_counter() + cooldown
+    print(
+        f"  [CompletionVLM] not complete; holding position before retry "
+        f"attempt={attempts}/{max_attempts} cooldown={cooldown:.1f}s"
+    )
+    return False
 
 
 def _signed_yaw_delta_deg(target_yaw_deg: float, current_yaw_deg: float) -> float:
@@ -2610,9 +3389,15 @@ def _sync_path_if_ready(
             f"remaining={len(objects.controller.queue.world_waypoints)}"
         )
     if progress.collided:
+        contact = _record_locked_target_collision(objects, stage, current_pos, current_yaw) if stage is not None else None
         objects.controller.clear()
         recovery = objects.collision_recovery.recover(client)
         print(f"  [Collision] before_path_reissue=True recovery_attempted={recovery.attempted}")
+        if contact is not None:
+            print(
+                "  [TargetSurfaceContact] collision matched locked facade "
+                f"range={contact['contact_range_m']:.2f}m memory_distance={contact['distance_m']:.2f}m"
+            )
         state.update(collided=True, trajectory_queue=[])
         return progress.consumed
 
@@ -2646,7 +3431,7 @@ def _sync_path_if_ready(
             print(f"  [Flight] started remaining={len(waypoints)} velocity={velocity:.1f}m/s")
     return progress.consumed + dropped_behind
 def _continuous_path_velocity(objects, current_pos) -> float:
-    """Keep enough active-path flight time for an in-flight Qwen request."""
+    """Avoid near-hover speed while preserving some planner response time."""
     nominal = float(cfg.get("SIM", {}).get("AIRSIM_VELOCITY", 2.0))
     if not objects.controller.planning:
         return nominal
@@ -2660,7 +3445,79 @@ def _continuous_path_velocity(objects, current_pos) -> float:
         path_length += math.sqrt(sum((point[i] - previous[i]) ** 2 for i in range(3)))
         previous = point
     reserve_time = max(float(objects.controller.reserve_time_s), 1e-6)
-    return min(nominal, path_length / reserve_time)
+    fast_slow_cfg = function_section(cfg, "FAST_SLOW")
+    minimum = max(0.0, float(fast_slow_cfg.get("CONTINUOUS_MIN_SPEED_MPS", 1.0)))
+    minimum = min(minimum, nominal)
+    return max(minimum, min(nominal, path_length / reserve_time))
+
+
+class _CompletionRadiusWatchdog:
+    """Keep the completion circle monitored while RPC/model calls block."""
+
+    def __init__(self, objects, client, path_stream, stage, trigger_radius_m: float, interval_s: float):
+        self.objects = objects
+        self.client = client
+        self.path_stream = path_stream
+        self.stage = stage
+        self.stage_key = CompletionPipeline.stage_key(stage)
+        self.trigger_radius_m = float(trigger_radius_m)
+        self.interval_s = max(0.02, float(interval_s))
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run,
+            name="completion-radius-watchdog",
+            daemon=True,
+        )
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread.is_alive() and threading.current_thread() is not self._thread:
+            self._thread.join(timeout=max(0.1, self.interval_s * 3.0))
+
+    def _run(self) -> None:
+        while not self._stop_event.wait(self.interval_s):
+            try:
+                current_stage = self.objects.task_manager.current_stage()
+                if CompletionPipeline.stage_key(current_stage) != self.stage_key:
+                    return
+                controller = getattr(self.objects, "controller", None)
+                queue = getattr(controller, "queue", None)
+                if not (
+                    self.path_stream.active
+                    or bool(getattr(queue, "world_waypoints", []) or [])
+                    or bool(getattr(controller, "planning", False))
+                    or bool(getattr(controller, "has_plan_job", False))
+                ):
+                    continue
+                current_world, _yaw = self.client.get_pose()
+                estimated = _cached_target_distance(self.objects, self.stage, current_world)
+                if not _should_trigger_completion_vlm(
+                    self.objects,
+                    self.stage,
+                    estimated,
+                    self.trigger_radius_m,
+                ):
+                    continue
+                # This is deliberately the only action performed by the
+                # watchdog.  Completion/VLM/memory decisions remain on the
+                # runtime thread after it regains control.
+                emergency_stop = getattr(self.path_stream, "emergency_stop", None)
+                if callable(emergency_stop):
+                    emergency_stop()
+                else:
+                    self.path_stream.stop()
+                if controller is not None:
+                    controller.clear()
+                print("  [CompletionWatchdog] live pose entered target radius; path stopped")
+                return
+            except Exception:
+                # AirSim can reject one concurrent pose RPC while an image is
+                # being captured. The next tick retries without affecting the
+                # navigation state.
+                continue
 
 
 def run_fast_slow_loop(
@@ -2706,7 +3563,7 @@ def run_fast_slow_loop(
     print(
         f"[Runtime] continuous_path=True velocity={float(cfg.get('SIM', {}).get('AIRSIM_VELOCITY', 2.0)):.1f}m/s "
         f"stop_radius={stop_radius:.1f}m distance_trigger={distance_trigger_radius:.1f}m "
-        f"completion=distance_triggered_vlm"
+        f"completion=distance_triggered_memory_or_vlm"
     )
 
     task_text = initial_task.strip()
@@ -2730,6 +3587,7 @@ def run_fast_slow_loop(
 
     last_stage_key = None
     distance_check_pending = False
+    radius_watchdog: _CompletionRadiusWatchdog | None = None
     step = 0
     while step < max_steps:
         stage = objects.task_manager.current_stage()
@@ -2739,6 +3597,9 @@ def run_fast_slow_loop(
         instruction = stage.instruction or task_text
         stage_key = (stage.index, stage.instruction)
         if stage_key != last_stage_key:
+            if radius_watchdog is not None:
+                radius_watchdog.stop()
+                radius_watchdog = None
             path_stream.stop()
             objects.controller.clear()
             if objects.completion_pipeline is not None:
@@ -2756,6 +3617,11 @@ def run_fast_slow_loop(
             last_stage_key = stage_key
             objects.navigation_metrics.start_stage(CompletionPipeline.stage_key(stage))
             print(f"\n[Stage {stage.index + 1}/{len(objects.task_manager.stages)}] {instruction}")
+            if is_view_relative_stage(stage):
+                # Resolve the relative identity only after all preceding move/
+                # turn stages have completed and this stage is truly active.
+                with web_helpers.pause_background_capture(capturer):
+                    _bind_view_relative_stage(objects, client, state, stage, task_text)
 
         # Future-target work is polled without waiting. MissionMemory remains
         # single-writer because completed observations are committed here.
@@ -2799,22 +3665,73 @@ def run_fast_slow_loop(
                 trajectory_queue=[list(wp) for wp in objects.controller.queue.world_waypoints],
             )
         if stream_event.collided:
+            contact = _record_locked_target_collision(objects, stage, pos_now, yaw_now)
             objects.controller.clear()
             recovery = objects.collision_recovery.recover(client)
             print(f"  [Collision] new_path_collision=True recovery_attempted={recovery.attempted}")
+            if contact is not None:
+                print(
+                    "  [TargetSurfaceContact] collision matched locked facade "
+                    f"range={contact['contact_range_m']:.2f}m memory_distance={contact['distance_m']:.2f}m"
+                )
             state.update(collided=True, trajectory_queue=[])
             continue
+
+        if radius_watchdog is None:
+            radius_watchdog = _CompletionRadiusWatchdog(
+                objects,
+                client,
+                path_stream,
+                stage,
+                distance_trigger_radius,
+                stream_poll_interval,
+            )
+            radius_watchdog.start()
 
         # memory/距离缓存很便宜；每轮都查一次，避免无人机已经到目标外圈但还沿旧队列冲进去。
         cached_distance = _cached_target_distance(objects, stage, pos_now)
         distance_check_pending = False
         current_stage_key = CompletionPipeline.stage_key(stage)
+        retry_waiting, retry_remaining = _completion_retry_waiting(objects, stage)
+        if retry_waiting:
+            path_stream.stop()
+            _debug_print(f"  [CompletionHold] retry in {retry_remaining:.2f}s")
+            time.sleep(max(0.01, min(stream_poll_interval, retry_remaining)))
+            continue
+        # Check the live pose and the currently commanded queue before any
+        # completion decision or new plan is issued.  A queued segment can
+        # cross the arrival circle while RGB/depth or Qwen work is running.
+        queue_guard = _truncate_queue_at_completion_radius(
+            objects,
+            path_stream,
+            state,
+            stage,
+            pos_now,
+            cached_distance,
+            distance_trigger_radius,
+        )
+        if queue_guard == "arrived":
+            # The trigger handler below performs the emergency stop before
+            # beginning fresh completion evidence capture. Keeping this pass
+            # together avoids issuing two consecutive AirSim stop RPCs.
+            pass
+        elif queue_guard == "truncated":
+            # Let the next fast loop observe the stopped pose and enter the
+            # normal completion trigger.  Do not immediately reissue the
+            # shortened boundary waypoint in this same iteration.
+            time.sleep(max(0.01, stream_poll_interval))
+            continue
         trigger_vlm = _should_trigger_completion_vlm(
             objects,
             stage,
             cached_distance,
             distance_trigger_radius,
         )
+        if queue_guard == "arrived" and (
+            str(getattr(cached_distance, "source", "") or "") == "mission_memory"
+            or bool(getattr(objects.distance_estimator, "use_for_completion", False))
+        ):
+            trigger_vlm = True
         if not trigger_vlm and _should_trigger_idle_memory_completion(
             objects,
             stage,
@@ -2836,6 +3753,16 @@ def run_fast_slow_loop(
             )
             if should_break:
                 break
+            continue
+
+        if _invalidate_unsafe_locked_surface_queue(
+            objects,
+            path_stream,
+            state,
+            stage,
+            pos_now,
+            distance_trigger_radius,
+        ):
             continue
 
         # A locked target from an earlier stage can legitimately be behind the
@@ -2927,11 +3854,63 @@ def run_fast_slow_loop(
                     memory_snapshot,
                 )
 
-            # Sync path AFTER Qwen submission so _continuous_path_velocity
-            # sees planning=True and slows down immediately.  Previously we
-            # synced first (planning=False → 2.0 m/s) then submitted Qwen,
-            # so the drone burned path-prefix capacity at full speed for one
-            # whole iteration before the velocity drop took effect.
+                # Captures can take seconds while AirSim follows the old path.
+                # Reconcile the new pose before that path is ever reissued.
+                post_capture_pos, _post_capture_yaw = client.get_pose()
+                post_capture_distance = _cached_target_distance(objects, stage, post_capture_pos)
+                post_capture_guard = _truncate_queue_at_completion_radius(
+                    objects,
+                    path_stream,
+                    state,
+                    stage,
+                    post_capture_pos,
+                    post_capture_distance,
+                    distance_trigger_radius,
+                )
+                if post_capture_guard == "truncated":
+                    continue
+                if post_capture_guard == "arrived" or _should_trigger_completion_vlm(
+                    objects,
+                    stage,
+                    post_capture_distance,
+                    distance_trigger_radius,
+                ):
+                    _clear_stopped_queue(objects, path_stream, state)
+                    print("  [CompletionTrigger] target radius reached during capture; old path cancelled")
+                    continue
+                if _invalidate_unsafe_locked_surface_queue(
+                    objects,
+                    path_stream,
+                    state,
+                    stage,
+                    post_capture_pos,
+                    distance_trigger_radius,
+                ):
+                    continue
+
+            # The planner result may have appended a path that crosses the
+            # radius even when the vehicle did not move during capture. Apply
+            # the same guard immediately before path sync so AirSim never
+            # receives the post-target suffix.
+            pre_sync_pos, _pre_sync_yaw = client.get_pose()
+            pre_sync_distance = _cached_target_distance(objects, stage, pre_sync_pos)
+            pre_sync_guard = _truncate_queue_at_completion_radius(
+                objects,
+                path_stream,
+                state,
+                stage,
+                pre_sync_pos,
+                pre_sync_distance,
+                distance_trigger_radius,
+            )
+            if pre_sync_guard == "arrived":
+                _clear_stopped_queue(objects, path_stream, state)
+                continue
+            if pre_sync_guard == "truncated":
+                continue
+
+            # Sync after Qwen submission so the bounded in-flight speed policy
+            # can preserve planning reserve without ever degrading to a hover.
             synced_consumed = _sync_path_if_ready(objects, path_stream, client, state, stage=stage)
             step += synced_consumed
             if synced_consumed > 0:
@@ -2961,6 +3940,8 @@ def run_fast_slow_loop(
     objects.navigation_metrics.print_summary(
         task_completed=objects.task_manager.is_done() and not objects.task_failed
     )
+    if radius_watchdog is not None:
+        radius_watchdog.stop()
     path_stream.stop()
     objects.controller.shutdown()
     objects.detect_executor.shutdown(wait=False, cancel_futures=True)
