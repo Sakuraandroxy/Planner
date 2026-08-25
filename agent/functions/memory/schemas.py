@@ -92,6 +92,18 @@ class TargetInstanceBelief:
     surface_observation_count: int = 0
     last_surface_contact_s: float = 0.0
     last_surface_contact_kind: str = ""
+    # Down-view roof geometry is deliberately kept separate from facade/body
+    # surfaces.  ``above`` navigation may use the facade for identity and XY
+    # approach, but only a horizontal roof observation can establish vertical
+    # clearance or deterministic overhead completion.
+    roof_points_world: List[List[float]] = field(default_factory=list)
+    roof_bounds_world: Optional[List[List[float]]] = None
+    roof_z_median: Optional[float] = None
+    roof_confidence: float = 0.0
+    roof_uncertainty_m: float = 999.0
+    roof_observation_count: int = 0
+    last_roof_seen_s: float = 0.0
+    last_roof_full_frame: bool = False
     geometry_kind: str = "point"
     is_large_structure: bool = False
     last_bbox_span: float = 0.0
@@ -129,6 +141,25 @@ class TargetInstanceBelief:
                 else round(max(0.0, now_s() - self.last_surface_contact_s), 1)
             ),
             "surface_contact_kind": self.last_surface_contact_kind,
+            "roof_z": None if self.roof_z_median is None else round(float(self.roof_z_median), 2),
+            "roof_confidence": round(float(self.roof_confidence), 3),
+            "roof_uncertainty_m": round(float(self.roof_uncertainty_m), 2),
+            "roof_observations": int(self.roof_observation_count),
+            "roof_points": len(self.roof_points_world),
+            "roof_age_s": (
+                None
+                if self.last_roof_seen_s <= 0.0
+                else round(max(0.0, now_s() - self.last_roof_seen_s), 1)
+            ),
+            "roof_full_frame": bool(self.last_roof_full_frame),
+            "roof_bounds": (
+                None
+                if not self.roof_bounds_world
+                else [
+                    [round(float(v), 2) for v in self.roof_bounds_world[0][:3]],
+                    [round(float(v), 2) for v in self.roof_bounds_world[1][:3]],
+                ]
+            ),
             "surface_bounds": (
                 None
                 if not self.surface_bounds_world

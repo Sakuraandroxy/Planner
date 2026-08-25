@@ -21,6 +21,7 @@ $PROFILE.txt
 
 # Logs / outputs
 *.log
+output/
 AVLN
 周报
 Fast-Planner

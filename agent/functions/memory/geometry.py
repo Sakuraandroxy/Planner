@@ -263,6 +263,71 @@ def vertical_distance_to_bounds(point: Sequence[float], bounds: Sequence[Sequenc
     return abs(float(point[2]) - nearest[2])
 
 
+def instance_roof_bounds(instance: Any) -> Optional[list[list[float]]]:
+    bounds = getattr(instance, "roof_bounds_world", None)
+    if valid_bounds(bounds):
+        return [point3(bounds[0]), point3(bounds[1])]
+    points = list(getattr(instance, "roof_points_world", None) or [])
+    return bounds_from_points(points)
+
+
+def has_roof_geometry(instance: Any) -> bool:
+    if instance is None:
+        return False
+    roof_z = getattr(instance, "roof_z_median", None)
+    try:
+        roof_z_ok = roof_z is not None and math.isfinite(float(roof_z))
+    except (TypeError, ValueError):
+        roof_z_ok = False
+    return bool(
+        roof_z_ok
+        and int(getattr(instance, "roof_observation_count", 0) or 0) > 0
+        and (
+            instance_roof_bounds(instance) is not None
+            or bool(getattr(instance, "roof_points_world", None) or [])
+        )
+    )
+
+
+def nearest_instance_roof_point(point: Sequence[float], instance: Any) -> list[float]:
+    current = point3(point)
+    roof_z = float(getattr(instance, "roof_z_median", current[2]) or current[2])
+    bounds = instance_roof_bounds(instance)
+    if bounds is not None:
+        return [
+            max(float(bounds[0][0]), min(float(bounds[1][0]), current[0])),
+            max(float(bounds[0][1]), min(float(bounds[1][1]), current[1])),
+            roof_z,
+        ]
+    points = [
+        point3(value)
+        for value in list(getattr(instance, "roof_points_world", None) or [])
+        if value is not None and len(value) >= 3
+    ]
+    if points:
+        nearest = min(points, key=lambda candidate: horizontal_distance(current, candidate))
+        return [nearest[0], nearest[1], roof_z]
+    target = point3(getattr(instance, "target_world", current))
+    return [target[0], target[1], roof_z]
+
+
+def horizontal_distance_to_instance_roof(point: Sequence[float], instance: Any) -> float:
+    return horizontal_distance(point, nearest_instance_roof_point(point, instance))
+
+
+def roof_interior_margin(point: Sequence[float], instance: Any) -> float:
+    """Signed XY margin to the retained roof bounds (positive when inside)."""
+    current = point3(point)
+    bounds = instance_roof_bounds(instance)
+    if bounds is None:
+        return -horizontal_distance_to_instance_roof(current, instance)
+    min_x, min_y = float(bounds[0][0]), float(bounds[0][1])
+    max_x, max_y = float(bounds[1][0]), float(bounds[1][1])
+    if min_x <= current[0] <= max_x and min_y <= current[1] <= max_y:
+        return min(current[0] - min_x, max_x - current[0], current[1] - min_y, max_y - current[1])
+    return -horizontal_distance_to_bounds(current, bounds)
+
+
 def instance_surface_bounds(instance: Any) -> Optional[list[list[float]]]:
     bounds = getattr(instance, "surface_bounds_world", None)
     if valid_bounds(bounds):

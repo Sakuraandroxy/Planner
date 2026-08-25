@@ -8,6 +8,7 @@ from agent.functions.common.config_access import function_section
 from agent.functions.memory.mission_memory import (
     MissionMemory,
     is_return_target_stage,
+    is_same_target_stage,
     is_view_relative_stage,
     view_relative_direction,
 )
@@ -33,6 +34,7 @@ __all__ = [
     "TargetMemory",
     "build_mission_memory",
     "is_return_target_stage",
+    "is_same_target_stage",
     "is_view_relative_stage",
     "view_relative_direction",
 ]

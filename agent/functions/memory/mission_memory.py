@@ -23,12 +23,16 @@ from agent.functions.memory.geometry import (
     estimate_detection_world,
     estimate_detection_surface_world,
     footprint_radius_from_detection,
+    has_roof_geometry,
     has_surface_geometry,
     horizontal_distance,
+    horizontal_distance_to_instance_roof,
     horizontal_distance_to_instance_surface_samples,
     has_surface_samples,
+    nearest_instance_roof_point,
     nearest_instance_surface_point,
     nearest_instance_surface_sample_point,
+    roof_interior_margin,
     world_to_body,
 )
 from agent.functions.memory.schemas import (
@@ -39,6 +43,11 @@ from agent.functions.memory.schemas import (
     TargetMemory,
 )
 from agent.functions.memory.spatial_reasoning import evaluate_memory_completion, relation_kind
+from agent.functions.perception.bearing_tracker import (
+    bbox_center_angle_deg,
+    metric_depth_usable,
+    signed_angle_delta_deg,
+)
 
 
 _EN_ORDINALS = {
@@ -290,28 +299,56 @@ class MissionMemory:
         if instance is None:
             return None
         current = [float(v) for v in current_world[:3]]
-        # Partial facades are reliable for near/beside distance, but not yet a
-        # complete roof footprint for "above" semantics.
-        surface_geometry = has_surface_geometry(instance) and relation_kind(stage) == "near"
+        relation = relation_kind(stage)
+        # Partial facades are reliable for near/beside distance, but only the
+        # separately retained down-view plane is roof geometry for ``above``.
+        surface_geometry = has_surface_geometry(instance) and relation == "near"
+        roof_geometry = has_roof_geometry(instance) and relation == "above"
         nearest_surface = nearest_instance_surface_point(current, instance)
+        nearest_roof = nearest_instance_roof_point(current, instance) if roof_geometry else None
         surface_sample_distance = (
             horizontal_distance_to_instance_surface_samples(current, instance)
             if surface_geometry
             else None
         )
-        navigation_target = nearest_surface if surface_geometry else instance.target_world
+        if surface_geometry:
+            navigation_target = nearest_surface
+        elif roof_geometry:
+            navigation_target = nearest_roof
+        elif relation == "above":
+            navigation_target = [
+                float(instance.target_world[0]),
+                float(instance.target_world[1]),
+                float(current[2]),
+            ]
+        else:
+            navigation_target = instance.target_world
+        horizontal_distance_m = (
+            horizontal_distance_to_instance_roof(current, instance)
+            if roof_geometry
+            else horizontal_distance(current, navigation_target)
+        )
+        vertical_delta_m = abs(float(current[2]) - float(navigation_target[2]))
         return {
             "stage_key": stage_key_tuple(stage),
             "distance_m": (
                 surface_sample_distance
                 if surface_geometry
+                else horizontal_distance_m
+                if relation == "above"
                 else distance3(current, instance.target_world)
             ),
             "target_world": list(navigation_target),
             "identity_anchor_world": list(instance.target_world),
             "nearest_surface_world": list(nearest_surface) if surface_geometry else None,
-            "distance_kind": "surface" if surface_geometry else "point",
-            "distance_plane": "xy" if surface_geometry else "3d",
+            "nearest_roof_world": list(nearest_roof) if roof_geometry else None,
+            "distance_kind": "surface" if surface_geometry else "roof" if roof_geometry else "point",
+            "distance_plane": "xy" if surface_geometry or relation == "above" else "3d",
+            "horizontal_distance_m": horizontal_distance_m,
+            "vertical_delta_m": vertical_delta_m,
+            "roof_geometry": roof_geometry,
+            "roof_confidence": float(getattr(instance, "roof_confidence", 0.0) or 0.0),
+            "roof_observations": int(getattr(instance, "roof_observation_count", 0) or 0),
             "current_world": current,
             "observation_age_s": instance.age_s(),
             "source": "mission_memory",
@@ -320,6 +357,235 @@ class MissionMemory:
                 stale_growth_per_s=float(self.config.get("STALE_UNCERTAINTY_GROWTH_MPS", 0.03))
             ),
             "instance_id": instance.instance_id,
+        }
+
+    def record_roof_plane(
+        self,
+        stage: Any,
+        plane: Any,
+        *,
+        observer_world: Sequence[float],
+    ) -> Optional[dict]:
+        """Associate one full down-depth plane with the locked ``above`` target."""
+        if (
+            not self.enabled
+            or relation_kind(stage) != "above"
+            or plane is None
+            or not bool(getattr(plane, "valid", False))
+            or not self.is_primary_locked(stage)
+        ):
+            return None
+        instance = self.primary_instance(stage)
+        if instance is None or not bool(getattr(instance, "is_large_structure", False)):
+            return None
+        center_world = list(getattr(plane, "center_world", None) or [])
+        roof_z = getattr(plane, "roof_z_world", None)
+        if len(center_world) < 3 or roof_z is None:
+            return None
+        try:
+            center_world = [float(value) for value in center_world[:3]]
+            roof_z = float(roof_z)
+        except (TypeError, ValueError):
+            return None
+        if not all(math.isfinite(value) for value in center_world + [roof_z]):
+            return None
+
+        current = [float(value) for value in observer_world[:3]]
+        clearance = roof_z - current[2]
+        min_clearance = float(self.config.get("ABOVE_MIN_CLEARANCE_M", 0.3))
+        max_sensor_clearance = float(self.config.get("ABOVE_ROOF_MAX_DEPTH_M", 120.0))
+        if clearance < min_clearance or clearance > max_sensor_clearance:
+            self._append_event({
+                "type": "reject_roof_plane_clearance",
+                "stage": stage_key(stage),
+                "instance": instance.instance_id,
+                "clearance_m": round(clearance, 2),
+            })
+            return None
+
+        anchor_distance = horizontal_distance(center_world, instance.target_world)
+        surface_distance = (
+            horizontal_distance_to_instance_surface_samples(center_world, instance)
+            if has_surface_samples(instance)
+            else anchor_distance
+        )
+        roof_distance = (
+            horizontal_distance_to_instance_roof(center_world, instance)
+            if has_roof_geometry(instance)
+            else None
+        )
+        association_distance = min(
+            anchor_distance,
+            surface_distance,
+            roof_distance if roof_distance is not None else float("inf"),
+        )
+        association_radius = (
+            max(1.0, float(instance.footprint_radius_m))
+            + min(max(0.0, float(instance.uncertainty_m)), 5.0)
+            + float(self.config.get("ABOVE_ROOF_ASSOCIATION_MARGIN_M", 6.0))
+        )
+        if roof_distance is None and bool(instance.is_large_structure):
+            # The first nadir roof point can be near the centre of a wide roof
+            # while the identity anchor lies on a facade.  Use the same bounded
+            # large-structure scale as facade association for this first link;
+            # later observations are gated against the retained roof itself.
+            association_radius = max(
+                association_radius,
+                float(self.config.get("ABOVE_ROOF_LARGE_STRUCTURE_ASSOCIATION_M", 25.0)),
+            )
+        if association_distance > association_radius:
+            self._append_event({
+                "type": "reject_roof_plane_xy_mismatch",
+                "stage": stage_key(stage),
+                "instance": instance.instance_id,
+                "distance_m": round(association_distance, 2),
+                "radius_m": round(association_radius, 2),
+            })
+            return None
+
+        # Ground under/behind a facade is lower in NED (larger Z).  A roof may
+        # be well above the facade anchor, but must not be materially below it.
+        max_below_anchor = float(self.config.get("ABOVE_ROOF_MAX_BELOW_ANCHOR_M", 3.0))
+        if roof_z > float(instance.target_world[2]) + max_below_anchor:
+            self._append_event({
+                "type": "reject_roof_plane_below_anchor",
+                "stage": stage_key(stage),
+                "instance": instance.instance_id,
+                "roof_z": round(roof_z, 2),
+                "anchor_z": round(float(instance.target_world[2]), 2),
+            })
+            return None
+
+        plane_confidence = float(getattr(plane, "confidence", 0.0) or 0.0)
+        if plane_confidence < float(self.config.get("ABOVE_ROOF_MIN_CONFIDENCE", 0.45)):
+            return None
+        existing_z = getattr(instance, "roof_z_median", None)
+        continuity = float(self.config.get("ABOVE_ROOF_Z_CONTINUITY_M", 2.5))
+        if existing_z is not None and abs(float(existing_z) - roof_z) > continuity:
+            self._append_event({
+                "type": "reject_roof_plane_z_mismatch",
+                "stage": stage_key(stage),
+                "instance": instance.instance_id,
+                "roof_z": round(roof_z, 2),
+                "locked_roof_z": round(float(existing_z), 2),
+            })
+            return None
+
+        alpha = min(0.45, max(0.18, 0.40 * plane_confidence))
+        instance.roof_z_median = (
+            roof_z
+            if existing_z is None
+            else (1.0 - alpha) * float(existing_z) + alpha * roof_z
+        )
+        z_mad = float(getattr(plane, "z_mad_m", 0.5) or 0.5)
+        observation_uncertainty = max(0.15, z_mad + (1.0 - plane_confidence) * 1.5)
+        if int(instance.roof_observation_count or 0) <= 0:
+            instance.roof_uncertainty_m = observation_uncertainty
+        else:
+            instance.roof_uncertainty_m = max(
+                0.12,
+                (1.0 - alpha) * float(instance.roof_uncertainty_m) + alpha * observation_uncertainty,
+            )
+        instance.roof_confidence = min(
+            0.99,
+            1.0 - (1.0 - float(instance.roof_confidence)) * (1.0 - 0.65 * plane_confidence),
+        )
+        instance.roof_observation_count = int(instance.roof_observation_count or 0) + 1
+        instance.last_roof_seen_s = time.perf_counter()
+        instance.last_roof_full_frame = bool(getattr(plane, "full_frame", False))
+
+        new_points = [
+            [float(value) for value in point[:3]]
+            for point in list(getattr(plane, "sample_points_world", None) or [])
+            if point is not None and len(point) >= 3
+        ]
+        instance.roof_points_world.extend(new_points)
+        max_points = max(8, int(self.config.get("ABOVE_ROOF_MEMORY_MAX_POINTS", 160)))
+        if len(instance.roof_points_world) > max_points:
+            # Retain points across the accumulated sequence instead of only
+            # the newest image, so a large roof can grow while being crossed.
+            step = max(1.0, len(instance.roof_points_world) / float(max_points))
+            retained = []
+            cursor = 0.0
+            while int(cursor) < len(instance.roof_points_world) and len(retained) < max_points:
+                retained.append(instance.roof_points_world[int(cursor)])
+                cursor += step
+            instance.roof_points_world = retained
+        instance.roof_bounds_world = bounds_from_points(instance.roof_points_world)
+        self._append_event({
+            "type": "roof_plane_update",
+            "stage": stage_key(stage),
+            "instance": instance.instance_id,
+            "roof_z": round(float(instance.roof_z_median), 2),
+            "confidence": round(float(instance.roof_confidence), 3),
+            "observations": int(instance.roof_observation_count),
+            "full_frame": bool(instance.last_roof_full_frame),
+        })
+        return self.roof_navigation_context(stage, current)
+
+    def roof_navigation_context(
+        self,
+        stage: Any,
+        current_world: Sequence[float],
+    ) -> Optional[dict]:
+        instance = self.primary_instance(stage)
+        if instance is None or relation_kind(stage) != "above" or not has_roof_geometry(instance):
+            return None
+        current = [float(value) for value in current_world[:3]]
+        nearest = nearest_instance_roof_point(current, instance)
+        age_s = max(0.0, time.perf_counter() - float(instance.last_roof_seen_s or 0.0))
+        min_observations = int(self.config.get("ABOVE_ROOF_MEMORY_MIN_OBSERVATIONS", 2))
+        min_confidence = float(self.config.get("ABOVE_ROOF_MEMORY_MIN_CONFIDENCE", 0.60))
+        max_age_s = float(self.config.get("ABOVE_ROOF_MAX_AGE_S", 20.0))
+        trusted = bool(
+            int(instance.roof_observation_count or 0) >= min_observations
+            and float(instance.roof_confidence) >= min_confidence
+            and age_s <= max_age_s
+        )
+        return {
+            "instance_id": instance.instance_id,
+            "trusted": trusted,
+            "target_world": list(nearest),
+            "roof_z_world": float(instance.roof_z_median),
+            "horizontal_distance_m": horizontal_distance_to_instance_roof(current, instance),
+            "clearance_m": float(instance.roof_z_median) - current[2],
+            "interior_margin_m": roof_interior_margin(current, instance),
+            "confidence": float(instance.roof_confidence),
+            "uncertainty_m": float(instance.roof_uncertainty_m),
+            "observations": int(instance.roof_observation_count),
+            "age_s": age_s,
+            "full_frame": bool(instance.last_roof_full_frame),
+        }
+
+    def above_overhead_context(
+        self,
+        stage: Any,
+        current_world: Sequence[float],
+    ) -> Optional[dict]:
+        """Return the phase switch used to hand navigation from front to down."""
+        instance = self.primary_instance(stage)
+        if instance is None or relation_kind(stage) != "above" or not self.is_primary_locked(stage):
+            return None
+        roof = self.roof_navigation_context(stage, current_world)
+        if roof is not None and bool(roof.get("trusted", False)):
+            return {**roof, "active": True, "phase": "roof_confirmed"}
+        current = [float(value) for value in current_world[:3]]
+        horizontal = horizontal_distance(current, instance.target_world)
+        uncertainty = instance.effective_uncertainty(
+            stale_growth_per_s=float(self.config.get("STALE_UNCERTAINTY_GROWTH_MPS", 0.03))
+        )
+        radius = (
+            max(1.0, float(instance.footprint_radius_m))
+            + float(self.config.get("ABOVE_HORIZONTAL_RADIUS_M", 3.5))
+            + min(max(0.0, uncertainty), float(self.config.get("MAX_COMPLETION_UNCERTAINTY_M", 5.0)))
+        )
+        return {
+            "active": bool(horizontal <= radius),
+            "phase": "verify" if horizontal <= radius else "approach",
+            "instance_id": instance.instance_id,
+            "horizontal_distance_m": horizontal,
+            "trigger_radius_m": radius,
+            "trusted": False,
         }
 
     def trusted_near_large_surface_estimate(
@@ -638,6 +904,9 @@ class MissionMemory:
         memory = self.target_memories.get(target_key)
         if memory is None:
             return None
+        transition_instance = self._transition_instance_for_stage(stage, memory)
+        if transition_instance is not None:
+            return transition_instance
         ordinal = getattr(stage, "ordinal", None)
         locked_id = self.stage_locks.get(stage_key(stage), "")
         if locked_id:
@@ -677,11 +946,13 @@ class MissionMemory:
         instance = self.primary_instance(stage)
         if instance is None:
             return None
-        target = (
-            nearest_instance_surface_point(current_world, instance)
-            if has_surface_geometry(instance) and relation_kind(stage) == "near"
-            else instance.target_world
-        )
+        relation = relation_kind(stage)
+        if relation == "near" and has_surface_geometry(instance):
+            target = nearest_instance_surface_point(current_world, instance)
+        elif relation == "above" and has_roof_geometry(instance):
+            target = nearest_instance_roof_point(current_world, instance)
+        else:
+            target = instance.target_world
         return bearing_yaw_deg(current_world, target)
 
     def planner_hint(
@@ -693,18 +964,47 @@ class MissionMemory:
     ) -> str:
         if not self.enabled or not bool(self.config.get("PLANNER_MEMORY_HINT_ENABLED", True)):
             return ""
+        transition_hint = self.transition_exclusion_hint(stage, current_world, yaw_deg)
         instance = self.primary_instance(stage)
         if instance is None:
-            return ""
+            return transition_hint
         relation = relation_kind(stage)
         surface_geometry = has_surface_geometry(instance) and relation == "near"
-        navigation_target = (
-            nearest_instance_surface_point(current_world, instance)
-            if surface_geometry
-            else instance.target_world
-        )
+        roof_geometry = has_roof_geometry(instance) and relation == "above"
+        if surface_geometry:
+            navigation_target = nearest_instance_surface_point(current_world, instance)
+        elif roof_geometry:
+            navigation_target = nearest_instance_roof_point(current_world, instance)
+        elif relation == "above":
+            # A front-view facade anchor identifies the building in XY, but its
+            # Z coordinate is not a roof height.  Keep the planner's vertical
+            # target at the current flight level until down depth confirms a
+            # roof plane.  AirSim uses NED: positive body/world dz is descent.
+            navigation_target = [
+                float(instance.target_world[0]),
+                float(instance.target_world[1]),
+                float(current_world[2]),
+            ]
+        else:
+            navigation_target = instance.target_world
         body = world_to_body(navigation_target, current_world, yaw_deg)
         anchor_hint = self._anchor_hint(stage, current_world, yaw_deg)
+        above_hint = ""
+        if relation == "above":
+            if roof_geometry:
+                roof = self.roof_navigation_context(stage, current_world) or {}
+                above_hint = (
+                    "Above-target vertical contract: use the retained roof geometry; "
+                    f"roof_trusted={bool(roof.get('trusted', False))}, "
+                    f"roof_clearance={float(roof.get('clearance_m', 0.0)):.1f}m. "
+                    "In AirSim NED positive dz means descent. "
+                )
+            else:
+                above_hint = (
+                    "Above-target vertical contract: roof height is unknown, so hold the current altitude "
+                    "while approaching the building in XY; do not descend toward the facade anchor. "
+                    "In AirSim NED positive dz means descent. "
+                )
         return (
             "Memory hint: keep the locked target instance. "
             f"Target='{target_name_for_stage(stage)}', instance={instance.instance_id}, "
@@ -712,8 +1012,194 @@ class MissionMemory:
             f"navigation_anchor_body_xyz=[{body[0]:.1f},{body[1]:.1f},{body[2]:.1f}], "
             f"geometry={instance.geometry_kind}, "
             f"confidence={instance.confidence:.2f}, uncertainty={instance.uncertainty_m:.1f}m. "
-            f"{anchor_hint}"
+            f"{above_hint}{anchor_hint}{transition_hint}"
             "Do not switch to another same-class object unless the locked instance is clearly impossible."
+        )
+
+    def previous_entity_exclusions(
+        self,
+        stage: Any,
+        current_world: Sequence[float],
+        yaw_deg: float,
+    ) -> List[dict]:
+        """Return a front-image bearing gate for the preceding entity."""
+        previous = self._previous_completed_instance(stage)
+        if previous is None or is_return_target_stage(stage) or is_same_target_stage(stage):
+            return []
+        target = (
+            nearest_instance_surface_point(current_world, previous)
+            if has_surface_geometry(previous)
+            else previous.target_world
+        )
+        body = world_to_body(target, current_world, yaw_deg)
+        horizontal_range = math.hypot(float(body[0]), float(body[1]))
+        if horizontal_range <= 1e-6:
+            tolerance = 35.0
+        else:
+            radius = (
+                max(0.5, float(previous.footprint_radius_m))
+                + min(max(0.0, float(previous.uncertainty_m)), 3.0)
+                + float(self.config.get("PREVIOUS_ENTITY_BEARING_MARGIN_M", 1.5))
+            )
+            tolerance = math.degrees(math.atan2(radius, horizontal_range))
+        return [{
+            "instance_id": previous.instance_id,
+            "bearing_deg": math.degrees(math.atan2(float(body[1]), float(body[0]))),
+            "tolerance_deg": max(6.0, min(35.0, tolerance)),
+            "body": [float(v) for v in body[:3]],
+        }]
+
+    def evaluate_locked_detection_identity(
+        self,
+        stage: Any,
+        detection: Any,
+        image: Any,
+        *,
+        observer_world: Sequence[float],
+        observer_yaw_deg: float,
+        view: str = "front",
+    ) -> dict:
+        """Apply one immutable identity gate before any runtime consumer.
+
+        Metric observations must remain continuous with the locked world
+        geometry.  RGB-only front observations must lie in the predicted
+        bearing cone.  A down-view observation without metric depth cannot be
+        associated with a world instance and is therefore not allowed to move
+        the lock or the distance estimator.
+        """
+        if detection is None or not bool(getattr(detection, "visible", False)):
+            return {"accepted": False, "reason": "not_visible"}
+        instance = self.primary_instance(stage)
+        if instance is None or not self.is_primary_locked(stage):
+            return {"accepted": True, "reason": "stage_not_locked"}
+
+        view_name = str(view or getattr(detection, "camera", "front") or "front").lower()
+        current = [float(value) for value in observer_world[:3]]
+        if relation_kind(stage) == "above" and view_name.startswith("front"):
+            overhead = self.above_overhead_context(stage, current)
+            if (
+                bool((overhead or {}).get("active", False))
+                and bool(self.config.get("ABOVE_OVERHEAD_SUPPRESS_FRONT_IDENTITY", True))
+            ):
+                return {
+                    "accepted": False,
+                    "reason": "above_overhead_down_view_primary",
+                    "instance_id": instance.instance_id,
+                }
+
+        depth_usable, depth_reason = metric_depth_usable(detection, self.config)
+        if depth_usable:
+            observed_world = estimate_detection_world(
+                detection,
+                image,
+                current,
+                observer_yaw_deg,
+                memory_config=self.config,
+                sim_config=self.sim_config,
+            )
+            if observed_world is None:
+                return {"accepted": False, "reason": "metric_projection_failed"}
+            if relation_kind(stage) == "above" and view_name.startswith("down"):
+                if has_roof_geometry(instance):
+                    distance_m = horizontal_distance_to_instance_roof(observed_world, instance)
+                else:
+                    distance_m = horizontal_distance(observed_world, instance.target_world)
+                radius_m = (
+                    max(1.0, float(instance.footprint_radius_m))
+                    + min(max(0.0, float(instance.uncertainty_m)), 5.0)
+                    + float(self.config.get("LOCKED_DOWN_ASSOCIATION_MARGIN_M", 6.0))
+                )
+            else:
+                distance_m = distance_to_instance_geometry(observed_world, instance)
+                radius_m = max(
+                    float(self.config.get("MIN_ASSOCIATION_RADIUS_M", 2.0)),
+                    float(instance.footprint_radius_m)
+                    + min(max(0.0, float(instance.uncertainty_m)), 5.0)
+                    + float(self.config.get("LOCKED_DETECTION_ASSOCIATION_MARGIN_M", 1.2)),
+                )
+                if bool(instance.is_large_structure):
+                    radius_m = max(
+                        radius_m,
+                        float(self.config.get("LOCKED_LARGE_STRUCTURE_CONTINUITY_M", 8.0)),
+                    )
+                if is_view_relative_stage(stage) and has_surface_geometry(instance):
+                    radius_m = min(
+                        radius_m,
+                        float(self.config.get("VIEW_RELATIVE_LOCKED_SURFACE_CONTINUITY_M", 8.0)),
+                    )
+            accepted = bool(distance_m <= radius_m)
+            return {
+                "accepted": accepted,
+                "reason": "metric_geometry_continuity" if accepted else "metric_locked_geometry_mismatch",
+                "instance_id": instance.instance_id,
+                "observed_world": [float(value) for value in observed_world[:3]],
+                "distance_m": float(distance_m),
+                "radius_m": float(radius_m),
+                "depth_state": depth_reason,
+            }
+
+        if not view_name.startswith("front"):
+            return {
+                "accepted": False,
+                "reason": f"{view_name}_without_metric_depth",
+                "instance_id": instance.instance_id,
+                "depth_state": depth_reason,
+            }
+        fov = float(self.config.get("FRONT_FOV_DEG", self.sim_config.get("FRONT_FOV", 90.0)))
+        observed_angle = bbox_center_angle_deg(getattr(detection, "bbox", None), image, fov)
+        if observed_angle is None:
+            return {"accepted": False, "reason": "rgb_bearing_unavailable"}
+        target = (
+            nearest_instance_roof_point(current, instance)
+            if relation_kind(stage) == "above" and has_roof_geometry(instance)
+            else nearest_instance_surface_point(current, instance)
+            if has_surface_geometry(instance)
+            else instance.target_world
+        )
+        body = world_to_body(target, current, observer_yaw_deg)
+        expected_angle = math.degrees(math.atan2(float(body[1]), float(body[0])))
+        horizontal_range = max(0.1, math.hypot(float(body[0]), float(body[1])))
+        angular_radius = math.degrees(math.atan2(
+            max(0.5, float(instance.footprint_radius_m))
+            + float(self.config.get("LOCKED_BEARING_MARGIN_M", 2.0)),
+            horizontal_range,
+        ))
+        tolerance = max(
+            float(self.config.get("LOCKED_BEARING_MIN_TOLERANCE_DEG", 8.0)),
+            min(
+                float(self.config.get("LOCKED_BEARING_MAX_TOLERANCE_DEG", 32.0)),
+                angular_radius,
+            ),
+        )
+        delta = abs(signed_angle_delta_deg(observed_angle, expected_angle))
+        accepted = bool(float(body[0]) > -max(1.0, float(instance.footprint_radius_m)) and delta <= tolerance)
+        return {
+            "accepted": accepted,
+            "reason": "rgb_locked_bearing_cone" if accepted else "rgb_locked_bearing_mismatch",
+            "instance_id": instance.instance_id,
+            "observed_bearing_deg": float(observed_angle),
+            "expected_bearing_deg": float(expected_angle),
+            "delta_deg": float(delta),
+            "tolerance_deg": float(tolerance),
+            "depth_state": depth_reason,
+        }
+
+    def transition_exclusion_hint(
+        self,
+        stage: Any,
+        current_world: Sequence[float],
+        yaw_deg: float,
+    ) -> str:
+        exclusions = self.previous_entity_exclusions(stage, current_world, yaw_deg)
+        if not exclusions:
+            return ""
+        exclusion = exclusions[0]
+        bearing = float(exclusion["bearing_deg"])
+        side = "right" if bearing >= 0.0 else "left"
+        return (
+            "Transition constraint: the immediately preceding target "
+            f"instance={exclusion['instance_id']} is about {abs(bearing):.0f} degrees to the {side}; "
+            "do not select its remaining facade or visible fragment as this stage's new target. "
         )
 
     def candidate_context(
@@ -732,10 +1218,24 @@ class MissionMemory:
             return {}
         relation = relation_kind(stage)
         surface_geometry = has_surface_geometry(instance) and relation == "near"
-        navigation_target = (
-            nearest_instance_surface_point(current_world, instance)
+        roof_geometry = has_roof_geometry(instance) and relation == "above"
+        roof_context = self.roof_navigation_context(stage, current_world) if roof_geometry else None
+        if surface_geometry:
+            navigation_target = nearest_instance_surface_point(current_world, instance)
+        elif roof_geometry:
+            navigation_target = nearest_instance_roof_point(current_world, instance)
+        elif relation == "above":
+            navigation_target = [
+                float(instance.target_world[0]),
+                float(instance.target_world[1]),
+                float(current_world[2]),
+            ]
+        else:
+            navigation_target = instance.target_world
+        completion_radius = (
+            float(self.config.get("SURFACE_NEAR_RADIUS_M", 6.0))
             if surface_geometry
-            else instance.target_world
+            else float(self.config.get("NEAR_STANDOFF_M", 6.0))
         )
         non_primary = []
         for other in memory.instances.values():
@@ -748,6 +1248,7 @@ class MissionMemory:
             "target_world": list(navigation_target),
             "identity_anchor_world": list(instance.target_world),
             "relation": relation,
+            "completion_radius_m": completion_radius,
             "confidence": float(instance.confidence),
             "uncertainty_m": instance.effective_uncertainty(
                 stale_growth_per_s=float(self.config.get("STALE_UNCERTAINTY_GROWTH_MPS", 0.03))
@@ -760,6 +1261,9 @@ class MissionMemory:
                 else float(instance.footprint_radius_m)
             ),
             "uses_surface_geometry": surface_geometry,
+            "uses_roof_geometry": roof_geometry,
+            "roof_trusted": bool((roof_context or {}).get("trusted", False)),
+            "roof_clearance_m": (roof_context or {}).get("clearance_m"),
             "geometry_kind": instance.geometry_kind,
             "is_large_structure": bool(instance.is_large_structure),
             "surface_bounds_world": (
@@ -872,6 +1376,11 @@ class MissionMemory:
                     sim_config=self.sim_config,
                 )
                 if world is None:
+                    continue
+                depth_usable, _depth_reason = metric_depth_usable(detection, self.config)
+                if not depth_usable:
+                    # The RGB bearing remains useful, but an unreliable range
+                    # must not create or move a physical instance.
                     continue
                 surface_world = estimate_detection_surface_world(
                     detection,
@@ -999,6 +1508,20 @@ class MissionMemory:
         *,
         exclude_instance_ids: Optional[set[str]] = None,
     ):
+        previous = self._previous_completed_instance(stage)
+        if (
+            previous is not None
+            and not is_return_target_stage(stage)
+            and not is_same_target_stage(stage)
+            and self._observation_matches_previous(obs, previous)
+        ):
+            self._append_event({
+                "type": "reject_previous_entity",
+                "stage": stage_key(stage),
+                "instance": previous.instance_id,
+            })
+            return None, "reject_previous_entity"
+
         best = None
         best_score = -1.0
         excluded_ids = exclude_instance_ids or set()
@@ -1077,6 +1600,47 @@ class MissionMemory:
         )
         memory.instances[instance_id] = instance
         return instance, "create"
+
+    def _previous_completed_instance(self, stage: Any) -> Optional[TargetInstanceBelief]:
+        target_key = normalize_target_key(target_name_for_stage(stage))
+        memory = self.target_memories.get(target_key)
+        if memory is None:
+            return None
+        current_key = stage_key(stage)
+        for summary in reversed(self.stage_summaries):
+            if summary.stage_key == current_key or summary.target_key != target_key:
+                continue
+            instance = memory.instances.get(summary.primary_instance_id)
+            if instance is not None:
+                return instance
+        return None
+
+    def _transition_instance_for_stage(
+        self,
+        stage: Any,
+        memory: TargetMemory,
+    ) -> Optional[TargetInstanceBelief]:
+        if is_same_target_stage(stage):
+            return self._previous_completed_instance(stage)
+        if not is_return_target_stage(stage):
+            return None
+        ordinal = getattr(stage, "ordinal", None)
+        if ordinal:
+            for instance in memory.instances.values():
+                if int(instance.encounter_order) == int(ordinal):
+                    return instance
+        return self._previous_completed_instance(stage)
+
+    def _observation_matches_previous(self, obs: dict, instance: TargetInstanceBelief) -> bool:
+        geo_dist = distance_to_instance_geometry(obs["world"], instance)
+        radius = max(
+            float(self.config.get("MIN_ASSOCIATION_RADIUS_M", 2.0)),
+            float(instance.footprint_radius_m) + min(float(instance.uncertainty_m), 3.0) + 1.2,
+        )
+        if bool(instance.is_large_structure) or bool(obs.get("is_large_structure", False)):
+            radius = max(radius, float(self.config.get("PREVIOUS_ENTITY_EXCLUSION_RADIUS_M", 8.0)))
+            radius = min(radius, float(self.config.get("PREVIOUS_ENTITY_EXCLUSION_MAX_RADIUS_M", 10.0)))
+        return geo_dist <= radius
 
     def _update_instance(self, instance: TargetInstanceBelief, obs: dict, stage: Any) -> None:
         now = time.perf_counter()
@@ -1255,6 +1819,9 @@ class MissionMemory:
         memory: TargetMemory,
         current_world: Sequence[float],
     ) -> Optional[TargetInstanceBelief]:
+        transition_instance = self._transition_instance_for_stage(stage, memory)
+        if transition_instance is not None:
+            return transition_instance
         if is_view_relative_stage(stage):
             local_instances = [
                 memory.instances[instance_id]
@@ -1403,6 +1970,21 @@ def is_return_target_stage(stage: Any) -> bool:
                 "先前经过",
             )
         )
+    )
+
+
+def is_same_target_stage(stage: Any) -> bool:
+    if stage is None or is_return_target_stage(stage):
+        return False
+    if bool(getattr(stage, "same_target", False)):
+        return True
+    text = " ".join((
+        str(getattr(stage, "instruction", "") or ""),
+        str(getattr(stage, "completion_condition", "") or ""),
+    )).lower()
+    return bool(
+        re.search(r"\b(?:the\s+)?same\s+(?:target|object|building|car|vehicle|tower)\b", text)
+        or any(token in text for token in ("同一栋", "同一个", "同一座", "该建筑", "这栋楼", "它的上方", "到它旁边"))
     )
 
 

@@ -82,12 +82,15 @@ The "instruction" field is a simple English command. Examples:
   "飞到灌木丛旁边的红车旁" -> {"instruction": "Fly to the red car near the bushes", "target": "red car", "relation": "beside", "auxiliary_targets": ["bushes"], "selection_rule": "anchored"}
   "原地左转后，以新视角为准飞到前方可见的第二栋楼旁" -> {"instruction": "Fly near the second building visible ahead in the new view", "target": "building", "relation": "near", "ordinal": 2, "selection_rule": "ordinal", "view_relative": true, "return_target": false}
   "飞回第一次经过的白车旁边" -> {"instruction": "Fly back to the first previously visited white car", "target": "white car", "relation": "near", "ordinal": 1, "selection_rule": "ordinal", "view_relative": false, "return_target": true}
+  "然后飞到同一栋楼上方" -> {"instruction": "Fly above the same building", "target": "building", "relation": "above", "same_target": true, "return_target": false}
 
 Target binding rules:
 - Set view_relative=true when the target identity or ordinal is defined by the view at the start of that stage, for example "current view", "new view", "after turning", "visible ahead", or "the first building on the left after the turn".
 - A view-relative target must not be resolved from the mission-start view or from an earlier stage.
 - Set return_target=true for explicit revisits such as "fly back", "return to", "previously visited", "飞回", "返回", or "回到".
 - return_target and view_relative are mutually exclusive. A return target must use view_relative=false even if the sentence also contains a direction.
+- Set same_target=true only for explicit continuity such as "the same building", "it", "同一栋楼", "该建筑", or "它". Do not set it merely because two stages use the same target class.
+- same_target and return_target are mutually exclusive. A normal new entity stage must not reuse the immediately preceding physical target.
 - Stable descriptions that do not redefine the target from a later view use view_relative=false and return_target=false.
 
 JSON schema:
@@ -111,6 +114,7 @@ JSON schema:
       "stage_kind": "navigation|landing|search|action",
       "view_relative": false,
       "return_target": false,
+      "same_target": false,
       "auxiliary_targets": ["English landmark or qualifier targets, e.g. bushes"]
     }
   ]
@@ -229,12 +233,17 @@ def parse_task_parser_to_stages(response_text: str, original_instruction: str = 
             _coerce_bool(item.get("return_target"))
             or _has_return_to_intent(binding_text)
         )
+        same_target = bool(
+            _coerce_bool(item.get("same_target"))
+            or _has_same_target_intent(binding_text)
+        )
         view_relative = bool(
             _coerce_bool(item.get("view_relative"))
             or _has_view_relative_intent(binding_text, ordinal=ordinal)
         )
         if return_target:
             view_relative = False
+            same_target = False
         auxiliary_targets = _coerce_auxiliary_targets(item.get("auxiliary_targets"))
         split_target, split_aux = _split_target_and_auxiliary(
             target,
@@ -281,6 +290,7 @@ def parse_task_parser_to_stages(response_text: str, original_instruction: str = 
                 stage_kind=str(item.get("stage_kind", "") or "").strip().lower(),
                 view_relative=view_relative if mode in {"target", "detect"} else False,
                 return_target=return_target if mode in {"target", "detect"} else False,
+                same_target=same_target if mode in {"target", "detect"} else False,
                 auxiliary_targets=auxiliary_targets if mode in {"target", "detect"} else [],
             )
         )
@@ -400,6 +410,15 @@ def _has_return_to_intent(text: str) -> bool:
                 "先前经过",
             )
         )
+    )
+
+
+def _has_same_target_intent(text: str) -> bool:
+    lower = (text or "").lower()
+    return bool(
+        re.search(r"\b(?:the\s+)?same\s+(?:target|object|building|car|vehicle|tower)\b", lower)
+        or re.search(r"\b(?:above|near|beside|around|over)\s+it\b", lower)
+        or any(token in lower for token in ("同一栋", "同一个", "同一座", "该建筑", "这栋楼", "它的上方", "到它旁边"))
     )
 
 

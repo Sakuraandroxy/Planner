@@ -62,6 +62,7 @@ FUNCTIONS:
     TRIGGER_RADIUS_M: 4.0                 # 首次观测在此半径外时可作为后续距离判定的远端锚点
     MIN_SCORE: 0.4                        # 用于更新目标世界位姿的最低检测置信度
     MAX_DEPTH_M: 200.0                    # 忽略异常远距离深度
+    MAX_RELIABLE_DEPTH_M: 120.0           # 更远深度只作粗距离/方位提示，不更新精确世界坐标
     DEPTH_MODE: radial                    # AirSim DepthPerspective按视线径向距离投影
     COMPLETION_CONFIRMATIONS: 2           # 首次观测已在半径内时至少需要两次一致观测
     FRONT_CAMERA_OFFSET: [1.0, 0.0, 0.0] # front_center相对机体的NED偏移
@@ -91,6 +92,26 @@ FUNCTIONS:
     VIEW_RELATIVE_MIN_FORWARD_M: 0.5       # 前方/左前/右前候选必须至少位于机身前方该距离
     VIEW_RELATIVE_LATERAL_MARGIN_M: 0.5    # 左右候选相对中线的最小横向间隔
     VIEW_RELATIVE_LOCKED_SURFACE_CONTINUITY_M: 8.0 # 锁定墙面只接受与已有墙面连续的更新，避免融合邻楼
+    LOCKED_LARGE_STRUCTURE_CONTINUITY_M: 8.0 # 已锁定建筑的新深度点必须与现有几何连续，防止跳到远处同类楼
+    LOCKED_DETECTION_ASSOCIATION_MARGIN_M: 1.2 # 锁定实例深度投影关联的额外空间余量
+    LOCKED_DOWN_ASSOCIATION_MARGIN_M: 6.0 # above下视检测与锁定建筑/屋顶XY关联的余量
+    LOCKED_BEARING_MARGIN_M: 2.0          # 无可靠深度时锁定实例预测方位锥的物理余量
+    LOCKED_BEARING_MIN_TOLERANCE_DEG: 8.0 # 方位锥最小角容差
+    LOCKED_BEARING_MAX_TOLERANCE_DEG: 32.0 # 方位锥最大角容差，避免同类远楼接管bearing
+    PREVIOUS_ENTITY_EXCLUSION_RADIUS_M: 8.0 # 新实体阶段拒绝与上一实体表面连续的同类检测
+    PREVIOUS_ENTITY_EXCLUSION_MAX_RADIUS_M: 10.0 # 排除半径上限，避免误伤相邻建筑
+    PREVIOUS_ENTITY_BEARING_MARGIN_M: 1.5  # 无深度阶段投影上一实体时附加的方位角余量
+    BEARING_ONLY_ENABLED: true             # RGB可见但深度不可靠时保留目标方位，不伪造三维坐标
+    BEARING_MIN_CONFIDENCE: 0.40           # 仅方位观测的最低检测置信度
+    BEARING_MAX_AGE_S: 6.0                 # 方位观测超过该时间后不再引导新轨迹
+    BEARING_LOST_CONFIRMATIONS: 2          # 连续丢失多次后才进入真正TargetLost/重定位
+    BEARING_MAX_LEG_M: 12.0                # 无可靠三维坐标时单次最多前进距离
+    BEARING_MAX_PATH_DEVIATION_DEG: 50.0   # 轨迹终点偏离新鲜RGB方位过大时改为短方位航段
+    BEARING_MEMORY_MAX_UNCERTAINTY_M: 5.0  # 旧三维记忆超过该误差时不能覆盖新鲜RGB方位
+    BEARING_MEMORY_MAX_AGE_S: 30.0         # 旧三维记忆超过该年龄时不能覆盖新鲜RGB方位
+    METRIC_LOCK_MAX_DEPTH_M: 120.0         # 深度超过该距离只进入bearing-only，不更新实例坐标
+    METRIC_DEPTH_MIN_VALID_RATIO: 0.20     # bbox中心深度有效像素比例下限
+    METRIC_DEPTH_MAX_MAD_RATIO: 0.12       # 深度MAD相对距离上限，过滤混入天空/背景的框
     PATH_CLIP_ENABLED: true               # 已知锁定目标坐标时，裁剪/替换明显飞过目标的Qwen轨迹
     PATH_CLIP_RADIUS_M: 6.0               # memory路径守卫的外圈基准半径；实际飞行目标会再收进NEAR_APPROACH内圈
     PATH_DIVERGE_RATIO: 0.90              # 候选终点比当前位置更远离memory目标时，用直达目标附近的短路径替换
@@ -171,6 +192,41 @@ FUNCTIONS:
     ABOVE_HORIZONTAL_RADIUS_M: 3.5        # “飞到上方”时，目标footprint之外允许的水平误差
     ABOVE_MIN_CLEARANCE_M: 0.3            # “上方”至少要高于目标中心的粗略安全余量
     ABOVE_MAX_ALTITUDE_M: 60.0            # 过高时不直接凭memory完成，避免高空误判
+    ABOVE_ALTITUDE_GUARD_ENABLED: true    # above最终高度硬守卫；无屋顶证据时禁止规划器主动下降
+    ABOVE_PRE_ROOF_MAX_DESCENT_M: 1.0     # 屋顶未确认前相对阶段入口最多下降1m
+    ABOVE_MAX_CLEARANCE_M: 18.0           # 屋顶已确认后，高于该净空才允许分段下降
+    ABOVE_MAX_VERTICAL_LEG_M: 3.0         # 每轮基于可信屋顶最多下降3m，避免一次扎向楼顶
+    ABOVE_QUEUE_Z_TOLERANCE_M: 0.15       # 首次锁定后复核旧队列的高度容差
+    ABOVE_QUEUE_DIVERGENCE_MARGIN_M: 2.0  # 锁定/锚点更新后旧队列允许的XY发散余量
+    ABOVE_ANCHOR_REPLAN_SHIFT_M: 3.0      # 同一锁定实例锚点变化超过该值时复核旧队列
+    ABOVE_COMPLETION_RESUME_MOTION_M: 0.75 # 屋顶约束未满足时至少移动该距离后才再次停车判定
+    ABOVE_MIN_CONTINUOUS_HORIZON_M: 12.0  # 无屋顶时至少保留的XY航程，避免路径先于慢规划耗尽
+    ABOVE_CONTINUOUS_FALLBACK_PLANNING_S: 5.5 # 尚无稳定耗时统计时按该慢规划时长准备航程
+    ABOVE_CONTINUOUS_HORIZON_MARGIN_S: 1.5 # 在最近规划耗时外附加的连续飞行余量
+    ABOVE_ROOF_PROBE_BEYOND_ANCHOR_M: 8.0 # 接近立面锚点后保持高度向建筑内部探测的距离
+    ABOVE_ROOF_PROBE_MAX_TRAVEL_M: 24.0   # 单次屋顶获取探测的最大水平航程
+    ABOVE_ROOF_ACQUIRE_WAYPOINT_SPACING_M: 3.0 # 屋顶获取直线航点间距
+    ABOVE_ROOF_ACQUIRE_MAX_WAYPOINTS: 8   # 单次屋顶获取路径的航点数量上限
+    ABOVE_OVERHEAD_SUPPRESS_FRONT_IDENTITY: true # 进入上方核验阶段后前视同类楼不再更新身份/方位
+    ABOVE_REQUIRE_ROOF_GEOMETRY: true     # 大型建筑above必须由下视屋顶几何完成，立面点不能完成
+    ABOVE_ROOF_MIN_CONFIDENCE: 0.45       # 单次下视水平平面进入屋顶记忆的最低置信度
+    ABOVE_ROOF_MEMORY_MIN_CONFIDENCE: 0.60 # 屋顶记忆参与完成/高度控制的最低融合置信度
+    ABOVE_ROOF_MEMORY_MIN_OBSERVATIONS: 2 # 无下视语义框时至少两次一致屋顶深度观测
+    ABOVE_INSTANCE_MIN_OBSERVATIONS: 1    # 已锁定建筑只需一次语义/立面观测；屋顶一致性单独计数
+    ABOVE_ROOF_MAX_UNCERTAINTY_M: 2.0     # 屋顶高度不确定性上限
+    ABOVE_ROOF_MAX_AGE_S: 20.0            # 屋顶证据最大有效年龄
+    ABOVE_ROOF_ASSOCIATION_MARGIN_M: 6.0  # 下视水平面与锁定建筑XY的关联余量
+    ABOVE_ROOF_LARGE_STRUCTURE_ASSOCIATION_M: 25.0 # 大屋顶首个中心点与立面锚点允许的最大XY距离
+    ABOVE_ROOF_MAX_BELOW_ANCHOR_M: 3.0    # 拒绝明显低于立面锚点的地面平面（NED中Z更大）
+    ABOVE_ROOF_Z_CONTINUITY_M: 2.5        # 连续屋顶观测允许的高度差
+    ABOVE_ROOF_MIN_VALID_RATIO: 0.35      # 下视深度稀疏采样的最低有效比例
+    ABOVE_ROOF_MIN_COVERAGE_RATIO: 0.20   # 主水平平面的最低画面覆盖比例
+    ABOVE_ROOF_MIN_CENTER_SUPPORT_RATIO: 0.65 # 画面中心必须由同一水平面支撑
+    ABOVE_ROOF_MAX_Z_MAD_M: 0.45          # 屋顶平面世界Z的MAD上限
+    ABOVE_ROOF_MAX_NORMAL_ERROR_DEG: 15.0 # 屋顶法向偏离竖直方向的最大角度
+    ABOVE_ROOF_MAX_DEPTH_M: 120.0         # 下视屋顶深度最大可信范围
+    ABOVE_ROOF_MEMORY_MAX_POINTS: 160     # 每个实例保留的稀疏屋顶点上限
+    ABOVE_ROOF_MAX_PLANE_SAMPLES: 64      # 单帧写入记忆的屋顶采样点上限
     NEAR_MAX_ALTITUDE_M: 8.0              # “旁边/附近”不能在目标正上方很高处直接完成
     NEAR_RADIUS_MARGIN_M: 1.0             # “附近/旁边”在原到达半径外的额外容差
     DIRECTED_RELOCALIZATION_ENABLED: true # 丢失目标时先朝memory中的目标方向转向，再做环视搜索
@@ -211,6 +267,10 @@ FUNCTIONS:
     LARGE_STRUCTURE_TARGET_MATCH_RANGE_TOLERANCE_M: 3.0 # 实时墙面与旧表面沿视线距离差在此范围内视作同一楼
     LARGE_STRUCTURE_TARGET_MATCH_VERTICAL_M: 3.0 # 建筑局部墙面与旧表面点允许的高度差
     TARGET_DEPTH_EXCLUSION_M: 0.0         # 默认不排除目标深度点，让目标本体也能阻止撞车
+    GOAL_NEAR_OBSTACLE_RADIUS_M: 0.0      # 0表示按完成半径+安全半径+不确定性动态计算
+    GOAL_NEAR_OBSTACLE_COMPLETION_RADIUS_M: 4.5
+    GOAL_NEAR_OBSTACLE_UNCERTAINTY_CAP_M: 2.5
+    GOAL_NEAR_BYPASS_FORWARD_M: 1.5       # 目标邻域绕障只越过局部障碍，不恢复旧轨迹后缀
     USE_DOWN_DEPTH: false                 # 下视深度默认不用于前向避障，避免把地面密集写入障碍地图
 
   PLANNING:

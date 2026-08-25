@@ -2,6 +2,7 @@
 """Terminal-entrypoint for the fast-slow AirSim closed loop.
 Presents a nice input prompt and runs tasks until Ctrl+C.
 """
+import argparse
 import os
 import sys
 import time
@@ -14,6 +15,7 @@ get_cfg(os.path.join(_script_dir, "config", "default.yaml"))
 
 from sim.frame_capturer import FrameCapturer
 from agent.functions.common.warmup import warmup_from_config
+from agent.functions.debug import TargetSnapshotRecorder
 from agent.functions.fast_slow.runtime import run_fast_slow_loop, print_last_navigation_summary
 from agent.functions.common import web_runtime_helpers as web_helpers
 
@@ -43,6 +45,7 @@ def input_task() -> str | None:
         "",
         "输入自然语言任务",
         "例如: 飞到红色车旁边",
+        "调试快照: /target-snapshot on 或 off",
         "空行或 Ctrl+C 退出",
     ])
     try:
@@ -52,12 +55,44 @@ def input_task() -> str | None:
         return None
 
 
-def main():
+def _parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="Uni-LaViRA AirSim terminal runtime")
+    parser.add_argument(
+        "--save-target-snapshots",
+        action="store_true",
+        help="保存每个实际锁定目标的首次检测框图（默认关闭）",
+    )
+    return parser.parse_args(argv)
+
+
+def _handle_snapshot_command(task: str, recorder: TargetSnapshotRecorder) -> bool:
+    parts = task.strip().lower().split()
+    if not parts or parts[0] not in {"/target-snapshot", "/target-snapshots"}:
+        return False
+    if len(parts) != 2 or parts[1] not in {"on", "off"}:
+        print("[TargetSnapshot] 用法: /target-snapshot on 或 /target-snapshot off")
+        return True
+    enabled = parts[1] == "on"
+    run_directory = recorder.set_enabled(enabled)
+    if enabled:
+        print(f"[TargetSnapshot] enabled output={run_directory}")
+    else:
+        print("[TargetSnapshot] disabled (已保存文件会保留)")
+    return True
+
+
+def main(argv=None):
+    args = _parse_args(argv)
+    target_snapshot_recorder = TargetSnapshotRecorder(enabled=args.save_target_snapshots)
     print_box([
         "✈ Uni-LaViRA 闭环 — 终端模式",
         "",
         "正在启动 AirSim 连接...",
     ])
+    if target_snapshot_recorder.enabled:
+        print(f"[TargetSnapshot] enabled output={target_snapshot_recorder.run_directory}")
+    else:
+        print("[TargetSnapshot] disabled (使用 --save-target-snapshots 或 /target-snapshot on 开启)")
 
     # Connect AirSim
     print("[AirSim] connecting...")
@@ -94,6 +129,8 @@ def main():
         task = input_task()
         if task is None:
             break
+        if _handle_snapshot_command(task, target_snapshot_recorder):
+            continue
 
         print_box(["Task: " + task, "", "运行中... Ctrl+C 中断"])
         state.update(status="running", task=task, task_done=False)
@@ -106,6 +143,7 @@ def main():
                 client=client,
                 capturer=capturer,
                 isolated_planning_capture=True,
+                target_snapshot_recorder=target_snapshot_recorder,
             )
         except KeyboardInterrupt:
             print("\n[Interrupted]")

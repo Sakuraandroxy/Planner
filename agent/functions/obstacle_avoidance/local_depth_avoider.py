@@ -125,6 +125,45 @@ class DepthObstacleAvoider:
                 blocked=not bool(stopped),
                 reason="stop_before_target_depth_obstacle",
                 obstacle_body=[round(float(v), 2) for v in hit.obstacle_body],
+                details={
+                    "context": "target_surface",
+                    "resume_policy": "completion_check",
+                },
+            )
+            self.last_filter_reason = result.reason
+            return result
+
+        obstacle_context = self._obstacle_context(hit.obstacle_body, memory_context)
+        if obstacle_context == "goal_near":
+            if bool(self.config.get("BYPASS_ENABLED", True)):
+                bypass = self._try_goal_near_bypass(original, hit, obstacles, memory_context)
+                if bypass is not None:
+                    result = AvoidanceResult(
+                        waypoints=bypass,
+                        changed=True,
+                        reason="depth_goal_near_bypass",
+                        obstacle_body=[round(float(v), 2) for v in hit.obstacle_body],
+                        details={
+                            "context": "goal_near",
+                            "resume_policy": "stop_and_reobserve",
+                            "obstacle_target_distance_m": round(
+                                self._target_obstacle_distance(hit.obstacle_body, memory_context), 2
+                            ),
+                        },
+                    )
+                    self.last_filter_reason = result.reason
+                    return result
+            stopped = self._stop_before_hit(original, hit)
+            result = AvoidanceResult(
+                waypoints=stopped,
+                changed=True,
+                blocked=not bool(stopped),
+                reason="stop_before_goal_near_obstacle",
+                obstacle_body=[round(float(v), 2) for v in hit.obstacle_body],
+                details={
+                    "context": "goal_near",
+                    "resume_policy": "stop_and_reobserve",
+                },
             )
             self.last_filter_reason = result.reason
             return result
@@ -137,7 +176,11 @@ class DepthObstacleAvoider:
                     changed=True,
                     reason="depth_lateral_bypass",
                     obstacle_body=[round(float(v), 2) for v in hit.obstacle_body],
-                    details={"segment": hit.segment_index},
+                    details={
+                        "segment": hit.segment_index,
+                        "context": "transit",
+                        "resume_policy": "rejoin_original",
+                    },
                 )
                 self.last_filter_reason = result.reason
                 return result
@@ -149,10 +192,93 @@ class DepthObstacleAvoider:
             blocked=not bool(stopped),
             reason="stop_before_depth_obstacle",
             obstacle_body=[round(float(v), 2) for v in hit.obstacle_body],
-            details={"segment": hit.segment_index},
+            details={
+                "segment": hit.segment_index,
+                "context": "transit",
+                "resume_policy": "stop_and_replan",
+            },
         )
         self.last_filter_reason = result.reason
         return result
+
+    def _target_obstacle_distance(self, obstacle_body: Sequence[float], memory_context: dict | None) -> float:
+        target = (memory_context or {}).get("target_body") or []
+        if len(target) < 3:
+            return float("inf")
+        return math.hypot(
+            float(obstacle_body[0]) - float(target[0]),
+            float(obstacle_body[1]) - float(target[1]),
+        )
+
+    def _obstacle_context(self, obstacle_body: Sequence[float], memory_context: dict | None) -> str:
+        if not memory_context or not bool(memory_context.get("enabled", False)):
+            return "unknown"
+        if self._obstacle_matches_locked_target(obstacle_body, memory_context):
+            return "target_surface"
+        target = (memory_context or {}).get("target_body") or []
+        if len(target) < 3:
+            return "unknown"
+        completion_radius = float(
+            memory_context.get(
+                "completion_radius_m",
+                self.config.get("GOAL_NEAR_OBSTACLE_COMPLETION_RADIUS_M", 4.5),
+            )
+            or 4.5
+        )
+        uncertainty = min(
+            max(0.0, float(memory_context.get("uncertainty_m", 0.0) or 0.0)),
+            float(self.config.get("GOAL_NEAR_OBSTACLE_UNCERTAINTY_CAP_M", 2.5)),
+        )
+        near_radius = max(
+            float(self.config.get("GOAL_NEAR_OBSTACLE_RADIUS_M", 0.0) or 0.0),
+            completion_radius
+            + float(self.config.get("SAFETY_RADIUS_M", 1.35))
+            + uncertainty,
+        )
+        return "goal_near" if self._target_obstacle_distance(obstacle_body, memory_context) <= near_radius else "transit"
+
+    def _try_goal_near_bypass(
+        self,
+        waypoints: List[List[float]],
+        hit: _CollisionHit,
+        obstacles: List[List[float]],
+        memory_context: dict | None,
+    ) -> List[List[float]] | None:
+        """Move around the local obstacle but deliberately do not rejoin its suffix."""
+        base = self._point_at_path_distance(
+            waypoints,
+            max(
+                float(self.config.get("MIN_STOP_WAYPOINT_M", 0.8)),
+                hit.total_distance_m - float(self.config.get("STOP_BUFFER_M", 2.2)),
+            ),
+        )
+        lateral = max(
+            float(self.config.get("BYPASS_LATERAL_M", 3.0)),
+            float(self.config.get("SAFETY_RADIUS_M", 1.35)) + 1.2,
+        )
+        pass_forward = max(
+            0.8,
+            float(self.config.get("GOAL_NEAR_BYPASS_FORWARD_M", 1.5)),
+        )
+        for side in self._preferred_bypass_sides(memory_context, hit.obstacle_body):
+            detour_y = float(hit.obstacle_body[1]) + side * lateral
+            detour = [
+                max(float(base[0]), float(hit.obstacle_body[0]) - 0.7),
+                detour_y,
+                float(base[2]),
+            ]
+            pass_point = [
+                detour[0] + pass_forward,
+                detour_y,
+                detour[2],
+            ]
+            candidate = [
+                [round(float(v), 3) for v in detour],
+                [round(float(v), 3) for v in pass_point],
+            ]
+            if self._first_collision(candidate, obstacles) is None:
+                return candidate
+        return None
 
     def summary(self) -> dict:
         cells = sorted(
@@ -287,7 +413,11 @@ class DepthObstacleAvoider:
             blocked=not bool(stopped),
             reason=f"target_keepout_{radius:.1f}m",
             obstacle_body=[round(float(v), 2) for v in target[:3]],
-            details={"radius_m": round(radius, 2)},
+            details={
+                "radius_m": round(radius, 2),
+                "context": "goal_near",
+                "resume_policy": "stop_and_reobserve",
+            },
         )
 
     def _first_collision(

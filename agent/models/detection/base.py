@@ -18,6 +18,11 @@ class DetectionResult:
     label: str = ""
     depth_median: Optional[float] = None
     depth_bbox: Optional[List[int]] = None
+    # Depth quality is kept separate from visibility. A target can provide a
+    # reliable RGB bearing even when its metric depth is too sparse or noisy.
+    depth_valid_ratio: Optional[float] = None
+    depth_mad_m: Optional[float] = None
+    depth_sample_count: int = 0
     # Normalized image coordinates plus radial depth: [u, v, depth_m].
     # Populated when a completion/memory depth frame is attached.
     surface_depth_samples: Optional[List[List[float]]] = None

@@ -4,15 +4,20 @@ from __future__ import annotations
 
 import math
 import re
+import time
 from typing import Any, Optional, Sequence
 
 from agent.functions.memory.geometry import (
     distance3,
     distance_to_instance_geometry,
+    has_roof_geometry,
     has_surface_geometry,
     horizontal_distance,
+    horizontal_distance_to_instance_roof,
     horizontal_distance_to_instance_geometry,
+    nearest_instance_roof_point,
     nearest_instance_surface_point,
+    roof_interior_margin,
     vertical_distance_to_instance_geometry,
 )
 from agent.functions.memory.schemas import MemoryCompletionDecision, TargetInstanceBelief
@@ -159,20 +164,92 @@ def evaluate_memory_completion(
         )
 
     if kind == "above":
+        roof_geometry = has_roof_geometry(instance)
+        require_roof = bool(
+            config.get("ABOVE_REQUIRE_ROOF_GEOMETRY", True)
+            and bool(getattr(instance, "is_large_structure", False))
+        )
+        if require_roof and not roof_geometry:
+            return MemoryCompletionDecision.hold(
+                instance_id=instance.instance_id,
+                reason="locked building has no verified down-view roof geometry",
+                confidence=confidence,
+                distance_m=d3,
+                horizontal_distance_m=hdist,
+                vertical_delta_m=vdist,
+                target_world=list(target),
+                uncertainty_m=uncertainty,
+                details={"relation": kind, "geometry": instance.geometry_kind, "roof_geometry": False},
+            )
+        if roof_geometry:
+            target = nearest_instance_roof_point(current, instance)
+            hdist = horizontal_distance_to_instance_roof(current, instance)
+            clearance = float(instance.roof_z_median) - float(current[2])
+            vdist = abs(clearance)
+            d3 = math.sqrt(hdist * hdist + vdist * vdist)
+            interior_margin = roof_interior_margin(current, instance)
+            roof_age_s = max(0.0, time.perf_counter() - float(instance.last_roof_seen_s or 0.0))
+            roof_confidence = float(instance.roof_confidence or 0.0)
+            roof_uncertainty = float(instance.roof_uncertainty_m or 999.0)
+            roof_min_obs = int(
+                config.get(
+                    "ABOVE_ROOF_MEMORY_MIN_OBSERVATIONS",
+                    1 if fresh_visual_support else 2,
+                )
+            )
+            if fresh_visual_support:
+                roof_min_obs = min(roof_min_obs, 1)
+            roof_min_conf = float(config.get("ABOVE_ROOF_MEMORY_MIN_CONFIDENCE", 0.60))
+            roof_max_age = float(config.get("ABOVE_ROOF_MAX_AGE_S", 20.0))
+            if (
+                int(instance.roof_observation_count or 0) < roof_min_obs
+                or roof_confidence < roof_min_conf
+                or roof_uncertainty > float(config.get("ABOVE_ROOF_MAX_UNCERTAINTY_M", 2.0))
+                or roof_age_s > roof_max_age
+            ):
+                return MemoryCompletionDecision.hold(
+                    instance_id=instance.instance_id,
+                    reason="roof geometry needs another consistent down-depth observation",
+                    confidence=min(confidence, roof_confidence),
+                    distance_m=d3,
+                    horizontal_distance_m=hdist,
+                    vertical_delta_m=vdist,
+                    target_world=list(target),
+                    uncertainty_m=roof_uncertainty,
+                    details={
+                        "relation": kind,
+                        "roof_geometry": True,
+                        "roof_observations": int(instance.roof_observation_count or 0),
+                        "roof_confidence": round(roof_confidence, 3),
+                        "roof_age_s": round(roof_age_s, 2),
+                    },
+                )
+            confidence = max(confidence, roof_confidence)
+            uncertainty = min(uncertainty, roof_uncertainty)
+            min_conf = min(min_conf, roof_min_conf)
+            # Roof consistency has its own observation counter.  A building
+            # that was semantically locked from one facade frame may still be
+            # completed from multiple consistent bbox-free roof planes.
+            min_obs = min(min_obs, int(config.get("ABOVE_INSTANCE_MIN_OBSERVATIONS", 1)))
+        else:
+            clearance = float(target[2]) - float(current[2])
+            interior_margin = -hdist
         required = (
             float(config.get("ABOVE_HORIZONTAL_RADIUS_M", 3.5))
             + min(uncertainty, max_uncertainty)
         )
-        if not surface_geometry:
+        if not roof_geometry:
             required += float(instance.footprint_radius_m)
-        clearance = float(target[2]) - float(current[2])
         min_clearance = float(config.get("ABOVE_MIN_CLEARANCE_M", 0.3))
         max_clearance = float(config.get("ABOVE_MAX_ALTITUDE_M", 60.0))
         horizontal_ok = hdist <= required
+        if roof_geometry:
+            min_interior = float(config.get("ABOVE_ROOF_MIN_INTERIOR_MARGIN_M", 0.0))
+            horizontal_ok = horizontal_ok and interior_margin >= min_interior
         height_ok = clearance >= min_clearance and clearance <= max_clearance
         return _decision_from_constraints(
             instance=instance,
-            target_world=nearest_surface,
+            target_world=target,
             confidence=confidence,
             min_conf=min_conf,
             min_obs=min_obs,
@@ -184,7 +261,7 @@ def evaluate_memory_completion(
             required_radius_m=required,
             constraints_ok=horizontal_ok and height_ok,
             near_but_uncertain=hdist <= required * 1.35,
-            reason_ok="memory_above_geometry_complete",
+            reason_ok=("memory_above_roof_geometry_complete" if roof_geometry else "memory_above_geometry_complete"),
             reason_far=(
                 "not horizontally above target" if not horizontal_ok
                 else "height clearance outside above relation"
@@ -192,7 +269,9 @@ def evaluate_memory_completion(
             details={
                 "relation": kind,
                 "clearance_m": round(clearance, 2),
-                "geometry": instance.geometry_kind,
+                "geometry": "roof" if roof_geometry else instance.geometry_kind,
+                "roof_geometry": roof_geometry,
+                "roof_interior_margin_m": round(interior_margin, 2),
             },
         )
 

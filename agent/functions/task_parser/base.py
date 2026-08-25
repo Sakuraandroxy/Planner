@@ -31,6 +31,9 @@ class TaskStage:
     # return_target explicitly reuses an instance remembered by an earlier
     # stage and therefore always takes precedence over view_relative.
     return_target: bool = False
+    # Explicit continuity such as "the same building". Otherwise a new entity
+    # stage must not silently reuse the immediately preceding physical target.
+    same_target: bool = False
     # auxiliary_targets 是当前目标的空间锚点/限定物，例如“灌木丛旁边的红车”里的 bush。
     auxiliary_targets: List[str] = field(default_factory=list)
 

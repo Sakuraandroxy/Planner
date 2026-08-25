@@ -43,11 +43,13 @@ class GeometricTargetDistanceEstimator:
     def __init__(self, config: Optional[dict] = None, sim_config: Optional[dict] = None):
         config = config or {}
         sim_config = sim_config or {}
+        self.config = dict(config)
         self.enabled = bool(config.get("ENABLED", True))
         self.use_for_completion = bool(config.get("USE_FOR_COMPLETION", True))
         self.trigger_radius_m = float(config.get("TRIGGER_RADIUS_M", 0.0))
         self.min_score = float(config.get("MIN_SCORE", 0.4))
         self.max_depth_m = float(config.get("MAX_DEPTH_M", 200.0))
+        self.max_reliable_depth_m = float(config.get("MAX_RELIABLE_DEPTH_M", self.max_depth_m))
         self.front_fov_deg = float(config.get("FRONT_FOV_DEG", sim_config.get("FRONT_FOV", 90.0)))
         self.down_fov_deg = float(config.get("DOWN_FOV_DEG", sim_config.get("DOWN_FOV", 90.0)))
         self.front_camera_offset = _point3(config.get("FRONT_CAMERA_OFFSET", [1.0, 0.0, 0.0]))
@@ -95,7 +97,13 @@ class GeometricTargetDistanceEstimator:
         if len(bbox) < 4 or depth is None or image is None or not hasattr(image, "size"):
             return None
         depth = float(depth)
-        if not math.isfinite(depth) or depth <= 0.0 or depth > self.max_depth_m or score < self.min_score:
+        if (
+            not math.isfinite(depth)
+            or depth <= 0.0
+            or depth > self.max_depth_m
+            or depth > self.max_reliable_depth_m
+            or score < self.min_score
+        ):
             return None
 
         width, height = float(image.size[0]), float(image.size[1])

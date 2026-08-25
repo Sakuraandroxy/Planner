@@ -158,6 +158,10 @@ class TaskManager:
             rule += " Resolve and keep the target instance selected from the view captured when this stage became active."
         if getattr(stage, "return_target", False):
             rule += " Reuse the previously remembered target instance; do not renumber targets from the current view."
+        elif getattr(stage, "same_target", False):
+            rule += " Continue using the immediately preceding physical target instance."
+        elif getattr(stage, "mode", "") in {"target", "detect"}:
+            rule += " Do not reuse the immediately preceding physical target when selecting a new entity."
         return rule
 
     _ACTION_DEFAULTS = {
@@ -229,6 +233,7 @@ class TaskManager:
                     stage_kind=str(item.get("stage_kind", "") or "").strip().lower(),
                     view_relative=bool(item.get("view_relative", False)),
                     return_target=bool(item.get("return_target", False)),
+                    same_target=bool(item.get("same_target", False)),
                     auxiliary_targets=auxiliary_targets if mode in {"target", "detect"} else [],
                 )
             )

@@ -60,8 +60,18 @@ def target_depth_text(name, detection, image, depth_meters) -> str:
         center_valid = center_region[np.isfinite(center_region)]
         center_valid = center_valid[center_valid > 0]
         robust_depth = float(np.median(center_valid)) if center_valid.size else median_depth
+        valid_count = int(center_valid.size)
+        center_count = max(1, int(center_region.size))
+        depth_mad = (
+            float(np.median(np.abs(center_valid - robust_depth)))
+            if center_valid.size and np.isfinite(robust_depth)
+            else float("nan")
+        )
         detection.depth_median = robust_depth if np.isfinite(robust_depth) else None
         detection.depth_bbox = db
+        detection.depth_valid_ratio = float(valid_count) / float(center_count)
+        detection.depth_mad_m = depth_mad if np.isfinite(depth_mad) else None
+        detection.depth_sample_count = valid_count
         detection.surface_depth_samples = _surface_depth_samples(
             depth_meters,
             db,
@@ -72,7 +82,9 @@ def target_depth_text(name, detection, image, depth_meters) -> str:
         robust_text = f"{robust_depth:.1f}m" if np.isfinite(robust_depth) else "N/A"
         return (
             f"{name}:bbox={bbox} score={float(getattr(detection, 'score', 0.0) or 0.0):.2f} "
-            f"depth={robust_text} bbox_median={median_text} depth_bbox={db}"
+            f"depth={robust_text} bbox_median={median_text} depth_bbox={db} "
+            f"valid={detection.depth_valid_ratio:.2f} mad="
+            f"{('N/A' if detection.depth_mad_m is None else f'{detection.depth_mad_m:.2f}m')}"
         )
     except Exception as exc:
         return (

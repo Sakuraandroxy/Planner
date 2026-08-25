@@ -8,6 +8,7 @@ from typing import Any, Sequence
 
 from agent.functions.common.config_access import first_value, function_section
 from agent.functions.common.detection_policy import allows_clipped_large_structure
+from agent.functions.perception.bearing_tracker import detection_is_excluded_by_bearing
 from config import cfg
 
 
@@ -18,6 +19,21 @@ class DirectionHintResult:
     angle_deg: float | None = None
     bbox: list[int] | None = None
     score: float = 0.0
+
+
+def direction_hint_from_angle(
+    angle_deg: float,
+    *,
+    score: float = 0.0,
+    reason: str = "visual bearing memory",
+) -> DirectionHintResult:
+    angle = float(angle_deg)
+    return DirectionHintResult(
+        text=_format_direction_text(angle, use_angle=_direction_hint_use_angle()),
+        reason=reason,
+        angle_deg=angle,
+        score=max(0.0, min(1.0, float(score or 0.0))),
+    )
 
 
 def direction_hint_from_locked_body_target(
@@ -62,6 +78,7 @@ def direction_hint_from_front_detection(
     target: str,
     *,
     stage: Any = None,
+    excluded_bearings: list[dict] | None = None,
 ) -> DirectionHintResult:
     if not _direction_hint_enabled():
         return DirectionHintResult(reason="direction hint disabled")
@@ -74,10 +91,32 @@ def direction_hint_from_front_detection(
         return DirectionHintResult(reason="empty target")
 
     try:
-        detection = detector.detect(front_image, target, depth_meters=None, camera_name="front")
+        if hasattr(detector, "detect_all"):
+            detections = list(
+                detector.detect_all(front_image, target, depth_meters=None, camera_name="front") or []
+            )
+        else:
+            detection = detector.detect(front_image, target, depth_meters=None, camera_name="front")
+            detections = [detection] if detection is not None else []
     except Exception as exc:
         return DirectionHintResult(reason=f"detection failed: {exc}")
 
+    visible = [detection for detection in detections if detection and getattr(detection, "visible", False)]
+    if excluded_bearings:
+        visible = [
+            detection
+            for detection in visible
+            if not detection_is_excluded_by_bearing(
+                detection,
+                front_image,
+                excluded_bearings,
+                horizontal_fov_deg=_camera_hfov_deg(),
+            )
+        ]
+    if not visible:
+        reason = "previous target excluded" if excluded_bearings and detections else "target not detected"
+        return DirectionHintResult(reason=reason)
+    detection = max(visible, key=lambda item: float(getattr(item, "score", 0.0) or 0.0))
     if not detection or not getattr(detection, "visible", False):
         return DirectionHintResult(reason="target not detected")
     bbox = list(getattr(detection, "bbox", None) or [])
