@@ -118,15 +118,30 @@ class ContinuousPathStream:
         self._state_lock = threading.RLock()
         self.reach_tolerance_m = float(config.get("PATH_REACH_TOLERANCE_M", 0.8))
         self.final_reach_tolerance_m = float(config.get("PATH_FINAL_REACH_TOLERANCE_M", 0.2))
+        self.vertical_final_reach_tolerance_m = max(
+            self.final_reach_tolerance_m,
+            float(config.get("PATH_VERTICAL_FINAL_REACH_TOLERANCE_M", 0.5)),
+        )
         self.pass_tolerance_m = float(config.get("PATH_PASS_TOLERANCE_M", 1.5))
         self.min_reissue_interval_s = float(config.get("PATH_REISSUE_MIN_INTERVAL_S", 0.15))
         self.velocity_epsilon_mps = float(config.get("PATH_VELOCITY_EPSILON_MPS", 0.05))
+        self.vertical_xy_tolerance_m = max(
+            0.01,
+            float(config.get("PATH_VERTICAL_XY_TOLERANCE_M", 0.15)),
+        )
+        self.heading_epsilon_deg = max(
+            0.01,
+            float(config.get("PATH_HEADING_EPSILON_DEG", 0.5)),
+        )
         self.debug_logs = bool(config.get("DEBUG_LOGS", False))
         self._anchor: list[float] | None = None
         self._commanded_remaining: list[list[float]] = []
         self._collision_marker = None
         self._last_issue_at = 0.0
         self._commanded_velocity: float | None = None
+        self._commanded_hold_heading = False
+        self._commanded_heading_yaw_deg: float | None = None
+        self._commanded_vertical_only = False
 
     @property
     def active(self) -> bool:
@@ -140,6 +155,9 @@ class ContinuousPathStream:
             self._collision_marker = None
             self._last_issue_at = 0.0
             self._commanded_velocity = None
+            self._commanded_hold_heading = False
+            self._commanded_heading_yaw_deg = None
+            self._commanded_vertical_only = False
 
     def stop(self) -> None:
         with self._state_lock:
@@ -173,6 +191,11 @@ class ContinuousPathStream:
         # for Qwen too early.
             if consumed == len(self._commanded_remaining) and self._commanded_remaining:
                 final_distance = _distance(current_pos, self._commanded_remaining[-1])
+                final_tolerance = (
+                    self.vertical_final_reach_tolerance_m
+                    if self._commanded_vertical_only
+                    else self.final_reach_tolerance_m
+                )
                 final_anchor = (
                     self._anchor
                     if len(self._commanded_remaining) == 1
@@ -184,7 +207,7 @@ class ContinuousPathStream:
                     self._commanded_remaining[-1],
                     self.pass_tolerance_m,
                 )
-                if final_distance > self.final_reach_tolerance_m and not passed_final:
+                if final_distance > final_tolerance and not passed_final:
                     consumed -= 1
             if consumed > 0:
                 self._anchor = list(self._commanded_remaining[consumed - 1])
@@ -202,25 +225,97 @@ class ContinuousPathStream:
         queue_waypoints: Sequence[Sequence[float]],
         current_pos: Sequence[float],
         velocity: float,
+        *,
+        hold_heading: bool = False,
+        heading_yaw_deg: float | None = None,
     ) -> bool:
         with self._state_lock:
             desired = [_point3(waypoint) for waypoint in queue_waypoints]
             if not desired:
                 return False
             velocity = float(velocity)
+            vertical_only = bool(
+                any(abs(float(point[2]) - float(current_pos[2])) > 0.01 for point in desired)
+                and all(
+                    math.hypot(
+                        float(point[0]) - float(current_pos[0]),
+                        float(point[1]) - float(current_pos[1]),
+                    )
+                    <= self.vertical_xy_tolerance_m
+                    for point in desired
+                )
+            )
+            effective_hold_heading = bool(hold_heading or vertical_only)
+            effective_heading_yaw = (
+                float(heading_yaw_deg)
+                if heading_yaw_deg is not None
+                else None
+            )
+            if effective_hold_heading and effective_heading_yaw is None:
+                same_vertical_command = bool(
+                    vertical_only
+                    and self._commanded_hold_heading
+                    and self._commanded_heading_yaw_deg is not None
+                    and self._commanded_remaining
+                    and desired == self._commanded_remaining
+                )
+                if same_vertical_command:
+                    effective_heading_yaw = float(self._commanded_heading_yaw_deg)
+                else:
+                    get_pose = getattr(self.client, "get_pose", None)
+                    if callable(get_pose):
+                        try:
+                            _pose, effective_heading_yaw = get_pose()
+                            effective_heading_yaw = float(effective_heading_yaw)
+                        except Exception:
+                            effective_heading_yaw = None
+            if effective_hold_heading and effective_heading_yaw is None:
+                # A fixed heading without an angle is not a valid AirSim
+                # contract. Real AirSim clients expose get_pose; lightweight
+                # test/alternate clients may safely retain legacy behavior.
+                effective_hold_heading = False
+            heading_changed = bool(
+                effective_hold_heading != self._commanded_hold_heading
+                or (
+                    effective_hold_heading
+                    and (
+                        self._commanded_heading_yaw_deg is None
+                        or abs(
+                            (float(effective_heading_yaw) - float(self._commanded_heading_yaw_deg) + 180.0)
+                            % 360.0
+                            - 180.0
+                        )
+                        >= self.heading_epsilon_deg
+                    )
+                )
+            )
             velocity_changed = (
                 self._commanded_velocity is None
                 or abs(velocity - self._commanded_velocity) >= self.velocity_epsilon_mps
             )
-            if self._commanded_remaining and desired == self._commanded_remaining and not velocity_changed:
+            if (
+                self._commanded_remaining
+                and desired == self._commanded_remaining
+                and not velocity_changed
+                and not heading_changed
+            ):
                 return False
-            if self._commanded_remaining and time.perf_counter() - self._last_issue_at < self.min_reissue_interval_s:
+            if (
+                self._commanded_remaining
+                and not heading_changed
+                and time.perf_counter() - self._last_issue_at < self.min_reissue_interval_s
+            ):
                 return False
 
             # Waypoints consumed from the front (desired is a suffix of
             # commanded_remaining). The existing AirSim path is still valid;
             # reissuing would restart ForwardOnly with a new anchor.
-            if self._commanded_remaining and len(desired) < len(self._commanded_remaining) and not velocity_changed:
+            if (
+                self._commanded_remaining
+                and len(desired) < len(self._commanded_remaining)
+                and not velocity_changed
+                and not heading_changed
+            ):
                 consumed = len(self._commanded_remaining) - len(desired)
                 if desired == self._commanded_remaining[consumed:]:
                     self._commanded_remaining = desired
@@ -235,12 +330,34 @@ class ContinuousPathStream:
             mode = "extend" if continuing else "start"
             previous_anchor = list(self._anchor) if continuing and self._anchor is not None else None
             self._collision_marker = self.client.collision_marker()
-            self.client.start_waypoint_path(desired, velocity=velocity)
+            command_options = {}
+            if effective_hold_heading:
+                command_options = {
+                    "hold_heading": True,
+                    "heading_yaw_deg": float(effective_heading_yaw),
+                }
+            self.client.start_waypoint_path(
+                desired,
+                velocity=velocity,
+                **command_options,
+            )
             # Preserve the original path anchor when extending the path.
             self._anchor = previous_anchor or _point3(current_pos)
             self._commanded_remaining = desired
             self._commanded_velocity = velocity
+            self._commanded_hold_heading = effective_hold_heading
+            self._commanded_heading_yaw_deg = (
+                float(effective_heading_yaw)
+                if effective_hold_heading
+                else None
+            )
+            self._commanded_vertical_only = vertical_only
             self._last_issue_at = time.perf_counter()
+            if vertical_only and effective_hold_heading:
+                print(
+                    "  [PathHeading] vertical_hold "
+                    f"yaw={float(effective_heading_yaw):.1f}deg"
+                )
             if self.debug_logs:
                 print(f"  [PathStream] {mode} points={len(desired)}")
             return True

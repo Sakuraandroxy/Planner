@@ -22,10 +22,22 @@ class DetectionResult:
     # reliable RGB bearing even when its metric depth is too sparse or noisy.
     depth_valid_ratio: Optional[float] = None
     depth_mad_m: Optional[float] = None
+    # Diagnostics for detecting a bbox that spans foreground/background
+    # entities. ``depth_median`` is measured in the central crop, while
+    # ``depth_bbox_median`` covers the entire detector box.
+    depth_bbox_median: Optional[float] = None
+    depth_p10_m: Optional[float] = None
+    depth_p90_m: Optional[float] = None
     depth_sample_count: int = 0
     # Normalized image coordinates plus radial depth: [u, v, depth_m].
     # Populated when a completion/memory depth frame is attached.
     surface_depth_samples: Optional[List[List[float]]] = None
+    # Large facades may contain windows/background and therefore fail the
+    # whole-box metric-depth gate.  Memory can still use a coherent foreground
+    # surface patch without pretending that the entire bbox has one depth.
+    surface_anchor_uv: Optional[List[float]] = None
+    surface_lock_fallback: bool = False
+    surface_lock_depth_reason: str = ""
     camera: str = "front"
 
 

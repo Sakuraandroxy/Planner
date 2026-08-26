@@ -169,3 +169,38 @@ def test_future_scan_discards_results_for_already_completed_stages():
     _poll_future_memory_scan(objects, SimpleNamespace(update=lambda **kwargs: None), current_stage)
 
     assert calls == []
+
+
+def test_future_scan_detector_error_is_nonfatal_and_restarts_interval(capsys):
+    current_stage = _stage(1, "white car")
+    failed = Future()
+    failed.set_exception(TimeoutError("GroundingDINO connection timed out"))
+    calls = []
+    memory = SimpleNamespace(
+        root_instruction="long task",
+        config={},
+        update_from_detections=lambda **kwargs: calls.append(kwargs) or [],
+        summary=lambda stage=None: {},
+    )
+    old_scan_time = time.perf_counter() - 120.0
+    objects = SimpleNamespace(
+        mission_memory=memory,
+        last_future_scan_s=old_scan_time,
+        future_scan_job=FutureMemoryScanJob(
+            future=failed,
+            snapshot=_snapshot(),
+            root_instruction="long task",
+            source_stage_key=(0, "", "target"),
+            target_names=("red car",),
+            submitted_at=old_scan_time,
+        ),
+    )
+
+    _poll_future_memory_scan(objects, SimpleNamespace(update=lambda **kwargs: None), current_stage)
+
+    assert objects.future_scan_job is None
+    assert objects.last_future_scan_s > old_scan_time
+    assert calls == []
+    output = capsys.readouterr().out
+    assert "detector_service_error" in output
+    assert "current navigation and memory kept" in output

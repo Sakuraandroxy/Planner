@@ -67,7 +67,20 @@ def target_depth_text(name, detection, image, depth_meters) -> str:
             if center_valid.size and np.isfinite(robust_depth)
             else float("nan")
         )
+        depth_p10 = (
+            float(np.percentile(center_valid, 10.0))
+            if center_valid.size
+            else float("nan")
+        )
+        depth_p90 = (
+            float(np.percentile(center_valid, 90.0))
+            if center_valid.size
+            else float("nan")
+        )
         detection.depth_median = robust_depth if np.isfinite(robust_depth) else None
+        detection.depth_bbox_median = median_depth if np.isfinite(median_depth) else None
+        detection.depth_p10_m = depth_p10 if np.isfinite(depth_p10) else None
+        detection.depth_p90_m = depth_p90 if np.isfinite(depth_p90) else None
         detection.depth_bbox = db
         detection.depth_valid_ratio = float(valid_count) / float(center_count)
         detection.depth_mad_m = depth_mad if np.isfinite(depth_mad) else None
@@ -126,7 +139,10 @@ def _surface_depth_samples(depth_meters, depth_bbox, anchor_depth, *, max_sample
 
     candidates = []
     anchor = float(anchor_depth)
-    tolerance = max(2.0, 0.18 * anchor)
+    # Keep the surface patch close to the central identity depth. A wider
+    # tolerance can silently combine a foreground facade and a rear building
+    # when one GroundingDINO box spans both.
+    tolerance = max(2.0, 0.08 * anchor)
     for py in ys:
         for px in xs:
             depth = float(depth_meters[int(py), int(px)])

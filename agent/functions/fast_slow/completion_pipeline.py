@@ -40,6 +40,9 @@ class DetectionDepthBundle:
     down_reliability: float = 0.0
     observer_world: Optional[list[float]] = None
     observer_yaw_deg: Optional[float] = None
+    # Monotonic timestamp of the RGB observation, used to reject late
+    # TargetLost events after a newer validated lock/bearing update.
+    capture_timestamp_s: float = 0.0
 
 
 @dataclass
@@ -49,6 +52,12 @@ class CompletionPipelineEvent:
     bundle: Optional[DetectionDepthBundle] = None
     completion: Any = None
     elapsed: float = 0.0
+    stage_generation: int = 0
+    lock_generation: int = 0
+    session_id: str = ""
+    locked_instance_id: str = ""
+    error: str = ""
+    retry_after_s: float = 0.0
 
 
 @dataclass
@@ -65,6 +74,10 @@ class CompletionPipelineJob:
     bundle: Optional[DetectionDepthBundle] = None
     phase: str = "detect_depth"
     near_stop_emitted: bool = False
+    stage_generation: int = 0
+    lock_generation: int = 0
+    session_id: str = ""
+    locked_instance_id: str = ""
 
 
 class CompletionPipeline:
@@ -83,6 +96,8 @@ class CompletionPipeline:
         slow_radius_m: float,
         distance_view_policy: str = "relation_aware",
         debug_logs: bool = False,
+        error_retry_backoff_s: float = 5.0,
+        error_retry_max_backoff_s: float = 30.0,
     ):
         self.detector = detector
         self.checker = checker
@@ -94,6 +109,13 @@ class CompletionPipeline:
         self.slow_radius_m = float(slow_radius_m)
         self.distance_view_policy = str(distance_view_policy or "relation_aware").strip().lower()
         self.debug_logs = bool(debug_logs)
+        self.error_retry_backoff_s = max(0.1, float(error_retry_backoff_s))
+        self.error_retry_max_backoff_s = max(
+            self.error_retry_backoff_s,
+            float(error_retry_max_backoff_s),
+        )
+        self._consecutive_errors = 0
+        self._retry_after_s = 0.0
         self._job: Optional[CompletionPipelineJob] = None
 
     @property
@@ -103,8 +125,27 @@ class CompletionPipeline:
     def clear(self) -> None:
         self._job = None
 
-    def submit(self, stage: Any, task_text: str, frame: Any, down_frame: Any) -> bool:
-        if self._job is not None or not self.checker.should_check_stage(stage):
+    @property
+    def retry_remaining_s(self) -> float:
+        return max(0.0, float(self._retry_after_s) - time.perf_counter())
+
+    def submit(
+        self,
+        stage: Any,
+        task_text: str,
+        frame: Any,
+        down_frame: Any,
+        *,
+        stage_generation: int = 0,
+        lock_generation: int = 0,
+        session_id: str = "",
+        locked_instance_id: str = "",
+    ) -> bool:
+        if (
+            self._job is not None
+            or self.retry_remaining_s > 0.0
+            or not self.checker.should_check_stage(stage)
+        ):
             return False
         stage_key = self.stage_key(stage)
         job = CompletionPipelineJob(
@@ -113,6 +154,10 @@ class CompletionPipeline:
             task_text=task_text,
             frame=frame,
             down_frame=down_frame,
+            stage_generation=int(stage_generation),
+            lock_generation=int(lock_generation),
+            session_id=str(session_id or ""),
+            locked_instance_id=str(locked_instance_id or ""),
         )
         if getattr(self.checker, "uses_detector", False) and self.checker.is_detector_enabled():
             job.detect_future = self.slow_executor.submit(self._capture_detect_depth_bundle, stage, task_text)
@@ -132,7 +177,29 @@ class CompletionPipeline:
         if job.phase == "detect_depth":
             if not (job.detect_future and job.detect_future.done()):
                 return None
-            bundle = job.detect_future.result()
+            try:
+                bundle = job.detect_future.result()
+            except Exception as exc:
+                self._job = None
+                self._consecutive_errors += 1
+                backoff_s = min(
+                    self.error_retry_max_backoff_s,
+                    self.error_retry_backoff_s * (2 ** max(0, self._consecutive_errors - 1)),
+                )
+                self._retry_after_s = time.perf_counter() + backoff_s
+                return CompletionPipelineEvent(
+                    "perception_error",
+                    job.stage_key,
+                    elapsed=time.perf_counter() - job.submitted_at,
+                    stage_generation=job.stage_generation,
+                    lock_generation=job.lock_generation,
+                    session_id=job.session_id,
+                    locked_instance_id=job.locked_instance_id,
+                    error=f"{type(exc).__name__}: {exc}",
+                    retry_after_s=backoff_s,
+                )
+            self._consecutive_errors = 0
+            self._retry_after_s = 0.0
             job.bundle = bundle
             job.frame = bundle.front_image
             job.down_frame = bundle.down_image
@@ -143,6 +210,10 @@ class CompletionPipeline:
                     job.stage_key,
                     bundle=bundle,
                     elapsed=time.perf_counter() - job.submitted_at,
+                    stage_generation=job.stage_generation,
+                    lock_generation=job.lock_generation,
+                    session_id=job.session_id,
+                    locked_instance_id=job.locked_instance_id,
                 )
             bundle.distance_m = self._distance_for_stage(job.stage, bundle, job.frame, job.down_frame)
             depth_text = "none" if bundle.distance_m is None else f"{bundle.distance_m:.1f}m"
@@ -157,14 +228,31 @@ class CompletionPipeline:
                 job.near_stop_emitted = True
                 elapsed = time.perf_counter() - job.submitted_at
                 self._job = None
-                return CompletionPipelineEvent("near_stop", job.stage_key, bundle=bundle, elapsed=elapsed)
+                return CompletionPipelineEvent(
+                    "near_stop",
+                    job.stage_key,
+                    bundle=bundle,
+                    elapsed=elapsed,
+                    stage_generation=job.stage_generation,
+                    lock_generation=job.lock_generation,
+                    session_id=job.session_id,
+                    locked_instance_id=job.locked_instance_id,
+                )
 
             # Far from the target, geometry is sufficient. Release this job so
             # the next detector snapshot can refresh the cached world pose;
             # the expensive VLM judge is reserved for fresh near-target confirmation.
             self._job = None
-            return CompletionPipelineEvent("observation", job.stage_key, bundle=bundle,
-                                           elapsed=time.perf_counter() - job.submitted_at)
+            return CompletionPipelineEvent(
+                "observation",
+                job.stage_key,
+                bundle=bundle,
+                elapsed=time.perf_counter() - job.submitted_at,
+                stage_generation=job.stage_generation,
+                lock_generation=job.lock_generation,
+                session_id=job.session_id,
+                locked_instance_id=job.locked_instance_id,
+            )
 
         if job.phase == "vlm":
             if not job.vlm_future or not job.vlm_future.done():
@@ -179,6 +267,10 @@ class CompletionPipeline:
                     bundle=job.bundle,
                     completion=completion,
                     elapsed=elapsed,
+                    stage_generation=job.stage_generation,
+                    lock_generation=job.lock_generation,
+                    session_id=job.session_id,
+                    locked_instance_id=job.locked_instance_id,
                 )
             return CompletionPipelineEvent(
                 "not_done",
@@ -186,6 +278,10 @@ class CompletionPipeline:
                 bundle=job.bundle,
                 completion=completion,
                 elapsed=elapsed,
+                stage_generation=job.stage_generation,
+                lock_generation=job.lock_generation,
+                session_id=job.session_id,
+                locked_instance_id=job.locked_instance_id,
             )
 
         return None
@@ -212,8 +308,15 @@ class CompletionPipeline:
         t0 = time.perf_counter()
         front_future = self.detect_executor.submit(detect_one, frame, "front")
         down_future = self.detect_executor.submit(detect_one, down_frame, "down")
-        front_all = front_future.result()
-        down_all = down_future.result()
+        try:
+            front_all = front_future.result()
+            down_all = down_future.result()
+        except Exception:
+            # If one view fails before the other starts, do not leave a stale
+            # request queued behind the failed completion observation.
+            front_future.cancel()
+            down_future.cancel()
+            raise
         for det in front_all:
             self._suppress_giant_bbox(stage, det, frame)
         for det in down_all:
@@ -234,6 +337,7 @@ class CompletionPipeline:
             observer_world,
             observer_yaw_deg,
         ) = web_helpers.capture_profile_isolated_with_pose(self.client, profile)
+        capture_timestamp_s = time.perf_counter()
         capture_elapsed = time.perf_counter() - t0
         timing = dict(timing or {})
         timing.setdefault("total_s", capture_elapsed)
@@ -251,6 +355,7 @@ class CompletionPipeline:
                                    frame=frame, down_frame=down_frame, stage=stage)
         bundle.observer_world = list(observer_world)
         bundle.observer_yaw_deg = float(observer_yaw_deg)
+        bundle.capture_timestamp_s = capture_timestamp_s
         if bundle.best_detection is None or not getattr(bundle.best_detection, "visible", False):
             bundle.distance_view = "none"
             bundle.distance_reason = "target_not_detected_in_rgb"
@@ -288,6 +393,7 @@ class CompletionPipeline:
                                    frame=frame, down_frame=down_frame, stage=stage)
         bundle.observer_world = list(observer_world)
         bundle.observer_yaw_deg = float(observer_yaw_deg)
+        bundle.capture_timestamp_s = capture_timestamp_s
         return bundle
 
     def _make_bundle(self, job, front_det, down_det, front_depth, down_depth,

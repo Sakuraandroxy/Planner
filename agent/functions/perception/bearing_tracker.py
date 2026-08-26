@@ -43,6 +43,27 @@ def metric_depth_usable(detection: Any, config: dict) -> tuple[bool, str]:
     max_mad_ratio = float(config.get("METRIC_DEPTH_MAX_MAD_RATIO", 0.12))
     if mad is not None and float(mad) > max(0.5, depth * max_mad_ratio):
         return False, "too_noisy"
+    bbox_median = getattr(detection, "depth_bbox_median", None)
+    max_center_bbox_ratio = float(
+        config.get("METRIC_DEPTH_MAX_CENTER_BBOX_DELTA_RATIO", 0.10)
+    )
+    if (
+        bbox_median is not None
+        and math.isfinite(float(bbox_median))
+        and abs(float(bbox_median) - depth) > max(2.0, depth * max_center_bbox_ratio)
+    ):
+        return False, "mixed_bbox_depth"
+    depth_p10 = getattr(detection, "depth_p10_m", None)
+    depth_p90 = getattr(detection, "depth_p90_m", None)
+    max_span_ratio = float(config.get("METRIC_DEPTH_MAX_P10_P90_RATIO", 0.18))
+    if (
+        depth_p10 is not None
+        and depth_p90 is not None
+        and math.isfinite(float(depth_p10))
+        and math.isfinite(float(depth_p90))
+        and float(depth_p90) - float(depth_p10) > max(3.0, depth * max_span_ratio)
+    ):
+        return False, "mixed_center_depth"
     return True, "reliable"
 
 
@@ -56,6 +77,7 @@ class TargetBearingObservation:
     observed_at: float
     depth_state: str
     range_hint_m: Optional[float] = None
+    source: str = "runtime"
 
     def age_s(self) -> float:
         return max(0.0, time.perf_counter() - float(self.observed_at))
@@ -71,15 +93,28 @@ class TargetBearingTracker:
         self.config = dict(config or {})
         self.sim_config = dict(sim_config or {})
         self._observations: dict[tuple, TargetBearingObservation] = {}
+        # A stage-activation RGB direction has one special responsibility: it
+        # must constrain the first accepted flight leg.  Keep it separately so
+        # a metric observation from the same capture can upgrade the normal
+        # tracker without erasing that still-unconsumed activation contract.
+        self._activation_guards: dict[tuple, TargetBearingObservation] = {}
         self._lost_counts: dict[tuple, int] = {}
 
-    def clear(self, stage_key: Optional[tuple] = None) -> None:
+    def clear(
+        self,
+        stage_key: Optional[tuple] = None,
+        *,
+        preserve_activation_guard: bool = False,
+    ) -> None:
         if stage_key is None:
             self._observations.clear()
+            self._activation_guards.clear()
             self._lost_counts.clear()
             return
         key = tuple(stage_key)
         self._observations.pop(key, None)
+        if not preserve_activation_guard:
+            self._activation_guards.pop(key, None)
         self._lost_counts.pop(key, None)
 
     def record(
@@ -89,6 +124,7 @@ class TargetBearingTracker:
         detection: Any,
         image: Any,
         observer_yaw_deg: float,
+        source: str = "runtime",
     ) -> Optional[TargetBearingObservation]:
         if not bool(self.config.get("BEARING_ONLY_ENABLED", True)):
             return None
@@ -122,8 +158,11 @@ class TargetBearingTracker:
             observed_at=time.perf_counter(),
             depth_state="metric" if usable_depth else depth_state,
             range_hint_m=range_hint,
+            source=str(source or "runtime"),
         )
         self._observations[observation.stage_key] = observation
+        if "prebind" in observation.source.lower():
+            self._activation_guards[observation.stage_key] = observation
         self._lost_counts[observation.stage_key] = 0
         return observation
 
@@ -131,10 +170,32 @@ class TargetBearingTracker:
         observation = self._observations.get(tuple(stage_key))
         if observation is None:
             return None
-        if observation.age_s() > float(self.config.get("BEARING_MAX_AGE_S", 6.0)):
+        is_prebind = "prebind" in str(getattr(observation, "source", "")).lower()
+        max_age_s = float(
+            self.config.get("PREBIND_MAX_AGE_S", 30.0)
+            if is_prebind
+            else self.config.get("BEARING_MAX_AGE_S", 6.0)
+        )
+        if observation.age_s() > max_age_s:
             self._observations.pop(tuple(stage_key), None)
             return None
         return observation
+
+    def activation_guard(self, stage_key: tuple) -> Optional[TargetBearingObservation]:
+        key = tuple(stage_key)
+        observation = self._activation_guards.get(key)
+        if observation is None:
+            return None
+        max_age_s = float(self.config.get("PREBIND_MAX_AGE_S", 30.0))
+        if observation.age_s() > max_age_s:
+            self._activation_guards.pop(key, None)
+            return None
+        return observation
+
+    def consume_activation_guard(self, stage_key: tuple) -> Optional[TargetBearingObservation]:
+        """Consume the activation bearing only after its path entered the queue."""
+
+        return self._activation_guards.pop(tuple(stage_key), None)
 
     def mark_lost(self, stage_key: tuple) -> int:
         key = tuple(stage_key)
@@ -143,6 +204,17 @@ class TargetBearingTracker:
         if count >= int(self.config.get("BEARING_LOST_CONFIRMATIONS", 2)):
             self._observations.pop(key, None)
         return count
+
+    def reset_lost(self, stage_key: tuple) -> None:
+        """Keep the current bearing while clearing only loss confirmations."""
+        self._lost_counts[tuple(stage_key)] = 0
+
+    def lost_count(self, stage_key: tuple) -> int:
+        return int(self._lost_counts.get(tuple(stage_key), 0))
+
+    def latest_observed_at(self, stage_key: tuple) -> float:
+        observation = self._observations.get(tuple(stage_key))
+        return float(observation.observed_at) if observation is not None else 0.0
 
 
 def detection_is_excluded_by_bearing(

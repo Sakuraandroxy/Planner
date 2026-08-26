@@ -15,8 +15,8 @@ _ACTION_VALUE_DEFAULTS = {
     "backward": 5.0,
     "left": 90.0,
     "right": 90.0,
-    "up": 5.0,
-    "down": 5.0,
+    "up": 6.0,
+    "down": 6.0,
     "land": 0.0,
 }
 
@@ -358,7 +358,10 @@ def _coerce_action_value(value, action: str) -> float | None:
     if action == "land":
         return None
     try:
-        return float(value) if value is not None else _ACTION_VALUE_DEFAULTS[action]
+        normalized = float(value) if value is not None else _ACTION_VALUE_DEFAULTS[action]
+        if action in {"up", "down"} and abs(normalized) <= 5.0:
+            return 6.0
+        return normalized
     except (TypeError, ValueError):
         return _ACTION_VALUE_DEFAULTS[action]
 

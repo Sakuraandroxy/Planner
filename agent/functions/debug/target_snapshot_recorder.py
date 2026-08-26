@@ -32,7 +32,8 @@ class TargetSnapshotRecorder:
         self.started_at = started_at or datetime.now()
         self._enabled = False
         self._run_directory: Path | None = None
-        self._recorded_keys: set[tuple[int, str, str]] = set()
+        self._recorded_keys: set[tuple[int, str, str, str]] = set()
+        self._final_instances: dict[tuple[int, str], str] = {}
         self._task_sequence = 0
         self._task_text = ""
         self._lock = threading.RLock()
@@ -79,6 +80,8 @@ class TargetSnapshotRecorder:
         observer_world: Sequence[float] | None = None,
         observer_yaw_deg: float | None = None,
         source: str = "runtime",
+        record_kind: str = "locked",
+        metadata: dict[str, Any] | None = None,
     ) -> Path | None:
         """Save a boxed image once for this stage and locked target instance."""
 
@@ -92,8 +95,22 @@ class TargetSnapshotRecorder:
             normalized_instance_id = str(instance_id or "").strip()
             if not normalized_instance_id:
                 return None
-            record_key = (self._task_sequence, normalized_stage_key, normalized_instance_id)
-            if record_key in self._recorded_keys:
+            normalized_record_kind = self._safe_component(record_kind, "locked").lower()
+            final_key = (self._task_sequence, normalized_stage_key)
+            previous_final_instance = (
+                self._final_instances.get(final_key, "")
+                if normalized_record_kind == "locked_final"
+                else ""
+            )
+            if previous_final_instance == normalized_instance_id:
+                return None
+            record_key = (
+                self._task_sequence,
+                normalized_stage_key,
+                normalized_record_kind,
+                normalized_instance_id,
+            )
+            if normalized_record_kind != "locked_final" and record_key in self._recorded_keys:
                 return None
 
             try:
@@ -102,17 +119,43 @@ class TargetSnapshotRecorder:
                 if bbox is None:
                     return None
                 view_name = str(view or getattr(detection, "camera", "front") or "front").lower()
-                self._draw_overlay(canvas, bbox, target_name, normalized_instance_id, view_name, detection)
+                overlay_identity = (
+                    "PREBIND CANDIDATE (NOT FINAL)"
+                    if normalized_record_kind == "prebind"
+                    else f"FINAL LOCK {normalized_instance_id}"
+                    if normalized_record_kind == "locked_final"
+                    else normalized_instance_id
+                )
+                self._draw_overlay(canvas, bbox, target_name, overlay_identity, view_name, detection)
 
                 run_directory = self._ensure_run_directory()
                 stage_number = int(stage_index) + 1 if stage_index is not None else 0
-                filename = (
-                    f"task_{self._task_sequence:02d}_stage_{stage_number:02d}_"
-                    f"{self._safe_component(target_name, 'target')}_"
-                    f"{self._safe_component(normalized_instance_id, 'instance')}_"
-                    f"{self._safe_component(view_name, 'view')}.jpg"
-                )
-                destination = self._unique_destination(run_directory / filename)
+                if normalized_record_kind == "prebind":
+                    filename = (
+                        f"task_{self._task_sequence:02d}_stage_{stage_number:02d}_"
+                        f"{self._safe_component(target_name, 'target')}_"
+                        f"prebind_{self._safe_component(view_name, 'view')}.jpg"
+                    )
+                elif normalized_record_kind == "locked_final":
+                    # This deterministic path is intentionally overwritten if
+                    # a non-view-relative stage later switches its lock. The
+                    # file visible in output therefore always depicts the
+                    # currently authoritative target, while manifest history
+                    # retains the superseded instance id.
+                    filename = (
+                        f"task_{self._task_sequence:02d}_stage_{stage_number:02d}_"
+                        f"{self._safe_component(target_name, 'target')}_locked_final.jpg"
+                    )
+                else:
+                    filename = (
+                        f"task_{self._task_sequence:02d}_stage_{stage_number:02d}_"
+                        f"{self._safe_component(target_name, 'target')}_"
+                        f"{self._safe_component(normalized_instance_id, 'instance')}_"
+                        f"{self._safe_component(view_name, 'view')}.jpg"
+                    )
+                destination = run_directory / filename
+                if normalized_record_kind != "locked_final":
+                    destination = self._unique_destination(destination)
                 canvas.save(destination, format="JPEG", quality=92, subsampling=0)
 
                 manifest_entry = {
@@ -124,6 +167,9 @@ class TargetSnapshotRecorder:
                     "task": self._task_text,
                     "target": str(target_name or ""),
                     "instance_id": normalized_instance_id,
+                    "record_kind": normalized_record_kind,
+                    "authoritative": normalized_record_kind == "locked_final",
+                    "supersedes_instance_id": previous_final_instance or None,
                     "view": view_name,
                     "bbox": bbox,
                     "score": float(getattr(detection, "score", 0.0) or 0.0),
@@ -136,10 +182,13 @@ class TargetSnapshotRecorder:
                     ),
                     "observer_yaw_deg": self._optional_float(observer_yaw_deg),
                     "source": str(source or "runtime"),
+                    "details": dict(metadata or {}),
                 }
                 with (run_directory / "manifest.jsonl").open("a", encoding="utf-8") as handle:
                     handle.write(json.dumps(manifest_entry, ensure_ascii=False) + "\n")
                 self._recorded_keys.add(record_key)
+                if normalized_record_kind == "locked_final":
+                    self._final_instances[final_key] = normalized_instance_id
                 return destination
             except Exception as exc:
                 # Diagnostics must never interrupt flight or change target state.

@@ -355,7 +355,14 @@ class AirSimClient:
             + float(velocity.z_val) ** 2
         )
 
-    def start_waypoint_path(self, waypoints, velocity=None):
+    def start_waypoint_path(
+        self,
+        waypoints,
+        velocity=None,
+        *,
+        hold_heading=False,
+        heading_yaw_deg=None,
+    ):
         """Start or replace the active AirSim path without waiting for it to finish."""
         from config import cfg
 
@@ -365,7 +372,7 @@ class AirSimClient:
         if not active_wps:
             return None
 
-        current_pos, _yaw = self.get_pose()
+        current_pos, current_yaw = self.get_pose()
         previous = np.array(current_pos, dtype=float)
         path_len = 0.0
         for waypoint in active_wps:
@@ -383,19 +390,58 @@ class AirSimClient:
         adaptive_lookahead = float(sim_cfg.get("AIRSIM_ADAPTIVE_LOOKAHEAD", 1.0))
         move_timeout = int(sim_cfg.get("AIRSIM_MOVE_TIMEOUT", 60))
         path = [airsim.Vector3r(*waypoint) for waypoint in active_wps]
+        if bool(hold_heading):
+            fixed_yaw = (
+                float(current_yaw)
+                if heading_yaw_deg is None
+                else float(heading_yaw_deg)
+            )
+            drivetrain = airsim.DrivetrainType.MaxDegreeOfFreedom
+            yaw_mode = airsim.YawMode(is_rate=False, yaw_or_rate=fixed_yaw)
+        else:
+            fixed_yaw = None
+            drivetrain = airsim.DrivetrainType.ForwardOnly
+            yaw_mode = airsim.YawMode(is_rate=False)
         functions_cfg = cfg.get("FUNCTIONS", {}) or {}
         fast_slow_cfg = {**(cfg.get("FAST_SLOW", {}) or {}), **(functions_cfg.get("FAST_SLOW", {}) or {})}
+        vertical_xy_tolerance = max(
+            0.01,
+            float(fast_slow_cfg.get("PATH_VERTICAL_XY_TOLERANCE_M", 0.15)),
+        )
+        single_vertical_position = bool(
+            fixed_yaw is not None
+            and len(active_wps) == 1
+            and math.hypot(
+                float(active_wps[0][0]) - float(current_pos[0]),
+                float(active_wps[0][1]) - float(current_pos[1]),
+            )
+            <= vertical_xy_tolerance
+            and abs(float(active_wps[0][2]) - float(current_pos[2])) > 0.01
+        )
         if bool(fast_slow_cfg.get("DEBUG_LOGS", False)):
             print(
                 f"  [PathCommand] points={len(active_wps)} path_m={path_len:.2f} "
-                f"lookahead={effective_lookahead:.2f} adaptive={adaptive_lookahead:g}"
+                f"lookahead={effective_lookahead:.2f} adaptive={adaptive_lookahead:g} "
+                f"heading={('path' if fixed_yaw is None else f'hold@{fixed_yaw:.1f}deg')} "
+                f"command={('moveToPosition' if single_vertical_position else 'moveOnPath')}"
+            )
+        if single_vertical_position:
+            target = active_wps[0]
+            return self.client.moveToPositionAsync(
+                float(target[0]),
+                float(target[1]),
+                float(target[2]),
+                float(velocity),
+                timeout_sec=move_timeout,
+                drivetrain=drivetrain,
+                yaw_mode=yaw_mode,
             )
         return self.client.moveOnPathAsync(
             path=path,
             velocity=float(velocity),
             timeout_sec=move_timeout,
-            drivetrain=airsim.DrivetrainType.ForwardOnly,
-            yaw_mode=airsim.YawMode(is_rate=False),
+            drivetrain=drivetrain,
+            yaw_mode=yaw_mode,
             lookahead=effective_lookahead,
             adaptive_lookahead=adaptive_lookahead,
         )
@@ -820,14 +866,46 @@ class AirSimClient:
             before_pos, before_yaw = self.get_pose()
             collision_before = self.collision_marker()
             path = [airsim.Vector3r(float(wp[0]), float(wp[1]), float(wp[2])) for wp in active_wps]
+            functions_cfg = cfg.get("FUNCTIONS", {}) or {}
+            fast_slow_cfg = {
+                **(cfg.get("FAST_SLOW", {}) or {}),
+                **(functions_cfg.get("FAST_SLOW", {}) or {}),
+            }
+            vertical_xy_tolerance = max(
+                0.01,
+                float(fast_slow_cfg.get("PATH_VERTICAL_XY_TOLERANCE_M", 0.15)),
+            )
+            vertical_only = bool(
+                any(abs(float(wp[2]) - float(before_pos[2])) > 0.01 for wp in active_wps)
+                and all(
+                    math.hypot(
+                        float(wp[0]) - float(before_pos[0]),
+                        float(wp[1]) - float(before_pos[1]),
+                    )
+                    <= vertical_xy_tolerance
+                    for wp in active_wps
+                )
+            )
+            drivetrain = (
+                airsim.DrivetrainType.MaxDegreeOfFreedom
+                if vertical_only
+                else airsim.DrivetrainType.ForwardOnly
+            )
+            yaw_mode = (
+                airsim.YawMode(is_rate=False, yaw_or_rate=float(before_yaw))
+                if vertical_only
+                else airsim.YawMode(is_rate=False)
+            )
+            if vertical_only:
+                print(f"  [PathHeading] vertical_hold yaw={float(before_yaw):.1f}deg")
             used_fallback = False
             try:
                 self.client.moveOnPathAsync(
                     path=path,
                     velocity=velocity,
                     timeout_sec=move_timeout,
-                    drivetrain=airsim.DrivetrainType.ForwardOnly,
-                    yaw_mode=airsim.YawMode(is_rate=False),
+                    drivetrain=drivetrain,
+                    yaw_mode=yaw_mode,
                     lookahead=lookahead,
                     adaptive_lookahead=adaptive_lookahead,
                 ).join()
@@ -853,8 +931,8 @@ class AirSimClient:
                         float(target[2]),
                         velocity,
                         timeout_sec=move_timeout,
-                        drivetrain=airsim.DrivetrainType.ForwardOnly,
-                        yaw_mode=airsim.YawMode(is_rate=False),
+                        drivetrain=drivetrain,
+                        yaw_mode=yaw_mode,
                     ).join()
                 after_pos, after_yaw = self.get_pose()
                 moved = float(np.linalg.norm(np.array(after_pos, dtype=float) - np.array(before_pos, dtype=float)))

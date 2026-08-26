@@ -36,11 +36,11 @@ def _memory() -> MissionMemory:
     )
 
 
-def _detection(depth: float, bbox) -> SimpleNamespace:
+def _detection(depth: float, bbox, *, score: float = 0.9) -> SimpleNamespace:
     return SimpleNamespace(
         visible=True,
         bbox=list(bbox),
-        score=0.9,
+        score=float(score),
         label="building",
         depth_median=float(depth),
         depth_bbox=None,
@@ -169,6 +169,63 @@ def test_view_relative_ordinal_uses_only_activation_view_candidates():
     )
     assert is_view_relative_stage(return_stage) is False
     assert memory.primary_instance(return_stage).instance_id == "building:3"
+
+
+def test_first_view_relative_building_uses_metric_nearest_not_dino_score_or_list_order():
+    memory = _memory()
+    image = Image.new("RGB", (640, 480), (120, 120, 120))
+    stage = TaskStage(
+        index=0,
+        instruction="Fly to the first building ahead on the left",
+        target="building",
+        relation="above",
+        ordinal=1,
+        view_relative=True,
+    )
+    far_high_score = _detection(42.0, [80, 120, 260, 360], score=0.99)
+    near_lower_score = _detection(14.0, [180, 180, 300, 430], score=0.61)
+
+    events = memory.update_from_detections(
+        stage=stage,
+        detections_by_view={"front": [far_high_score, near_lower_score]},
+        images_by_view={"front": image},
+        observer_world=[0.0, 0.0, -5.0],
+        observer_yaw_deg=0.0,
+    )
+
+    primary = memory.primary_instance(stage)
+    assert primary is not None
+    assert primary.depth_median == 14.0
+    assert events[0].detection is near_lower_score
+    assert events[0].instance_id == primary.instance_id
+    assert primary.identity_bbox == near_lower_score.bbox
+
+
+def test_overlapping_same_depth_building_boxes_create_one_local_instance():
+    memory = _memory()
+    image = Image.new("RGB", (640, 480), (120, 120, 120))
+    stage = TaskStage(
+        index=0,
+        instruction="Fly to the first building ahead on the left",
+        target="building",
+        relation="above",
+        ordinal=1,
+        view_relative=True,
+    )
+    outer = _detection(18.0, [80, 100, 300, 430], score=0.82)
+    nested = _detection(18.3, [100, 120, 285, 420], score=0.91)
+
+    events = memory.update_from_detections(
+        stage=stage,
+        detections_by_view={"front": [outer, nested]},
+        images_by_view={"front": image},
+        observer_world=[0.0, 0.0, -5.0],
+        observer_yaw_deg=0.0,
+    )
+
+    assert len(events) == 1
+    assert len(memory.local_instance_ids(stage)) == 1
+    assert len(memory.target_memories["building"].instances) == 1
 
 
 def test_reset_view_relative_binding_preserves_global_instances():

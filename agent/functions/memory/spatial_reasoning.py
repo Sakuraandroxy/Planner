@@ -241,12 +241,15 @@ def evaluate_memory_completion(
         if not roof_geometry:
             required += float(instance.footprint_radius_m)
         min_clearance = float(config.get("ABOVE_MIN_CLEARANCE_M", 0.3))
-        max_clearance = float(config.get("ABOVE_MAX_ALTITUDE_M", 60.0))
         horizontal_ok = hdist <= required
         if roof_geometry:
             min_interior = float(config.get("ABOVE_ROOF_MIN_INTERIOR_MARGIN_M", 0.0))
             horizontal_ok = horizontal_ok and interior_margin >= min_interior
-        height_ok = clearance >= min_clearance and clearance <= max_clearance
+        # ``above`` is a one-sided relation: once the UAV is inside the roof
+        # footprint it only needs to be measurably higher than the roof.  A
+        # maximum roof clearance is a flight-policy concern, not a semantic
+        # completion constraint.
+        height_ok = clearance >= min_clearance
         return _decision_from_constraints(
             instance=instance,
             target_world=target,

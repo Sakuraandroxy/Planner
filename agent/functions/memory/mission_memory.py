@@ -5,9 +5,11 @@ from __future__ import annotations
 import math
 import re
 import time
-from dataclasses import dataclass
+from copy import copy
+from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
+from agent.functions.common.detection_policy import detection_reliability
 from agent.functions.memory.appearance_signature import (
     appearance_similarity,
     build_appearance_signature,
@@ -86,6 +88,141 @@ _SMALL_TARGET_TOKENS = (
 )
 
 
+def _explicit_large_structure_target(stage: Any, detection: Any) -> bool:
+    identity_text = " ".join((
+        str(getattr(stage, "target", "") or ""),
+        str(getattr(stage, "target_query", "") or ""),
+        str(getattr(detection, "label", "") or ""),
+    )).lower()
+    if any(token in identity_text for token in _SMALL_TARGET_TOKENS):
+        return False
+    context_text = " ".join((
+        identity_text,
+        str(getattr(stage, "instruction", "") or ""),
+        str(getattr(stage, "completion_condition", "") or ""),
+    )).lower()
+    return any(token in context_text for token in _LARGE_STRUCTURE_TOKENS)
+
+
+def _large_structure_surface_lock_detection(
+    detection: Any,
+    image: Any,
+    config: dict,
+    depth_reason: str,
+) -> Any:
+    """Return a depth-safe facade observation from a mixed building bbox.
+
+    GroundingDINO building boxes frequently include windows, sky and a rear
+    building.  The ordinary metric gate must continue rejecting that mixed
+    range as an object point, while ``above`` navigation still needs the
+    coherent foreground facade to establish identity and climb before contact.
+    """
+
+    if not bool(config.get("LARGE_STRUCTURE_SURFACE_FALLBACK_ENABLED", True)):
+        return None
+    if str(getattr(detection, "camera", "front") or "front").strip().lower() != "front":
+        return None
+    if depth_reason not in {"mixed_bbox_depth", "mixed_center_depth", "too_noisy"}:
+        return None
+    samples = []
+    max_depth = float(config.get("METRIC_LOCK_MAX_DEPTH_M", 120.0))
+    for raw in list(getattr(detection, "surface_depth_samples", None) or []):
+        if not isinstance(raw, (list, tuple)) or len(raw) < 3:
+            continue
+        try:
+            u, v, depth = float(raw[0]), float(raw[1]), float(raw[2])
+        except (TypeError, ValueError):
+            continue
+        if not all(math.isfinite(value) for value in (u, v, depth)):
+            continue
+        if not (0.0 <= u <= 1.0 and 0.0 <= v <= 1.0 and 0.0 < depth <= max_depth):
+            continue
+        samples.append([u, v, depth])
+    min_samples = max(4, int(config.get("LARGE_STRUCTURE_SURFACE_FALLBACK_MIN_SAMPLES", 6)))
+    if len(samples) < min_samples:
+        return None
+
+    ordered_depths = sorted(float(sample[2]) for sample in samples)
+    anchor = _median(ordered_depths)
+    cluster_tolerance = max(
+        float(config.get("LARGE_STRUCTURE_SURFACE_FALLBACK_MIN_TOLERANCE_M", 2.0)),
+        anchor * float(config.get("LARGE_STRUCTURE_SURFACE_FALLBACK_CLUSTER_RATIO", 0.10)),
+    )
+    cluster = [sample for sample in samples if abs(float(sample[2]) - anchor) <= cluster_tolerance]
+    if len(cluster) < min_samples:
+        return None
+    min_support_ratio = float(config.get("LARGE_STRUCTURE_SURFACE_FALLBACK_MIN_SUPPORT_RATIO", 0.35))
+    if len(cluster) / max(float(len(samples)), 1.0) < min_support_ratio:
+        return None
+
+    depths = sorted(float(sample[2]) for sample in cluster)
+    cluster_median = _median(depths)
+    depth_p10 = _percentile(depths, 0.10)
+    depth_p90 = _percentile(depths, 0.90)
+    max_span = max(
+        float(config.get("LARGE_STRUCTURE_SURFACE_FALLBACK_MIN_SPAN_M", 2.5)),
+        cluster_median * float(config.get("LARGE_STRUCTURE_SURFACE_FALLBACK_MAX_SPAN_RATIO", 0.12)),
+    )
+    if depth_p90 - depth_p10 > max_span:
+        return None
+
+    bbox = list(getattr(detection, "bbox", None) or [])
+    if len(bbox) < 4 or image is None or not hasattr(image, "size"):
+        return None
+    width, height = float(image.size[0]), float(image.size[1])
+    if width <= 1.0 or height <= 1.0:
+        return None
+    bbox_u_span = max(1.0 / width, abs(float(bbox[2]) - float(bbox[0])) / width)
+    bbox_v_span = max(1.0 / height, abs(float(bbox[3]) - float(bbox[1])) / height)
+    u_values = [float(sample[0]) for sample in cluster]
+    v_values = [float(sample[1]) for sample in cluster]
+    coverage_u = (max(u_values) - min(u_values)) / bbox_u_span
+    coverage_v = (max(v_values) - min(v_values)) / bbox_v_span
+    min_extent = float(config.get("LARGE_STRUCTURE_SURFACE_FALLBACK_MIN_EXTENT_RATIO", 0.18))
+    if coverage_u < min_extent or coverage_v < min_extent:
+        return None
+
+    projected = copy(detection)
+    projected.depth_median = float(cluster_median)
+    projected.depth_bbox_median = float(cluster_median)
+    projected.depth_p10_m = float(depth_p10)
+    projected.depth_p90_m = float(depth_p90)
+    projected.depth_mad_m = _median([abs(depth - cluster_median) for depth in depths])
+    projected.depth_valid_ratio = max(
+        float(getattr(detection, "depth_valid_ratio", 0.0) or 0.0),
+        len(cluster) / max(float(len(samples)), 1.0),
+    )
+    projected.depth_sample_count = len(cluster)
+    projected.surface_depth_samples = [list(sample) for sample in cluster]
+    projected.surface_anchor_uv = [_median(u_values), _median(v_values)]
+    projected.surface_lock_fallback = True
+    projected.surface_lock_depth_reason = str(depth_reason)
+    return projected
+
+
+def _median(values: Sequence[float]) -> float:
+    ordered = sorted(float(value) for value in values)
+    if not ordered:
+        return float("nan")
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return 0.5 * (ordered[middle - 1] + ordered[middle])
+
+
+def _percentile(values: Sequence[float], fraction: float) -> float:
+    ordered = sorted(float(value) for value in values)
+    if not ordered:
+        return float("nan")
+    position = max(0.0, min(1.0, float(fraction))) * (len(ordered) - 1)
+    lower = int(math.floor(position))
+    upper = int(math.ceil(position))
+    if lower == upper:
+        return ordered[lower]
+    weight = position - lower
+    return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
+
+
 @dataclass
 class MemoryUpdateEvent:
     target_key: str
@@ -94,6 +231,12 @@ class MemoryUpdateEvent:
     confidence: float
     world: List[float]
     view: str
+    score: float = 0.0
+    reliability: float = 0.0
+    observer_world: List[float] = field(default_factory=list)
+    observer_yaw_deg: Optional[float] = None
+    detection: Any = field(default=None, repr=False, compare=False)
+    image: Any = field(default=None, repr=False, compare=False)
 
     def to_summary_dict(self) -> dict:
         return {
@@ -103,6 +246,14 @@ class MemoryUpdateEvent:
             "confidence": round(float(self.confidence), 3),
             "world": [round(float(v), 2) for v in self.world[:3]],
             "view": self.view,
+            "score": round(float(self.score), 3),
+            "reliability": round(float(self.reliability), 3),
+            "observer_world": [round(float(v), 2) for v in self.observer_world[:3]],
+            "observer_yaw_deg": (
+                None
+                if self.observer_yaw_deg is None
+                else round(float(self.observer_yaw_deg), 2)
+            ),
         }
 
 
@@ -252,8 +403,19 @@ class MissionMemory:
             self._decay_unseen_instances(memory)
             return []
 
-        # 同一帧内先按无人机前进方向排序，新的实例 encounter_order 才更接近“路上遇到的第N个”。
-        observations.sort(key=lambda obs: (obs["forward_projection"], obs["distance_from_observer"]))
+        observations = self._deduplicate_frame_observations(observations)
+        # 视角相对的“第一栋”表示激活视角指定扇区中实际距离最近的独立实体，
+        # GroundingDINO 的语义分数只负责准入，不能决定空间序号。
+        if is_view_relative_stage(stage):
+            observations.sort(
+                key=lambda obs: (
+                    obs["distance_from_observer"],
+                    obs["forward_projection"],
+                    -float(obs["score"]),
+                )
+            )
+        else:
+            observations.sort(key=lambda obs: (obs["forward_projection"], obs["distance_from_observer"]))
         events: List[MemoryUpdateEvent] = []
         binding_frame_instances = set()
         binding_unlocked = bool(
@@ -284,8 +446,14 @@ class MissionMemory:
                     instance_id=instance.instance_id,
                     kind=kind,
                     confidence=instance.confidence,
-                    world=list(instance.target_world),
-                    view=instance.last_seen_view,
+                    world=list(obs["world"]),
+                    view=str(obs["view"]),
+                    score=float(obs["score"]),
+                    reliability=float(obs["quality"]),
+                    observer_world=list(obs.get("observer_world") or []),
+                    observer_yaw_deg=obs.get("observer_yaw_deg"),
+                    detection=obs.get("detection"),
+                    image=obs.get("image"),
                 )
             )
         self._ensure_stage_lock(stage, memory, observer_world, observer_yaw_deg)
@@ -419,6 +587,49 @@ class MissionMemory:
             surface_distance,
             roof_distance if roof_distance is not None else float("inf"),
         )
+        # The first down-view roof must remain on the identity ray established
+        # by the exact facade observation that created this instance. A broad
+        # 25 m facade/roof radius alone can otherwise attach a neighbouring
+        # building that happens to sit beside the locked one.
+        identity_origin = list(getattr(instance, "identity_observer_world", None) or [])
+        identity_target = list(getattr(instance, "identity_world", None) or instance.target_world)
+        if len(identity_origin) >= 2 and len(identity_target) >= 2:
+            ray_x = float(identity_target[0]) - float(identity_origin[0])
+            ray_y = float(identity_target[1]) - float(identity_origin[1])
+            ray_norm = math.hypot(ray_x, ray_y)
+            if ray_norm > 1e-6:
+                unit_x, unit_y = ray_x / ray_norm, ray_y / ray_norm
+                roof_x = float(center_world[0]) - float(identity_origin[0])
+                roof_y = float(center_world[1]) - float(identity_origin[1])
+                roof_along = roof_x * unit_x + roof_y * unit_y
+                roof_cross = abs(-roof_x * unit_y + roof_y * unit_x)
+                corridor = (
+                    float(self.config.get("ABOVE_ROOF_IDENTITY_CORRIDOR_HALF_WIDTH_M", 10.0))
+                    + min(max(0.0, float(instance.uncertainty_m)), 2.0)
+                    + min(max(0.0, float(instance.footprint_radius_m)) * 0.20, 4.0)
+                )
+                max_before = float(
+                    self.config.get("ABOVE_ROOF_MAX_BEFORE_FACADE_M", 8.0)
+                )
+                max_beyond = max(
+                    float(self.config.get("ABOVE_ROOF_MAX_BEYOND_FACADE_M", 24.0)),
+                    min(32.0, 2.0 * max(1.0, float(instance.footprint_radius_m))),
+                )
+                if (
+                    roof_cross > corridor
+                    or roof_along < ray_norm - max_before
+                    or roof_along > ray_norm + max_beyond
+                ):
+                    self._append_event({
+                        "type": "reject_roof_plane_identity_corridor",
+                        "stage": stage_key(stage),
+                        "instance": instance.instance_id,
+                        "cross_track_m": round(roof_cross, 2),
+                        "corridor_m": round(corridor, 2),
+                        "along_track_m": round(roof_along, 2),
+                        "facade_range_m": round(ray_norm, 2),
+                    })
+                    return None
         association_radius = (
             max(1.0, float(instance.footprint_radius_m))
             + min(max(0.0, float(instance.uncertainty_m)), 5.0)
@@ -1001,8 +1212,9 @@ class MissionMemory:
                 )
             else:
                 above_hint = (
-                    "Above-target vertical contract: roof height is unknown, so hold the current altitude "
-                    "while approaching the building in XY; do not descend toward the facade anchor. "
+                    "Above-target vertical contract: roof height is unknown. If the observed facade extends "
+                    "above the UAV, climb vertically above the retained facade envelope before any XY crossing; "
+                    "otherwise hold altitude while approaching, and never descend toward the facade anchor. "
                     "In AirSim NED positive dz means descent. "
                 )
         return (
@@ -1077,8 +1289,14 @@ class MissionMemory:
         current = [float(value) for value in observer_world[:3]]
         if relation_kind(stage) == "above" and view_name.startswith("front"):
             overhead = self.above_overhead_context(stage, current)
+            roof_candidate = self.roof_navigation_context(stage, current)
             if (
                 bool((overhead or {}).get("active", False))
+                # XY proximity alone does not mean the UAV is above the roof.
+                # Keep accepting the locked facade while climbing so a taller
+                # upper wall can extend the vertical safety envelope.  Switch
+                # to down-view-only identity only after a roof plane exists.
+                and roof_candidate is not None
                 and bool(self.config.get("ABOVE_OVERHEAD_SUPPRESS_FRONT_IDENTITY", True))
             ):
                 return {
@@ -1183,6 +1401,72 @@ class MissionMemory:
             "tolerance_deg": float(tolerance),
             "depth_state": depth_reason,
         }
+
+    def evaluate_relocalization_identity(
+        self,
+        stage: Any,
+        detection: Any,
+        image: Any,
+        *,
+        observer_world: Sequence[float],
+        observer_yaw_deg: float,
+        view: str = "front",
+    ) -> dict:
+        """Use geometry/bearing first and appearance only as a reliable veto.
+
+        GroundingDINO confidence proves that a crop matches the target noun; it
+        does not prove that it is the already locked physical instance.  This
+        stricter gate is reserved for relocalization candidates, where a false
+        positive would otherwise redirect the vehicle to another same-class
+        object.
+        """
+        decision = self.evaluate_locked_detection_identity(
+            stage,
+            detection,
+            image,
+            observer_world=observer_world,
+            observer_yaw_deg=observer_yaw_deg,
+            view=view,
+        )
+        if not bool(decision.get("accepted", False)):
+            return decision
+        instance = self.primary_instance(stage)
+        if (
+            instance is None
+            or not self.is_primary_locked(stage)
+            or not bool(self.config.get("RELOCALIZATION_APPEARANCE_ENABLED", True))
+            or not instance.appearance_prototypes
+        ):
+            return decision
+
+        signature = build_appearance_signature(
+            image,
+            getattr(detection, "bbox", None),
+            view=str(view or "front"),
+        )
+        if signature is None:
+            return decision
+        prototype_reliability = max(
+            (float(getattr(proto, "reliability", 0.0) or 0.0) for proto in instance.appearance_prototypes),
+            default=0.0,
+        )
+        joint_reliability = min(float(signature.reliability), prototype_reliability)
+        similarity = appearance_similarity(signature, instance.appearance_prototypes)
+        min_reliability = float(self.config.get("RELOCALIZATION_APPEARANCE_MIN_RELIABILITY", 0.45))
+        min_similarity = float(self.config.get("RELOCALIZATION_APPEARANCE_MIN_SIMILARITY", 0.12))
+        accepted = bool(joint_reliability < min_reliability or similarity >= min_similarity)
+        enriched = dict(decision)
+        enriched.update({
+            "accepted": accepted,
+            "reason": (
+                "relocalization_identity_match"
+                if accepted
+                else "relocalization_appearance_mismatch"
+            ),
+            "appearance_similarity": float(similarity),
+            "appearance_reliability": float(joint_reliability),
+        })
+        return enriched
 
     def transition_exclusion_hint(
         self,
@@ -1364,11 +1648,20 @@ class MissionMemory:
             for detection in list(detections or []):
                 if detection is None or not getattr(detection, "visible", False):
                     continue
+                score = float(getattr(detection, "score", 0.0) or 0.0)
+                if score < float(self.config.get("MIN_DETECTION_SCORE", 0.35)):
+                    continue
+                explicitly_large = _explicit_large_structure_target(stage, detection)
                 quality = bbox_quality(detection, image)
+                if quality <= 0.0 and explicitly_large:
+                    # A facade that fills the front image is weak appearance
+                    # evidence but can still provide a coherent target surface.
+                    quality = detection_reliability(stage, detection, image)
                 if quality <= 0.0:
                     continue
+                projection_detection = detection
                 world = estimate_detection_world(
-                    detection,
+                    projection_detection,
                     image,
                     observer_world,
                     observer_yaw_deg,
@@ -1377,22 +1670,46 @@ class MissionMemory:
                 )
                 if world is None:
                     continue
-                depth_usable, _depth_reason = metric_depth_usable(detection, self.config)
+                depth_usable, depth_reason = metric_depth_usable(projection_detection, self.config)
                 if not depth_usable:
-                    # The RGB bearing remains useful, but an unreliable range
-                    # must not create or move a physical instance.
-                    continue
+                    projection_detection = (
+                        _large_structure_surface_lock_detection(
+                            detection,
+                            image,
+                            self.config,
+                            depth_reason,
+                        )
+                        if explicitly_large
+                        else None
+                    )
+                    if projection_detection is None:
+                        # The RGB bearing remains useful, but an unreliable
+                        # range must not create or move a physical instance.
+                        continue
+                    depth_usable, _surface_reason = metric_depth_usable(
+                        projection_detection,
+                        self.config,
+                    )
+                    if not depth_usable:
+                        continue
+                    world = estimate_detection_world(
+                        projection_detection,
+                        image,
+                        observer_world,
+                        observer_yaw_deg,
+                        memory_config=self.config,
+                        sim_config=self.sim_config,
+                    )
+                    if world is None:
+                        continue
                 surface_world = estimate_detection_surface_world(
-                    detection,
+                    projection_detection,
                     image,
                     observer_world,
                     observer_yaw_deg,
                     memory_config=self.config,
                     sim_config=self.sim_config,
                 )
-                score = float(getattr(detection, "score", 0.0) or 0.0)
-                if score < float(self.config.get("MIN_DETECTION_SCORE", 0.35)):
-                    continue
                 dx = world[0] - float(observer_world[0])
                 dy = world[1] - float(observer_world[1])
                 forward_projection = dx * forward[0] + dy * forward[1]
@@ -1411,16 +1728,16 @@ class MissionMemory:
                     continue
                 signature = build_appearance_signature(
                     image,
-                    getattr(detection, "bbox", None),
+                    getattr(projection_detection, "bbox", None),
                     view=str(view_name or getattr(detection, "camera", "unknown")),
                 )
                 footprint = footprint_radius_from_detection(
-                    detection,
+                    projection_detection,
                     image,
                     memory_config=self.config,
                     sim_config=self.sim_config,
                 )
-                bbox = list(getattr(detection, "bbox", []) or [])
+                bbox = list(getattr(projection_detection, "bbox", []) or [])
                 bbox_span = 0.0
                 if len(bbox) >= 4 and image is not None and hasattr(image, "size"):
                     width, height = float(image.size[0]), float(image.size[1])
@@ -1431,7 +1748,7 @@ class MissionMemory:
                         )
                 target_identity_text = " ".join((
                     str(getattr(stage, "target", "") or ""),
-                    str(getattr(detection, "label", "") or ""),
+                    str(getattr(projection_detection, "label", "") or ""),
                 )).lower()
                 target_text = " ".join((
                     target_identity_text,
@@ -1444,19 +1761,20 @@ class MissionMemory:
                     not explicitly_small
                     and (
                         footprint >= float(self.config.get("LARGE_STRUCTURE_MIN_FOOTPRINT_M", 4.5))
+                        or explicitly_large
                         or any(token in target_text for token in _LARGE_STRUCTURE_TOKENS)
                     )
                 )
                 observations.append(
                     {
                         "world": [float(v) for v in world[:3]],
-                        "detection": detection,
+                        "detection": projection_detection,
                         "image": image,
                         "view": str(view_name or getattr(detection, "camera", "unknown")),
                         "score": score,
                         "quality": quality,
                         "area_ratio": bbox_area_ratio(detection, image),
-                        "depth": getattr(detection, "depth_median", None),
+                        "depth": getattr(projection_detection, "depth_median", None),
                         "footprint": footprint,
                         "surface_world": surface_world,
                         "bbox_span": bbox_span,
@@ -1465,9 +1783,75 @@ class MissionMemory:
                         "distance_from_observer": distance3(observer_world, world),
                         "forward_projection": forward_projection,
                         "lateral_projection": lateral_projection,
+                        "observer_world": [float(v) for v in observer_world[:3]],
+                        "observer_yaw_deg": float(observer_yaw_deg),
                     }
                 )
         return observations
+
+    def _deduplicate_frame_observations(self, observations: List[dict]) -> List[dict]:
+        """Collapse multiple detector boxes for one depth-backed entity.
+
+        GroundingDINO commonly emits nested ``building``/``facade`` boxes for
+        the same wall. During delayed ordinal binding those duplicates must not
+        become building #1 and building #2. Overlapping boxes at materially
+        different depths are deliberately retained as separate entities.
+        """
+
+        if len(observations) <= 1:
+            return list(observations)
+        iou_threshold = float(self.config.get("FRAME_DUPLICATE_BBOX_IOU", 0.62))
+        containment_threshold = float(
+            self.config.get("FRAME_DUPLICATE_BBOX_CONTAINMENT", 0.82)
+        )
+        max_world_distance = float(
+            self.config.get("FRAME_DUPLICATE_MAX_WORLD_DISTANCE_M", 5.0)
+        )
+        max_depth_ratio = float(
+            self.config.get("FRAME_DUPLICATE_MAX_DEPTH_RATIO", 0.12)
+        )
+        retained: List[dict] = []
+        ranked = sorted(
+            observations,
+            key=lambda obs: (
+                float(obs.get("quality", 0.0) or 0.0),
+                float(obs.get("score", 0.0) or 0.0),
+                -float(getattr(obs.get("detection"), "depth_mad_m", 0.0) or 0.0),
+            ),
+            reverse=True,
+        )
+        for candidate in ranked:
+            duplicate = False
+            for accepted in retained:
+                if str(candidate.get("view", "")) != str(accepted.get("view", "")):
+                    continue
+                overlap, containment = _bbox_overlap_statistics(
+                    getattr(candidate.get("detection"), "bbox", None),
+                    getattr(accepted.get("detection"), "bbox", None),
+                )
+                if overlap < iou_threshold and containment < containment_threshold:
+                    continue
+                candidate_depth = float(candidate.get("depth", 0.0) or 0.0)
+                accepted_depth = float(accepted.get("depth", 0.0) or 0.0)
+                depth_limit = max(
+                    2.0,
+                    min(candidate_depth, accepted_depth) * max_depth_ratio,
+                )
+                if abs(candidate_depth - accepted_depth) > depth_limit:
+                    continue
+                if distance3(candidate["world"], accepted["world"]) > max_world_distance:
+                    continue
+                duplicate = True
+                self._append_event({
+                    "type": "deduplicate_frame_detection",
+                    "kept_bbox": list(getattr(accepted.get("detection"), "bbox", []) or []),
+                    "dropped_bbox": list(getattr(candidate.get("detection"), "bbox", []) or []),
+                    "depth_m": round(candidate_depth, 2),
+                })
+                break
+            if not duplicate:
+                retained.append(candidate)
+        return retained
 
     def _view_relative_observation_allowed(self, stage: Any, observation: dict) -> bool:
         """Apply the activation-view direction before a local instance exists."""
@@ -1597,6 +1981,17 @@ class MissionMemory:
             bbox_quality=float(obs["quality"]),
             last_seen_view=str(obs["view"]),
             last_label=str(getattr(obs["detection"], "label", "") or ""),
+            identity_observer_world=list(obs.get("observer_world") or []),
+            identity_observer_yaw_deg=obs.get("observer_yaw_deg"),
+            identity_bbox=list(getattr(obs["detection"], "bbox", []) or []),
+            identity_score=float(obs["score"]),
+            identity_reliability=float(obs["quality"]),
+            identity_depth_median=(
+                None if obs.get("depth") is None else float(obs["depth"])
+            ),
+            identity_world=[float(v) for v in obs["world"][:3]],
+            identity_view=str(obs["view"]),
+            identity_label=str(getattr(obs["detection"], "label", "") or ""),
         )
         memory.instances[instance_id] = instance
         return instance, "create"
@@ -1939,6 +2334,30 @@ class MissionMemory:
         event.setdefault("time", round(time.perf_counter(), 3))
         self.events.append(event)
         del self.events[: max(0, len(self.events) - self.max_events)]
+
+
+def _bbox_overlap_statistics(first: Any, second: Any) -> tuple[float, float]:
+    """Return (IoU, intersection/smaller-area) for two xyxy boxes."""
+
+    a = list(first or [])
+    b = list(second or [])
+    if len(a) < 4 or len(b) < 4:
+        return 0.0, 0.0
+    ax1, ay1, ax2, ay2 = [float(value) for value in a[:4]]
+    bx1, by1, bx2, by2 = [float(value) for value in b[:4]]
+    area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+    area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+    if area_a <= 0.0 or area_b <= 0.0:
+        return 0.0, 0.0
+    intersection = max(0.0, min(ax2, bx2) - max(ax1, bx1)) * max(
+        0.0,
+        min(ay2, by2) - max(ay1, by1),
+    )
+    union = area_a + area_b - intersection
+    return (
+        intersection / max(union, 1e-9),
+        intersection / max(min(area_a, area_b), 1e-9),
+    )
 
 
 def target_name_for_stage(stage: Any) -> str:

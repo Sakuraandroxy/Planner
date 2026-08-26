@@ -116,6 +116,55 @@ def test_same_stage_and_instance_can_be_recorded_again_in_a_new_task(tmp_path):
     assert len(list(recorder.run_directory.glob("*.jpg"))) == 2
 
 
+def test_same_stage_keeps_prebind_and_formal_lock_as_separate_snapshots(tmp_path):
+    recorder = TargetSnapshotRecorder(
+        enabled=True,
+        output_root=tmp_path / "output",
+        started_at=datetime(2026, 8, 25, 14, 32),
+    )
+    recorder.begin_task("Fly to the building")
+    common = dict(
+        stage_key=(0, "Fly to the building", "target"),
+        stage_index=0,
+        target_name="building",
+        view="front",
+        image=Image.new("RGB", (64, 48), "white"),
+        detection=_detection(),
+    )
+
+    prebind = recorder.record_first(
+        **common,
+        instance_id="rgb_prebind",
+        record_kind="prebind",
+        source="stage_activation_prebind",
+    )
+    duplicate_prebind = recorder.record_first(
+        **common,
+        instance_id="rgb_prebind",
+        record_kind="prebind",
+        source="later_prebind",
+    )
+    locked = recorder.record_first(
+        **common,
+        instance_id="building:1",
+        record_kind="locked",
+        source="active_observation",
+    )
+
+    assert prebind is not None
+    assert prebind.name == "task_01_stage_01_building_prebind_front.jpg"
+    assert duplicate_prebind is None
+    assert locked is not None
+    assert locked.name == "task_01_stage_01_building_building_1_front.jpg"
+    manifest = [
+        json.loads(line)
+        for line in (recorder.run_directory / "manifest.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    assert [entry["record_kind"] for entry in manifest] == ["prebind", "locked"]
+
+
 def test_invalid_bbox_is_skipped_without_consuming_first_snapshot(tmp_path):
     recorder = TargetSnapshotRecorder(enabled=True, output_root=tmp_path / "output")
     recorder.begin_task("task")
@@ -132,7 +181,7 @@ def test_invalid_bbox_is_skipped_without_consuming_first_snapshot(tmp_path):
     assert recorder.record_first(detection=_detection((5, 5, 30, 30)), **common) is not None
 
 
-def test_runtime_snapshot_uses_identity_approved_locked_candidate(tmp_path):
+def test_runtime_snapshot_uses_exact_memory_event_instead_of_high_score_frame_box(tmp_path):
     recorder = TargetSnapshotRecorder(enabled=True, output_root=tmp_path / "output")
     recorder.begin_task("Fly to the building")
     stage = SimpleNamespace(
@@ -155,16 +204,12 @@ def test_runtime_snapshot_uses_identity_approved_locked_candidate(tmp_path):
 
         @staticmethod
         def primary_instance(_stage):
-            return SimpleNamespace(instance_id="building:7")
-
-        @staticmethod
-        def previous_entity_exclusions(_stage, _world, _yaw):
-            return []
-
-        @staticmethod
-        def evaluate_locked_detection_identity(_stage, detection, _image, **_kwargs):
-            accepted = detection is locked_candidate
-            return {"accepted": accepted, "reason": "match" if accepted else "wrong_instance"}
+            return SimpleNamespace(
+                instance_id="building:7",
+                target_world=[18.0, -4.0, -6.0],
+                confidence=0.83,
+                uncertainty_m=1.2,
+            )
 
     image = Image.new("RGB", (100, 75), "white")
     bundle = DetectionDepthBundle(
@@ -181,13 +226,71 @@ def test_runtime_snapshot_uses_identity_approved_locked_candidate(tmp_path):
         mission_memory=LockedMemory(),
     )
 
-    _record_locked_target_snapshot(objects, stage, bundle, source="test")
+    exact_event = SimpleNamespace(
+        instance_id="building:7",
+        detection=locked_candidate,
+        image=image,
+        view="front",
+        world=[18.0, -4.0, -6.0],
+        observer_world=[0.0, 0.0, -5.0],
+        observer_yaw_deg=0.0,
+        reliability=0.72,
+        score=0.80,
+    )
+    _record_locked_target_snapshot(
+        objects,
+        stage,
+        bundle,
+        source="test",
+        events=[exact_event],
+    )
 
     saved_files = list(recorder.run_directory.glob("*.jpg"))
     assert len(saved_files) == 1
+    assert saved_files[0].name == "task_01_stage_01_building_locked_final.jpg"
     with Image.open(saved_files[0]) as boxed:
         boxed = boxed.convert("RGB")
         locked_pixel = boxed.getpixel((45, 18))
         wrong_pixel = boxed.getpixel((5, 8))
         assert locked_pixel[0] > 170 and locked_pixel[0] > locked_pixel[1] * 1.4
         assert min(wrong_pixel) > 210
+    manifest = json.loads(
+        (recorder.run_directory / "manifest.jsonl").read_text(encoding="utf-8").splitlines()[0]
+    )
+    assert manifest["record_kind"] == "locked_final"
+    assert manifest["authoritative"] is True
+    assert manifest["details"]["association"] == "exact_memory_update_event"
+    assert manifest["details"]["detection_world"] == [18.0, -4.0, -6.0]
+
+
+def test_locked_final_file_is_replaced_when_authoritative_instance_switches(tmp_path):
+    recorder = TargetSnapshotRecorder(enabled=True, output_root=tmp_path / "output")
+    recorder.begin_task("Fly to a building")
+    common = dict(
+        stage_key=(0, "Fly to a building", "target"),
+        stage_index=0,
+        target_name="building",
+        view="front",
+        image=Image.new("RGB", (80, 60), "white"),
+        record_kind="locked_final",
+    )
+
+    first = recorder.record_first(
+        **common,
+        instance_id="building:1",
+        detection=_detection((5, 5, 30, 35), score=0.7),
+    )
+    second = recorder.record_first(
+        **common,
+        instance_id="building:2",
+        detection=_detection((45, 8, 75, 40), score=0.8),
+    )
+
+    assert first == second
+    assert len(list(recorder.run_directory.glob("*locked_final.jpg"))) == 1
+    manifest = [
+        json.loads(line)
+        for line in (recorder.run_directory / "manifest.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert [entry["instance_id"] for entry in manifest] == ["building:1", "building:2"]
+    assert manifest[-1]["supersedes_instance_id"] == "building:1"

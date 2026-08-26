@@ -167,15 +167,60 @@ def estimate_down_roof_plane(
     )
     min_coverage = float(config.get("ABOVE_ROOF_MIN_COVERAGE_RATIO", 0.20))
     min_center_support = float(config.get("ABOVE_ROOF_MIN_CENTER_SUPPORT_RATIO", 0.65))
+    local_patch = False
     if support.shape[0] < 6 or coverage_ratio < min_coverage or center_support_ratio < min_center_support:
-        return RoofPlaneEstimate(
-            False,
-            "down_center_not_supported_by_one_plane",
-            roof_z_world=anchor_z,
-            valid_ratio=valid_ratio,
-            coverage_ratio=coverage_ratio,
-            center_support_ratio=center_support_ratio,
-        )
+        # Complex roofs often contain parapets, HVAC units and several height
+        # levels inside the broad centre region.  For navigation we only need
+        # a stable horizontal patch directly under the aircraft.  Fall back to
+        # a smaller nadir window, while leaving temporal/identity association
+        # to MissionMemory exactly as for a full-frame plane.
+        if bool(config.get("ABOVE_ROOF_LOCAL_PATCH_ENABLED", True)):
+            local_half_span = max(
+                0.03,
+                min(
+                    centre_half_span,
+                    float(config.get("ABOVE_ROOF_LOCAL_CENTER_FRACTION", 0.08)),
+                ),
+            )
+            local_mask = (
+                (np.abs((pixel_array[:, 0] + 0.5) / max(float(width), 1.0) - 0.5) <= local_half_span)
+                & (np.abs((pixel_array[:, 1] + 0.5) / max(float(height), 1.0) - 0.5) <= local_half_span)
+            )
+            local_z = point_array[local_mask, 2]
+            local_min_samples = max(6, int(config.get("ABOVE_ROOF_LOCAL_MIN_SAMPLES", 16)))
+            local_min_support = max(
+                0.0,
+                min(1.0, float(config.get("ABOVE_ROOF_LOCAL_MIN_SUPPORT_RATIO", 0.55))),
+            )
+            if local_z.size >= local_min_samples:
+                local_anchor_z = _dominant_z_cluster_anchor(local_z, plane_tolerance)
+                local_support_mask = local_mask & (
+                    np.abs(point_array[:, 2] - local_anchor_z) <= plane_tolerance
+                )
+                local_support_count = int(np.count_nonzero(local_support_mask))
+                local_support_ratio = float(local_support_count) / max(
+                    float(np.count_nonzero(local_mask)),
+                    1.0,
+                )
+                if (
+                    local_support_count >= max(6, int(math.ceil(local_min_samples * local_min_support)))
+                    and local_support_ratio >= local_min_support
+                ):
+                    support_mask = local_support_mask
+                    support = point_array[support_mask]
+                    coverage_ratio = float(support.shape[0]) / max(float(point_array.shape[0]), 1.0)
+                    center_support_ratio = local_support_ratio
+                    anchor_z = float(local_anchor_z)
+                    local_patch = True
+        if not local_patch:
+            return RoofPlaneEstimate(
+                False,
+                "down_center_not_supported_by_one_plane",
+                roof_z_world=anchor_z,
+                valid_ratio=valid_ratio,
+                coverage_ratio=coverage_ratio,
+                center_support_ratio=center_support_ratio,
+            )
 
     roof_z = float(np.median(support[:, 2]))
     z_mad = float(np.median(np.abs(support[:, 2] - roof_z)))
@@ -225,7 +270,11 @@ def estimate_down_roof_plane(
     bounds = _bounds_from_points(sample_points)
 
     full_frame_ratio = float(config.get("ABOVE_ROOF_FULL_FRAME_COVERAGE_RATIO", 0.65))
-    full_frame = bool(coverage_ratio >= full_frame_ratio and center_support_ratio >= 0.9)
+    full_frame = bool(
+        not local_patch
+        and coverage_ratio >= full_frame_ratio
+        and center_support_ratio >= 0.9
+    )
     normal_score = max(0.0, 1.0 - normal_error / max(max_normal_error, 1e-6))
     noise_score = max(0.0, 1.0 - z_mad / max(max_z_mad, 1e-6))
     confidence = max(
@@ -241,7 +290,7 @@ def estimate_down_roof_plane(
     )
     return RoofPlaneEstimate(
         True,
-        "horizontal_plane_under_drone",
+        "local_horizontal_patch_under_drone" if local_patch else "horizontal_plane_under_drone",
         roof_z_world=roof_z,
         center_world=centre_world,
         center_depth_m=centre_depth,
@@ -255,6 +304,27 @@ def estimate_down_roof_plane(
         sample_points_world=sample_points,
         bounds_world=bounds,
     )
+
+
+def _dominant_z_cluster_anchor(values, tolerance_m: float) -> float:
+    """Return the median of the densest bounded world-Z interval."""
+
+    import numpy as np
+
+    ordered = np.sort(np.asarray(values, dtype=float))
+    if ordered.size == 0:
+        return 0.0
+    width = max(0.01, 2.0 * float(tolerance_m))
+    best_start = 0
+    best_end = 1
+    start = 0
+    for end in range(ordered.size):
+        while start < end and float(ordered[end] - ordered[start]) > width:
+            start += 1
+        if end + 1 - start > best_end - best_start:
+            best_start = start
+            best_end = end + 1
+    return float(np.median(ordered[best_start:best_end]))
 
 
 def _plane_normal_error_deg(points) -> Optional[float]:

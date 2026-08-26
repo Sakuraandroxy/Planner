@@ -50,6 +50,7 @@ from agent.functions.memory.geometry import (
     has_surface_geometry,
     has_surface_samples,
     instance_surface_sample_points,
+    nearest_instance_surface_point,
     world_to_body,
 )
 from agent.functions.memory.spatial_reasoning import relation_kind
@@ -68,7 +69,7 @@ from agent.functions.planning.direction_hint import (
 )
 from agent.functions.planning.sliding_window_planning import SlidingWindowPlanningFunction
 from agent.functions.recovery.collision_recovery import CollisionRecovery
-from agent.functions.relocalization import TargetRelocalizer
+from agent.functions.relocalization import TargetLostRecoveryState, TargetRelocalizer
 from agent.functions.task_parser import build_task_parser
 from agent.models.detection import build_detector
 from agent.models.world_model import build_world_model
@@ -100,6 +101,7 @@ class RuntimeObjects:
     mission_memory: MissionMemory
     obstacle_avoider: DepthObstacleAvoider
     target_bearing_tracker: TargetBearingTracker
+    target_lost_recovery: TargetLostRecoveryState | None = None
     target_snapshot_recorder: TargetSnapshotRecorder | None = None
     world_model: Any = None
     completion_pipeline: CompletionPipeline | None = None
@@ -113,6 +115,8 @@ class RuntimeObjects:
     last_future_scan_s: float = 0.0
     future_scan_job: Any = None
     above_stage_states: dict[tuple, "AboveStageRuntimeState"] = field(default_factory=dict)
+    stage_generations: dict[tuple, int] = field(default_factory=dict)
+    lock_generations: dict[tuple, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -126,6 +130,13 @@ class AboveStageRuntimeState:
     roof_acquire_origin_world: list[float] | None = None
     roof_acquire_direction_world: list[float] | None = None
     roof_acquire_goal_distance_m: float = 0.0
+    # Before a roof plane is visible, front-depth facade samples provide a
+    # conservative vertical envelope.  Climb legs are executed without XY
+    # motion, then one newer facade observation is required before crossing.
+    pre_roof_climb_target_z: float | None = None
+    pre_roof_climb_surface_observations: int = 0
+    pre_roof_waiting_reobserve: bool = False
+    last_facade_clearance_z: float | None = None
 
 
 @dataclass(frozen=True)
@@ -227,6 +238,7 @@ def _build_runtime_objects(
             mission_memory.config,
             cfg.get("SIM", {}) or {},
         ),
+        target_lost_recovery=TargetLostRecoveryState(relocalization_cfg.get("RELOCALIZATION", {})),
         target_snapshot_recorder=target_snapshot_recorder,
         world_model=build_world_model(),
     )
@@ -234,6 +246,106 @@ def _build_runtime_objects(
 
 def _runtime_stage_key(stage) -> tuple:
     return CompletionPipeline.stage_key(stage)
+
+
+def _target_lost_recovery(objects) -> TargetLostRecoveryState:
+    recovery = getattr(objects, "target_lost_recovery", None)
+    if recovery is None:
+        memory_cfg = dict(getattr(getattr(objects, "mission_memory", None), "config", {}) or {})
+        relocalization_cfg = {
+            **memory_cfg,
+            **dict(function_section(cfg, "RELOCALIZATION") or {}),
+        }
+        recovery = TargetLostRecoveryState(relocalization_cfg)
+        setattr(objects, "target_lost_recovery", recovery)
+    return recovery
+
+
+def _generation_map(objects, name: str) -> dict:
+    values = getattr(objects, name, None)
+    if values is None:
+        values = {}
+        setattr(objects, name, values)
+    return values
+
+
+def _stage_generation(objects, stage) -> int:
+    return int(_generation_map(objects, "stage_generations").get(_runtime_stage_key(stage), 0))
+
+
+def _lock_generation(objects, stage) -> int:
+    return int(_generation_map(objects, "lock_generations").get(_runtime_stage_key(stage), 0))
+
+
+def _bump_stage_generation(objects, stage) -> int:
+    key = _runtime_stage_key(stage)
+    generations = _generation_map(objects, "stage_generations")
+    generations[key] = int(generations.get(key, 0)) + 1
+    return generations[key]
+
+
+def _bump_lock_generation(objects, stage) -> int:
+    key = _runtime_stage_key(stage)
+    generations = _generation_map(objects, "lock_generations")
+    generations[key] = int(generations.get(key, 0)) + 1
+    return generations[key]
+
+
+def _locked_instance_id(objects, stage) -> str:
+    memory = getattr(objects, "mission_memory", None)
+    if memory is None:
+        return ""
+    instance = memory.primary_instance(stage)
+    locked_fn = getattr(memory, "is_primary_locked", None)
+    if instance is None or not callable(locked_fn) or not locked_fn(stage):
+        return ""
+    return str(getattr(instance, "instance_id", "") or "")
+
+
+def _active_relocalization_session_id(objects, stage) -> str:
+    recovery = _target_lost_recovery(objects)
+    session = recovery.sessions.get(_runtime_stage_key(stage))
+    return str(getattr(session, "session_id", "") or "") if session is not None else ""
+
+
+def _target_lost_event_is_stale(objects, stage, event) -> tuple[bool, str]:
+    """Reject a TargetLost result captured before newer navigation identity state."""
+    if event is None:
+        return False, ""
+    event_stage_generation = int(getattr(event, "stage_generation", 0) or 0)
+    current_stage_generation = _stage_generation(objects, stage)
+    if event_stage_generation != current_stage_generation:
+        return True, f"stage_generation {event_stage_generation}!={current_stage_generation}"
+    event_lock_generation = int(getattr(event, "lock_generation", 0) or 0)
+    current_lock_generation = _lock_generation(objects, stage)
+    if event_lock_generation != current_lock_generation:
+        return True, f"lock_generation {event_lock_generation}!={current_lock_generation}"
+    event_instance = str(getattr(event, "locked_instance_id", "") or "")
+    current_instance = _locked_instance_id(objects, stage)
+    if event_instance != current_instance:
+        return True, f"locked_instance {event_instance or 'none'}!={current_instance or 'none'}"
+    event_session = str(getattr(event, "session_id", "") or "")
+    current_session = _active_relocalization_session_id(objects, stage)
+    if event_session and event_session != current_session:
+        return True, f"session {event_session}!={current_session or 'none'}"
+
+    capture_timestamp = float(
+        getattr(getattr(event, "bundle", None), "capture_timestamp_s", 0.0) or 0.0
+    )
+    if capture_timestamp > 0.0:
+        tracker = getattr(objects, "target_bearing_tracker", None)
+        latest_bearing = (
+            float(tracker.latest_observed_at(_runtime_stage_key(stage)))
+            if tracker is not None and hasattr(tracker, "latest_observed_at")
+            else 0.0
+        )
+        memory = getattr(objects, "mission_memory", None)
+        primary = memory.primary_instance(stage) if memory is not None else None
+        latest_memory = float(getattr(primary, "last_seen_s", 0.0) or 0.0)
+        latest_valid = max(latest_bearing, latest_memory)
+        if latest_valid > capture_timestamp:
+            return True, f"newer_target_observation {latest_valid:.3f}>{capture_timestamp:.3f}"
+    return False, ""
 
 
 def _identity_approved_detections(objects, stage, bundle, view: str) -> list:
@@ -313,14 +425,185 @@ def _select_identity_approved_down_detection(objects, stage, bundle):
     return max(approved, key=lambda d: _detection_reliability(stage, d, bundle.down_image))
 
 
+def _select_prebind_front_detection(objects, stage, bundle):
+    """Select the first RGB candidate without creating a metric landmark."""
+
+    approved = _identity_approved_detections(objects, stage, bundle, "front")
+    approved = [
+        detection
+        for detection in approved
+        if _detection_reliability(stage, detection, bundle.front_image) > 0.0
+        and (
+            not is_view_relative_stage(stage)
+            or _detection_matches_view_relative_sector(
+                stage,
+                detection,
+                bundle.front_image,
+                camera_name="front",
+            )
+        )
+    ]
+    if not approved:
+        return None
+
+    if is_view_relative_stage(stage):
+        # RGB prebinding has no metric range. Use perspective proximity
+        # (lower box edge, then occupied area) to approximate encounter order;
+        # detector score remains only a semantic tie-breaker.
+        image = bundle.front_image
+        width, height = image.size if image is not None and hasattr(image, "size") else (1, 1)
+
+        def perspective_rank(detection):
+            bbox = list(getattr(detection, "bbox", []) or [])
+            if len(bbox) < 4:
+                return (0.0, 0.0, 0.0)
+            box_width = max(0.0, float(bbox[2]) - float(bbox[0]))
+            box_height = max(0.0, float(bbox[3]) - float(bbox[1]))
+            return (
+                min(1.0, float(bbox[3]) / max(float(height), 1.0)),
+                (box_width * box_height) / max(float(width * height), 1.0),
+                _detection_reliability(stage, detection, image),
+            )
+
+        ordered = sorted(approved, key=perspective_rank, reverse=True)
+        ordinal = max(1, int(getattr(stage, "ordinal", None) or 1))
+        return ordered[ordinal - 1] if ordinal <= len(ordered) else None
+
+    preferred = getattr(bundle, "front_detection", None)
+    if preferred is not None and any(preferred is candidate for candidate in approved):
+        return preferred
+    return max(
+        approved,
+        key=lambda detection: _detection_reliability(stage, detection, bundle.front_image),
+    )
+
+
+def _primary_update_event(memory, stage, events):
+    primary = memory.primary_instance(stage) if memory is not None else None
+    if primary is None:
+        return None
+    candidates = [
+        event
+        for event in list(events or [])
+        if str(getattr(event, "instance_id", "") or "") == str(primary.instance_id)
+    ]
+    if not candidates:
+        return None
+    return max(
+        candidates,
+        key=lambda event: (
+            float(getattr(event, "reliability", 0.0) or 0.0),
+            float(getattr(event, "score", 0.0) or 0.0),
+        ),
+    )
+
+
+def _prebind_target_from_bundle(
+    objects,
+    stage,
+    bundle: DetectionDepthBundle | None,
+    *,
+    source: str,
+) -> bool:
+    """Prebind one RGB bearing and optionally save its first boxed frame.
+
+    Prebinding deliberately strips every depth field before updating the
+    bearing tracker.  It therefore cannot create or move a MissionMemory
+    instance; reliable depth observations still own the formal surface lock.
+    """
+
+    memory = getattr(objects, "mission_memory", None)
+    config = getattr(memory, "config", {}) or {}
+    if not bool(config.get("PREBIND_ENABLED", True)) or bundle is None:
+        return False
+    if getattr(stage, "mode", "") not in {"target", "detect"}:
+        return False
+    if (
+        bundle.front_image is None
+        or bundle.observer_world is None
+        or bundle.observer_yaw_deg is None
+    ):
+        return False
+
+    detection = _select_prebind_front_detection(objects, stage, bundle)
+    if detection is None:
+        return False
+    tracker = getattr(objects, "target_bearing_tracker", None)
+    if tracker is None:
+        return False
+
+    rgb_detection = SimpleNamespace(
+        visible=bool(getattr(detection, "visible", False)),
+        bbox=list(getattr(detection, "bbox", None) or []),
+        score=float(getattr(detection, "score", 0.0) or 0.0),
+        camera="front",
+        depth_median=None,
+        depth_valid_ratio=None,
+        depth_mad_m=None,
+    )
+    observation = tracker.record(
+        stage_key=_runtime_stage_key(stage),
+        detection=rgb_detection,
+        image=bundle.front_image,
+        observer_yaw_deg=float(bundle.observer_yaw_deg),
+        source=source,
+    )
+    if observation is None:
+        return False
+
+    target_name = str(
+        getattr(stage, "target_query", None)
+        or getattr(stage, "target", None)
+        or getattr(detection, "label", None)
+        or "target"
+    )
+    print(
+        "  [TargetPrebind] "
+        f"target={target_name!r} angle={observation.relative_angle_deg:+.1f}deg "
+        f"score={observation.score:.2f} source={source}"
+    )
+
+    recorder = getattr(objects, "target_snapshot_recorder", None)
+    if recorder is not None and bool(getattr(recorder, "enabled", False)):
+        stage_index = getattr(stage, "index", None)
+        try:
+            normalized_stage_index = int(stage_index) if stage_index is not None else None
+        except (TypeError, ValueError):
+            normalized_stage_index = None
+        destination = recorder.record_first(
+            stage_key=_runtime_stage_key(stage),
+            stage_index=normalized_stage_index,
+            instance_id="rgb_prebind",
+            target_name=target_name,
+            view="front",
+            image=bundle.front_image,
+            detection=detection,
+            observer_world=bundle.observer_world,
+            observer_yaw_deg=bundle.observer_yaw_deg,
+            source=source,
+            record_kind="prebind",
+        )
+        if destination is not None:
+            print(
+                "  [TargetSnapshot] "
+                f"saved={destination} target={target_name!r} kind=prebind view=front"
+            )
+    return True
+
+
 def _record_locked_target_snapshot(
     objects,
     stage,
     bundle: DetectionDepthBundle | None,
     *,
     source: str,
+    events: list | tuple | None = None,
 ) -> None:
-    """Save the first view that matches the instance actually locked by memory."""
+    """Save the exact detector observation assigned to the locked instance.
+
+    Never re-select a high-score box from the frame here. The memory update
+    event is the authoritative detection-to-instance association.
+    """
 
     recorder = getattr(objects, "target_snapshot_recorder", None)
     memory = getattr(objects, "mission_memory", None)
@@ -338,18 +621,29 @@ def _record_locked_target_snapshot(
     if primary is None:
         return
 
-    candidates = []
-    for view_name, image in (("front", bundle.front_image), ("down", bundle.down_image)):
-        if image is None:
-            continue
-        for detection in _identity_approved_detections(objects, stage, bundle, view_name):
-            reliability = _detection_reliability(stage, detection, image)
-            if reliability > 0.0:
-                candidates.append((reliability, view_name, image, detection))
-    if not candidates:
+    exact_events = [
+        event
+        for event in list(events or [])
+        if str(getattr(event, "instance_id", "") or "") == str(primary.instance_id)
+        and getattr(event, "image", None) is not None
+        and bool(getattr(getattr(event, "detection", None), "visible", False))
+    ]
+    if not exact_events:
+        _debug_print(
+            "  [TargetSnapshot] locked snapshot deferred: "
+            f"instance={primary.instance_id} has no exact observation in this update"
+        )
         return
-
-    _reliability, view_name, image, detection = max(candidates, key=lambda item: item[0])
+    exact_event = max(
+        exact_events,
+        key=lambda event: (
+            float(getattr(event, "reliability", 0.0) or 0.0),
+            float(getattr(event, "score", 0.0) or 0.0),
+        ),
+    )
+    view_name = str(getattr(exact_event, "view", "front") or "front")
+    image = exact_event.image
+    detection = exact_event.detection
     target_name = str(
         getattr(stage, "target_query", None)
         or getattr(stage, "target", None)
@@ -369,19 +663,46 @@ def _record_locked_target_snapshot(
         view=view_name,
         image=image,
         detection=detection,
-        observer_world=bundle.observer_world,
-        observer_yaw_deg=bundle.observer_yaw_deg,
+        observer_world=(
+            list(getattr(exact_event, "observer_world", []) or [])
+            or bundle.observer_world
+        ),
+        observer_yaw_deg=(
+            getattr(exact_event, "observer_yaw_deg", None)
+            if getattr(exact_event, "observer_yaw_deg", None) is not None
+            else bundle.observer_yaw_deg
+        ),
         source=source,
+        record_kind="locked_final",
+        metadata={
+            "authoritative": True,
+            "association": "exact_memory_update_event",
+            "detection_world": [float(v) for v in list(getattr(exact_event, "world", []) or [])[:3]],
+            "final_target_world": [float(v) for v in list(getattr(primary, "target_world", []) or [])[:3]],
+            "memory_confidence": float(getattr(primary, "confidence", 0.0) or 0.0),
+            "memory_uncertainty_m": float(getattr(primary, "uncertainty_m", 0.0) or 0.0),
+            "reliability": float(getattr(exact_event, "reliability", 0.0) or 0.0),
+            "selection_rule": str(getattr(stage, "selection_rule", "") or "stable"),
+            "ordinal": getattr(stage, "ordinal", None),
+        },
     )
     if destination is not None:
         print(
             "  [TargetSnapshot] "
             f"saved={destination} target={target_name!r} "
-            f"instance={getattr(primary, 'instance_id', '')} view={view_name}"
+            f"instance={getattr(primary, 'instance_id', '')} kind=locked_final "
+            f"view={view_name} association=exact_memory_update_event"
         )
 
 
-def _record_target_bearing(objects, stage, bundle, detection=None):
+def _record_target_bearing(
+    objects,
+    stage,
+    bundle,
+    detection=None,
+    *,
+    source: str = "active_observation",
+):
     tracker = getattr(objects, "target_bearing_tracker", None)
     if tracker is None or bundle is None:
         return None
@@ -393,13 +714,15 @@ def _record_target_bearing(objects, stage, bundle, detection=None):
         detection=detection,
         image=bundle.front_image,
         observer_yaw_deg=float(bundle.observer_yaw_deg),
+        source=source,
     )
     if observation is not None:
         print(
             "  [TargetBearing] "
             f"angle={observation.relative_angle_deg:+.1f}deg "
             f"score={observation.score:.2f} depth_state={observation.depth_state} "
-            f"range_hint={('none' if observation.range_hint_m is None else f'{observation.range_hint_m:.1f}m')}"
+            f"range_hint={('none' if observation.range_hint_m is None else f'{observation.range_hint_m:.1f}m')} "
+            f"source={observation.source}"
         )
     return observation
 
@@ -424,20 +747,48 @@ def _memory_estimate_is_trustworthy(objects, stage, current_world) -> bool:
 
 def _bearing_only_active(objects, stage, current_world) -> bool:
     tracker = getattr(objects, "target_bearing_tracker", None)
+    activation = (
+        tracker.activation_guard(_runtime_stage_key(stage))
+        if tracker is not None and hasattr(tracker, "activation_guard")
+        else None
+    )
+    if activation is not None:
+        # The first accepted leg must still respect the activation-view RGB
+        # direction even if the same frame also produced a usable metric lock.
+        return True
     observation = tracker.current(_runtime_stage_key(stage)) if tracker is not None else None
-    if observation is None or observation.depth_state == "metric":
+    if observation is None:
+        return False
+    if "prebind" in str(getattr(observation, "source", "")).lower():
+        # The activation frame is newer identity evidence than any bootstrap
+        # anchor.  Keep it in charge of the first leg until a reliable metric
+        # observation upgrades the tracker.
+        return True
+    if observation.depth_state == "metric":
         return False
     return not _memory_estimate_is_trustworthy(objects, stage, current_world)
 
 
 def _apply_bearing_path_guard(objects, stage, cumulative_waypoints, *, selection_pos, selection_yaw):
     tracker = getattr(objects, "target_bearing_tracker", None)
-    observation = tracker.current(_runtime_stage_key(stage)) if tracker is not None else None
-    if observation is None or observation.depth_state == "metric":
+    stage_key = _runtime_stage_key(stage)
+    activation = (
+        tracker.activation_guard(stage_key)
+        if tracker is not None and hasattr(tracker, "activation_guard")
+        else None
+    )
+    observation = activation or (tracker.current(stage_key) if tracker is not None else None)
+    if observation is None or (activation is None and observation.depth_state == "metric"):
         return cumulative_waypoints, ""
     memory = getattr(objects, "mission_memory", None)
     memory_cfg = getattr(memory, "config", {}) or {}
-    max_leg = float(memory_cfg.get("BEARING_MAX_LEG_M", 12.0))
+    is_prebind = activation is not None or "prebind" in str(getattr(observation, "source", "")).lower()
+    if is_prebind:
+        max_leg = float(memory_cfg.get("PREBIND_MAX_LEG_M", 10.0))
+        max_deviation = float(memory_cfg.get("PREBIND_MAX_PATH_DEVIATION_DEG", 18.0))
+    else:
+        max_leg = float(memory_cfg.get("BEARING_MAX_LEG_M", 12.0))
+        max_deviation = float(memory_cfg.get("BEARING_MAX_PATH_DEVIATION_DEG", 50.0))
     if max_leg <= 0.0 or not cumulative_waypoints:
         return cumulative_waypoints, ""
     limited, was_limited = _limit_cumulative_path_length(
@@ -447,10 +798,10 @@ def _apply_bearing_path_guard(objects, stage, cumulative_waypoints, *, selection
     angle = observation.relative_to_yaw(float(selection_yaw))
     endpoint = list(limited[-1] if limited else [0.0, 0.0, 0.0])
     endpoint_angle = math.degrees(math.atan2(float(endpoint[1]), max(float(endpoint[0]), 1e-6)))
-    max_deviation = float(memory_cfg.get("BEARING_MAX_PATH_DEVIATION_DEG", 50.0))
     deviation = abs((endpoint_angle - angle + 180.0) % 360.0 - 180.0)
     if limited and endpoint[0] > 0.0 and deviation <= max_deviation:
-        return limited, f"limit_{max_leg:.1f}m" if was_limited else ""
+        prefix = "prebind_" if is_prebind else ""
+        return limited, f"{prefix}limit_{max_leg:.1f}m" if was_limited else ""
     distance = min(
         max_leg,
         float(observation.range_hint_m)
@@ -459,7 +810,8 @@ def _apply_bearing_path_guard(objects, stage, cumulative_waypoints, *, selection
     )
     radians = math.radians(angle)
     direct = [[round(distance * math.cos(radians), 3), round(distance * math.sin(radians), 3), 0.0]]
-    return direct, f"replace_bearing_deviation_{deviation:.1f}deg"
+    prefix = "prebind_" if is_prebind else ""
+    return direct, f"{prefix}replace_bearing_deviation_{deviation:.1f}deg"
 
 
 def _update_target_pose_from_bundle(objects: RuntimeObjects, stage, bundle: DetectionDepthBundle | None):
@@ -497,13 +849,25 @@ def _update_target_pose_from_bundle(objects: RuntimeObjects, stage, bundle: Dete
         )
         if events:
             primary = objects.mission_memory.primary_instance(stage)
+            facade_fallbacks = sum(
+                bool(getattr(event.detection, "surface_lock_fallback", False))
+                for event in events
+            )
+            fallback_text = (
+                f" facade_surface_locks={facade_fallbacks}"
+                if facade_fallbacks
+                else ""
+            )
             print(
                 f"  [Memory] updates={len(events)} "
                 f"primary={(primary.instance_id if primary else 'none')}"
+                f"{fallback_text}"
             )
         post_update_lock = str(
             objects.mission_memory.stage_locks.get(_mission_stage_key(stage), "") or ""
         )
+        if post_update_lock != previous_lock:
+            _bump_lock_generation(objects, stage)
         if not previous_lock and post_update_lock:
             # The pre-lock frame may contain several same-class candidates.
             # Re-run the gate now that the selected ordinal/instance is known,
@@ -511,15 +875,49 @@ def _update_target_pose_from_bundle(objects: RuntimeObjects, stage, bundle: Dete
             # that same activation frame.
             tracker = getattr(objects, "target_bearing_tracker", None)
             if tracker is not None:
-                tracker.clear(_runtime_stage_key(stage))
-            approved_front = _select_identity_approved_front_detection(objects, stage, bundle)
+                tracker.clear(
+                    _runtime_stage_key(stage),
+                    preserve_activation_guard=True,
+                )
+            lock_event = _primary_update_event(objects.mission_memory, stage, events)
+            approved_front = (
+                getattr(lock_event, "detection", None)
+                if str(getattr(lock_event, "view", "") or "").startswith("front")
+                else None
+            )
             bearing_observation = _record_target_bearing(objects, stage, bundle, approved_front)
+            activation = (
+                tracker.activation_guard(_runtime_stage_key(stage))
+                if tracker is not None and hasattr(tracker, "activation_guard")
+                else None
+            )
+            if activation is not None and bearing_observation is not None:
+                correction = abs(
+                    (bearing_observation.world_bearing_deg - activation.world_bearing_deg + 180.0)
+                    % 360.0
+                    - 180.0
+                )
+                if correction >= float(
+                    objects.mission_memory.config.get("PREBIND_CORRECTION_LOG_DEG", 5.0)
+                ):
+                    print(
+                        "  [TargetPrebindCorrection] "
+                        f"rgb_bearing={activation.world_bearing_deg:+.1f}deg "
+                        f"locked_bearing={bearing_observation.world_bearing_deg:+.1f}deg "
+                        f"delta={correction:.1f}deg instance={post_update_lock}"
+                    )
         _record_locked_target_snapshot(
             objects,
             stage,
             bundle,
             source="active_observation",
+            events=events,
         )
+        if approved_front_all or approved_down_all:
+            tracker = getattr(objects, "target_bearing_tracker", None)
+            if tracker is not None and hasattr(tracker, "reset_lost"):
+                tracker.reset_lost(_runtime_stage_key(stage))
+            _target_lost_recovery(objects).mark_observed(_runtime_stage_key(stage))
         if above_state is not None:
             current_primary = objects.mission_memory.primary_instance(stage)
             current_lock = str(
@@ -542,6 +940,39 @@ def _update_target_pose_from_bundle(objects: RuntimeObjects, stage, bundle: Dete
                 above_state.pending_queue_review = "anchor_shift"
             above_state.last_lock_id = current_lock
             above_state.last_anchor_world = current_anchor
+            facade_clearance = _above_pre_roof_facade_clearance_context(
+                objects,
+                stage,
+                bundle.observer_world,
+            )
+            if facade_clearance:
+                clearance_z = float(facade_clearance["target_world_z"])
+                prior_clearance_z = above_state.last_facade_clearance_z
+                replan_shift = max(
+                    0.1,
+                    float(objects.mission_memory.config.get("ABOVE_FACADE_TOP_REPLAN_SHIFT_M", 0.75)),
+                )
+                climb_tolerance = max(
+                    0.05,
+                    float(objects.mission_memory.config.get("ABOVE_PRE_ROOF_CLIMB_TOLERANCE_M", 0.4)),
+                )
+                if (
+                    bundle.observer_world[2] > clearance_z + climb_tolerance
+                    and (
+                        prior_clearance_z is None
+                        or clearance_z < float(prior_clearance_z) - replan_shift
+                    )
+                ):
+                    above_state.pending_queue_review = (
+                        f"{above_state.pending_queue_review}+facade_top_rise"
+                        if above_state.pending_queue_review
+                        else "facade_top_rise"
+                    )
+                above_state.last_facade_clearance_z = (
+                    clearance_z
+                    if prior_clearance_z is None
+                    else min(float(prior_clearance_z), clearance_z)
+                )
         if is_view_relative_stage(stage) and not objects.mission_memory.has_primary(stage):
             # A detector hit is not a navigation identity until the requested
             # activation-view ordinal has been resolved and locked.
@@ -654,6 +1085,25 @@ def _update_target_pose_from_bundle(objects: RuntimeObjects, stage, bundle: Dete
 def _execute_action_stage(client, stage) -> None:
     act = stage.action
     val = stage.value or 0
+    if act in ("up", "down"):
+        requested = float(val or 0.0)
+        vertical_config = function_section(cfg, "MEMORY")
+        val = _normalize_direct_vertical_action_m(
+            requested,
+            vertical_config,
+            climb=(act == "up"),
+        )
+        if abs(val - abs(requested)) > 1e-6:
+            minimum = (
+                _minimum_airsim_climb_command_m(vertical_config)
+                if act == "up"
+                else _minimum_airsim_vertical_command_m(vertical_config)
+            )
+            print(
+                "  [Action] AirSim vertical displacement quantized "
+                f"requested={requested:.2f}m executed={val:.2f}m "
+                f"minimum={minimum:.2f}m direction={act}"
+            )
     print(f"  [Action] direct execution: {act} {val}")
     pos_before, yaw_before = client.get_pose()
     try:
@@ -985,6 +1435,187 @@ def _apply_above_roof_acquisition_path_guard(
     return guarded, reason
 
 
+def _above_pre_roof_facade_clearance_context(
+    objects: RuntimeObjects,
+    stage: Any,
+    current_world,
+) -> dict:
+    """Estimate a conservative climb envelope from locked front-facade depth.
+
+    A horizontal front camera cannot verify a roof plane while the UAV is
+    below it, but the uppermost retained facade samples still prove that the
+    building occupies that altitude.  NED Z decreases while climbing, so a
+    safe pre-roof target is above (more negative than) that highest sample.
+    """
+
+    if not _locked_large_above_requires_roof(objects, stage):
+        return {}
+    memory = getattr(objects, "mission_memory", None)
+    config = getattr(memory, "config", {}) or {}
+    if not bool(config.get("ABOVE_PRE_ROOF_FACADE_CLIMB_ENABLED", True)):
+        return {}
+    current = [float(value) for value in list(current_world or [])[:3]]
+    if memory is None or len(current) < 3:
+        return {}
+    roof = memory.roof_navigation_context(stage, current)
+    if bool((roof or {}).get("trusted", False)):
+        return {}
+    instance = memory.primary_instance(stage)
+    if instance is None:
+        return {}
+
+    facade_z_values = []
+    bounds = list(getattr(instance, "surface_bounds_world", None) or [])
+    if bounds and len(bounds[0]) >= 3:
+        facade_z_values.append(float(bounds[0][2]))
+    for point in list(getattr(instance, "surface_points_world", None) or []):
+        if point is not None and len(point) >= 3:
+            facade_z_values.append(float(point[2]))
+    for patch in list(getattr(instance, "surface_patches_world", None) or []):
+        for point in list(patch or []):
+            if point is not None and len(point) >= 3:
+                facade_z_values.append(float(point[2]))
+    facade_z_values = [value for value in facade_z_values if math.isfinite(value)]
+    if not facade_z_values:
+        return {}
+
+    highest_facade_z = min(facade_z_values)
+    clearance_m = max(0.5, float(config.get("ABOVE_PRE_ROOF_FACADE_CLEARANCE_M", 3.0)))
+    uncertainty_margin_m = max(
+        0.0,
+        float(config.get("ABOVE_PRE_ROOF_FACADE_UNCERTAINTY_MARGIN_M", 1.0)),
+    )
+    requested_z = highest_facade_z - clearance_m - uncertainty_margin_m
+    source = "front_facade"
+    # One untrusted down-view roof plane is not allowed to complete the stage,
+    # but using its height only to request an upward move is conservative.
+    if roof is not None and roof.get("roof_z_world") is not None:
+        requested_z = min(
+            requested_z,
+            float(roof["roof_z_world"]) - clearance_m - uncertainty_margin_m,
+        )
+        source = "front_facade_and_roof_candidate"
+
+    runtime_state = _above_stage_state(objects, stage, current)
+    max_total_climb_m = max(
+        clearance_m,
+        float(config.get("ABOVE_PRE_ROOF_MAX_TOTAL_CLIMB_M", 60.0)),
+    )
+    minimum_world_z = float(runtime_state.entry_z) - max_total_climb_m
+    target_z = max(requested_z, minimum_world_z)
+    return {
+        "target_world_z": float(target_z),
+        "requested_world_z": float(requested_z),
+        "highest_facade_world_z": float(highest_facade_z),
+        "clearance_m": float(clearance_m),
+        "uncertainty_margin_m": float(uncertainty_margin_m),
+        "source": source,
+        "limited": bool(target_z > requested_z + 1e-6),
+        "surface_observations": int(getattr(instance, "surface_observation_count", 0) or 0),
+    }
+
+
+def _minimum_airsim_vertical_command_m(config: dict | None = None) -> float:
+    """Return a vertical displacement that is strictly greater than 5 m."""
+
+    config = config or {}
+    return max(5.001, float(config.get("AIRSIM_MIN_VERTICAL_COMMAND_M", 5.5)))
+
+
+def _minimum_airsim_climb_command_m(config: dict | None = None) -> float:
+    """Return the configured climb minimum without weakening AirSim's limit."""
+
+    config = config or {}
+    return max(
+        _minimum_airsim_vertical_command_m(config),
+        float(
+            config.get(
+                "AIRSIM_MIN_CLIMB_COMMAND_M",
+                config.get("AIRSIM_MIN_VERTICAL_COMMAND_M", 5.5),
+            )
+        ),
+    )
+
+
+def _quantized_climb_body_z(
+    current_world_z: float,
+    requested_world_z: float,
+    *,
+    config: dict,
+    preferred_max_leg_m: float,
+) -> float:
+    """Quantize one NED climb leg so AirSim cannot silently ignore it."""
+
+    remaining = float(current_world_z) - float(requested_world_z)
+    if remaining <= 0.0:
+        return 0.0
+    minimum = _minimum_airsim_climb_command_m(config)
+    preferred = max(minimum, float(preferred_max_leg_m))
+    magnitude = min(preferred, remaining)
+    if magnitude < minimum:
+        magnitude = minimum
+    return -float(magnitude)
+
+
+def _normalize_direct_vertical_action_m(
+    value: Any,
+    config: dict | None = None,
+    *,
+    climb: bool = False,
+) -> float:
+    """Preserve direction while enforcing its configured displacement minimum."""
+
+    try:
+        magnitude = abs(float(value))
+    except (TypeError, ValueError):
+        magnitude = 0.0
+    minimum = (
+        _minimum_airsim_climb_command_m(config)
+        if climb
+        else _minimum_airsim_vertical_command_m(config)
+    )
+    return max(magnitude, minimum)
+
+
+def _apply_airsim_vertical_path_quantization(
+    cumulative_waypoints: list,
+    *,
+    config: dict | None = None,
+) -> tuple[list, str]:
+    """Drop intermediate altitude targets below the configured minimum.
+
+    Cumulative targets are compared with the last effective altitude. Small
+    increments are held until their accumulated change reaches the applicable
+    threshold (10 m for climbs by default, 5.5 m for descents). Horizontal
+    motion is preserved unchanged.
+    """
+
+    if not cumulative_waypoints:
+        return cumulative_waypoints, ""
+    vertical_minimum = _minimum_airsim_vertical_command_m(config)
+    climb_minimum = _minimum_airsim_climb_command_m(config)
+    minimum = vertical_minimum
+    effective_z = 0.0
+    changed = 0
+    guarded = []
+    for waypoint in cumulative_waypoints:
+        point = [float(value) for value in waypoint[:3]]
+        requested_z = point[2]
+        vertical_delta = requested_z - effective_z
+        minimum = climb_minimum if vertical_delta < -1e-6 else vertical_minimum
+        if 1e-6 < abs(vertical_delta) < minimum:
+            point[2] = effective_z
+            changed += 1
+        elif abs(vertical_delta) >= minimum:
+            effective_z = requested_z
+        else:
+            point[2] = effective_z
+        guarded.append([round(value, 3) for value in point])
+    if not changed:
+        return cumulative_waypoints, ""
+    return guarded, f"held_{changed}_sub_{minimum:.3f}m_vertical_targets"
+
+
 def _above_max_allowed_world_z(objects: RuntimeObjects, stage: Any, current_world) -> tuple[float, str, dict]:
     """Return the deepest safe NED Z for the active above stage."""
     memory = getattr(objects, "mission_memory", None)
@@ -995,9 +1626,18 @@ def _above_max_allowed_world_z(objects: RuntimeObjects, stage: Any, current_worl
     runtime_state = _above_stage_state(objects, stage, current)
     roof = memory.roof_navigation_context(stage, current) if memory is not None else None
     if not bool((roof or {}).get("trusted", False)):
+        # ``above`` never needs a semantic descent. Before a roof is trusted,
+        # hold the entry altitude or climb above the observed facade.
+        hold_world_z = float(runtime_state.entry_z)
+        facade = _above_pre_roof_facade_clearance_context(objects, stage, current)
+        if facade:
+            return (
+                min(hold_world_z, float(facade["target_world_z"])),
+                "roof_unknown_climb_above_observed_facade",
+                facade,
+            )
         return (
-            float(runtime_state.entry_z)
-            + max(0.0, float(config.get("ABOVE_PRE_ROOF_MAX_DESCENT_M", 1.0))),
+            hold_world_z,
             "roof_unknown_hold_entry_altitude",
             roof or {},
         )
@@ -1005,14 +1645,8 @@ def _above_max_allowed_world_z(objects: RuntimeObjects, stage: Any, current_worl
     roof_z = float(roof["roof_z_world"])
     clearance = roof_z - current[2]
     min_clearance = max(0.1, float(config.get("ABOVE_MIN_CLEARANCE_M", 0.3)))
-    max_clearance = max(min_clearance, float(config.get("ABOVE_MAX_CLEARANCE_M", 18.0)))
-    max_vertical_leg = max(0.0, float(config.get("ABOVE_MAX_VERTICAL_LEG_M", 3.0)))
-    if clearance > max_clearance:
-        allowed = current[2] + min(max_vertical_leg, clearance - max_clearance)
-        mode = "roof_confirmed_segmented_descent"
-    else:
-        allowed = current[2]
-        mode = "roof_confirmed_hold_clearance"
+    allowed = current[2]
+    mode = "roof_confirmed_hold_clearance"
     allowed = min(allowed, roof_z - min_clearance)
     return float(allowed), mode, dict(roof)
 
@@ -1024,12 +1658,119 @@ def _apply_above_altitude_path_guard(
     *,
     selection_pos,
 ) -> tuple[list, str]:
-    if not cumulative_waypoints or not _is_above_stage(stage):
+    if not _is_above_stage(stage):
         return cumulative_waypoints, ""
+    current = [float(value) for value in list(selection_pos or [])[:3]]
+    if len(current) < 3:
+        return cumulative_waypoints, ""
+    memory = getattr(objects, "mission_memory", None)
+    config = getattr(memory, "config", {}) or {}
+    runtime_state = _above_stage_state(objects, stage, current)
+    instance = memory.primary_instance(stage) if memory is not None else None
+    surface_observations = int(getattr(instance, "surface_observation_count", 0) or 0)
+    last_seen_view = str(getattr(instance, "last_seen_view", "") or "").strip().lower()
+    roof = memory.roof_navigation_context(stage, current) if memory is not None else None
+    roof_trusted = bool((roof or {}).get("trusted", False))
+    climb_tolerance = max(
+        0.05,
+        float(config.get("ABOVE_PRE_ROOF_CLIMB_TOLERANCE_M", 0.4)),
+    )
+    max_climb_leg = max(
+        _minimum_airsim_climb_command_m(config),
+        float(config.get("ABOVE_PRE_ROOF_MAX_CLIMB_LEG_M", 10.0)),
+    )
+
+    if roof_trusted:
+        runtime_state.pre_roof_climb_target_z = None
+        runtime_state.pre_roof_waiting_reobserve = False
+    elif runtime_state.pre_roof_climb_target_z is not None:
+        pending_target_z = float(runtime_state.pre_roof_climb_target_z)
+        if current[2] > pending_target_z + climb_tolerance:
+            climb_body_z = _quantized_climb_body_z(
+                current[2],
+                pending_target_z,
+                config=config,
+                preferred_max_leg_m=max_climb_leg,
+            )
+            next_target_z = current[2] + climb_body_z
+            return (
+                [[0.0, 0.0, round(climb_body_z, 3)]],
+                f"vertical_first_continue_climb target_world_z={pending_target_z:.2f} "
+                f"current_world_z={current[2]:.2f}",
+            )
+        runtime_state.pre_roof_climb_target_z = None
+    if not roof_trusted and runtime_state.pre_roof_waiting_reobserve:
+        post_climb_front_reobserved = bool(
+            surface_observations > runtime_state.pre_roof_climb_surface_observations
+            and last_seen_view.startswith("front")
+        )
+        if (
+            roof is None
+            and not post_climb_front_reobserved
+        ):
+            # Do not cross the facade using the same observation that caused
+            # the climb.  The normal target-observation pipeline keeps running
+            # while the queue is empty and will release this hold with a newer
+            # upper-facade envelope (or a roof plane).
+            return (
+                [],
+                "vertical_first_waiting_for_post_climb_facade_observation "
+                f"surface_observations={surface_observations} last_view={last_seen_view or 'none'}",
+            )
+        runtime_state.pre_roof_waiting_reobserve = False
+
     max_world_z, mode, roof = _above_max_allowed_world_z(objects, stage, selection_pos)
     if not math.isfinite(max_world_z):
         return cumulative_waypoints, ""
-    max_body_z = float(max_world_z) - float(selection_pos[2])
+    if current[2] > float(max_world_z) + climb_tolerance:
+        if (
+            bool((roof or {}).get("limited", False))
+            and current[2] - float(max_world_z) + 1e-6
+            < _minimum_airsim_climb_command_m(config)
+        ):
+            return (
+                [],
+                "pre_roof_climb_tail_blocked_by_emergency_ceiling "
+                f"remaining={current[2] - float(max_world_z):.2f}m",
+            )
+        climb_body_z = _quantized_climb_body_z(
+            current[2],
+            float(max_world_z),
+            config=config,
+            preferred_max_leg_m=max_climb_leg,
+        )
+        next_target_z = current[2] + climb_body_z
+        runtime_state.pre_roof_climb_target_z = float(next_target_z)
+        runtime_state.pre_roof_climb_surface_observations = surface_observations
+        runtime_state.pre_roof_waiting_reobserve = not bool((roof or {}).get("trusted", False))
+        context_text = ""
+        if mode == "roof_unknown_climb_above_observed_facade" and roof:
+            context_text = (
+                f" facade_top_z={float(roof.get('highest_facade_world_z', 0.0)):.2f}"
+                f" clearance={float(roof.get('clearance_m', 0.0)):.1f}m"
+            )
+        return (
+            [[0.0, 0.0, round(climb_body_z, 3)]],
+            f"{mode} vertical_first target_world_z={float(max_world_z):.2f} "
+            f"leg_target_z={next_target_z:.2f}{context_text}",
+        )
+
+    if (
+        mode == "roof_unknown_climb_above_observed_facade"
+        and bool((roof or {}).get("limited", False))
+    ):
+        # The configured emergency ceiling is a hard safety boundary, not a
+        # license to cross a facade that still extends above it.
+        return (
+            [],
+            "pre_roof_climb_limit_reached_horizontal_crossing_blocked "
+            f"world_z={current[2]:.2f} requested_z={float(roof.get('requested_world_z', max_world_z)):.2f}",
+        )
+
+    if not cumulative_waypoints:
+        return cumulative_waypoints, ""
+    # Never ask an above stage to descend; excess roof clearance is valid.
+    max_body_z = min(0.0, float(max_world_z) - current[2])
     guarded = []
     changed = False
     for waypoint in cumulative_waypoints:
@@ -1040,11 +1781,18 @@ def _apply_above_altitude_path_guard(
         guarded.append([round(value, 3) for value in point])
     if not changed:
         return cumulative_waypoints, ""
-    roof_text = (
-        ""
-        if not roof
-        else f" roof_z={float(roof.get('roof_z_world', 0.0)):.2f} clearance={float(roof.get('clearance_m', 0.0)):.2f}m"
-    )
+    if not roof:
+        roof_text = ""
+    elif roof.get("roof_z_world") is not None:
+        roof_text = (
+            f" roof_z={float(roof['roof_z_world']):.2f} "
+            f"clearance={float(roof.get('clearance_m', 0.0)):.2f}m"
+        )
+    else:
+        roof_text = (
+            f" facade_top_z={float(roof.get('highest_facade_world_z', 0.0)):.2f} "
+            f"required_z={float(roof.get('target_world_z', max_world_z)):.2f}"
+        )
     return guarded, f"{mode} max_world_z={max_world_z:.2f}{roof_text}"
 
 
@@ -1061,8 +1809,24 @@ def _above_queue_violation_reason(objects: RuntimeObjects, stage: Any, current_w
         return ""
     max_world_z, _mode, _roof = _above_max_allowed_world_z(objects, stage, current_world)
     memory = getattr(objects, "mission_memory", None)
-    tolerance = float((getattr(memory, "config", {}) or {}).get("ABOVE_QUEUE_Z_TOLERANCE_M", 0.15))
-    if any(float(point[2]) > max_world_z + tolerance for point in queue if len(point) >= 3):
+    memory_cfg = getattr(memory, "config", {}) or {}
+    tolerance = float(memory_cfg.get("ABOVE_QUEUE_Z_TOLERANCE_M", 0.15))
+    current = [float(value) for value in current_world[:3]]
+    climb_required = bool(current[2] > max_world_z + tolerance)
+    if climb_required:
+        xy_tolerance = max(
+            0.05,
+            float(memory_cfg.get("ABOVE_VERTICAL_FIRST_XY_TOLERANCE_M", 0.35)),
+        )
+        if any(
+            math.hypot(float(point[0]) - current[0], float(point[1]) - current[1]) > xy_tolerance
+            for point in queue
+            if len(point) >= 3
+        ):
+            return "queued_xy_motion_before_above_facade_clearance"
+        if any(float(point[2]) > current[2] + tolerance for point in queue if len(point) >= 3):
+            return "queued_descent_while_above_climb_required"
+    elif any(float(point[2]) > max_world_z + tolerance for point in queue if len(point) >= 3):
         return "queued_descent_exceeds_above_envelope"
     estimate = memory.estimate_distance(stage, current_world) if memory is not None else None
     target = list((estimate or {}).get("target_world") or [])
@@ -1074,6 +1838,53 @@ def _above_queue_violation_reason(objects: RuntimeObjects, stage: Any, current_w
         endpoint = queue[-1]
         endpoint_distance = math.hypot(float(endpoint[0]) - float(target[0]), float(endpoint[1]) - float(target[1]))
         margin = float(memory.config.get("ABOVE_QUEUE_DIVERGENCE_MARGIN_M", 2.0))
+        above_state = _above_stage_state(objects, stage, current)
+        probe_origin = list(above_state.roof_acquire_origin_world or [])
+        probe_direction = list(above_state.roof_acquire_direction_world or [])
+        roof = memory.roof_navigation_context(stage, current) if memory is not None else None
+        probe_active = bool(
+            len(probe_origin) >= 2
+            and len(probe_direction) >= 2
+            and float(above_state.roof_acquire_goal_distance_m) > 0.0
+            and not bool((roof or {}).get("trusted", False))
+        )
+        if probe_active:
+            direction_norm = math.hypot(float(probe_direction[0]), float(probe_direction[1]))
+            if direction_norm <= 1e-6:
+                return "queued_roof_probe_has_invalid_direction"
+            direction = [
+                float(probe_direction[0]) / direction_norm,
+                float(probe_direction[1]) / direction_norm,
+            ]
+            progress_tolerance = max(
+                0.1,
+                float(memory.config.get("ABOVE_ROOF_PROBE_PROGRESS_TOLERANCE_M", 1.0)),
+            )
+            corridor_half_width = max(
+                0.25,
+                float(memory.config.get("ABOVE_ROOF_PROBE_CORRIDOR_HALF_WIDTH_M", 3.0)),
+            )
+            current_offset = [current[0] - float(probe_origin[0]), current[1] - float(probe_origin[1])]
+            current_progress = current_offset[0] * direction[0] + current_offset[1] * direction[1]
+            goal_progress = float(above_state.roof_acquire_goal_distance_m)
+            last_progress = current_progress
+            for point in queue:
+                if point is None or len(point) < 2:
+                    continue
+                offset = [float(point[0]) - float(probe_origin[0]), float(point[1]) - float(probe_origin[1])]
+                progress = offset[0] * direction[0] + offset[1] * direction[1]
+                lateral = abs(offset[0] * direction[1] - offset[1] * direction[0])
+                if progress < last_progress - progress_tolerance:
+                    return "queued_roof_probe_moves_backward"
+                if progress > goal_progress + progress_tolerance:
+                    return "queued_roof_probe_exceeds_goal"
+                if lateral > corridor_half_width:
+                    return "queued_roof_probe_leaves_corridor"
+                last_progress = max(last_progress, progress)
+            # Moving beyond a facade point is the intended roof-acquisition
+            # motion.  Once the path is inside this bounded corridor, do not
+            # reinterpret increasing distance from the facade anchor as drift.
+            return ""
         if endpoint_distance > current_distance + margin:
             return "queued_path_diverges_from_locked_above_target"
     return ""
@@ -1143,7 +1954,7 @@ def _record_synchronized_roof_plane(
             rejection_reason = "roof_plane_memory_association_rejected"
     print(
         f"  [RoofPlane] source={source} accepted={roof_context is not None} "
-        f"reason={rejection_reason or 'roof_plane_recorded'} "
+        f"reason={rejection_reason or estimate.reason} "
         f"z={float(estimate.roof_z_world):.2f}m depth={float(estimate.center_depth_m):.2f}m "
         f"confidence={estimate.confidence:.2f} valid={estimate.valid_ratio:.2f} "
         f"coverage={estimate.coverage_ratio:.2f} center={estimate.center_support_ratio:.2f} "
@@ -1501,9 +2312,26 @@ def _update_memory_from_fresh_detection(
         )
         if events:
             primary = objects.mission_memory.primary_instance(stage)
+            facade_fallbacks = sum(
+                bool(getattr(event.detection, "surface_lock_fallback", False))
+                for event in events
+            )
+            fallback_text = (
+                f" facade_surface_locks={facade_fallbacks}"
+                if facade_fallbacks
+                else ""
+            )
             print(
                 f"  [Memory] fresh_updates={len(events)} "
                 f"primary={(primary.instance_id if primary else 'none')}"
+                f"{fallback_text}"
+            )
+            _record_locked_target_snapshot(
+                objects,
+                stage,
+                identity_bundle,
+                source="fresh_completion_observation",
+                events=events,
             )
     except Exception as exc:
         print(f"  [Memory] update skipped: {exc}")
@@ -1580,6 +2408,7 @@ def _run_memory_observation_scan(
     reason: str,
     max_queries: int,
     snapshot_stages: list | tuple | None = None,
+    prebind_stages: list | tuple | None = None,
 ) -> int:
     if getattr(objects, "mission_memory", None) is None or not objects.mission_memory.enabled:
         return 0
@@ -1587,14 +2416,51 @@ def _run_memory_observation_scan(
         return 0
     updated_total = 0
     snapshot_stage_ids = {id(item) for item in (snapshot_stages or [])}
+    prebind_stage_ids = {id(item) for item in (prebind_stages or [])}
     for query_stage in list(query_stages)[: max(0, int(max_queries))]:
-        best_det, front_det, down_det, detect_elapsed, front_all, down_all = _detect_dual_view(
-            objects,
-            query_stage,
-            task_text,
-            frame,
-            down_frame,
+        try:
+            best_det, front_det, down_det, detect_elapsed, front_all, down_all = _detect_dual_view(
+                objects,
+                query_stage,
+                task_text,
+                frame,
+                down_frame,
+            )
+        except Exception as exc:
+            print(
+                "  [PerceptionSync] detector_service_error "
+                f"source={reason} target={_caption_for_stage(query_stage, task_text)!r} "
+                f"error={type(exc).__name__}: {exc}; memory unchanged"
+            )
+            # A service/network error is not a negative observation.  Stop
+            # this scan without aging, replacing, or clearing target memory.
+            break
+        observation_bundle = DetectionDepthBundle(
+            best_detection=best_det,
+            front_detection=front_det,
+            down_detection=down_det,
+            front_detections=list(front_all or []),
+            down_detections=list(down_all or []),
+            front_image=frame,
+            down_image=down_frame,
+            front_depth=front_depth,
+            down_depth=down_depth,
+            detect_elapsed=detect_elapsed,
+            observer_world=list(observer_world) if observer_world is not None else None,
+            observer_yaw_deg=(
+                float(observer_yaw_deg) if observer_yaw_deg is not None else None
+            ),
         )
+        if id(query_stage) in prebind_stage_ids:
+            # This call intentionally precedes depth attachment.  The saved
+            # frame and tracker state therefore represent what RGB alone knew
+            # before any surface point was formally accepted.
+            _prebind_target_from_bundle(
+                objects,
+                query_stage,
+                observation_bundle,
+                source=f"{reason}_prebind",
+            )
         _attach_depth_to_detection_lists(front_all, down_all, frame, down_frame, front_depth, down_depth)
         events = objects.mission_memory.update_from_detections(
             stage=query_stage,
@@ -1603,34 +2469,51 @@ def _run_memory_observation_scan(
             observer_world=observer_world,
             observer_yaw_deg=observer_yaw_deg,
         )
+        if id(query_stage) in prebind_stage_ids:
+            lock_event = _primary_update_event(objects.mission_memory, query_stage, events)
+            approved_front = (
+                getattr(lock_event, "detection", None)
+                if str(getattr(lock_event, "view", "") or "").startswith("front")
+                else None
+            )
+            metric_usable, _depth_state = metric_depth_usable(
+                approved_front,
+                objects.mission_memory.config,
+            )
+            if objects.mission_memory.is_primary_locked(query_stage) and metric_usable:
+                # Upgrade the temporary RGB bearing to the detector/depth
+                # observation that actually agrees with the formal lock.
+                _record_target_bearing(
+                    objects,
+                    query_stage,
+                    observation_bundle,
+                    approved_front,
+                    source=f"{reason}_metric_lock",
+                )
         if id(query_stage) in snapshot_stage_ids:
             _record_locked_target_snapshot(
                 objects,
                 query_stage,
-                DetectionDepthBundle(
-                    best_detection=best_det,
-                    front_detection=front_det,
-                    down_detection=down_det,
-                    front_detections=list(front_all or []),
-                    down_detections=list(down_all or []),
-                    front_image=frame,
-                    down_image=down_frame,
-                    front_depth=front_depth,
-                    down_depth=down_depth,
-                    detect_elapsed=detect_elapsed,
-                    observer_world=list(observer_world) if observer_world is not None else None,
-                    observer_yaw_deg=(
-                        float(observer_yaw_deg) if observer_yaw_deg is not None else None
-                    ),
-                ),
+                observation_bundle,
                 source=reason,
+                events=events,
             )
         if events:
             updated_total += len(events)
             primary = objects.mission_memory.primary_instance(query_stage)
+            facade_fallbacks = sum(
+                bool(getattr(event.detection, "surface_lock_fallback", False))
+                for event in events
+            )
+            fallback_text = (
+                f" facade_surface_locks={facade_fallbacks}"
+                if facade_fallbacks
+                else ""
+            )
             print(
                 f"  [MemoryScan] reason={reason} target={_caption_for_stage(query_stage, task_text)!r} "
-                f"updates={len(events)} primary={(primary.instance_id if primary else 'none')} "
+                f"updates={len(events)} primary={(primary.instance_id if primary else 'none')}"
+                f"{fallback_text} "
                 f"detect={detect_elapsed:.2f}s"
             )
     if updated_total:
@@ -1681,7 +2564,80 @@ def _bootstrap_mission_memory(objects: RuntimeObjects, client, state, task_text:
         # Auxiliary landmark queries may update memory but are not navigation
         # targets, so only real task stages receive user-facing snapshots.
         snapshot_stages=list(objects.task_manager.stages or []),
+        prebind_stages=list(objects.task_manager.stages or []),
     )
+
+
+def _prebind_stage_target(objects: RuntimeObjects, client, stage, task_text: str) -> bool:
+    """Synchronously acquire the active target's RGB bearing before planning."""
+
+    if getattr(stage, "mode", "") not in {"target", "detect"}:
+        return False
+    memory = getattr(objects, "mission_memory", None)
+    tracker = getattr(objects, "target_bearing_tracker", None)
+    config = (
+        getattr(memory, "config", {})
+        if memory is not None
+        else getattr(tracker, "config", {})
+    ) or {}
+    if not bool(config.get("PREBIND_ENABLED", True)):
+        return False
+
+    profile = str(config.get("PREBIND_CAPTURE_PROFILE", "front_down") or "front_down")
+    try:
+        (
+            frame,
+            down_frame,
+            front_depth,
+            down_depth,
+            timing,
+            observer_world,
+            observer_yaw_deg,
+        ) = web_helpers.capture_profile_isolated_with_pose(client, profile)
+        best_det, front_det, down_det, detect_elapsed, front_all, down_all = _detect_dual_view(
+            objects,
+            stage,
+            task_text,
+            frame,
+            down_frame,
+        )
+    except Exception as exc:
+        print(
+            f"  [TargetPrebind] skipped target={_caption_for_stage(stage, task_text)!r} "
+            f"error={exc}"
+        )
+        return False
+
+    bundle = DetectionDepthBundle(
+        best_detection=best_det,
+        front_detection=front_det,
+        down_detection=down_det,
+        front_detections=list(front_all or []),
+        down_detections=list(down_all or []),
+        front_image=frame,
+        down_image=down_frame,
+        # A custom profile may include depth, but prebinding must remain a
+        # purely visual operation.  Formal depth attachment happens only in
+        # the normal synchronized observation pipeline.
+        front_depth=None,
+        down_depth=None,
+        detect_elapsed=detect_elapsed,
+        observer_world=list(observer_world) if observer_world is not None else None,
+        observer_yaw_deg=(float(observer_yaw_deg) if observer_yaw_deg is not None else None),
+    )
+    success = _prebind_target_from_bundle(
+        objects,
+        stage,
+        bundle,
+        source="stage_activation_prebind",
+    )
+    if not success:
+        print(
+            "  [TargetPrebind] "
+            f"target={_caption_for_stage(stage, task_text)!r} candidate=none "
+            f"profile={profile} capture={float((timing or {}).get('total_s', 0.0) or 0.0):.2f}s"
+        )
+    return success
 
 
 def _bind_view_relative_stage(objects: RuntimeObjects, client, state, stage, task_text: str) -> bool:
@@ -1732,6 +2688,7 @@ def _bind_view_relative_stage(objects: RuntimeObjects, client, state, stage, tas
         reason="view_relative_activation",
         max_queries=len(query_stages),
         snapshot_stages=[stage],
+        prebind_stages=[stage],
     )
     primary = memory.primary_instance(stage)
     capture_total_s = float((timing or {}).get("total_s", 0.0) or 0.0)
@@ -1772,6 +2729,7 @@ def _bind_view_relative_stage(objects: RuntimeObjects, client, state, stage, tas
                     reason="view_relative_local_retry",
                     max_queries=len(query_stages),
                     snapshot_stages=[stage],
+                    prebind_stages=[stage],
                 )
                 primary = memory.primary_instance(stage)
                 if primary is None:
@@ -1903,7 +2861,15 @@ def _poll_future_memory_scan(objects: RuntimeObjects, state, current_stage) -> N
     try:
         observations = list(job.future.result() or [])
     except Exception as exc:
-        print(f"  [FutureScan] failed elapsed={elapsed:.1f}s error={exc}")
+        # The previous timestamp may be older than the detector's read
+        # timeout. Restart the normal interval here instead of immediately
+        # flooding an unavailable service with another opportunistic scan.
+        objects.last_future_scan_s = time.perf_counter()
+        print(
+            "  [FutureScan] detector_service_error "
+            f"elapsed={elapsed:.1f}s error={type(exc).__name__}: {exc}; "
+            "current navigation and memory kept"
+        )
         return
 
     memory = getattr(objects, "mission_memory", None)
@@ -2144,7 +3110,10 @@ def _submit_plan_if_needed(
         direction_hint = direction_hint_from_angle(
             bearing_observation.relative_to_yaw(yaw_now),
             score=bearing_observation.score,
-            reason=f"cached RGB bearing ({bearing_observation.depth_state})",
+            reason=(
+                f"cached RGB bearing ({bearing_observation.depth_state}, "
+                f"{bearing_observation.source})"
+            ),
         )
     memory_hint = ""
     if getattr(objects, "mission_memory", None) is not None:
@@ -2194,9 +3163,11 @@ def _submit_plan_if_needed(
                 )
                 memory_hint = transition_hint
     if bearing_observation is not None and bearing_observation.depth_state != "metric":
+        bearing_source = str(getattr(bearing_observation, "source", "runtime") or "runtime")
         memory_hint += (
             f"Fresh RGB bearing is authoritative: {bearing_observation.relative_to_yaw(yaw_now):+.1f} degrees "
-            "relative to the current nose. Move only a short leg and reacquire depth; do not invent a far world coordinate. "
+            f"relative to the current nose (source={bearing_source}). Move only a short leg and reacquire depth; "
+            "do not invent a far world coordinate. "
         )
     direction_text = direction_hint.text
     print(
@@ -2654,6 +3625,20 @@ def _select_and_transform_plan(objects: RuntimeObjects, stage, result, frame, do
         return None
     cand_cfg = cfg.get("CANDIDATE", {}) or {}
     if not bool(cand_cfg.get("ENABLED", False)):
+        raw_cumulative = incremental_to_cumulative(
+            [list(wp) for wp in (getattr(result, "waypoints", []) or [])]
+        )
+        memory = getattr(objects, "mission_memory", None)
+        vertical_guarded, vertical_reason = _apply_airsim_vertical_path_quantization(
+            raw_cumulative,
+            config=getattr(memory, "config", {}) or {},
+        )
+        if vertical_reason:
+            print(
+                f"  [AirSimVerticalGuard] {vertical_reason} "
+                f"from={_format_waypoints(raw_cumulative)} to={_format_waypoints(vertical_guarded)}"
+            )
+            result.waypoints = cumulative_to_incremental(vertical_guarded)
         return result
 
     qwen_incremental = [list(wp) for wp in (getattr(result, "waypoints", []) or [])]
@@ -2672,6 +3657,12 @@ def _select_and_transform_plan(objects: RuntimeObjects, stage, result, frame, do
         )
     selection_pos = getattr(result, "_selection_pos", [0.0, 0.0, 0.0])
     selection_yaw = float(getattr(result, "_selection_yaw", 0.0) or 0.0)
+    tracker = getattr(objects, "target_bearing_tracker", None)
+    activation_bearing_guard = (
+        tracker.activation_guard(_runtime_stage_key(stage))
+        if tracker is not None and hasattr(tracker, "activation_guard")
+        else None
+    )
     bearing_only = _bearing_only_active(objects, stage, selection_pos)
     avoidance_memory_context = memory_context
     if bearing_only:
@@ -2801,6 +3792,16 @@ def _select_and_transform_plan(objects: RuntimeObjects, stage, result, frame, do
             f"from={_format_waypoints(chosen_cumulative)} to={_format_waypoints(above_guarded)}"
         )
         chosen_cumulative = above_guarded
+    vertical_guarded, vertical_reason = _apply_airsim_vertical_path_quantization(
+        chosen_cumulative,
+        config=(getattr(getattr(objects, "mission_memory", None), "config", {}) or {}),
+    )
+    if vertical_reason:
+        print(
+            f"  [AirSimVerticalGuard] {vertical_reason} "
+            f"from={_format_waypoints(chosen_cumulative)} to={_format_waypoints(vertical_guarded)}"
+        )
+        chosen_cumulative = vertical_guarded
     if (
         obstacle_result is not None
         and str(getattr(obstacle_result, "reason", "") or "") == "stop_before_target_depth_obstacle"
@@ -2842,6 +3843,7 @@ def _select_and_transform_plan(objects: RuntimeObjects, stage, result, frame, do
         "above_roof_acquisition_guard": roof_guard_reason,
         "obstacle_path_guard": obstacle_reason,
         "above_altitude_guard": above_reason,
+        "airsim_vertical_guard": vertical_reason,
         "all_candidates": [cand.to_dict() for cand in all_candidates],
         "wm_candidates": [cand.to_dict() for cand in (selection.wm_candidates or [])],
         "selected_candidate": chosen.to_dict(),
@@ -2849,6 +3851,9 @@ def _select_and_transform_plan(objects: RuntimeObjects, stage, result, frame, do
     transformed.candidates = [cand.to_dict() for cand in all_candidates]
     transformed.selected_index = selected_index
     transformed.selected_candidate = chosen.to_dict()
+    transformed._consume_activation_bearing_guard = bool(
+        activation_bearing_guard is not None and chosen_incremental
+    )
     return transformed
 
 
@@ -2858,6 +3863,18 @@ def _poll_plan(objects: RuntimeObjects, stage=None, frame=None, down_frame=None,
     if result is None:
         return
     qwen_inc = getattr(result, "waypoints", []) or []
+    if qwen_inc and bool(getattr(result, "_consume_activation_bearing_guard", False)):
+        tracker = getattr(objects, "target_bearing_tracker", None)
+        consumed = (
+            tracker.consume_activation_guard(_runtime_stage_key(stage))
+            if tracker is not None and hasattr(tracker, "consume_activation_guard")
+            else None
+        )
+        if consumed is not None:
+            print(
+                "  [TargetPrebind] activation bearing consumed after first path enqueue "
+                f"angle={consumed.relative_angle_deg:+.1f}deg"
+            )
     rejection_reason = getattr(result, "rejection_reason", "")
     if rejection_reason:
         print(f"  [PlanRejected] {rejection_reason}; existing queue kept")
@@ -3178,26 +4195,139 @@ def _fail_current_stage_after_relocalization(objects, path_stream, state, stage_
     return True
 
 
-def _search_with_memory_guidance(objects, client, stage, capture_mode: str, *, skip_initial_frame: bool):
-    if (
-        getattr(objects, "mission_memory", None) is not None
-        and bool(objects.mission_memory.config.get("DIRECTED_RELOCALIZATION_ENABLED", True))
-        and objects.mission_memory.has_primary(stage)
-    ):
-        pos_now, _yaw_now = client.get_pose()
-        preferred_yaw = objects.mission_memory.preferred_yaw_deg(stage, pos_now)
-        if preferred_yaw is not None:
-            print(f"  [Relocalize] memory_guided_yaw={preferred_yaw:.1f}deg")
-            try:
-                client.rotate_to_yaw(preferred_yaw)
-                skip_initial_frame = False
-            except Exception as exc:
-                print(f"  [Relocalize] memory-guided yaw failed: {exc}")
-    return objects.relocalizer.search(
-        client,
-        stage,
-        capture_mode=capture_mode,
-        skip_initial_frame=skip_initial_frame,
+def _large_target_expected_offscreen(objects, stage, current_world) -> tuple[bool, str]:
+    """Recognize normal facade disappearance without attempting a yaw scan."""
+    memory = getattr(objects, "mission_memory", None)
+    instance = memory.primary_instance(stage) if memory is not None else None
+    if instance is None:
+        return False, "large target has no metric lock yet"
+    if _is_above_stage(stage):
+        overhead = memory.above_overhead_context(stage, current_world)
+        if bool((overhead or {}).get("active", False)):
+            return True, f"above_{(overhead or {}).get('phase', 'overhead')}"
+        roof = memory.roof_navigation_context(stage, current_world)
+        if roof is not None:
+            return True, "roof acquisition uses down view"
+
+    estimate = memory.estimate_distance(stage, current_world)
+    distance_m = float((estimate or {}).get("distance_m", float("inf")))
+    close_threshold = max(
+        4.0,
+        float((getattr(memory, "config", {}) or {}).get("LARGE_EXPECTED_OFFSCREEN_NEAR_M", 14.0)),
+    )
+    if distance_m <= close_threshold:
+        return True, f"locked facade is close ({distance_m:.1f}m)"
+
+    target_world = (
+        nearest_instance_surface_point(current_world, instance)
+        if has_surface_geometry(instance)
+        else list(instance.target_world)
+    )
+    horizontal = math.hypot(
+        float(target_world[0]) - float(current_world[0]),
+        float(target_world[1]) - float(current_world[1]),
+    )
+    down_delta = float(target_world[2]) - float(current_world[2])
+    elevation_down_deg = math.degrees(math.atan2(down_delta, max(horizontal, 0.1)))
+    offscreen_deg = float(
+        (getattr(memory, "config", {}) or {}).get("LARGE_EXPECTED_OFFSCREEN_DOWN_ANGLE_DEG", 32.0)
+    )
+    if down_delta > 0.0 and elevation_down_deg >= offscreen_deg:
+        return True, f"target is {elevation_down_deg:.1f}deg below front view"
+    return False, "facade should still be front-visible"
+
+
+def _relocalization_memory_is_reliable(objects, stage, current_world) -> bool:
+    memory = getattr(objects, "mission_memory", None)
+    if memory is None or not memory.has_primary(stage):
+        return False
+    locked_fn = getattr(memory, "is_primary_locked", None)
+    if not callable(locked_fn) or not locked_fn(stage):
+        return False
+    estimate = memory.estimate_distance(stage, current_world)
+    if estimate is None:
+        return False
+    memory_cfg = getattr(memory, "config", {}) or {}
+    return bool(
+        float(estimate.get("confidence", 0.0) or 0.0)
+        >= float(memory_cfg.get("RELOCALIZATION_MEMORY_MIN_CONFIDENCE", 0.35))
+        and float(estimate.get("uncertainty_m", 999.0) or 999.0)
+        <= float(memory_cfg.get("RELOCALIZATION_MEMORY_MAX_UNCERTAINTY_M", 8.0))
+        and float(estimate.get("observation_age_s", 999.0) or 999.0)
+        <= float(memory_cfg.get("RELOCALIZATION_MEMORY_MAX_AGE_S", 60.0))
+    )
+
+
+def _build_locked_relocalization_validator(objects, client, stage):
+    """Accept only the locked entity, not merely another matching noun."""
+    memory = getattr(objects, "mission_memory", None)
+
+    def validate(_stage, front_image, down_image, _front_det, _down_det, candidate):
+        if candidate is None or not bool(getattr(candidate, "visible", False)):
+            return None
+        observer_world, observer_yaw = client.get_pose()
+        view = str(getattr(candidate, "camera", "front") or "front").lower()
+        image = down_image if view.startswith("down") else front_image
+        if memory is not None and view.startswith("front"):
+            exclusions = memory.previous_entity_exclusions(stage, observer_world, observer_yaw)
+            fov = float((getattr(memory, "sim_config", {}) or {}).get("FRONT_FOV", 90.0))
+            if detection_is_excluded_by_bearing(
+                candidate,
+                image,
+                exclusions,
+                horizontal_fov_deg=fov,
+            ):
+                _debug_print("  [RelocalizeIdentity] rejected=previous_entity_bearing")
+                return None
+        if memory is not None and hasattr(memory, "evaluate_relocalization_identity"):
+            identity = memory.evaluate_relocalization_identity(
+                stage,
+                candidate,
+                image,
+                observer_world=observer_world,
+                observer_yaw_deg=observer_yaw,
+                view=view,
+            )
+            if not bool(identity.get("accepted", False)):
+                _debug_print(
+                    "  [RelocalizeIdentity] "
+                    f"candidate={getattr(candidate, 'label', '')!r} "
+                    f"score={float(getattr(candidate, 'score', 0.0) or 0.0):.2f} "
+                    f"rejected={identity.get('reason')} details={identity}"
+                )
+                return None
+        return candidate
+
+    return validate
+
+
+def _bundle_from_relocalization_result(result) -> DetectionDepthBundle:
+    detection = getattr(result, "detection", None)
+    view = str(getattr(detection, "camera", "none") or "none").lower()
+    # Only the validator-approved physical instance may enter MissionMemory.
+    # Keeping the other raw same-class boxes here would let the normal update
+    # selector choose a higher-DINO-score candidate that relocalization had
+    # explicitly rejected.
+    front_detection = detection if view == "front" else None
+    down_detection = detection if view == "down" else None
+    front_detections = [detection] if front_detection is not None else []
+    down_detections = [detection] if down_detection is not None else []
+    observer_world = getattr(result, "observer_world", None)
+    return DetectionDepthBundle(
+        best_detection=detection,
+        front_detection=front_detection,
+        down_detection=down_detection,
+        front_detections=front_detections,
+        down_detections=down_detections,
+        front_image=getattr(result, "front_image", None),
+        down_image=getattr(result, "down_image", None),
+        front_depth=getattr(result, "front_depth", None),
+        down_depth=getattr(result, "down_depth", None),
+        observer_world=(list(observer_world) if observer_world is not None else None),
+        observer_yaw_deg=getattr(result, "observer_yaw_deg", None),
+        capture_timestamp_s=float(getattr(result, "capture_timestamp_s", 0.0) or 0.0),
+        distance_view=view if view in {"front", "down"} else "none",
+        distance_reason="validated_relocalization",
     )
 
 
@@ -3252,38 +4382,16 @@ def _handle_background_target_lost(
     stage,
     capture_mode: str,
     reason: str,
+    event=None,
 ) -> bool:
-    """Stop immediately when the slow observation loop loses the target."""
+    """Recover by target scale without allowing repeated building scans."""
     current_stage_key = CompletionPipeline.stage_key(stage)
     bearing_tracker = getattr(objects, "target_bearing_tracker", None)
     memory = getattr(objects, "mission_memory", None)
-    if _is_above_stage(stage) and memory is not None and memory.has_primary(stage):
-        pos_now, _yaw_now = client.get_pose()
-        overhead = memory.above_overhead_context(stage, pos_now)
-        if bool((overhead or {}).get("active", False)):
-            if bearing_tracker is not None:
-                bearing_tracker.clear(current_stage_key)
-            print(
-                "  [TargetLost] ignored_during_above_overhead_verify "
-                f"phase={(overhead or {}).get('phase', 'verify')} "
-                f"horizontal={float((overhead or {}).get('horizontal_distance_m', 0.0)):.2f}m; "
-                "front view is no longer authoritative"
-            )
-            state.update(memory_summary=memory.summary(stage))
-            return False
-    if bearing_tracker is not None:
-        lost_count = bearing_tracker.mark_lost(current_stage_key)
-        required_losses = int(
-            getattr(getattr(objects, "mission_memory", None), "config", {}).get(
-                "BEARING_LOST_CONFIRMATIONS", 2
-            )
-        )
-        if lost_count < max(1, required_losses):
-            print(
-                f"  [TargetLost] transient_rgb_miss count={lost_count}/{required_losses}; "
-                "active path kept"
-            )
-            return False
+    stale, stale_reason = _target_lost_event_is_stale(objects, stage, event)
+    if stale:
+        print(f"  [TargetLost] stale_event_discarded reason={stale_reason}")
+        return False
     if (
         is_view_relative_stage(stage)
         and getattr(objects, "mission_memory", None) is not None
@@ -3307,109 +4415,172 @@ def _handle_background_target_lost(
         print(f"  [TargetLost] delayed_binding_pending; {wait_reason}; current stage kept active")
         state.update(memory_summary=objects.mission_memory.summary(stage))
         return False
-    if getattr(objects, "mission_memory", None) is not None and objects.mission_memory.has_primary(stage):
-        pos_now, _yaw_now = client.get_pose()
-        trusted_surface_fn = getattr(
-            objects.mission_memory,
-            "trusted_near_large_surface_estimate",
-            None,
+
+    pos_now, yaw_now = client.get_pose()
+    instance = memory.primary_instance(stage) if memory is not None and memory.has_primary(stage) else None
+    large_target = bool(
+        is_large_structure_stage(stage)
+        or (instance is not None and bool(getattr(instance, "is_large_structure", False)))
+    )
+    if large_target:
+        expected_offscreen, offscreen_reason = _large_target_expected_offscreen(
+            objects,
+            stage,
+            pos_now,
         )
-        trusted_surface = (
-            trusted_surface_fn(stage, pos_now)
-            if callable(trusted_surface_fn)
-            else None
-        )
-        if trusted_surface is not None:
-            print(
-                "  [TargetLost] ignored_by_locked_near_surface_memory "
-                f"distance={trusted_surface['distance_m']:.2f}m "
-                f"confidence={trusted_surface['confidence']:.2f} "
-                f"uncertainty={trusted_surface['uncertainty_m']:.1f}m; "
-                "continuing without yaw change"
-            )
-            state.update(memory_summary=objects.mission_memory.summary(stage))
-            return False
-        mem_distance = objects.mission_memory.estimate_distance(stage, pos_now)
-        instance = objects.mission_memory.primary_instance(stage)
-        memory_cfg = getattr(objects.mission_memory, "config", {}) or {}
-        confidence = float((mem_distance or {}).get("confidence", 0.0) or 0.0)
-        uncertainty = float((mem_distance or {}).get("uncertainty_m", 999.0) or 999.0)
-        uses_surface = str((mem_distance or {}).get("distance_kind", "point")) == "surface"
-        min_confidence = 0.65
-        if uses_surface:
-            min_confidence = float(memory_cfg.get("SURFACE_MEMORY_ONLY_MIN_CONFIDENCE", 0.65))
-            if bool(getattr(instance, "is_large_structure", False)):
-                min_confidence = float(memory_cfg.get("LARGE_STRUCTURE_MEMORY_ONLY_MIN_CONFIDENCE", 0.55))
-        surface_fresh = not uses_surface or (
-            instance is not None
-            and instance.age_s() <= float(memory_cfg.get("SURFACE_COMPLETION_MAX_AGE_S", 120.0))
+        recovery = _target_lost_recovery(objects)
+        budget = recovery.large_loss_budget(
+            stage_key=current_stage_key,
+            instance_id=str(getattr(instance, "instance_id", "") or ""),
+            current_position=pos_now,
+            reason=reason,
+            expected_offscreen=expected_offscreen,
         )
         controller = getattr(objects, "controller", None)
         queue = getattr(controller, "queue", None)
-        pending_world = list(getattr(queue, "world_waypoints", []) or [])
         navigation_active = bool(
             getattr(path_stream, "active", False)
-            or pending_world
-            or getattr(controller, "planning", False)
+            or list(getattr(queue, "world_waypoints", []) or [])
+            or bool(getattr(controller, "planning", False))
+            or bool(getattr(controller, "has_plan_job", False))
         )
-        locked_primary_fn = getattr(objects.mission_memory, "is_primary_locked", None)
-        locked_primary = bool(locked_primary_fn(stage)) if callable(locked_primary_fn) else False
-        if (
-            navigation_active
-            and locked_primary
-            and uses_surface
-            and bool(getattr(instance, "is_large_structure", False))
-            and surface_fresh
-            and confidence >= float(
-                memory_cfg.get("LARGE_STRUCTURE_SURFACE_LOCK_MIN_CONFIDENCE", 0.15)
+        bearing_support = None
+        if bearing_tracker is not None:
+            activation_fn = getattr(bearing_tracker, "activation_guard", None)
+            current_fn = getattr(bearing_tracker, "current", None)
+            bearing_support = (
+                activation_fn(current_stage_key)
+                if callable(activation_fn)
+                else None
+            ) or (
+                current_fn(current_stage_key)
+                if callable(current_fn)
+                else None
             )
-        ):
+        if instance is None and bearing_support is None and not navigation_active:
+            return _fail_current_stage_after_relocalization(
+                objects,
+                path_stream,
+                state,
+                current_stage_key,
+                (
+                    "large target has neither a locked surface nor a fresh RGB bearing; "
+                    "stopped instead of issuing an unguided path or rotating in place"
+                ),
+            )
+        if bool(budget.get("continue", False)):
+            if bearing_tracker is not None and expected_offscreen and hasattr(bearing_tracker, "reset_lost"):
+                bearing_tracker.reset_lost(current_stage_key)
+            phase = "expected_offscreen_down_view" if expected_offscreen else "bounded_memory_navigation"
             print(
-                "  [TargetLost] ignored_by_locked_surface_navigation "
-                f"distance={float((mem_distance or {}).get('distance_m', 0.0)):.2f}m "
-                f"confidence={confidence:.2f} uncertainty={uncertainty:.1f}m; "
-                "active path kept without yaw change"
+                f"  [TargetLost] large_structure_no_yaw_search phase={phase} "
+                f"active_navigation={navigation_active} reason={offscreen_reason}; "
+                f"blind_elapsed={float(budget.get('elapsed_s', 0.0)):.1f}s "
+                f"blind_distance={float(budget.get('distance_m', 0.0)):.1f}m; "
+                "queue and completed planner job kept"
             )
-            state.update(memory_summary=objects.mission_memory.summary(stage))
+            if memory is not None:
+                state.update(memory_summary=memory.summary(stage))
             return False
-        if (
-            confidence >= min_confidence
-            and uncertainty <= float(memory_cfg.get("MAX_COMPLETION_UNCERTAINTY_M", 5.0))
-            and surface_fresh
-        ):
-            # 有稳定锁定实例时，单帧/单轮检测丢失不立刻停车清空；继续用memory引导规划。
-            print(
-                f"  [TargetLost] ignored_by_memory geometry={'surface' if uses_surface else 'point'} "
-                f"confidence={confidence:.2f} "
-                f"uncertainty={uncertainty:.1f}m reason={reason}"
-            )
-            state.update(memory_summary=objects.mission_memory.summary(stage))
-            return False
-    _clear_stopped_queue(objects, path_stream, state)
-    objects.distance_estimator.clear()
-    objects.navigation_metrics.invalidate_target(current_stage_key)
-    print(f"  [TargetLost] stopped, cleared queue, relocalizing reason={reason}")
-    if not objects.relocalizer.enabled:
         return _fail_current_stage_after_relocalization(
             objects,
             path_stream,
             state,
             current_stage_key,
-            "target lost and relocalization disabled",
+            (
+                "large target remained unexpectedly invisible beyond no-yaw blind budget "
+                f"({float(budget.get('elapsed_s', 0.0)):.1f}s, "
+                f"{float(budget.get('distance_m', 0.0)):.1f}m); "
+                "stopped instead of rotating in place"
+            ),
         )
 
-    relocalized = _search_with_memory_guidance(
-        objects,
-        client,
-        stage,
-        capture_mode,
-        skip_initial_frame=True,
+    if bearing_tracker is not None:
+        lost_count = bearing_tracker.mark_lost(current_stage_key)
+        required_losses = int(
+            getattr(memory, "config", {}).get("BEARING_LOST_CONFIRMATIONS", 2)
+        )
+        if lost_count < max(1, required_losses):
+            print(
+                f"  [TargetLost] transient_rgb_miss count={lost_count}/{required_losses}; "
+                "active path kept"
+            )
+            return False
+
+    recovery = _target_lost_recovery(objects)
+    reliable_memory = _relocalization_memory_is_reliable(objects, stage, pos_now)
+    preferred_yaw = (
+        memory.preferred_yaw_deg(stage, pos_now)
+        if reliable_memory and memory is not None
+        else None
+    )
+    session, session_reason = recovery.begin_small_session(
+        stage_key=current_stage_key,
+        instance_id=str(getattr(instance, "instance_id", "") or ""),
+        current_position=pos_now,
+        current_yaw_deg=yaw_now,
+        preferred_yaw_deg=preferred_yaw,
+        reliable_memory=reliable_memory,
+    )
+    if session is None:
+        if "cooldown" in session_reason:
+            print(f"  [TargetLost] compact_target_recovery_deferred reason={session_reason}; path kept")
+            return False
+        return _fail_current_stage_after_relocalization(
+            objects,
+            path_stream,
+            state,
+            current_stage_key,
+            session_reason,
+        )
+    if not getattr(objects, "relocalizer", None) or not objects.relocalizer.enabled:
+        return _fail_current_stage_after_relocalization(
+            objects,
+            path_stream,
+            state,
+            current_stage_key,
+            "compact target lost and bounded relocalization is disabled",
+        )
+
+    _clear_stopped_queue(objects, path_stream, state)
+    objects.distance_estimator.clear()
+    objects.navigation_metrics.invalidate_target(current_stage_key)
+    offsets = recovery.search_offsets(session)
+    max_rotation = float(
+        recovery.config.get(
+            "SMALL_GLOBAL_MAX_TOTAL_ROTATION_DEG" if session.global_search else "SMALL_LOCAL_MAX_TOTAL_ROTATION_DEG",
+            420.0,
+        )
     )
     print(
-        f"  [Relocalize] found={relocalized.found} "
+        "  [TargetLost] compact_target_bounded_search "
+        f"session={session.session_id} reliable_memory={reliable_memory} "
+        f"base_yaw={session.preferred_yaw_deg:.1f} offsets={offsets} reason={reason}"
+    )
+    relocalized = objects.relocalizer.search(
+        client,
+        stage,
+        capture_mode=capture_mode,
+        skip_initial_frame=True,
+        validator=_build_locked_relocalization_validator(objects, client, stage),
+        yaw_offsets_deg=offsets,
+        base_yaw_deg=session.preferred_yaw_deg,
+        max_total_rotation_deg=max_rotation,
+        session_id=session.session_id,
+    )
+    recovery.finish_small_session(
+        session,
+        found=bool(relocalized.found),
+        searched_yaws_deg=relocalized.searched_yaws_deg,
+        total_rotation_deg=relocalized.total_rotation_deg,
+    )
+    print(
+        f"  [Relocalize] session={session.session_id} found={relocalized.found} "
         f"view={(relocalized.detection.camera if relocalized.detection else 'none')} "
         f"yaw_delta={relocalized.yaw_delta_deg:.1f}deg "
-        f"elapsed={relocalized.elapsed:.2f}s reason={relocalized.reason}"
+        f"total_rotation={relocalized.total_rotation_deg:.1f}deg "
+        f"views={len(relocalized.searched_yaws_deg)} elapsed={relocalized.elapsed:.2f}s "
+        f"reason={relocalized.reason}"
     )
     if not relocalized.found:
         return _fail_current_stage_after_relocalization(
@@ -3417,16 +4588,31 @@ def _handle_background_target_lost(
             path_stream,
             state,
             current_stage_key,
-            relocalized.reason or "target not found after relocalization",
+            relocalized.reason or "compact target not found in bounded search",
         )
 
-    # Relocalization only turns the vehicle back toward the target.  The next
-    # loop starts fresh planning and fresh detector/depth observations.
-    _clear_stopped_queue(objects, path_stream, state)
-    objects.distance_estimator.clear()
-    objects.navigation_metrics.invalidate_target(current_stage_key)
+    previous_instance_id = str(getattr(instance, "instance_id", "") or "")
+    bundle = _bundle_from_relocalization_result(relocalized)
+    _update_target_pose_from_bundle(objects, stage, bundle)
+    current_instance_id = _locked_instance_id(objects, stage)
+    if previous_instance_id and current_instance_id != previous_instance_id:
+        return _fail_current_stage_after_relocalization(
+            objects,
+            path_stream,
+            state,
+            current_stage_key,
+            (
+                "relocalization candidate did not preserve locked identity "
+                f"{previous_instance_id} (got {current_instance_id or 'none'})"
+            ),
+        )
+    if bearing_tracker is not None and hasattr(bearing_tracker, "reset_lost"):
+        bearing_tracker.reset_lost(current_stage_key)
+    recovery.mark_observed(current_stage_key)
+    if getattr(objects, "completion_pipeline", None) is not None:
+        objects.completion_pipeline.clear()
+    state.update(memory_summary=memory.summary(stage) if memory is not None else {})
     return False
-
 
 def _handle_above_completion_trigger(
     objects: RuntimeObjects,
@@ -3699,13 +4885,27 @@ def _handle_distance_completion_trigger(
             "fresh RGB capture failed",
         )
 
-    best_det, front_det, down_det, detect_elapsed, front_all, down_all = _detect_dual_view(
-        objects,
-        stage,
-        task_text,
-        frame,
-        down_frame,
-    )
+    try:
+        best_det, front_det, down_det, detect_elapsed, front_all, down_all = _detect_dual_view(
+            objects,
+            stage,
+            task_text,
+            frame,
+            down_frame,
+        )
+    except Exception as exc:
+        completion_cfg = function_section(cfg, "FAST_SLOW")
+        backoff_s = max(
+            0.1,
+            float(completion_cfg.get("PERCEPTION_ERROR_RETRY_BACKOFF_S", 5.0)),
+        )
+        objects.completion_retry_after[current_stage_key] = time.perf_counter() + backoff_s
+        print(
+            "  [PerceptionSync] detector_service_error "
+            f"error={type(exc).__name__}: {exc} retry_after={backoff_s:.1f}s; "
+            "completion postponed, locked memory and yaw kept"
+        )
+        return False
     if best_det is None or not getattr(best_det, "visible", False):
         decision = _evaluate_memory_completion_now(
             objects,
@@ -3724,84 +4924,16 @@ def _handle_distance_completion_trigger(
                 return _complete_stage_from_memory(objects, path_stream, state, stage, decision)
         if _trusted_near_surface_completion(objects, stage, client):
             return _handle_inconclusive_completion_attempt(objects, path_stream, state, stage)
-        objects.distance_estimator.clear()
-        objects.navigation_metrics.invalidate_target(current_stage_key)
-        if not objects.relocalizer.enabled:
-            return _fail_current_stage_after_relocalization(
-                objects,
-                path_stream,
-                state,
-                current_stage_key,
-                "fresh target not detected and relocalization disabled",
-            )
-        print("  [Relocalize] fresh RGB lost the target; scanning 360deg")
-        relocalized = _search_with_memory_guidance(
+        print("  [TargetLost] fresh completion RGB miss; applying scale-aware recovery")
+        return _handle_background_target_lost(
             objects,
             client,
+            path_stream,
+            state,
             stage,
             capture_mode,
-            skip_initial_frame=True,
+            "target not detected in fresh completion RGB",
         )
-        print(
-            f"  [Relocalize] found={relocalized.found} "
-            f"view={(relocalized.detection.camera if relocalized.detection else 'none')} "
-            f"yaw_delta={relocalized.yaw_delta_deg:.1f}deg "
-            f"elapsed={relocalized.elapsed:.2f}s reason={relocalized.reason}"
-        )
-        if not relocalized.found:
-            return _fail_current_stage_after_relocalization(
-                objects,
-                path_stream,
-                state,
-                current_stage_key,
-                relocalized.reason or "target not found after relocalization",
-            )
-
-        frame, down_frame, rgb_elapsed = _capture_fresh_rgb_frames(
-            client,
-            objects.completion_checker,
-            capture_mode,
-        )
-        if frame is None:
-            return _fail_current_stage_after_relocalization(
-                objects,
-                path_stream,
-                state,
-                current_stage_key,
-                "fresh RGB capture failed after relocalization",
-            )
-        best_det, front_det, down_det, detect_elapsed, front_all, down_all = _detect_dual_view(
-            objects,
-            stage,
-            task_text,
-            frame,
-            down_frame,
-        )
-        if best_det is None or not getattr(best_det, "visible", False):
-            decision = _evaluate_memory_completion_now(
-                objects,
-                client,
-                stage,
-                fresh_visual_support=False,
-                stop_radius_m=float(trigger_radius_m),
-            )
-            if decision is not None:
-                print(
-                    f"  [MemoryCompletion] status={decision.status} "
-                    f"confidence={decision.confidence:.2f} reason={decision.reason}"
-                )
-                state.update(memory_summary=objects.mission_memory.summary(stage))
-                if decision.done:
-                    return _complete_stage_from_memory(objects, path_stream, state, stage, decision)
-            if _trusted_near_surface_completion(objects, stage, client):
-                return _handle_inconclusive_completion_attempt(objects, path_stream, state, stage)
-            return _fail_current_stage_after_relocalization(
-                objects,
-                path_stream,
-                state,
-                current_stage_key,
-                "target lost after relocalization",
-            )
 
     depth_future = objects.slow_executor.submit(
         _capture_completion_depth,
@@ -4113,11 +5245,9 @@ def _should_trigger_completion_vlm(objects, stage, estimated, trigger_radius_m: 
             if bool((roof or {}).get("trusted", False)):
                 clearance = float((roof or {}).get("clearance_m", 0.0) or 0.0)
                 min_clearance = float(memory.config.get("ABOVE_MIN_CLEARANCE_M", 0.3))
-                max_clearance = float(memory.config.get("ABOVE_MAX_ALTITUDE_M", 60.0))
-                if clearance < min_clearance or clearance > max_clearance:
-                    # Let the bounded altitude guard issue the necessary climb
-                    # or segmented descent before stopping for another roof
-                    # completion capture.
+                if clearance < min_clearance:
+                    # The UAV must be numerically above the trusted roof.  No
+                    # maximum clearance is part of the semantic relation.
                     return False
             resume_pose = list(above_state.completion_resume_pose or [])
             if len(resume_pose) >= 3:
@@ -4346,6 +5476,15 @@ def _active_queue_overshoots_locked_surface(objects, stage, current_world, trigg
 
 
 def _invalidate_unsafe_locked_surface_queue(objects, path_stream, state, stage, current_world, trigger_radius_m: float) -> bool:
+    if _is_above_stage(stage):
+        above_violation = _above_queue_violation_reason(objects, stage, current_world)
+        if above_violation:
+            _clear_stopped_queue(objects, path_stream, state)
+            print(
+                "  [AbovePathGuard] stopped unsafe active queue "
+                f"reason={above_violation}"
+            )
+            return True
     if not _active_queue_overshoots_locked_surface(objects, stage, current_world, trigger_radius_m):
         return False
     _clear_stopped_queue(objects, path_stream, state)
@@ -4507,11 +5646,25 @@ def _reorient_to_locked_target_if_behind(
 
 
 def _drop_path_points_behind_vehicle(objects, current_pos, current_yaw_deg) -> int:
-    """Remove queue-head points that are behind the current vehicle heading."""
+    """Remove horizontally passed queue-head points behind the vehicle.
+
+    Pure vertical commands intentionally keep nearly the same XY position as
+    the vehicle.  Tiny pose/planning round-off can otherwise make their
+    forward projection slightly negative and incorrectly discard the climb
+    before it reaches AirSim.
+    """
     waypoints = objects.controller.queue.world_waypoints
     if not waypoints:
         return 0
 
+    fast_slow_cfg = {
+        **(cfg.get("FAST_SLOW", {}) or {}),
+        **function_section(cfg, "FAST_SLOW"),
+    }
+    vertical_xy_tolerance_m = max(
+        0.01,
+        float(fast_slow_cfg.get("PATH_VERTICAL_XY_TOLERANCE_M", 0.15)),
+    )
     yaw = math.radians(float(current_yaw_deg))
     forward_x = math.cos(yaw)
     forward_y = math.sin(yaw)
@@ -4520,6 +5673,10 @@ def _drop_path_points_behind_vehicle(objects, current_pos, current_yaw_deg) -> i
         point = waypoints[0]
         dx = float(point[0]) - float(current_pos[0])
         dy = float(point[1]) - float(current_pos[1])
+        # Heading has no geometric meaning for a vertical leg.  Preserve the
+        # point so ContinuousPathStream can issue it with vertical_hold yaw.
+        if math.hypot(dx, dy) <= vertical_xy_tolerance_m:
+            break
         forward_projection = dx * forward_x + dy * forward_y
         if forward_projection >= 0.0:
             break
@@ -4733,6 +5890,8 @@ def run_fast_slow_loop(
         slow_radius_m=slow_radius,
         distance_view_policy=fast_slow_cfg.get("DISTANCE_VIEW_POLICY", "relation_aware"),
         debug_logs=bool(fast_slow_cfg.get("DEBUG_LOGS", False)),
+        error_retry_backoff_s=float(fast_slow_cfg.get("PERCEPTION_ERROR_RETRY_BACKOFF_S", 5.0)),
+        error_retry_max_backoff_s=float(fast_slow_cfg.get("PERCEPTION_ERROR_RETRY_MAX_BACKOFF_S", 30.0)),
     )
     path_stream = ContinuousPathStream(client, fast_slow_cfg)
     stream_poll_interval = float(fast_slow_cfg.get("PATH_POLL_INTERVAL_S", 0.05))
@@ -4781,6 +5940,8 @@ def run_fast_slow_loop(
             objects.controller.clear()
             if objects.completion_pipeline is not None:
                 objects.completion_pipeline.clear()
+            _bump_stage_generation(objects, stage)
+            _target_lost_recovery(objects).reset(CompletionPipeline.stage_key(stage))
             objects.distance_estimator.clear()
             # 阶段刚切换时先检查一次memory/距离缓存；如果已经在目标附近，不再盲目起新规划。
             state.update(
@@ -4796,11 +5957,18 @@ def run_fast_slow_loop(
             if _is_above_stage(stage):
                 stage_entry_pos, _stage_entry_yaw = client.get_pose()
                 _above_stage_state(objects, stage, stage_entry_pos)
-            if is_view_relative_stage(stage):
-                # Resolve the relative identity only after all preceding move/
-                # turn stages have completed and this stage is truly active.
+            if getattr(stage, "mode", "") in {"target", "detect"}:
+                # Resolve/prebind the active target synchronously before the
+                # first slow plan.  Otherwise the planner can consume an RGB
+                # frame before its asynchronous detector has supplied any
+                # target direction and emit a default straight-ahead leg.
                 with web_helpers.pause_background_capture(capturer):
-                    _bind_view_relative_stage(objects, client, state, stage, task_text)
+                    if is_view_relative_stage(stage):
+                        # Relative identity is defined only after all prior
+                        # move/turn stages have completed in this exact view.
+                        _bind_view_relative_stage(objects, client, state, stage, task_text)
+                    else:
+                        _prebind_stage_target(objects, client, stage, task_text)
 
         # Future-target work is polled without waiting. MissionMemory remains
         # single-writer because completed observations are committed here.
@@ -4967,6 +6135,12 @@ def run_fast_slow_loop(
                 current_pipeline_key = CompletionPipeline.stage_key(stage)
                 if event.stage_key != current_pipeline_key:
                     print(f"  [CompletionAsync] stale event={event.kind}; discarded")
+                elif event.kind == "perception_error":
+                    print(
+                        "  [PerceptionAsync] detector_service_error "
+                        f"error={event.error} retry_after={event.retry_after_s:.1f}s; "
+                        "active path, locked memory and yaw kept"
+                    )
                 elif event.kind == "target_lost":
                     reason = (
                         getattr(event.bundle, "distance_reason", "")
@@ -4981,6 +6155,7 @@ def run_fast_slow_loop(
                         stage,
                         capture_mode,
                         reason or "target not detected",
+                        event=event,
                     )
                     if should_break:
                         break
@@ -5101,7 +6276,16 @@ def run_fast_slow_loop(
                 and objects.controller.should_check_completion()
                 and not objects.completion_pipeline.active
             ):
-                submitted = objects.completion_pipeline.submit(stage, task_text, None, None)
+                submitted = objects.completion_pipeline.submit(
+                    stage,
+                    task_text,
+                    None,
+                    None,
+                    stage_generation=_stage_generation(objects, stage),
+                    lock_generation=_lock_generation(objects, stage),
+                    session_id=_active_relocalization_session_id(objects, stage),
+                    locked_instance_id=_locked_instance_id(objects, stage),
+                )
                 if submitted:
                     _debug_print("  [TargetObservation] submitted detector+depth snapshot")
 

@@ -20,6 +20,7 @@ FUNCTIONS:
     BOX_THRESHOLD: 0.4                    # GroundingDINO box threshold
     TEXT_THRESHOLD: 0.3                   # GroundingDINO text threshold
     MIN_CONFIDENCE: 0.4                   # 功能层接受 bbox 的最低置信度
+    CONNECT_TIMEOUT: 5                    # 仅建立HTTP连接的超时；服务掉线时快速返回并保持导航状态
     TIMEOUT: 120                          # 检测请求超时秒数
     PARALLEL: true                        # 是否并行检测 front/down
 
@@ -42,11 +43,11 @@ FUNCTIONS:
     MAX_DETECTION_SPAN: 0.90               # 覆盖单边90%以上的异常框不作为完成证据
 
   RELOCALIZATION:
-    NAME: target_relocalization            # 双视图看不到目标后的原地重定位功能
-    ENABLED: true                          # 完成确认未看到目标时自动环视搜索
-    CAPTURE_PROFILE: front_down            # 每个朝向抓取前视和下视RGB
-    TURN_DEG: 90.0                         # 每次原地扫描转角
-    MAX_TURNS: 4                           # 跳过已失败朝向后最多扫描一整周
+    NAME: target_relocalization            # 小目标丢失后的有界身份重定位；大型建筑不原地环视
+    ENABLED: true                          # 仅控制小目标的有限扇形/一次性全局搜索
+    CAPTURE_PROFILE: front_down_both_depth # 重定位候选同时抓深度，供三维锁定身份连续性校验
+    TURN_DEG: 90.0                         # 兼容旧入口；新运行时使用下方显式偏航序列
+    MAX_TURNS: 4                           # 兼容旧入口；新运行时由有限偏航集合决定视图数
     ACCEPT_DOWN_VIEW: false                # 定向重定位只接受前视目标，确保机头朝向目标
     CENTER_ON_TARGET: true                 # 找到后按bbox水平中心进一步对准目标
     CAMERA_HFOV_DEG: 90.0                  # 前视相机水平视场角，用于bbox到yaw修正
@@ -54,6 +55,14 @@ FUNCTIONS:
     MIN_CONFIDENCE: 0.4                    # 重定位接受目标框的最低置信度
     MIN_BBOX_AREA_RATIO: 0.002             # 近目标重定位拒绝过小的远处/噪声候选框
     MAX_BBOX_SPAN: 0.90                    # 拒绝单边覆盖90%以上的异常候选框
+    SMALL_LOCAL_OFFSETS_DEG: [0, -15, -30, 15, 30] # 有可靠记忆时只在预测方位附近搜索，顺序减少往返旋转
+    SMALL_GLOBAL_OFFSETS_DEG: [90, 180, -90] # 无可靠记忆时同一位置最多补充一次受限全局覆盖
+    SMALL_LOCAL_MAX_TOTAL_ROTATION_DEG: 420 # 含转向预测方位和失败恢复初始航向的总旋转硬上限
+    SMALL_GLOBAL_MAX_TOTAL_ROTATION_DEG: 420 # 一次性全局覆盖的总旋转硬上限
+    SMALL_RETRY_MIN_MOVE_M: 3.0            # 搜索失败后至少移动该距离才允许再次搜索
+    RELOCALIZATION_COOLDOWN_S: 4.0         # 成功重定位后忽略晚到/瞬时TargetLost的冷却时间
+    LARGE_BLIND_MAX_TIME_S: 30.0           # 建筑非预期不可见时按记忆继续飞的时间预算
+    LARGE_BLIND_MAX_DISTANCE_M: 45.0       # 建筑非预期不可见时按记忆继续飞的距离预算
 
   DISTANCE_ESTIMATION:
     NAME: geometric_target_pose           # 根据检测框、深度和无人机位姿估计目标世界坐标
@@ -101,6 +110,12 @@ FUNCTIONS:
     PREVIOUS_ENTITY_EXCLUSION_RADIUS_M: 8.0 # 新实体阶段拒绝与上一实体表面连续的同类检测
     PREVIOUS_ENTITY_EXCLUSION_MAX_RADIUS_M: 10.0 # 排除半径上限，避免误伤相邻建筑
     PREVIOUS_ENTITY_BEARING_MARGIN_M: 1.5  # 无深度阶段投影上一实体时附加的方位角余量
+    PREBIND_ENABLED: true                  # 阶段激活时先用RGB目标框预绑定方位，再等待深度建立正式表面锁定
+    PREBIND_CAPTURE_PROFILE: front_down    # 预绑定只需前/下视RGB；不会把该帧写成三维目标坐标
+    PREBIND_MAX_AGE_S: 30.0                # 覆盖首次慢规划耗时；正式深度观测会提前替换该临时方位
+    PREBIND_MAX_LEG_M: 10.0                # 只有预绑定方位时，第一段最多向候选目标飞行10m
+    PREBIND_MAX_PATH_DEVIATION_DEG: 18.0   # 首段轨迹偏离预绑定方位超过该角度时直接改为朝目标的短航段
+    PREBIND_CORRECTION_LOG_DEG: 5.0        # 正式三维锁定与RGB预绑定方位差超过该角度时明确记录纠正
     BEARING_ONLY_ENABLED: true             # RGB可见但深度不可靠时保留目标方位，不伪造三维坐标
     BEARING_MIN_CONFIDENCE: 0.40           # 仅方位观测的最低检测置信度
     BEARING_MAX_AGE_S: 6.0                 # 方位观测超过该时间后不再引导新轨迹
@@ -109,9 +124,29 @@ FUNCTIONS:
     BEARING_MAX_PATH_DEVIATION_DEG: 50.0   # 轨迹终点偏离新鲜RGB方位过大时改为短方位航段
     BEARING_MEMORY_MAX_UNCERTAINTY_M: 5.0  # 旧三维记忆超过该误差时不能覆盖新鲜RGB方位
     BEARING_MEMORY_MAX_AGE_S: 30.0         # 旧三维记忆超过该年龄时不能覆盖新鲜RGB方位
+    RELOCALIZATION_MEMORY_MIN_CONFIDENCE: 0.35 # 小目标采用记忆引导局部搜索的最低置信度
+    RELOCALIZATION_MEMORY_MAX_UNCERTAINTY_M: 8.0 # 超过该不确定性只允许一次受限全局搜索
+    RELOCALIZATION_MEMORY_MAX_AGE_S: 60.0  # 记忆超过该年龄不再作为小目标局部搜索中心
+    RELOCALIZATION_APPEARANCE_ENABLED: true # 重定位在几何/方位通过后再用外观排除明显不同实例
+    RELOCALIZATION_APPEARANCE_MIN_RELIABILITY: 0.45 # 低纹理/低饱和外观不作为否决证据
+    RELOCALIZATION_APPEARANCE_MIN_SIMILARITY: 0.12 # 可靠外观低于该相似度拒绝同类错误实体
+    LARGE_EXPECTED_OFFSCREEN_NEAR_M: 14.0  # 靠近大型墙面后前视漏检视为正常视角变化
+    LARGE_EXPECTED_OFFSCREEN_DOWN_ANGLE_DEG: 32.0 # 建筑明显位于前视下方时切换记忆/下视策略
     METRIC_LOCK_MAX_DEPTH_M: 120.0         # 深度超过该距离只进入bearing-only，不更新实例坐标
     METRIC_DEPTH_MIN_VALID_RATIO: 0.20     # bbox中心深度有效像素比例下限
+    LARGE_STRUCTURE_SURFACE_FALLBACK_ENABLED: true # 建筑框深度混杂时允许用稳定前景墙面先建立facade锁定
+    LARGE_STRUCTURE_SURFACE_FALLBACK_MIN_SAMPLES: 6 # 墙面深度簇至少需要的稀疏采样数
+    LARGE_STRUCTURE_SURFACE_FALLBACK_MIN_SUPPORT_RATIO: 0.35 # 稳定墙面簇占候选采样的最低比例
+    LARGE_STRUCTURE_SURFACE_FALLBACK_CLUSTER_RATIO: 0.10 # 墙面采样相对中心深度的聚类容差
+    LARGE_STRUCTURE_SURFACE_FALLBACK_MAX_SPAN_RATIO: 0.12 # 接受墙面簇的最大相对深度跨度
+    LARGE_STRUCTURE_SURFACE_FALLBACK_MIN_EXTENT_RATIO: 0.18 # 墙面簇需在检测框水平和垂直方向均形成一定范围
     METRIC_DEPTH_MAX_MAD_RATIO: 0.12       # 深度MAD相对距离上限，过滤混入天空/背景的框
+    METRIC_DEPTH_MAX_CENTER_BBOX_DELTA_RATIO: 0.10 # 中央深度与整框深度差异上限，拒绝横跨前后楼的框
+    METRIC_DEPTH_MAX_P10_P90_RATIO: 0.18  # 中央区域P10-P90深度跨度上限，拒绝明显多层表面
+    FRAME_DUPLICATE_BBOX_IOU: 0.62         # 同帧同深度建筑框达到该IoU时只保留一个实例候选
+    FRAME_DUPLICATE_BBOX_CONTAINMENT: 0.82 # 嵌套building/facade框的较小框覆盖率去重阈值
+    FRAME_DUPLICATE_MAX_WORLD_DISTANCE_M: 5.0 # 重复框投影世界坐标的最大差异
+    FRAME_DUPLICATE_MAX_DEPTH_RATIO: 0.12 # 重叠框深度差超过该比例时视为前后两个实体，不合并
     PATH_CLIP_ENABLED: true               # 已知锁定目标坐标时，裁剪/替换明显飞过目标的Qwen轨迹
     PATH_CLIP_RADIUS_M: 6.0               # memory路径守卫的外圈基准半径；实际飞行目标会再收进NEAR_APPROACH内圈
     PATH_DIVERGE_RATIO: 0.90              # 候选终点比当前位置更远离memory目标时，用直达目标附近的短路径替换
@@ -190,12 +225,21 @@ FUNCTIONS:
     MAX_COMPLETION_UNCERTAINTY_M: 5.0     # 完成判定允许的最大不确定性
     WEAK_VISUAL_SUPPORT_ENABLED: true     # 允许检测/VLM弱证据辅助memory完成，但身份仍以几何锁定为主
     ABOVE_HORIZONTAL_RADIUS_M: 3.5        # “飞到上方”时，目标footprint之外允许的水平误差
-    ABOVE_MIN_CLEARANCE_M: 0.3            # “上方”至少要高于目标中心的粗略安全余量
-    ABOVE_MAX_ALTITUDE_M: 60.0            # 过高时不直接凭memory完成，避免高空误判
+    ABOVE_MIN_CLEARANCE_M: 0.3            # 仅作为“确实高于屋顶”的数值容差；above完成不限制高出屋顶多少米
     ABOVE_ALTITUDE_GUARD_ENABLED: true    # above最终高度硬守卫；无屋顶证据时禁止规划器主动下降
-    ABOVE_PRE_ROOF_MAX_DESCENT_M: 1.0     # 屋顶未确认前相对阶段入口最多下降1m
-    ABOVE_MAX_CLEARANCE_M: 18.0           # 屋顶已确认后，高于该净空才允许分段下降
-    ABOVE_MAX_VERTICAL_LEG_M: 3.0         # 每轮基于可信屋顶最多下降3m，避免一次扎向楼顶
+    AIRSIM_MIN_VERTICAL_COMMAND_M: 5.5    # AirSim通用垂直位移需严格大于5m；下降仍按此下限量化
+    AIRSIM_MIN_CLIMB_COMMAND_M: 10.0      # 每个实际执行的上升航段至少10m；不足部分向上扩展且不下降补偿
+    ABOVE_PRE_ROOF_MAX_DESCENT_M: 0.0     # above不需要语义下降；屋顶未确认前禁止低于阶段入口高度
+    ABOVE_PRE_ROOF_FACADE_CLIMB_ENABLED: true # 屋顶未知且前视墙面高于无人机时，先原地爬升再做XY越顶
+    ABOVE_PRE_ROOF_FACADE_CLEARANCE_M: 3.0 # 至少高于当前已观测墙面顶部3m后才允许水平越过
+    ABOVE_PRE_ROOF_FACADE_UNCERTAINTY_MARGIN_M: 1.0 # 墙面顶部深度/投影误差的额外向上安全余量
+    ABOVE_PRE_ROOF_MAX_CLIMB_LEG_M: 10.0  # 屋顶未知时每次原地爬升10m，之后重新观测墙面高度
+    ABOVE_PRE_ROOF_MAX_TOTAL_CLIMB_M: 60.0 # 屋顶未知时相对阶段入口允许的最大累计爬升，防止异常深度无限上升
+    ABOVE_PRE_ROOF_CLIMB_TOLERANCE_M: 0.4 # 判断一个原地爬升分段已经到达的Z容差
+    ABOVE_VERTICAL_FIRST_XY_TOLERANCE_M: 0.35 # 需要爬升时，旧队列允许的最大水平漂移
+    ABOVE_FACADE_TOP_REPLAN_SHIFT_M: 0.75 # 新观测墙面顶部上移超过该值时立即取消旧水平路径
+    ABOVE_MAX_CLEARANCE_M: 18.0           # 保留兼容配置；above只要求位于屋顶上方，不会因净空过大主动下降
+    ABOVE_MAX_VERTICAL_LEG_M: 10.0        # 保留兼容配置；above实际上升航段按10m执行
     ABOVE_QUEUE_Z_TOLERANCE_M: 0.15       # 首次锁定后复核旧队列的高度容差
     ABOVE_QUEUE_DIVERGENCE_MARGIN_M: 2.0  # 锁定/锚点更新后旧队列允许的XY发散余量
     ABOVE_ANCHOR_REPLAN_SHIFT_M: 3.0      # 同一锁定实例锚点变化超过该值时复核旧队列
@@ -205,9 +249,11 @@ FUNCTIONS:
     ABOVE_CONTINUOUS_HORIZON_MARGIN_S: 1.5 # 在最近规划耗时外附加的连续飞行余量
     ABOVE_ROOF_PROBE_BEYOND_ANCHOR_M: 8.0 # 接近立面锚点后保持高度向建筑内部探测的距离
     ABOVE_ROOF_PROBE_MAX_TRAVEL_M: 24.0   # 单次屋顶获取探测的最大水平航程
+    ABOVE_ROOF_PROBE_CORRIDOR_HALF_WIDTH_M: 3.0 # 探测路径相对初始越顶方向允许的横向半宽
+    ABOVE_ROOF_PROBE_PROGRESS_TOLERANCE_M: 1.0 # 队列航点沿探测方向允许的数值回退/终点余量
     ABOVE_ROOF_ACQUIRE_WAYPOINT_SPACING_M: 3.0 # 屋顶获取直线航点间距
     ABOVE_ROOF_ACQUIRE_MAX_WAYPOINTS: 8   # 单次屋顶获取路径的航点数量上限
-    ABOVE_OVERHEAD_SUPPRESS_FRONT_IDENTITY: true # 进入上方核验阶段后前视同类楼不再更新身份/方位
+    ABOVE_OVERHEAD_SUPPRESS_FRONT_IDENTITY: true # 下视已获得屋顶候选后，前视同类楼不再更新身份/方位
     ABOVE_REQUIRE_ROOF_GEOMETRY: true     # 大型建筑above必须由下视屋顶几何完成，立面点不能完成
     ABOVE_ROOF_MIN_CONFIDENCE: 0.45       # 单次下视水平平面进入屋顶记忆的最低置信度
     ABOVE_ROOF_MEMORY_MIN_CONFIDENCE: 0.60 # 屋顶记忆参与完成/高度控制的最低融合置信度
@@ -217,11 +263,18 @@ FUNCTIONS:
     ABOVE_ROOF_MAX_AGE_S: 20.0            # 屋顶证据最大有效年龄
     ABOVE_ROOF_ASSOCIATION_MARGIN_M: 6.0  # 下视水平面与锁定建筑XY的关联余量
     ABOVE_ROOF_LARGE_STRUCTURE_ASSOCIATION_M: 25.0 # 大屋顶首个中心点与立面锚点允许的最大XY距离
+    ABOVE_ROOF_IDENTITY_CORRIDOR_HALF_WIDTH_M: 10.0 # 首个屋顶必须位于最终立面身份射线附近，拒绝侧向邻楼
+    ABOVE_ROOF_MAX_BEFORE_FACADE_M: 8.0   # 屋顶中心最多允许位于立面锚点前方该距离
+    ABOVE_ROOF_MAX_BEYOND_FACADE_M: 24.0 # 屋顶中心沿身份射线越过立面锚点的基础上限
     ABOVE_ROOF_MAX_BELOW_ANCHOR_M: 3.0    # 拒绝明显低于立面锚点的地面平面（NED中Z更大）
     ABOVE_ROOF_Z_CONTINUITY_M: 2.5        # 连续屋顶观测允许的高度差
     ABOVE_ROOF_MIN_VALID_RATIO: 0.35      # 下视深度稀疏采样的最低有效比例
     ABOVE_ROOF_MIN_COVERAGE_RATIO: 0.20   # 主水平平面的最低画面覆盖比例
     ABOVE_ROOF_MIN_CENTER_SUPPORT_RATIO: 0.65 # 画面中心必须由同一水平面支撑
+    ABOVE_ROOF_LOCAL_PATCH_ENABLED: true  # 复杂多层屋顶无法形成全局主平面时，启用正下方局部水平面回退
+    ABOVE_ROOF_LOCAL_CENTER_FRACTION: 0.08 # 局部回退窗口相对半宽，只估计无人机正下方表面
+    ABOVE_ROOF_LOCAL_MIN_SAMPLES: 16      # 局部正下方窗口至少需要的有效稀疏深度点
+    ABOVE_ROOF_LOCAL_MIN_SUPPORT_RATIO: 0.55 # 局部窗口内同一高度簇的最低占比；仍需连续两帧记忆确认
     ABOVE_ROOF_MAX_Z_MAD_M: 0.45          # 屋顶平面世界Z的MAD上限
     ABOVE_ROOF_MAX_NORMAL_ERROR_DEG: 15.0 # 屋顶法向偏离竖直方向的最大角度
     ABOVE_ROOF_MAX_DEPTH_M: 120.0         # 下视屋顶深度最大可信范围
@@ -311,6 +364,9 @@ FUNCTIONS:
     PATH_PASS_TOLERANCE_M: 1.5            # 仅在确实越过轨迹点且横向误差较小时消费，避免提前删除前方点
     PATH_REISSUE_MIN_INTERVAL_S: 0.15     # 两次路径续写命令的最小间隔
     PATH_VELOCITY_EPSILON_MPS: 0.05       # 速度变化小于该值时不重发相同路径
+    PATH_VERTICAL_XY_TOLERANCE_M: 0.15    # 水平位移小于该值的纯升降航段固定当前机头方向
+    PATH_VERTICAL_FINAL_REACH_TOLERANCE_M: 0.5 # AirSim垂直终点小误差在爬升容差内直接消费，避免剩余不足5m卡队列
+    PATH_HEADING_EPSILON_DEG: 0.5         # 固定航向变化小于该值时不重复下发路径
     CONTINUOUS_MIN_SPEED_MPS: 1.0         # 规划返回前的连续飞行下限，禁止降到近似悬停的0.xm/s
     COMPLETION_PATH_ENTRY_MARGIN_M: 0.25  # 路径截断点比完成半径内缩，避免终点误差停在阈值外
     COMPLETION_INTERVAL_S: 1.0            # 后台目标观测最短提交间隔；active任务未结束时不会重复堆积
@@ -322,6 +378,8 @@ FUNCTIONS:
     SLOW_WORKERS: 2                       # 慢系统后台线程数：depth/VLM/Qwen 周边任务
     DETECT_WORKERS: 2                     # front/down 检测线程数
     FUTURE_DETECT_WORKERS: 1              # 未来目标专用检测线程；与当前阶段检测隔离，并限制后台服务压力
+    PERCEPTION_ERROR_RETRY_BACKOFF_S: 5.0 # GroundingDINO网络异常后首次重试等待；不当作TargetLost
+    PERCEPTION_ERROR_RETRY_MAX_BACKOFF_S: 30.0 # 连续服务异常的指数退避上限，飞行进程保持存活
 
 AGENT:
   # 任务解析器: vlm_parser | simple_parser
@@ -337,6 +395,7 @@ AGENT:
   DETECTOR_MODEL: mimo-v2.5  # groundingdino 不需要。云: mimo-v2.5
   DETECTOR_API_KEY: no-key  # 本地: no-key  |  云: sk-...
   DETECTOR_MAX_TOKENS: 512
+  DETECTOR_CONNECT_TIMEOUT: 5
   DETECTOR_TIMEOUT: 120
   DETECTOR_BOX_THRESHOLD: 0.4
   DETECTOR_MIN_CONFIDENCE: 0.4

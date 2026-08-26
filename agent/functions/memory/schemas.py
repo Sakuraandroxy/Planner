@@ -111,6 +111,18 @@ class TargetInstanceBelief:
     bbox_quality: float = 0.0
     last_seen_view: str = "unknown"
     last_label: str = ""
+    # Compact provenance for the observation that created this physical
+    # instance. Raw RGB/depth frames remain runtime-only; these fields make the
+    # identity anchor auditable without growing MissionMemory indefinitely.
+    identity_observer_world: List[float] = field(default_factory=list)
+    identity_observer_yaw_deg: Optional[float] = None
+    identity_bbox: List[int] = field(default_factory=list)
+    identity_score: float = 0.0
+    identity_reliability: float = 0.0
+    identity_depth_median: Optional[float] = None
+    identity_world: List[float] = field(default_factory=list)
+    identity_view: str = "unknown"
+    identity_label: str = ""
     appearance_prototypes: List[AppearancePrototype] = field(default_factory=list)
     observed_stage_keys: List[str] = field(default_factory=list)
 
@@ -170,6 +182,25 @@ class TargetInstanceBelief:
             ),
             "large_structure": bool(self.is_large_structure),
             "view": self.last_seen_view,
+            "identity_source": {
+                "view": self.identity_view,
+                "bbox": list(self.identity_bbox[:4]),
+                "score": round(float(self.identity_score), 3),
+                "reliability": round(float(self.identity_reliability), 3),
+                "depth_m": (
+                    None
+                    if self.identity_depth_median is None
+                    else round(float(self.identity_depth_median), 2)
+                ),
+                "observer_world": [round(float(v), 2) for v in self.identity_observer_world[:3]],
+                "observer_yaw_deg": (
+                    None
+                    if self.identity_observer_yaw_deg is None
+                    else round(float(self.identity_observer_yaw_deg), 2)
+                ),
+                "world": [round(float(v), 2) for v in self.identity_world[:3]],
+                "label": self.identity_label,
+            },
             "age_s": round(self.age_s(), 1),
             "status": self.status,
             "appearance": [p.to_summary_dict() for p in self.appearance_prototypes[:3]],

@@ -13,8 +13,12 @@ from agent.functions.common.task_manager import TaskManager
 from agent.functions.fast_slow.runtime import (
     _apply_above_altitude_path_guard,
     _apply_above_roof_acquisition_path_guard,
+    _apply_airsim_vertical_path_quantization,
+    _above_pre_roof_facade_clearance_context,
+    _above_queue_violation_reason,
     _above_stage_state,
     _handle_above_completion_trigger,
+    _normalize_direct_vertical_action_m,
     _queue_reaches_memory_arrival,
     _record_synchronized_roof_plane,
     _should_trigger_completion_vlm,
@@ -23,6 +27,7 @@ from agent.functions.fast_slow.runtime import (
 from agent.functions.memory import MissionMemory
 from agent.functions.memory.mission_memory import stage_key
 from agent.functions.memory.schemas import TargetInstanceBelief, TargetMemory
+from sim.airsim_client import AirSimClient
 
 
 def _above_stage():
@@ -44,7 +49,18 @@ def _locked_memory(stage, *, target_x: float = 30.0):
             "ENABLED": True,
             "ABOVE_ALTITUDE_GUARD_ENABLED": True,
             "ABOVE_PRE_ROOF_MAX_DESCENT_M": 1.0,
-            "ABOVE_MAX_VERTICAL_LEG_M": 3.0,
+            "ABOVE_PRE_ROOF_FACADE_CLIMB_ENABLED": True,
+            "ABOVE_PRE_ROOF_FACADE_CLEARANCE_M": 3.0,
+            "ABOVE_PRE_ROOF_FACADE_UNCERTAINTY_MARGIN_M": 1.0,
+            "ABOVE_PRE_ROOF_MAX_CLIMB_LEG_M": 10.0,
+            "AIRSIM_MIN_VERTICAL_COMMAND_M": 5.5,
+            "AIRSIM_MIN_CLIMB_COMMAND_M": 10.0,
+            "ABOVE_PRE_ROOF_MAX_TOTAL_CLIMB_M": 60.0,
+            "ABOVE_PRE_ROOF_CLIMB_TOLERANCE_M": 0.4,
+            "ABOVE_VERTICAL_FIRST_XY_TOLERANCE_M": 0.35,
+            "ABOVE_ROOF_PROBE_CORRIDOR_HALF_WIDTH_M": 3.0,
+            "ABOVE_ROOF_PROBE_PROGRESS_TOLERANCE_M": 1.0,
+            "ABOVE_MAX_VERTICAL_LEG_M": 10.0,
             "ABOVE_MAX_CLEARANCE_M": 18.0,
             "ABOVE_MIN_CLEARANCE_M": 0.3,
             "ABOVE_MAX_ALTITUDE_M": 60.0,
@@ -111,7 +127,21 @@ def _horizontal_plane_depth(clearance_m: float, size: int = 256):
     return float(clearance_m) * np.sqrt(1.0 + u * u + v * v)
 
 
-def test_unknown_roof_clamps_descent_but_preserves_climb():
+def _complex_roof_depth(size: int = 256):
+    rows, cols = np.mgrid[0:size, 0:size]
+    focal = size / 2.0
+    u = (cols + 0.5 - size * 0.5) / focal
+    v = (rows + 0.5 - size * 0.5) / focal
+    nx = (cols + 0.5) / size - 0.5
+    ny = (rows + 0.5) / size - 0.5
+    broad_center = (np.abs(nx) <= 0.22) & (np.abs(ny) <= 0.22)
+    clearance = np.full((size, size), 20.0, dtype=float)
+    clearance[broad_center & (nx < -0.08)] = 15.0
+    clearance[broad_center & (nx > 0.08)] = 25.0
+    return clearance * np.sqrt(1.0 + u * u + v * v)
+
+
+def test_unknown_high_roof_replaces_xy_path_with_vertical_first_climb():
     stage = _above_stage()
     memory, _instance = _locked_memory(stage)
     objects = _runtime_objects(memory)
@@ -124,12 +154,179 @@ def test_unknown_roof_clamps_descent_but_preserves_climb():
         selection_pos=[0.0, 0.0, -50.0],
     )
 
-    assert guarded[0][2] == -2.0
-    assert guarded[1][2] == 1.0
-    assert "roof_unknown_hold_entry_altitude" in reason
+    assert guarded == [[0.0, 0.0, -10.0]]
+    assert "roof_unknown_climb_above_observed_facade" in reason
+    assert "vertical_first" in reason
 
 
-def test_trusted_roof_allows_only_segmented_descent_then_holds_clearance():
+def test_pre_roof_climb_requires_new_facade_observation_before_xy_crossing():
+    stage = _above_stage()
+    memory, instance = _locked_memory(stage)
+    objects = _runtime_objects(memory)
+
+    first, _first_reason = _apply_above_altitude_path_guard(
+        objects,
+        stage,
+        [[8.0, 0.0, 0.0]],
+        selection_pos=[0.0, 0.0, -50.0],
+    )
+    held, held_reason = _apply_above_altitude_path_guard(
+        objects,
+        stage,
+        [[8.0, 0.0, 0.0]],
+        selection_pos=[0.0, 0.0, -60.0],
+    )
+
+    assert first == [[0.0, 0.0, -10.0]]
+    assert held == []
+    assert "waiting_for_post_climb_facade_observation" in held_reason
+
+    instance.surface_observation_count += 1
+    instance.last_seen_view = "down"
+    still_held, _still_held_reason = _apply_above_altitude_path_guard(
+        objects,
+        stage,
+        [[8.0, 0.0, 0.0]],
+        selection_pos=[0.0, 0.0, -60.0],
+    )
+    assert still_held == []
+
+    # A new higher-altitude front-depth observation sees the facade continue
+    # upward, so another vertical-only leg is issued instead of crossing it.
+    instance.surface_observation_count += 1
+    instance.surface_points_world.append([30.0, 0.0, -61.0])
+    instance.surface_bounds_world[0][2] = -61.0
+    instance.last_seen_view = "front"
+    second, second_reason = _apply_above_altitude_path_guard(
+        objects,
+        stage,
+        [[8.0, 0.0, 0.0]],
+        selection_pos=[0.0, 0.0, -60.0],
+    )
+
+    assert second == [[0.0, 0.0, -10.0]]
+    assert "vertical_first" in second_reason
+
+
+def test_facade_clearance_context_uses_highest_observed_wall_sample():
+    stage = _above_stage()
+    memory, _instance = _locked_memory(stage)
+    objects = _runtime_objects(memory)
+
+    context = _above_pre_roof_facade_clearance_context(
+        objects,
+        stage,
+        [0.0, 0.0, -50.0],
+    )
+
+    assert context["highest_facade_world_z"] == -55.0
+    assert context["target_world_z"] == -59.0
+    assert context["clearance_m"] == 3.0
+
+
+def test_pending_horizontal_queue_is_cancelled_when_facade_requires_climb():
+    stage = _above_stage()
+    memory, _instance = _locked_memory(stage)
+    objects = SimpleNamespace(
+        mission_memory=memory,
+        above_stage_states={},
+        controller=SimpleNamespace(
+            queue=SimpleNamespace(world_waypoints=[[8.0, 0.0, -50.0]])
+        ),
+    )
+
+    violation = _above_queue_violation_reason(objects, stage, [0.0, 0.0, -50.0])
+    objects.controller.queue.world_waypoints = [[0.0, 0.0, -56.0]]
+    vertical_violation = _above_queue_violation_reason(objects, stage, [0.0, 0.0, -50.0])
+
+    assert violation == "queued_xy_motion_before_above_facade_clearance"
+    assert vertical_violation == ""
+
+
+def test_trusted_roof_above_uav_also_forces_vertical_first_climb():
+    stage = _above_stage()
+    memory, instance = _locked_memory(stage)
+    _install_roof(instance, roof_z=-65.0)
+    objects = _runtime_objects(memory)
+
+    guarded, reason = _apply_above_altitude_path_guard(
+        objects,
+        stage,
+        [[10.0, 0.0, 0.0]],
+        selection_pos=[0.0, 0.0, -50.0],
+    )
+
+    assert guarded == [[0.0, 0.0, -10.0]]
+    assert "vertical_first" in reason
+
+
+def test_pre_roof_climb_limit_blocks_horizontal_crossing():
+    stage = _above_stage()
+    memory, instance = _locked_memory(stage)
+    memory.config["ABOVE_PRE_ROOF_MAX_TOTAL_CLIMB_M"] = 5.2
+    instance.surface_points_world.append([30.0, 0.0, -75.0])
+    instance.surface_bounds_world[0][2] = -75.0
+    objects = _runtime_objects(memory)
+
+    climb, climb_reason = _apply_above_altitude_path_guard(
+        objects,
+        stage,
+        [[8.0, 0.0, 0.0]],
+        selection_pos=[0.0, 0.0, -50.0],
+    )
+    instance.surface_observation_count += 1
+    instance.last_seen_view = "front"
+    blocked, blocked_reason = _apply_above_altitude_path_guard(
+        objects,
+        stage,
+        [[8.0, 0.0, 0.0]],
+        selection_pos=[0.0, 0.0, -55.2],
+    )
+
+    assert climb == []
+    assert "tail_blocked_by_emergency_ceiling" in climb_reason
+    assert blocked == []
+    assert "climb_limit_reached_horizontal_crossing_blocked" in blocked_reason
+
+
+def test_front_identity_remains_available_for_climb_until_roof_candidate_exists():
+    stage = _above_stage()
+    memory, instance = _locked_memory(stage)
+    image = Image.new("RGB", (640, 480), (100, 100, 100))
+    facade = SimpleNamespace(
+        visible=True,
+        bbox=[280, 180, 360, 300],
+        score=0.9,
+        label="building",
+        camera="front",
+        depth_median=4.0,
+        depth_valid_ratio=0.9,
+        depth_mad_m=0.2,
+    )
+
+    before_roof = memory.evaluate_locked_detection_identity(
+        stage,
+        facade,
+        image,
+        observer_world=[25.0, 0.0, -50.0],
+        observer_yaw_deg=0.0,
+        view="front",
+    )
+    _install_roof(instance, roof_z=-55.0)
+    after_roof = memory.evaluate_locked_detection_identity(
+        stage,
+        facade,
+        image,
+        observer_world=[30.0, 0.0, -58.0],
+        observer_yaw_deg=0.0,
+        view="front",
+    )
+
+    assert before_roof["accepted"]
+    assert after_roof["reason"] == "above_overhead_down_view_primary"
+
+
+def test_trusted_roof_never_descends_because_excess_clearance_is_valid():
     stage = _above_stage()
     memory, instance = _locked_memory(stage)
     _install_roof(instance, roof_z=-20.0)
@@ -148,10 +345,197 @@ def test_trusted_roof_allows_only_segmented_descent_then_holds_clearance():
         selection_pos=[30.0, 0.0, -35.0],
     )
 
-    assert high_path[0][2] == 3.0
-    assert "segmented_descent" in high_reason
+    assert high_path[0][2] == 0.0
+    assert "hold_clearance" in high_reason
     assert safe_path[0][2] == 0.0
     assert "hold_clearance" in safe_reason
+
+
+def test_short_climb_tail_is_expanded_to_ten_meter_minimum():
+    stage = _above_stage()
+    memory, instance = _locked_memory(stage)
+    objects = _runtime_objects(memory)
+    instance.surface_points_world = [[30.0, 0.0, -51.0]]
+    instance.surface_bounds_world = [[30.0, -2.0, -51.0], [30.0, 2.0, -25.0]]
+
+    climb, _reason = _apply_above_altitude_path_guard(
+        objects,
+        stage,
+        [[6.0, 0.0, 0.0]],
+        selection_pos=[0.0, 0.0, -50.0],
+    )
+
+    assert climb == [[0.0, 0.0, -10.0]]
+
+
+def test_direct_vertical_action_is_always_strictly_greater_than_five_meters():
+    config = {"AIRSIM_MIN_VERTICAL_COMMAND_M": 5.5}
+
+    assert _normalize_direct_vertical_action_m(3.0, config) == 5.5
+    assert _normalize_direct_vertical_action_m(5.0, config) == 5.5
+    assert _normalize_direct_vertical_action_m(7.0, config) == 7.0
+
+
+def test_direct_climb_uses_ten_meter_minimum_without_changing_descent_minimum():
+    config = {
+        "AIRSIM_MIN_VERTICAL_COMMAND_M": 5.5,
+        "AIRSIM_MIN_CLIMB_COMMAND_M": 10.0,
+    }
+
+    assert _normalize_direct_vertical_action_m(6.0, config, climb=True) == 10.0
+    assert _normalize_direct_vertical_action_m(6.0, config, climb=False) == 6.0
+
+
+def test_airsim_fixed_heading_path_uses_max_degree_of_freedom(monkeypatch):
+    class _YawMode:
+        def __init__(self, is_rate=False, yaw_or_rate=0.0):
+            self.is_rate = bool(is_rate)
+            self.yaw_or_rate = float(yaw_or_rate)
+
+    class _Vector3r:
+        def __init__(self, x, y, z):
+            self.values = [float(x), float(y), float(z)]
+
+    fake_airsim = SimpleNamespace(
+        Vector3r=_Vector3r,
+        YawMode=_YawMode,
+        DrivetrainType=SimpleNamespace(
+            ForwardOnly="forward_only",
+            MaxDegreeOfFreedom="max_degree_of_freedom",
+        ),
+    )
+
+    class _Rpc:
+        def __init__(self):
+            self.command = None
+
+        def moveOnPathAsync(self, **kwargs):
+            self.command = ("path", (), kwargs)
+            return SimpleNamespace()
+
+        def moveToPositionAsync(self, *args, **kwargs):
+            self.command = ("position", args, kwargs)
+            return SimpleNamespace()
+
+    monkeypatch.setattr("sim.airsim_client.airsim", fake_airsim)
+    client = AirSimClient.__new__(AirSimClient)
+    client.client = _Rpc()
+    client.get_pose = lambda: ([32.29, 0.53, -7.45], 40.4)
+
+    client.start_waypoint_path(
+        [[32.29, 0.53, -13.45]],
+        velocity=1.3,
+        hold_heading=True,
+        heading_yaw_deg=40.4,
+    )
+
+    command_kind, _args, command = client.client.command
+    assert command_kind == "position"
+    assert command["drivetrain"] == "max_degree_of_freedom"
+    assert command["yaw_mode"].yaw_or_rate == 40.4
+
+
+def test_vertical_path_quantization_accumulates_small_climbs_until_executable():
+    guarded, reason = _apply_airsim_vertical_path_quantization(
+        [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
+        config={"AIRSIM_MIN_VERTICAL_COMMAND_M": 5.5},
+    )
+
+    assert guarded == [[1.0, 2.0, 0.0], [4.0, 5.0, 6.0]]
+    assert reason == "held_1_sub_5.500m_vertical_targets"
+
+
+def test_vertical_path_quantization_holds_five_meter_target_but_keeps_horizontal_motion():
+    guarded, reason = _apply_airsim_vertical_path_quantization(
+        [[8.0, -3.0, 5.0]],
+        config={"AIRSIM_MIN_VERTICAL_COMMAND_M": 5.5},
+    )
+
+    assert guarded == [[8.0, -3.0, 0.0]]
+    assert reason
+
+
+def test_vertical_path_quantization_does_not_execute_sub_ten_meter_climb():
+    guarded, reason = _apply_airsim_vertical_path_quantization(
+        [[8.0, -3.0, -6.0]],
+        config={
+            "AIRSIM_MIN_VERTICAL_COMMAND_M": 5.5,
+            "AIRSIM_MIN_CLIMB_COMMAND_M": 10.0,
+        },
+    )
+
+    assert guarded == [[8.0, -3.0, 0.0]]
+    assert reason == "held_1_sub_10.000m_vertical_targets"
+
+
+def test_vertical_path_quantization_preserves_executable_targets():
+    for requested_z in (5.5, 6.0):
+        waypoints = [[1.0, 2.0, requested_z]]
+        guarded, reason = _apply_airsim_vertical_path_quantization(
+            waypoints,
+            config={"AIRSIM_MIN_VERTICAL_COMMAND_M": 5.5},
+        )
+
+        assert guarded == waypoints
+        assert reason == ""
+
+
+def test_vertical_path_quantization_holds_small_tail_after_executable_climb():
+    guarded, reason = _apply_airsim_vertical_path_quantization(
+        [[1.0, 2.0, 5.5], [3.0, 4.0, 6.0]],
+        config={"AIRSIM_MIN_VERTICAL_COMMAND_M": 5.5},
+    )
+
+    assert guarded == [[1.0, 2.0, 5.5], [3.0, 4.0, 5.5]]
+    assert reason
+
+
+def test_first_roof_plane_must_remain_in_locked_facade_identity_corridor():
+    stage = _above_stage()
+    memory, instance = _locked_memory(stage)
+    memory.config.update({
+        "ABOVE_ROOF_IDENTITY_CORRIDOR_HALF_WIDTH_M": 8.0,
+        "ABOVE_ROOF_MAX_BEFORE_FACADE_M": 8.0,
+        "ABOVE_ROOF_MAX_BEYOND_FACADE_M": 24.0,
+        "ABOVE_ROOF_LARGE_STRUCTURE_ASSOCIATION_M": 25.0,
+        "ABOVE_ROOF_MIN_CONFIDENCE": 0.45,
+    })
+    instance.identity_observer_world = [0.0, 0.0, -50.0]
+    instance.identity_world = [30.0, 0.0, -30.0]
+    off_axis_neighbour = SimpleNamespace(
+        valid=True,
+        center_world=[30.0, 18.0, -32.0],
+        roof_z_world=-32.0,
+        confidence=0.9,
+        z_mad_m=0.2,
+        full_frame=True,
+        sample_points_world=[[28.0, 16.0, -32.0], [32.0, 20.0, -32.0]],
+    )
+    same_building = SimpleNamespace(
+        valid=True,
+        center_world=[32.0, 2.0, -32.0],
+        roof_z_world=-32.0,
+        confidence=0.9,
+        z_mad_m=0.2,
+        full_frame=True,
+        sample_points_world=[[28.0, -2.0, -32.0], [34.0, 4.0, -32.0]],
+    )
+
+    rejected = memory.record_roof_plane(
+        stage,
+        off_axis_neighbour,
+        observer_world=[30.0, 18.0, -50.0],
+    )
+    accepted = memory.record_roof_plane(
+        stage,
+        same_building,
+        observer_world=[32.0, 2.0, -50.0],
+    )
+
+    assert rejected is None
+    assert any(event.get("type") == "reject_roof_plane_identity_corridor" for event in memory.events)
+    assert accepted is not None
+    assert instance.roof_observation_count == 1
 
 
 def test_large_building_facade_point_cannot_complete_above_but_roof_can():
@@ -168,6 +552,25 @@ def test_large_building_facade_point_cannot_complete_above_but_roof_can():
     assert roof_complete.done
     assert roof_complete.details["geometry"] == "roof"
     assert roof_complete.target_world == [30.0, 0.0, -20.0]
+
+
+def test_above_completion_has_no_maximum_roof_clearance():
+    stage = _above_stage()
+    memory, instance = _locked_memory(stage)
+    memory.config["ABOVE_MAX_ALTITUDE_M"] = 10.0  # Legacy value must be ignored.
+    _install_roof(instance, roof_z=-20.0)
+    current = [30.0, 0.0, -100.0]
+    decision = memory.evaluate_completion(stage=stage, current_world=current)
+    objects = SimpleNamespace(
+        mission_memory=memory,
+        above_stage_states={},
+        distance_estimator=SimpleNamespace(use_for_completion=False),
+    )
+    estimate = SimpleNamespace(**memory.estimate_distance(stage, current))
+
+    assert decision.done
+    assert decision.details["clearance_m"] == 80.0
+    assert _should_trigger_completion_vlm(objects, stage, estimate, 4.0)
 
 
 def test_facade_point_cannot_trigger_runtime_watchdog_or_idle_completion():
@@ -311,6 +714,31 @@ def test_roof_acquisition_crosses_facade_and_keeps_original_probe_direction():
     assert second[-1][0] > 0.0
 
 
+def test_active_roof_probe_corridor_may_move_away_from_facade_anchor():
+    stage = _above_stage()
+    memory, _instance = _locked_memory(stage, target_x=30.0)
+    objects = _runtime_objects(memory)
+    _apply_above_roof_acquisition_path_guard(
+        objects,
+        stage,
+        [[2.0, 0.0, 0.0]],
+        selection_pos=[25.0, 0.0, -60.0],
+        selection_yaw=0.0,
+        planning_wall_s=5.2,
+    )
+    objects.controller = SimpleNamespace(
+        queue=SimpleNamespace(world_waypoints=[[38.0, 0.0, -60.0]])
+    )
+
+    assert _above_queue_violation_reason(objects, stage, [25.0, 0.0, -60.0]) == ""
+
+    objects.controller.queue.world_waypoints = [[38.0, 4.0, -60.0]]
+    assert (
+        _above_queue_violation_reason(objects, stage, [25.0, 0.0, -60.0])
+        == "queued_roof_probe_leaves_corridor"
+    )
+
+
 def test_trusted_roof_reenables_normal_completion_trigger():
     stage = _above_stage()
     memory, instance = _locked_memory(stage)
@@ -323,6 +751,42 @@ def test_trusted_roof_reenables_normal_completion_trigger():
     estimate = SimpleNamespace(**memory.estimate_distance(stage, [30.0, 0.0, -50.0]))
 
     assert _should_trigger_completion_vlm(objects, stage, estimate, 4.0)
+
+
+def test_two_complex_roof_local_patches_become_trusted_and_complete():
+    stage = _above_stage()
+    memory, _instance = _locked_memory(stage)
+    memory.config.update({
+        "ABOVE_ROOF_DEPTH_STRIDE": 4,
+        "ABOVE_ROOF_LOCAL_PATCH_ENABLED": True,
+        "ABOVE_ROOF_LOCAL_CENTER_FRACTION": 0.08,
+        "ABOVE_ROOF_LOCAL_MIN_SUPPORT_RATIO": 0.55,
+    })
+    objects = _runtime_objects(memory)
+    current = [30.0, 0.0, -50.0]
+
+    first = _record_synchronized_roof_plane(
+        objects,
+        stage,
+        _complex_roof_depth(),
+        current,
+        0.0,
+        source="planning_snapshot",
+    )
+    second = _record_synchronized_roof_plane(
+        objects,
+        stage,
+        _complex_roof_depth(),
+        current,
+        0.0,
+        source="above_completion",
+    )
+    roof = memory.roof_navigation_context(stage, current)
+
+    assert first.valid and second.valid
+    assert first.reason == "local_horizontal_patch_under_drone"
+    assert roof["trusted"]
+    assert memory.evaluate_completion(stage=stage, current_world=current).done
 
 
 def test_roof_plane_rejection_reason_is_visible_without_debug_logs(capsys):

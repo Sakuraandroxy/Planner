@@ -23,7 +23,14 @@ class GroundingDINODetector(BaseDetector):
         fc = function_section(cfg, "PERCEPTION")
         ag = cfg.get("AGENT", {}) or {}
         self.url = str(first_value(fc.get("URL"), ag.get("GROUNDINGDINO_URL"), default="")).strip()
-        self.timeout = int(first_value(fc.get("TIMEOUT"), ag.get("DETECTOR_TIMEOUT"), default=15))
+        self.timeout = float(first_value(fc.get("TIMEOUT"), ag.get("DETECTOR_TIMEOUT"), default=15))
+        self.connect_timeout = float(
+            first_value(
+                fc.get("CONNECT_TIMEOUT"),
+                ag.get("DETECTOR_CONNECT_TIMEOUT"),
+                default=min(5.0, self.timeout),
+            )
+        )
         self.box_threshold = float(first_value(fc.get("BOX_THRESHOLD"), ag.get("DETECTOR_BOX_THRESHOLD"), default=0.4))
         self.text_threshold = float(first_value(fc.get("TEXT_THRESHOLD"), ag.get("DETECTOR_TEXT_THRESHOLD"), default=0.3))
 
@@ -59,7 +66,10 @@ class GroundingDINODetector(BaseDetector):
                 "box_threshold": self.box_threshold,
                 "text_threshold": self.text_threshold,
             },
-            timeout=self.timeout,
+            # A missing route/service must be reported quickly so navigation
+            # can keep its locked memory and enter a bounded retry backoff.
+            # Model inference may still use the longer read timeout.
+            timeout=(self.connect_timeout, self.timeout),
         )
         data = resp.json()
         detections = data.get("detections") if data.get("success") else None

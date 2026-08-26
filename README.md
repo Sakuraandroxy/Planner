@@ -14,7 +14,7 @@
 - **场景物体深度**：可同时检测目标、障碍物和参考物，打印并注入其 bbox 与深度，辅助规划绕障。
 - **目标实例锁定**：首次发现目标后锁定类别和世界坐标，减少同类目标误切换。
 - **轻量上下文管理**：只保留目标记忆和状态机，不负责重定位、局部前进或到达判断。
-- **四向环视重定位**：目标丢失后独立触发 4 视角环视，重新寻找最可能的锁定目标。
+- **按尺度目标丢失恢复**：建筑保持锁定几何并切换记忆/下视屋顶获取；小目标才进行身份校验后的有限扇形搜索。
 - **本地/远程 VLM 兼容**：支持云端 API，也支持内网 vLLM 部署的 `Qwen3-VL-4B-Instruct`。
 
 ## 系统流程
@@ -40,7 +40,7 @@ TaskManager（按阶段执行）
           ↓
         解析 JSON → AirSim 航点执行
           ↓
-        若目标丢失 → Relocalizer 四向环视
+        若目标丢失 → 建筑按记忆/下视继续；小目标有限扇形重定位
 ```
 
 ## 项目结构
@@ -58,7 +58,7 @@ TaskManager（按阶段执行）
 | `agent/target_depth.py` | bbox 解析、目标选择、bbox 到深度图映射、深度统计 |
 | `agent/target_identity.py` | 目标实例锁定，防止追错同类目标 |
 | `agent/context_manager.py` | 轻量上下文：目标记忆 + 状态机 |
-| `agent/relocalizer.py` | 目标丢失后的四向环视重定位 |
+| `agent/functions/relocalization/` | 按目标尺度分流的有界重定位与防重复搜索状态 |
 | `agent/prompt_builder.py` | 图片编码、深度提示格式化、planner 消息构造 |
 | `agent/response_parser.py` | 解析 VLM JSON，并裁剪/规范动作 |
 | `agent/vlm_client.py` | OpenAI 兼容 Chat Completions API 客户端 |
@@ -182,7 +182,7 @@ copy .env.example .env
 | `PLANNER_TARGET_IDENTITY_ENABLED` | `1` | 是否锁定首次目标实例 |
 | `PLANNER_TARGET_IDENTITY_WORLD_TOLERANCE_ABS` | `15.0` | 目标实例世界坐标匹配半径下限 |
 | `PLANNER_TARGET_IDENTITY_WORLD_TOLERANCE_RATIO` | `0.35` | 根据深度放大的匹配半径比例 |
-| `PLANNER_RELOCALIZER_ENABLED` | `1` | 目标丢失后是否启用四向环视 |
+| `PLANNER_RELOCALIZER_ENABLED` | `1` | 是否启用小目标有界重定位；大型建筑始终禁止原地环视 |
 | `PLANNER_RELOCALIZER_VIEW_COUNT` | `4` | 环视视角数量 |
 | `PLANNER_RELOCALIZER_YAW_STEP_DEG` | `90.0` | 环视每次旋转角 |
 
@@ -255,14 +255,14 @@ TaskParser 会把任务拆成以下三类阶段：
 
 ### Relocalizer
 
-目标丢失时，普通 planner 不继续盲目前进，而是触发独立四向环视：
+目标丢失后先按目标尺度分流。大型建筑不旋转：保留已锁定表面和活动队列，`above` 阶段改由下视深度获取屋顶；只有人物等小目标才以记忆方位为中心进行 `±15°/±30°` 有限搜索。无可靠记忆时，同一位置最多允许一次受限全局覆盖，候选必须通过三维几何/方位、外观和上一实体排除校验：
 
 ```text
-[RELOCALIZE] target missing; scanning 4 views...
-[RELOCALIZE] found view=2 yaw=159.3 conf=0.92 depth=7.76 world_pos=[...]
+[TargetLost] compact_target_bounded_search session=relocalize-1 offsets=[0,-15,-30,15,30]
+[Relocalize] session=relocalize-1 found=True view=front total_rotation=45.0deg views=3
 ```
 
-Relocalizer 只负责重新找目标候选，不直接决定最终轨迹。
+重定位成功后会把带深度和观测位姿的完整结果回写 MissionMemory，并清零丢失计数；GroundingDINO 分数本身不能证明候选就是已锁定的实体。
 
 ## VLM 输出格式
 

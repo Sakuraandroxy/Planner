@@ -98,6 +98,16 @@ def estimate_detection_world(
         return None
     center_x = (float(bbox[0]) + float(bbox[2])) * 0.5
     center_y = (float(bbox[1]) + float(bbox[3])) * 0.5
+    surface_anchor_uv = list(getattr(detection, "surface_anchor_uv", None) or [])
+    if len(surface_anchor_uv) >= 2:
+        try:
+            anchor_u = float(surface_anchor_uv[0])
+            anchor_v = float(surface_anchor_uv[1])
+        except (TypeError, ValueError):
+            anchor_u = anchor_v = float("nan")
+        if all(math.isfinite(value) for value in (anchor_u, anchor_v)):
+            center_x = max(0.0, min(width - 1.0, anchor_u * width))
+            center_y = max(0.0, min(height - 1.0, anchor_v * height))
     return project_image_depth_world(
         pixel_x=center_x,
         pixel_y=center_y,

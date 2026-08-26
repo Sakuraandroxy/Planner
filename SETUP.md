@@ -72,6 +72,7 @@ conda create -n airsim python=3.10 -y
 conda activate airsim
 cd D:\Codex_code\world_model\Planner
 pip install -r requirements.txt
+python run_airsim_cli.py --save-target-snapshots
 ```
 
 `requirements.txt` 内容：
