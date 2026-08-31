@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import math
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional, Sequence
@@ -15,6 +16,10 @@ from agent.functions.common.detection_policy import (
     is_large_structure_stage,
 )
 from agent.models.detection.base import DetectionResult
+from agent.functions.perception.camera_geometry import (
+    attach_detection_camera_context,
+    project_world_to_pixel,
+)
 
 
 @dataclass
@@ -31,6 +36,8 @@ class RelocalizationResult:
     down_depth: Any = None
     front_detections: list[DetectionResult] = field(default_factory=list)
     down_detections: list[DetectionResult] = field(default_factory=list)
+    camera_images: dict[str, Any] = field(default_factory=dict)
+    camera_depths: dict[str, Any] = field(default_factory=dict)
     observer_world: Optional[list[float]] = None
     observer_yaw_deg: Optional[float] = None
     capture_timestamp_s: float = 0.0
@@ -79,6 +86,7 @@ class TargetRelocalizer:
         base_yaw_deg: Optional[float] = None,
         max_total_rotation_deg: Optional[float] = None,
         session_id: str = "",
+        expected_target_world: Optional[Sequence[float]] = None,
     ) -> RelocalizationResult:
         started = time.perf_counter()
         if not self.enabled:
@@ -137,6 +145,12 @@ class TargetRelocalizer:
             observer_world, observer_yaw = client.get_pose()
             capture_timestamp = time.perf_counter()
             searched_yaws.append(float(observer_yaw))
+            predicted_views = self._predicted_visible_views(
+                (frame, down),
+                expected_target_world,
+            )
+            if predicted_views and not any(predicted_views):
+                continue
             (
                 front_det,
                 down_det,
@@ -150,6 +164,7 @@ class TargetRelocalizer:
                 target,
                 front_depth=front_depth,
                 down_depth=down_depth,
+                allowed_views=predicted_views,
             )
 
             accepted = None
@@ -172,10 +187,13 @@ class TargetRelocalizer:
 
             if accepted is not None and accepted.visible:
                 center_offset = 0.0
-                if accepted.camera == "front" and self.center_on_target:
-                    center_offset = self._front_center_offset_deg(accepted, frame)
+                if self.center_on_target:
+                    accepted_image = self._image_for_detection(accepted, frame, down)
+                    center_offset = self._camera_center_offset_deg(accepted, accepted_image)
                     if abs(center_offset) >= self.min_center_offset_deg:
                         client.rotate_yaw(center_offset)
+                camera_images = self._camera_value_map(frame, down)
+                camera_depths = self._camera_value_map(front_depth, down_depth)
                 return RelocalizationResult(
                     found=True,
                     detection=accepted,
@@ -185,6 +203,8 @@ class TargetRelocalizer:
                     down_depth=down_depth,
                     front_detections=front_detections,
                     down_detections=down_detections,
+                    camera_images=camera_images,
+                    camera_depths=camera_depths,
                     observer_world=[float(v) for v in observer_world[:3]],
                     observer_yaw_deg=float(observer_yaw),
                     capture_timestamp_s=capture_timestamp,
@@ -194,7 +214,10 @@ class TargetRelocalizer:
                     total_rotation_deg=total_rotation + abs(center_offset),
                     searched_yaws_deg=searched_yaws,
                     elapsed=time.perf_counter() - started,
-                    reason=f"validated target detected in {accepted.camera} view",
+                    reason=(
+                        "validated target detected in "
+                        f"{getattr(accepted, 'camera_id', '') or accepted.camera} view"
+                    ),
                 )
 
         restore_turn = abs(self._signed_yaw_delta_deg(start_yaw, last_commanded_yaw))
@@ -217,14 +240,14 @@ class TargetRelocalizer:
         *,
         front_depth=None,
         down_depth=None,
+        allowed_views: Optional[Sequence[bool]] = None,
     ):
-        if front_image is None:
-            empty = DetectionResult(visible=False, camera="none")
-            return empty, empty, empty, [], []
-
-        def detect_all(image, camera_name: str, depth):
+        def detect_all(image, camera_name: str, depth, allowed: bool = True):
             if image is None:
                 return []
+            if not allowed:
+                return []
+            camera_frame = getattr(image, "camera_frame", None)
             if hasattr(self.detector, "detect_all"):
                 results = list(self.detector.detect_all(
                     image,
@@ -241,6 +264,7 @@ class TargetRelocalizer:
                 )
                 results = [detected] if detected is not None and detected.visible else []
             for index, result in enumerate(results):
+                attach_detection_camera_context(result, image, camera_frame)
                 if depth is not None:
                     web_helpers.target_depth_text(
                         f"relocalize_{camera_name}#{index}",
@@ -251,11 +275,17 @@ class TargetRelocalizer:
             return results
 
         with contextlib.redirect_stdout(io.StringIO()):
-            front_all = detect_all(front_image, "front", front_depth)
-            down_all = detect_all(down_image, "down", down_depth)
+            front_allowed = bool(allowed_views[0]) if allowed_views and len(allowed_views) > 0 else True
+            down_allowed = bool(allowed_views[1]) if allowed_views and len(allowed_views) > 1 else True
+            front_all = detect_all(front_image, "front", front_depth, front_allowed)
+            down_all = detect_all(down_image, "down", down_depth, down_allowed)
         front_det = self._best_detection(stage, front_all, front_image, "front")
         down_det = self._best_detection(stage, down_all, down_image, "down")
-        candidates = (front_det, down_det) if self.accept_down_view else (front_det,)
+        candidates = (
+            (front_det, down_det)
+            if self._secondary_camera_allowed(front_image, down_image)
+            else (front_det,)
+        )
         visible = [detection for detection in candidates if detection.visible]
         best = (
             max(visible, key=lambda detection: float(detection.score or 0.0))
@@ -289,7 +319,7 @@ class TargetRelocalizer:
             (candidate, front_image)
             for candidate in list(front_detections or [])
         ]
-        if self.accept_down_view:
+        if self._secondary_camera_allowed(front_image, down_image):
             candidates.extend((candidate, down_image) for candidate in list(down_detections or []))
         candidates = [
             candidate
@@ -322,6 +352,88 @@ class TargetRelocalizer:
         center_x = (float(detection.bbox[0]) + float(detection.bbox[2])) / 2.0
         normalized_x = center_x / float(image.width) - 0.5
         return normalized_x * self.camera_hfov_deg
+
+    def _camera_center_offset_deg(self, detection: DetectionResult, image) -> float:
+        """Return vehicle yaw correction from exact world rays when possible."""
+        world_ray = getattr(detection, "world_ray", None)
+        camera_frame = getattr(detection, "camera_frame", None) or getattr(image, "camera_frame", None)
+        if world_ray is not None and camera_frame is not None:
+            ray = world_ray.direction_world
+            optical = camera_frame.optical_axis_world
+            ray_horizontal = math.hypot(float(ray[0]), float(ray[1]))
+            optical_horizontal = math.hypot(float(optical[0]), float(optical[1]))
+            if ray_horizontal > 1e-6 and optical_horizontal > 0.15:
+                ray_bearing = math.degrees(math.atan2(float(ray[1]), float(ray[0])))
+                optical_bearing = math.degrees(math.atan2(float(optical[1]), float(optical[0])))
+                return self._signed_yaw_delta_deg(ray_bearing, optical_bearing)
+            return 0.0
+        if str(getattr(detection, "camera", "") or "").lower() == "front":
+            return self._front_center_offset_deg(detection, image)
+        return 0.0
+
+    def _predicted_visible_views(
+        self,
+        images: Sequence[Any],
+        expected_target_world: Optional[Sequence[float]],
+    ) -> list[bool]:
+        """Gate detector calls using the locked target projected into each image.
+
+        An empty return means exact camera geometry is unavailable and the
+        legacy detector behavior should be retained.
+        """
+        target = list(expected_target_world or [])
+        if len(target) < 3:
+            return []
+        decisions = []
+        exact_count = 0
+        margin_ratio = 0.20
+        for image in images:
+            camera_frame = getattr(image, "camera_frame", None) if image is not None else None
+            if camera_frame is None or camera_frame.rgb_intrinsics is None:
+                decisions.append(True)
+                continue
+            exact_count += 1
+            projected = project_world_to_pixel(camera_frame, target, require_in_frame=False)
+            if projected is None:
+                decisions.append(False)
+                continue
+            u, v, _forward = projected
+            width = float(camera_frame.rgb_intrinsics.width)
+            height = float(camera_frame.rgb_intrinsics.height)
+            decisions.append(bool(
+                -margin_ratio * width <= u < (1.0 + margin_ratio) * width
+                and -margin_ratio * height <= v < (1.0 + margin_ratio) * height
+            ))
+        return decisions if exact_count > 0 else []
+
+    def _secondary_camera_allowed(self, primary_image, secondary_image) -> bool:
+        if secondary_image is None:
+            return False
+        # Any Camera API frame has an exact pose and is therefore a valid
+        # relocalization sensor. ACCEPT_DOWN_VIEW remains a legacy-only switch.
+        if getattr(secondary_image, "camera_frame", None) is not None:
+            return True
+        return self.accept_down_view
+
+    @staticmethod
+    def _image_for_detection(detection, primary_image, secondary_image):
+        camera_id = str(getattr(detection, "camera_id", "") or "")
+        for image in (primary_image, secondary_image):
+            frame = getattr(image, "camera_frame", None) if image is not None else None
+            if frame is not None and camera_id and str(frame.camera_id) == camera_id:
+                return image
+        return secondary_image if str(getattr(detection, "camera", "")).lower() == "down" else primary_image
+
+    @staticmethod
+    def _camera_value_map(primary, secondary) -> dict[str, Any]:
+        values = {}
+        for index, value in enumerate((primary, secondary)):
+            if value is None:
+                continue
+            camera_frame = getattr(value, "camera_frame", None)
+            camera_id = str(getattr(camera_frame, "camera_id", "") or f"view_{index}")
+            values[camera_id] = value
+        return values
 
     @staticmethod
     def _signed_yaw_delta_deg(target_yaw_deg: float, current_yaw_deg: float) -> float:

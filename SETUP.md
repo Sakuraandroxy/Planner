@@ -177,12 +177,6 @@ wget https://huggingface.co/ShilongLiu/GroundingDINO/resolve/main/groundingdino_
 conda activate groundingdino
 PYTHONPATH=/data/sakura/models/GroundingDINO/GroundingDINO:$PYTHONPATH CUDA_VISIBLE_DEVICES=2 python /data/sakura/models/GroundingDINO/groundingdino_server.py
 
-PYTHONPATH=/data/sakura/models/GroundingDINO/GroundingDINO:$PYTHONPATH \
-HF_HUB_DISABLE_SSL_VERIFY=1 \
-CURL_CA_BUNDLE="" \
-REQUESTS_CA_BUNDLE="" \
-CUDA_VISIBLE_DEVICES=2 \
-python /data/sakura/models/GroundingDINO/groundingdino_server.py
 ```
 
 > `groundingdino_server.py` 不在本仓库中——它是一个独立的 Flask wrapper，位于 GroundingDINO 仓库根目录。接口为 `POST :8003/detect`，非标准 OpenAI 格式。

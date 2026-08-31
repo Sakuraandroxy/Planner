@@ -87,10 +87,17 @@ class TrajectoryRefiner:
         return waypoints, [f"clip_x<={max_forward:.1f}m"] if clipped else []
 
     def _refine_above(self, waypoints, detection, depth: float, front_image, down_image):
-        camera = str(getattr(detection, "camera", "front") or "front")
+        camera = str(getattr(detection, "camera_id", "") or getattr(detection, "camera", "camera") or "camera")
+        camera_frame = getattr(detection, "camera_frame", None)
+        optical_axis = list(getattr(camera_frame, "optical_axis_world", []) or [])
+        downward_facing = bool(
+            len(optical_axis) >= 3
+            and float(optical_axis[2]) > 0.35
+            and float(optical_axis[2]) > 0.5 * math.hypot(float(optical_axis[0]), float(optical_axis[1]))
+        )
         changes: List[str] = []
 
-        if camera == "front":
+        if not downward_facing:
             overfly_margin = max(1.0, min(3.0, self.stop_threshold * 0.25))
             max_forward = max(1.0, depth + overfly_margin)
             waypoints, clipped = self._limit_forward_progress(waypoints, max_forward)
@@ -117,7 +124,7 @@ class TrajectoryRefiner:
                 changes.append(f"limit_up<={ascent_cap:.1f}m")
             return waypoints, changes
 
-        if camera == "down":
+        if downward_facing:
             hold_radius = max(1.5, min(self.stop_threshold, 4.0))
             waypoints, clipped = self._limit_forward_progress(waypoints, hold_radius)
             if clipped:

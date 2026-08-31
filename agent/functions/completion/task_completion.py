@@ -19,9 +19,9 @@ from agent.models.detection.base import DetectionResult
 
 SYSTEM_PROMPT = """You are a deterministic UAV navigation stage completion judge.
 
-You are given one or more current camera images with reliable detector evidence:
-- front-view: what the drone sees ahead
-- down-view: what the drone sees below
+You are given one or more current Camera API images with reliable detector evidence.
+Each image is identified by camera_id and may have any pitch/yaw/roll; do not infer
+its viewing direction from its name or from its position in the message.
 
 Use the provided image evidence, the exact stage target, the overlaid detector box, target depth, and the estimated world distance together. The distance trigger has already stopped the drone near the cached target; your job is to verify target identity and the requested relation.
 
@@ -33,9 +33,9 @@ Rules:
 - Apply the same rule consistently. Do not become more permissive or stricter across repeated calls.
 - Do not choose a view just because its detector confidence is higher; verify that the boxed object matches the requested target, including color and object type.
 - If a detector box covers most of the image or does not visually match the requested object/color/shape, distrust that proposal.
-- If the instruction says above / over / on top, actively inspect the down-view when it is provided. A front-view target only means the drone is near or facing it; it does not by itself mean the drone is above it.
-- For above / over / on top, mark done=true only when the target's main body is clearly visible near the central area of the down-view and the down-view depth is within the arrival radius.
-- For above / over / on top, if the down-view shows only a small edge/corner/partial fragment of the target, or the target is mainly at the image border, return done=false even if the depth is small.
+- If the instruction says above / over / on top, use an image whose supplied optical axis points downward. A target in a horizontally facing image only means the drone is near or facing it.
+- For above / over / on top, mark done=true only when the target's main body is clearly visible near the central area of a downward-facing image and that image's depth is within the arrival radius.
+- For above / over / on top, if a downward-facing image shows only a small edge/corner/partial fragment of the target, or the target is mainly at the image border, return done=false even if the depth is small.
 - For fly to / beside / near, return done=true only when the requested target is visually matched in at least one reliable boxed view AND that same fresh view's target depth is within the arrival radius.
 - Estimated world distance is trigger/context information only. It must never replace a fresh boxed target depth or make an otherwise invisible target complete.
 - A close target may be large or partially clipped because the drone is already beside it. Cropping alone is NOT a reason for done=false when target identity is clear and distance is within the radius.
@@ -45,7 +45,7 @@ Rules:
 
 Return only one JSON object. Keep reason_code short and deterministic.
 Required keys:
-{"target_detected": true or false, "done": true or false, "accepted_view": "front" or "down" or "none", "reason_code": "complete_near_target" or "target_mismatch" or "outside_radius"}
+{"target_detected": true or false, "done": true or false, "accepted_view": "one supplied camera_id" or "none", "reason_code": "complete_near_target" or "target_mismatch" or "outside_radius"}
 """
 
 
@@ -60,8 +60,10 @@ Estimated UAV-to-target world distance: {estimated_distance_m}
 Detector evidence:
 {evidence}
 
+Allowed accepted_view values: {allowed_views}
+
 Question: Looking at the provided image evidence and the task target, is this stage complete now?
-Return only {{"target_detected": true or false, "done": true or false, "accepted_view": "front" or "down" or "none", "reason_code": "complete_near_target" or "target_mismatch" or "outside_radius"}}."""
+Return only {{"target_detected": true or false, "done": true or false, "accepted_view": "one allowed camera_id" or "none", "reason_code": "complete_near_target" or "target_mismatch" or "outside_radius"}}."""
 
 
 @dataclass
@@ -273,10 +275,20 @@ class TaskCompletionChecker:
                 )
             if ok:
                 # Validate the VLM's decision against physical constraints
-                if done and target_detected and accepted_view in {"front", "down"}:
-                    accepted_det = (
-                        reliable_front if accepted_view == "front" else reliable_down
-                    )
+                view_evidence = self._view_evidence_map(
+                    front_image,
+                    down_image,
+                    reliable_front,
+                    reliable_down,
+                )
+                accepted_item = view_evidence.get(str(accepted_view).lower())
+                if done and target_detected and accepted_item is None:
+                    target_detected = False
+                    accepted_view = "none"
+                    done = False
+                    reason = "not complete"
+                elif done and target_detected and accepted_item is not None:
+                    accepted_det, accepted_image = accepted_item
                     if accepted_det is None or not accepted_det.visible:
                         target_detected = False
                         accepted_view = "none"
@@ -287,17 +299,21 @@ class TaskCompletionChecker:
                     ):
                         done = False
                         reason = "not complete"
-                if self._is_above_stage(stage) and done and accepted_view != "down":
+                if (
+                    self._is_above_stage(stage)
+                    and done
+                    and (
+                        accepted_item is None
+                        or not self._camera_points_downward(accepted_item[1])
+                    )
+                ):
                     done = False
                     reason = "not complete"
 
-                accepted_detection = (
-                    (reliable_front if accepted_view == "front" else reliable_down)
-                    if target_detected and accepted_view in {"front", "down"}
-                    else None
-                )
+                accepted_detection = accepted_item[0] if target_detected and accepted_item is not None else None
+                accepted_image = accepted_item[1] if accepted_item is not None else front_image
                 direction = (
-                    self._estimate_direction(accepted_detection, front_image)
+                    self._estimate_direction(accepted_detection, accepted_image)
                     if target_detected else ""
                 )
                 return CompletionResult(
@@ -318,24 +334,29 @@ class TaskCompletionChecker:
                 )
 
         # ── Heuristic fallback (VLM disabled or failed with fallback enabled) ──
-        for det in (front_detection, down_detection):
+        for det, image, fallback_view in (
+            (front_detection, front_image, "front"),
+            (down_detection, down_image, "down"),
+        ):
             if det is None or not det.visible:
+                continue
+            if self._is_above_stage(stage) and not self._camera_points_downward(image):
                 continue
             if getattr(stage, "mode", "") == "detect":
                 return CompletionResult(
                     checked=True, done=True, target_detected=True,
-                    accepted_view=det.camera, reason="target detected",
+                    accepted_view=self._camera_id_for_detection(det, image, fallback_view), reason="target detected",
                     detection=det,
-                    direction=self._estimate_direction(det, front_image),
+                    direction=self._estimate_direction(det, image),
                     elapsed=time.perf_counter() - started,
                 )
             if det.depth_median is not None and det.depth_median < self.stop_depth:
                 return CompletionResult(
                     checked=True, done=True, target_detected=True,
-                    accepted_view=det.camera,
+                    accepted_view=self._camera_id_for_detection(det, image, fallback_view),
                     reason=f"depth={det.depth_median:.1f}m < {self.stop_depth:.1f}m",
                     detection=det,
-                    direction=self._estimate_direction(det, front_image),
+                    direction=self._estimate_direction(det, image),
                     elapsed=time.perf_counter() - started,
                 )
         return CompletionResult(
@@ -354,13 +375,21 @@ class TaskCompletionChecker:
             or "on top" in instruction
         )
 
-    def _estimate_direction(self, detection: Optional[DetectionResult], front_image) -> str:
+    def _estimate_direction(self, detection: Optional[DetectionResult], image) -> str:
         if not detection or not detection.visible or not detection.bbox:
             return ""
-        if detection.camera == "down":
-            return "Target is visible in the downward view below the drone."
-        if detection.camera == "front" and self.direction_estimator and front_image is not None:
-            return self.direction_estimator.estimate(detection.bbox, 0, (front_image.width, front_image.height))
+        if self.direction_estimator and image is not None:
+            frame = getattr(detection, "camera_frame", None) or getattr(image, "camera_frame", None)
+            yaw = float(getattr(frame, "navigation_yaw_deg", 0.0) or 0.0)
+            try:
+                return self.direction_estimator.estimate(
+                    detection=detection,
+                    bbox=detection.bbox,
+                    image_size=(image.width, image.height),
+                    navigation_yaw_deg=yaw,
+                )
+            except TypeError:
+                return self.direction_estimator.estimate(detection.bbox, 0, (image.width, image.height))
         return ""
 
     def _attach_depth(
@@ -373,11 +402,15 @@ class TaskCompletionChecker:
     ) -> DetectionResult:
         if detection.depth_median is not None or not detection.bbox:
             return detection
-        depth = down_depth_meters if detection.camera == "down" else front_depth_meters
+        front_id = self._camera_id_for_image(front_image, "front")
+        down_id = self._camera_id_for_image(down_image, "down")
+        detection_id = str(getattr(detection, "camera_id", "") or getattr(detection, "camera", "")).lower()
+        use_down = detection_id in {str(down_id).lower(), "down"}
+        depth = down_depth_meters if use_down else front_depth_meters
         if depth is None:
             return detection
 
-        image = down_image if detection.camera == "down" and down_image is not None else front_image
+        image = down_image if use_down and down_image is not None else front_image
         if image is None or not hasattr(image, "width") or not hasattr(image, "height"):
             return detection
 
@@ -398,6 +431,42 @@ class TaskCompletionChecker:
         except Exception:
             pass
         return detection
+
+    @staticmethod
+    def _camera_id_for_image(image, fallback: str) -> str:
+        frame = getattr(image, "camera_frame", None) if image is not None else None
+        return str(getattr(frame, "camera_id", "") or fallback).strip().lower()
+
+    @classmethod
+    def _camera_id_for_detection(cls, detection, image, fallback: str) -> str:
+        return str(
+            getattr(detection, "camera_id", "")
+            or cls._camera_id_for_image(image, fallback)
+            or getattr(detection, "camera", "")
+            or fallback
+        ).strip().lower()
+
+    @staticmethod
+    def _camera_points_downward(image) -> bool:
+        frame = getattr(image, "camera_frame", None) if image is not None else None
+        if frame is None:
+            return False
+        optical = list(frame.optical_axis_world or [])
+        if len(optical) < 3:
+            return False
+        horizontal = (float(optical[0]) ** 2 + float(optical[1]) ** 2) ** 0.5
+        return bool(float(optical[2]) > 0.35 and float(optical[2]) > 0.5 * horizontal)
+
+    @classmethod
+    def _view_evidence_map(cls, front_image, down_image, front_detection, down_detection):
+        mapping = {
+            cls._camera_id_for_image(front_image, "front"): (front_detection, front_image),
+            cls._camera_id_for_image(down_image, "down"): (down_detection, down_image),
+        }
+        # Legacy aliases are input-slot adapters, not orientation assumptions.
+        mapping.setdefault("front", (front_detection, front_image))
+        mapping.setdefault("down", (down_detection, down_image))
+        return mapping
 
     def _prepare_detection(
         self,
@@ -551,24 +620,29 @@ class TaskCompletionChecker:
         down_detection: Optional[DetectionResult],
         estimated_distance_m: Optional[float] = None,
     ) -> Tuple[bool, bool, str, bool, str]:
-        if front_image is None:
-            return False, False, "none", False, "vlm judge skipped: front image unavailable"
+        if front_image is None and down_image is None:
+            return False, False, "none", False, "vlm judge skipped: camera images unavailable"
 
         instruction = (getattr(stage, "instruction", "") or fallback_instruction or "").strip()
         target = (getattr(stage, "target_query", "") or getattr(stage, "target", "") or "").strip()
         relation = (getattr(stage, "relation", "") or "").strip()
         completion_condition = (getattr(stage, "completion_condition", "") or "").strip()
         mode = (getattr(stage, "mode", "") or "").strip()
-        prefer_down_view = self._is_above_stage(stage)
+        front_view_id = self._camera_id_for_image(front_image, "front")
+        down_view_id = self._camera_id_for_image(down_image, "down")
+        prefer_down_view = self._is_above_stage(stage) and self._camera_points_downward(down_image)
         evidence_items = []
         if front_detection is not None:
-            evidence_items.append(self._format_detection_evidence("front", front_detection, front_image))
+            evidence_items.append(self._format_detection_evidence(front_view_id, front_detection, front_image))
         if down_detection is not None:
-            evidence_items.append(self._format_detection_evidence("down", down_detection, down_image))
+            evidence_items.append(self._format_detection_evidence(down_view_id, down_detection, down_image))
         if not evidence_items:
             return False, False, "none", False, "vlm judge skipped: no reliable image evidence"
         if prefer_down_view:
-            evidence_items = sorted(evidence_items, key=lambda item: 0 if item.startswith("- down:") else 1)
+            evidence_items = sorted(
+                evidence_items,
+                key=lambda item: 0 if item.startswith(f"- {down_view_id}:") else 1,
+            )
         evidence = "\n".join(evidence_items)
         user_text = USER_PROMPT.format(
             mode=mode or "unknown",
@@ -583,6 +657,7 @@ class TaskCompletionChecker:
                 else "unavailable"
             ),
             evidence=evidence,
+            allowed_views=", ".join(dict.fromkeys([front_view_id, down_view_id, "none"])),
         )
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -612,7 +687,12 @@ class TaskCompletionChecker:
             data = self._parse_response(raw)
             target_detected = bool(data.get("target_detected", False))
             accepted_view = str(data.get("accepted_view", "none") or "none").strip().lower()
-            if accepted_view not in {"front", "down", "none"}:
+            if accepted_view == "front":
+                accepted_view = front_view_id
+            elif accepted_view == "down":
+                accepted_view = down_view_id
+            allowed_views = {front_view_id, down_view_id, "none"}
+            if accepted_view not in allowed_views:
                 accepted_view = "none"
             if not target_detected:
                 accepted_view = "none"
@@ -645,22 +725,24 @@ class TaskCompletionChecker:
         def append_front():
             if front_image is None or not has_reliable_detection(front_detection):
                 return
-            content.append({"type": "text", "text": "Front-view image with proposed detection box overlay:"})
+            view_id = self._camera_id_for_image(front_image, "front")
+            content.append({"type": "text", "text": f"Camera {view_id} image with proposed detection box overlay:"})
             content.append({
                 "type": "image_url",
                 "image_url": {
-                    "url": f"data:image/jpeg;base64,{self._to_b64(self._overlay_detection(front_image, front_detection, 'front'))}"
+                    "url": f"data:image/jpeg;base64,{self._to_b64(self._overlay_detection(front_image, front_detection, view_id))}"
                 },
             })
 
         def append_down():
             if down_image is None or not has_reliable_detection(down_detection):
                 return
-            content.append({"type": "text", "text": "Down-view image with proposed detection box overlay:"})
+            view_id = self._camera_id_for_image(down_image, "down")
+            content.append({"type": "text", "text": f"Camera {view_id} image with proposed detection box overlay:"})
             content.append({
                 "type": "image_url",
                 "image_url": {
-                    "url": f"data:image/jpeg;base64,{self._to_b64(self._overlay_detection(down_image, down_detection, 'down'))}"
+                    "url": f"data:image/jpeg;base64,{self._to_b64(self._overlay_detection(down_image, down_detection, view_id))}"
                 },
             })
 
@@ -683,7 +765,7 @@ class TaskCompletionChecker:
             return canvas
 
         x1, y1, x2, y2 = [int(v) for v in detection.bbox]
-        color = (255, 64, 64) if view_name == "front" else (64, 200, 255)
+        color = (255, 64, 64) if "front" in str(view_name).lower() else (64, 200, 255)
         width = max(3, int(round(min(canvas.size) / 256)))
         for offset in range(width):
             draw.rectangle(
@@ -757,8 +839,15 @@ class TaskCompletionChecker:
             center = f"({(bbox[0] + bbox[2]) / (2.0 * max(width, 1.0)):.3f}, {(bbox[1] + bbox[3]) / (2.0 * max(height, 1.0)):.3f})"
         depth = f"{detection.depth_median:.2f}m" if detection.depth_median is not None else "unknown"
         label = detection.label or ""
+        frame = getattr(detection, "camera_frame", None) or getattr(image, "camera_frame", None)
+        optical_axis = (
+            "[" + ",".join(f"{float(value):.3f}" for value in frame.optical_axis_world[:3]) + "]"
+            if frame is not None
+            else "unknown"
+        )
         return (
             f"- {view_name}: image_size={image_size}, visible={bool(detection.visible)}, "
             f"bbox_px={bbox}, score={float(detection.score or 0.0):.2f}, "
-            f"depth={depth}, bbox_area_ratio={area_ratio}, bbox_center_norm={center}, label={label}"
+            f"depth={depth}, optical_axis_world={optical_axis}, "
+            f"bbox_area_ratio={area_ratio}, bbox_center_norm={center}, label={label}"
         )

@@ -7,6 +7,8 @@ import time
 from dataclasses import dataclass
 from typing import Any, Optional, Sequence
 
+from agent.functions.memory.geometry import estimate_detection_world
+
 
 def _point3(value: Sequence[float]) -> list[float]:
     return [float(value[0]), float(value[1]), float(value[2])]
@@ -26,6 +28,9 @@ class TargetPoseEstimate:
     camera: str
     score: float
     updated_at: float
+    camera_id: str = ""
+    capture_id: str = ""
+    projection_source: str = "legacy"
 
 
 @dataclass(frozen=True)
@@ -54,6 +59,7 @@ class GeometricTargetDistanceEstimator:
         self.down_fov_deg = float(config.get("DOWN_FOV_DEG", sim_config.get("DOWN_FOV", 90.0)))
         self.front_camera_offset = _point3(config.get("FRONT_CAMERA_OFFSET", [1.0, 0.0, 0.0]))
         self.down_camera_offset = _point3(config.get("DOWN_CAMERA_OFFSET", [0.0, 0.0, 0.0]))
+        self.sim_config = dict(sim_config)
         self.depth_is_radial = str(config.get("DEPTH_MODE", "radial")).strip().lower() != "planar"
         self.completion_confirmations = max(1, int(config.get("COMPLETION_CONFIRMATIONS", 2)))
         self._estimate: Optional[TargetPoseEstimate] = None
@@ -106,38 +112,18 @@ class GeometricTargetDistanceEstimator:
         ):
             return None
 
-        width, height = float(image.size[0]), float(image.size[1])
-        if width <= 1.0 or height <= 1.0:
-            return None
-        center_x = (float(bbox[0]) + float(bbox[2])) * 0.5
-        center_y = (float(bbox[1]) + float(bbox[3])) * 0.5
-        fov_deg = self.down_fov_deg if camera == "down" else self.front_fov_deg
-        fx = width / (2.0 * math.tan(math.radians(fov_deg) * 0.5))
-        fy = fx
-        ray_camera = [1.0, (center_x - width * 0.5) / fx, (center_y - height * 0.5) / fy]
-        if self.depth_is_radial:
-            norm = math.sqrt(sum(value * value for value in ray_camera))
-            ray_camera = [value / max(norm, 1e-9) for value in ray_camera]
-        point_camera = [value * depth for value in ray_camera]
-
-        if camera == "down":
-            # down_center uses Pitch=-90 degrees: optical forward maps to body +Z (NED down).
-            point_body = [-point_camera[2], point_camera[1], point_camera[0]]
-            camera_offset = self.down_camera_offset
-        else:
-            point_body = point_camera
-            camera_offset = self.front_camera_offset
-        point_body = [point_body[i] + camera_offset[i] for i in range(3)]
-
-        yaw = math.radians(float(observer_yaw_deg))
-        cos_yaw = math.cos(yaw)
-        sin_yaw = math.sin(yaw)
         observer = _point3(observer_world)
-        target_world = [
-            observer[0] + cos_yaw * point_body[0] - sin_yaw * point_body[1],
-            observer[1] + sin_yaw * point_body[0] + cos_yaw * point_body[1],
-            observer[2] + point_body[2],
-        ]
+        target_world = estimate_detection_world(
+            detection,
+            image,
+            observer,
+            observer_yaw_deg,
+            memory_config=self.config,
+            sim_config=self.sim_config,
+            camera_frame=getattr(detection, "camera_frame", None),
+        )
+        if target_world is None:
+            return None
         stage_key = tuple(stage_key)
         previous = self._estimate if self._estimate and self._estimate.stage_key == stage_key else None
 
@@ -150,6 +136,14 @@ class GeometricTargetDistanceEstimator:
             camera=camera,
             score=score,
             updated_at=time.perf_counter(),
+            camera_id=str(getattr(detection, "camera_id", "") or ""),
+            capture_id=str(getattr(detection, "capture_id", "") or ""),
+            projection_source=(
+                "unified"
+                if str(self.config.get("CAMERA_GEOMETRY_MODE", "shadow")).strip().lower() == "unified"
+                and getattr(detection, "camera_frame", None) is not None
+                else "legacy_shadow" if getattr(detection, "camera_frame", None) is not None else "legacy"
+            ),
         )
         self._estimate = estimate
         self._accepted_updates = self._accepted_updates + 1 if previous is not None else 1

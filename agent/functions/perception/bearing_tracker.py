@@ -78,6 +78,10 @@ class TargetBearingObservation:
     depth_state: str
     range_hint_m: Optional[float] = None
     source: str = "runtime"
+    camera_id: str = ""
+    capture_id: str = ""
+    ray_origin_world: Optional[tuple[float, float, float]] = None
+    ray_direction_world: Optional[tuple[float, float, float]] = None
 
     def age_s(self) -> float:
         return max(0.0, time.perf_counter() - float(self.observed_at))
@@ -131,15 +135,27 @@ class TargetBearingTracker:
         if detection is None or not getattr(detection, "visible", False):
             return None
         camera = str(getattr(detection, "camera", "front") or "front").lower()
-        if camera != "front":
+        world_ray = getattr(detection, "world_ray", None)
+        if world_ray is None and camera != "front":
             return None
         score = float(getattr(detection, "score", 0.0) or 0.0)
         if score < float(self.config.get("BEARING_MIN_CONFIDENCE", 0.40)):
             return None
-        fov = float(self.config.get("FRONT_FOV_DEG", self.sim_config.get("FRONT_FOV", 90.0)))
-        relative = bbox_center_angle_deg(getattr(detection, "bbox", None), image, fov)
-        if relative is None:
-            return None
+        if world_ray is not None:
+            direction = tuple(float(value) for value in world_ray.direction_world[:3])
+            if math.hypot(direction[0], direction[1]) <= 1e-9:
+                return None
+            world_bearing = math.degrees(math.atan2(direction[1], direction[0])) % 360.0
+            relative = signed_angle_delta_deg(world_bearing, observer_yaw_deg)
+            ray_origin = tuple(float(value) for value in world_ray.origin_world[:3])
+        else:
+            fov = float(self.config.get("FRONT_FOV_DEG", self.sim_config.get("FRONT_FOV", 90.0)))
+            relative = bbox_center_angle_deg(getattr(detection, "bbox", None), image, fov)
+            if relative is None:
+                return None
+            world_bearing = (float(observer_yaw_deg) + float(relative)) % 360.0
+            direction = None
+            ray_origin = None
         usable_depth, depth_state = metric_depth_usable(detection, self.config)
         depth = getattr(detection, "depth_median", None)
         range_hint = None
@@ -152,13 +168,17 @@ class TargetBearingTracker:
         observation = TargetBearingObservation(
             stage_key=tuple(stage_key),
             relative_angle_deg=float(relative),
-            world_bearing_deg=(float(observer_yaw_deg) + float(relative)) % 360.0,
+            world_bearing_deg=world_bearing,
             score=score,
             bbox=tuple(int(v) for v in list(getattr(detection, "bbox", []) or [])[:4]),
             observed_at=time.perf_counter(),
             depth_state="metric" if usable_depth else depth_state,
             range_hint_m=range_hint,
             source=str(source or "runtime"),
+            camera_id=str(getattr(detection, "camera_id", "") or ""),
+            capture_id=str(getattr(detection, "capture_id", "") or ""),
+            ray_origin_world=ray_origin,
+            ray_direction_world=direction,
         )
         self._observations[observation.stage_key] = observation
         if "prebind" in observation.source.lower():
@@ -223,8 +243,17 @@ def detection_is_excluded_by_bearing(
     exclusions: Iterable[dict],
     *,
     horizontal_fov_deg: float,
+    observer_yaw_deg: float | None = None,
 ) -> bool:
-    angle = bbox_center_angle_deg(getattr(detection, "bbox", None), image, horizontal_fov_deg)
+    world_ray = getattr(detection, "world_ray", None)
+    if world_ray is not None and observer_yaw_deg is not None:
+        direction = world_ray.direction_world
+        if math.hypot(float(direction[0]), float(direction[1])) <= 1e-9:
+            return False
+        world_bearing = math.degrees(math.atan2(float(direction[1]), float(direction[0])))
+        angle = signed_angle_delta_deg(world_bearing, float(observer_yaw_deg))
+    else:
+        angle = bbox_center_angle_deg(getattr(detection, "bbox", None), image, horizontal_fov_deg)
     if angle is None:
         return False
     for exclusion in exclusions or []:

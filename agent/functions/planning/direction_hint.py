@@ -9,6 +9,8 @@ from typing import Any, Sequence
 from agent.functions.common.config_access import first_value, function_section
 from agent.functions.common.detection_policy import allows_clipped_large_structure
 from agent.functions.perception.bearing_tracker import detection_is_excluded_by_bearing
+from agent.functions.perception.bearing_tracker import signed_angle_delta_deg
+from agent.functions.perception.camera_geometry import attach_detection_camera_context
 from config import cfg
 
 
@@ -79,6 +81,8 @@ def direction_hint_from_front_detection(
     *,
     stage: Any = None,
     excluded_bearings: list[dict] | None = None,
+    additional_images: list[Any] | None = None,
+    observer_yaw_deg: float = 0.0,
 ) -> DirectionHintResult:
     if not _direction_hint_enabled():
         return DirectionHintResult(reason="direction hint disabled")
@@ -90,33 +94,51 @@ def direction_hint_from_front_detection(
     if not target:
         return DirectionHintResult(reason="empty target")
 
+    images = [front_image] + [image for image in list(additional_images or []) if image is not None and image is not front_image]
+    detections_with_images = []
     try:
-        if hasattr(detector, "detect_all"):
-            detections = list(
-                detector.detect_all(front_image, target, depth_meters=None, camera_name="front") or []
+        for index, image in enumerate(images):
+            camera_frame = getattr(image, "camera_frame", None)
+            camera_name = (
+                str(getattr(camera_frame, "camera_id", "") or "")
+                or ("front" if index == 0 else f"camera_{index}")
             )
-        else:
-            detection = detector.detect(front_image, target, depth_meters=None, camera_name="front")
-            detections = [detection] if detection is not None else []
+            if hasattr(detector, "detect_all"):
+                detections = list(
+                    detector.detect_all(image, target, depth_meters=None, camera_name=camera_name) or []
+                )
+            else:
+                detection = detector.detect(image, target, depth_meters=None, camera_name=camera_name)
+                detections = [detection] if detection is not None else []
+            for detection in detections:
+                attach_detection_camera_context(detection, image, camera_frame)
+                detections_with_images.append((detection, image))
     except Exception as exc:
         return DirectionHintResult(reason=f"detection failed: {exc}")
 
-    visible = [detection for detection in detections if detection and getattr(detection, "visible", False)]
+    visible = [
+        (detection, image)
+        for detection, image in detections_with_images
+        if detection and getattr(detection, "visible", False)
+    ]
     if excluded_bearings:
         visible = [
-            detection
-            for detection in visible
-            if not detection_is_excluded_by_bearing(
+            (detection, image)
+            for detection, image in visible
+            if not _detection_excluded_in_navigation_frame(
                 detection,
-                front_image,
+                image,
                 excluded_bearings,
-                horizontal_fov_deg=_camera_hfov_deg(),
+                observer_yaw_deg,
             )
         ]
     if not visible:
-        reason = "previous target excluded" if excluded_bearings and detections else "target not detected"
+        reason = "previous target excluded" if excluded_bearings and detections_with_images else "target not detected"
         return DirectionHintResult(reason=reason)
-    detection = max(visible, key=lambda item: float(getattr(item, "score", 0.0) or 0.0))
+    detection, detection_image = max(
+        visible,
+        key=lambda item: float(getattr(item[0], "score", 0.0) or 0.0),
+    )
     if not detection or not getattr(detection, "visible", False):
         return DirectionHintResult(reason="target not detected")
     bbox = list(getattr(detection, "bbox", None) or [])
@@ -127,18 +149,52 @@ def direction_hint_from_front_detection(
     if score < _min_confidence():
         return DirectionHintResult(bbox=bbox[:4], score=score, reason=f"low confidence {score:.2f}")
 
-    reliable, reason = _bbox_is_reliable(bbox, front_image, stage=stage, detection=detection)
+    reliable, reason = _bbox_is_reliable(bbox, detection_image, stage=stage, detection=detection)
     if not reliable:
         return DirectionHintResult(bbox=bbox[:4], score=score, reason=reason)
 
-    angle = _bbox_center_angle_deg(bbox, front_image)
+    world_ray = getattr(detection, "world_ray", None)
+    if world_ray is not None:
+        direction = world_ray.direction_world
+        if math.hypot(float(direction[0]), float(direction[1])) <= 1e-9:
+            return DirectionHintResult(bbox=bbox[:4], score=score, reason="camera ray is vertical")
+        bearing = math.degrees(math.atan2(float(direction[1]), float(direction[0])))
+        angle = signed_angle_delta_deg(bearing, observer_yaw_deg)
+        reason = f"world ray accepted from {getattr(detection, 'camera_id', '') or 'camera'}"
+    else:
+        angle = _bbox_center_angle_deg(bbox, detection_image)
+        reason = "legacy front bbox accepted"
     return DirectionHintResult(
         text=_format_direction_text(angle, use_angle=_direction_hint_use_angle()),
-        reason="front bbox accepted",
+        reason=reason,
         angle_deg=angle,
         bbox=bbox[:4],
         score=score,
     )
+
+
+def _detection_excluded_in_navigation_frame(detection, image, exclusions, observer_yaw_deg: float) -> bool:
+    world_ray = getattr(detection, "world_ray", None)
+    if world_ray is None:
+        return detection_is_excluded_by_bearing(
+            detection,
+            image,
+            exclusions,
+            horizontal_fov_deg=_camera_hfov_deg(),
+        )
+    direction = world_ray.direction_world
+    if math.hypot(float(direction[0]), float(direction[1])) <= 1e-9:
+        return False
+    relative = signed_angle_delta_deg(
+        math.degrees(math.atan2(float(direction[1]), float(direction[0]))),
+        observer_yaw_deg,
+    )
+    for exclusion in exclusions or []:
+        if abs(signed_angle_delta_deg(relative, float(exclusion.get("bearing_deg", 0.0) or 0.0))) <= float(
+            exclusion.get("tolerance_deg", 0.0) or 0.0
+        ):
+            return True
+    return False
 
 
 def _direction_hint_enabled() -> bool:

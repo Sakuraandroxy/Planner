@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
-from typing import List, Optional
+from dataclasses import dataclass, field
+from typing import Any, List, Optional
 
 
 @dataclass
@@ -39,6 +39,14 @@ class DetectionResult:
     surface_lock_fallback: bool = False
     surface_lock_depth_reason: str = ""
     camera: str = "front"
+    # Actual Camera API provenance. ``camera`` remains a legacy semantic view
+    # alias during migration; geometry must use CameraFrame instead.
+    camera_id: str = ""
+    capture_id: str = ""
+    camera_frame: Any = field(default=None, repr=False, compare=False)
+    depth_camera_frame: Any = field(default=None, repr=False, compare=False)
+    world_ray: Any = field(default=None, repr=False, compare=False)
+    projection_source: str = "legacy"
 
 
 class BaseDetector(ABC):

@@ -53,13 +53,17 @@ def _score_one(
     path_len = _path_length(cand.waypoints)
     det_depth = getattr(detection, "depth_median", None)
     camera = getattr(detection, "camera", "none") if detection is not None else "none"
+    world_ray = getattr(detection, "world_ray", None) if detection is not None else None
 
     progress = 0.0
     alignment = 0.0
     safety = 0.0
     smoothness = 0.0
 
-    if camera == "front":
+    if world_ray is not None:
+        progress, alignment = _world_ray_scores(endpoint, det_depth, detection, stop_threshold)
+        camera = "unified_camera"
+    elif camera == "front":
         progress = _front_progress_score(endpoint, det_depth, stop_threshold)
         alignment = _front_alignment_score(endpoint, direction)
     elif camera == "down":
@@ -88,6 +92,36 @@ def _score_one(
         "smoothness": 0.08 * smoothness,
         "memory": 0.18 * memory,
     }
+
+
+def _world_ray_scores(endpoint, det_depth, detection, stop_threshold: float) -> tuple[float, float]:
+    """Score a body-frame endpoint against an exact Camera API world ray."""
+    ray = detection.world_ray.direction_world
+    frame = getattr(detection, "camera_frame", None)
+    navigation_yaw = float(getattr(frame, "navigation_yaw_deg", 0.0) or 0.0)
+    world_bearing = math.degrees(math.atan2(float(ray[1]), float(ray[0])))
+    relative = math.radians((world_bearing - navigation_yaw + 180.0) % 360.0 - 180.0)
+    horizontal_norm = math.hypot(float(ray[0]), float(ray[1]))
+    if horizontal_norm <= 1e-9:
+        desired = [0.0, 0.0, float(ray[2])]
+    else:
+        desired = [math.cos(relative) * horizontal_norm, math.sin(relative) * horizontal_norm, float(ray[2])]
+    desired_norm = math.sqrt(sum(value * value for value in desired))
+    if desired_norm > 1e-9:
+        desired = [value / desired_norm for value in desired]
+    endpoint_norm = math.sqrt(sum(float(value) ** 2 for value in endpoint[:3]))
+    if endpoint_norm <= 1e-6:
+        alignment = 0.0
+    else:
+        alignment = sum(float(endpoint[index]) * desired[index] for index in range(3)) / endpoint_norm
+        alignment = max(-1.0, min(1.0, alignment))
+    if det_depth is None:
+        progress = min(max(endpoint_norm / 10.0, 0.0), 1.0) * max(0.0, alignment)
+    else:
+        desired_distance = max(0.0, float(det_depth) - float(stop_threshold))
+        projected = sum(float(endpoint[index]) * desired[index] for index in range(3))
+        progress = 1.0 - min(abs(projected - desired_distance) / max(desired_distance, 1.0), 1.5)
+    return progress, alignment
 
 
 def _front_progress_score(endpoint, det_depth, stop_threshold: float) -> float:

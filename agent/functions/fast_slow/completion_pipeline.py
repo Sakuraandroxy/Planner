@@ -18,6 +18,7 @@ from agent.functions.common.detection_policy import (
     detection_reliability,
 )
 from agent.models.detection.base import DetectionResult
+from agent.functions.perception.camera_geometry import attach_detection_camera_context
 
 
 @dataclass
@@ -43,6 +44,8 @@ class DetectionDepthBundle:
     # Monotonic timestamp of the RGB observation, used to reject late
     # TargetLost events after a newer validated lock/bearing update.
     capture_timestamp_s: float = 0.0
+    camera_frames: dict[str, Any] = field(default_factory=dict)
+    capture_id: str = ""
 
 
 @dataclass
@@ -318,8 +321,10 @@ class CompletionPipeline:
             down_future.cancel()
             raise
         for det in front_all:
+            attach_detection_camera_context(det, frame)
             self._suppress_giant_bbox(stage, det, frame)
         for det in down_all:
+            attach_detection_camera_context(det, down_frame)
             self._suppress_giant_bbox(stage, det, down_frame)
         front_det = self._best_from_list(stage, front_all, frame, require_depth=False, camera_name="front")
         down_det = self._best_from_list(stage, down_all, down_frame, require_depth=False, camera_name="down")
@@ -411,6 +416,11 @@ class CompletionPipeline:
             down_frame,
             require_depth=False,
         ) if visible else None
+        camera_frames = {}
+        for image in (frame, down_frame):
+            camera_frame = getattr(image, "camera_frame", None)
+            if camera_frame is not None:
+                camera_frames[camera_frame.camera_id] = camera_frame
         return DetectionDepthBundle(
             best_detection=best,
             front_detection=front_det,
@@ -423,6 +433,12 @@ class CompletionPipeline:
             down_depth=down_depth,
             detect_elapsed=detect_elapsed,
             depth_elapsed=depth_elapsed,
+            camera_frames=camera_frames,
+            capture_id=(
+                str(next(iter(camera_frames.values())).capture_id)
+                if camera_frames
+                else ""
+            ),
         )
 
     def _evaluate_with_bundle(self, job: CompletionPipelineJob, bundle: DetectionDepthBundle):
@@ -506,8 +522,18 @@ class CompletionPipeline:
             reason = "configured_best_reliable"
         else:
             above = self._is_above_stage(stage)
-            ordered_names = ["down", "front"] if above else ["front", "down"]
-            reason = "relation_above_prefers_down" if above else "relation_non_above_prefers_front"
+            if above:
+                ordered_names = sorted(
+                    ["front", "down"],
+                    key=lambda name: (
+                        not self._camera_points_downward(options[name][1]),
+                        -float(options[name][2]),
+                    ),
+                )
+                reason = "relation_above_prefers_downward_optical_axis"
+            else:
+                ordered_names = ["front", "down"] if front_rel >= down_rel else ["down", "front"]
+                reason = "relation_non_above_prefers_best_reliable_camera"
 
         for name in ordered_names:
             detection, _image, reliability = options[name]
@@ -517,13 +543,23 @@ class CompletionPipeline:
                 continue
             if reliability > 0.0:
                 if bundle is not None:
-                    bundle.distance_view = name
+                    frame = getattr(_image, "camera_frame", None) if _image is not None else None
+                    bundle.distance_view = str(getattr(frame, "camera_id", "") or name)
                     bundle.distance_reason = reason
                 return detection
         if bundle is not None:
             bundle.distance_view = "none"
             bundle.distance_reason = f"{reason}_no_reliable_depth"
         return None
+
+    @staticmethod
+    def _camera_points_downward(image) -> bool:
+        frame = getattr(image, "camera_frame", None) if image is not None else None
+        optical = list(getattr(frame, "optical_axis_world", []) or [])
+        if len(optical) < 3:
+            return False
+        horizontal = (float(optical[0]) ** 2 + float(optical[1]) ** 2) ** 0.5
+        return bool(float(optical[2]) > 0.35 and float(optical[2]) > 0.5 * horizontal)
 
     def _select_reliable_detection(
         self,
@@ -574,11 +610,12 @@ class CompletionPipeline:
             return max(visible, key=lambda d: float(d.score or 0.0))
         return DetectionResult(visible=False, camera=camera_name)
 
-    @staticmethod
-    def _attach_depth_to_all(name: str, detections: list[DetectionResult], image, depth_meters) -> None:
+    def _attach_depth_to_all(self, name: str, detections: list[DetectionResult], image, depth_meters) -> None:
         # depth_median 是后续memory投影到世界坐标的必要轻量证据。
         for index, detection in enumerate(detections or []):
             web_helpers.target_depth_text(f"{name}#{index}", detection, image, depth_meters)
+            if hasattr(self.client, "camera_frame_for_image"):
+                detection.depth_camera_frame = self.client.camera_frame_for_image(depth_meters)
 
     def _detection_reliability(self, stage: Any, detection: DetectionResult, image: Any = None) -> float:
         return detection_reliability(stage, detection, image)

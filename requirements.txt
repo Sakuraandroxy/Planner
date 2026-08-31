@@ -16,6 +16,7 @@ openai>=1.0.0
 # 图像处理 & 数值计算
 Pillow>=10.0.0
 numpy>=1.24.0
+opencv-python>=4.8.0
 
 # Web 仪表盘
 Flask>=3.0.0

@@ -34,7 +34,37 @@ class CameraModel:
 class ThreeDGDirectionEstimator(BaseDirectionEstimator):
     """Classify a detection as front-left, straight, front-right, or down."""
 
-    def estimate(self, bbox, camera_id, image_size) -> str:
+    def estimate(
+        self,
+        bbox=None,
+        camera_id=0,
+        image_size=(256, 256),
+        *,
+        detection=None,
+        navigation_yaw_deg: float = 0.0,
+    ) -> str:
+        """Classify by a world ray when available, with a legacy adapter.
+
+        ``camera_id == 1`` is intentionally retained only in the no-frame
+        adapter so old callers keep working while core geometry remains
+        independent of camera names and configured pitch.
+        """
+        detection = detection or (bbox if hasattr(bbox, "world_ray") else None)
+        if detection is not None:
+            bbox = getattr(detection, "bbox", bbox)
+            world_ray = getattr(detection, "world_ray", None)
+            if world_ray is not None:
+                direction = world_ray.direction_world
+                horizontal = math.hypot(float(direction[0]), float(direction[1]))
+                if horizontal <= 1e-9:
+                    return LOCAL_DIRECTION_MAP["down"] if float(direction[2]) > 0.0 else "Target is above the drone."
+                world_bearing = math.degrees(math.atan2(float(direction[1]), float(direction[0])))
+                yaw_deg = (world_bearing - float(navigation_yaw_deg) + 180.0) % 360.0 - 180.0
+                if yaw_deg < -15:
+                    return LOCAL_DIRECTION_MAP["front-left"]
+                if yaw_deg > 15:
+                    return LOCAL_DIRECTION_MAP["front-right"]
+                return LOCAL_DIRECTION_MAP["straight"]
         if bbox is None or len(bbox) < 4:
             return ""
 

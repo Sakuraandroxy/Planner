@@ -5,6 +5,8 @@ from __future__ import annotations
 import math
 from typing import Any, Iterable, Optional, Sequence
 
+from sim.camera_frames import CameraFrame
+
 
 def point3(value: Sequence[float]) -> list[float]:
     return [float(value[0]), float(value[1]), float(value[2])]
@@ -78,6 +80,7 @@ def estimate_detection_world(
     *,
     memory_config: Optional[dict] = None,
     sim_config: Optional[dict] = None,
+    camera_frame: CameraFrame | None = None,
 ) -> Optional[list[float]]:
     """Project a depth-backed bbox center into AirSim world coordinates."""
     memory_config = memory_config or {}
@@ -118,6 +121,7 @@ def estimate_detection_world(
         observer_yaw_deg=observer_yaw_deg,
         memory_config=memory_config,
         sim_config=sim_config,
+        camera_frame=camera_frame or getattr(detection, "camera_frame", None),
     )
 
 
@@ -132,6 +136,7 @@ def project_image_depth_world(
     observer_yaw_deg: float,
     memory_config: Optional[dict] = None,
     sim_config: Optional[dict] = None,
+    camera_frame: CameraFrame | None = None,
 ) -> list[float]:
     """Project one radial/planar image-depth sample into AirSim world NED."""
     memory_config = memory_config or {}
@@ -167,11 +172,37 @@ def project_image_depth_world(
     cos_yaw = math.cos(yaw)
     sin_yaw = math.sin(yaw)
     observer = point3(observer_world)
-    return [
+    legacy_world = [
         observer[0] + cos_yaw * point_body[0] - sin_yaw * point_body[1],
         observer[1] + sin_yaw * point_body[0] + cos_yaw * point_body[1],
         observer[2] + point_body[2],
     ]
+    if camera_frame is None:
+        return legacy_world
+
+    from agent.functions.perception.camera_geometry import (
+        geometry_shadow_tracker,
+        pixel_depth_to_world,
+    )
+
+    try:
+        unified_world = pixel_depth_to_world(
+            camera_frame,
+            pixel_x,
+            pixel_y,
+            depth,
+            pixels_use_rgb_intrinsics=True,
+            depth_mode=memory_config.get("DEPTH_MODE"),
+        )
+    except (TypeError, ValueError):
+        return legacy_world
+    geometry_shadow_tracker.observe(legacy_world, unified_world, camera_frame)
+    geometry_cfg = dict(sim_config.get("CAMERA_GEOMETRY", {}) or {})
+    mode = str(
+        memory_config.get("CAMERA_GEOMETRY_MODE", geometry_cfg.get("MODE", "shadow"))
+        or "shadow"
+    ).strip().lower()
+    return unified_world if mode == "unified" else legacy_world
 
 
 def estimate_detection_surface_world(
@@ -182,6 +213,7 @@ def estimate_detection_surface_world(
     *,
     memory_config: Optional[dict] = None,
     sim_config: Optional[dict] = None,
+    camera_frame: CameraFrame | None = None,
 ) -> list[list[float]]:
     """Project the bounded sparse depth samples attached to a detection."""
     if detection is None or image is None or not hasattr(image, "size"):
@@ -195,6 +227,7 @@ def estimate_detection_surface_world(
             observer_yaw_deg,
             memory_config=memory_config,
             sim_config=sim_config,
+            camera_frame=camera_frame or getattr(detection, "camera_frame", None),
         )
         return [point] if point is not None else []
     memory_config = memory_config or {}
@@ -219,6 +252,7 @@ def estimate_detection_surface_world(
             observer_yaw_deg=observer_yaw_deg,
             memory_config=memory_config,
             sim_config=sim_config,
+            camera_frame=camera_frame or getattr(detection, "camera_frame", None),
         ))
     return out
 

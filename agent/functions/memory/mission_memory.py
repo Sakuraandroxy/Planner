@@ -50,6 +50,7 @@ from agent.functions.perception.bearing_tracker import (
     metric_depth_usable,
     signed_angle_delta_deg,
 )
+from agent.functions.perception.camera_geometry import triangulate_world_rays
 
 
 _EN_ORDINALS = {
@@ -285,6 +286,7 @@ class MissionMemory:
         self.events: List[dict] = []
         self._switch_candidates: Dict[str, tuple[str, int]] = {}
         self.last_completion_decision: Optional[MemoryCompletionDecision] = None
+        self._bearing_ray_tracks: Dict[str, List[dict]] = {}
 
     def reset(self, root_instruction: str = "") -> None:
         self.root_instruction = (root_instruction or "").strip()
@@ -297,6 +299,7 @@ class MissionMemory:
         self.events.clear()
         self._switch_candidates.clear()
         self.last_completion_decision = None
+        self._bearing_ray_tracks.clear()
 
     def local_instance_ids(self, stage: Any) -> List[str]:
         """Return the activation-view candidates owned by one stage."""
@@ -456,7 +459,13 @@ class MissionMemory:
                     image=obs.get("image"),
                 )
             )
+        lock_key = stage_key(stage)
+        previous_lock = self.stage_locks.get(lock_key, "")
         self._ensure_stage_lock(stage, memory, observer_world, observer_yaw_deg)
+        if self.stage_locks.get(lock_key, "") != previous_lock:
+            # Unbound rays may contain several same-class candidates. A fresh
+            # physical lock starts a clean ray track for that one instance.
+            self._bearing_ray_tracks.pop(lock_key, None)
         self._prune_memory()
         for event in events:
             self._append_event(event.to_summary_dict())
@@ -734,6 +743,63 @@ class MissionMemory:
         })
         return self.roof_navigation_context(stage, current)
 
+    def navigation_context(
+        self,
+        stage: Any,
+        current_world: Sequence[float],
+        current_yaw_deg: float,
+    ) -> dict:
+        """Return camera-independent coordinates used by the planning prompt.
+
+        Output waypoints are always expressed in the current horizontal
+        navigation frame.  View-relative language keeps the origin/yaw frozen
+        at stage activation so a later vehicle turn cannot change the meaning
+        of "left", "right" or "front".
+        """
+        current = [float(value) for value in current_world[:3]]
+        context = {
+            "coordinate_convention": "AirSim NED; +x forward, +y right, +z down in navigation frame",
+            "current_origin_world": current,
+            "current_yaw_deg": float(current_yaw_deg),
+        }
+        activation = self.stage_activation_views.get(stage_key(stage))
+        if activation is not None:
+            activation_origin = [
+                float(value)
+                for value in list(activation.get("observer_world") or current)[:3]
+            ]
+            activation_yaw = float(activation.get("observer_yaw_deg", current_yaw_deg))
+            context["stage_activation"] = {
+                "origin_world": activation_origin,
+                "yaw_deg": activation_yaw,
+                "direction_words_use_this_yaw": True,
+            }
+
+        estimate = self.estimate_distance(stage, current)
+        if estimate is None:
+            return context
+        target_world = list(estimate.get("target_world") or [])
+        if len(target_world) < 3:
+            return context
+        context["target_world"] = [float(value) for value in target_world[:3]]
+        context["target_nav_xyz"] = [
+            round(float(value), 3)
+            for value in world_to_body(target_world, current, current_yaw_deg)
+        ]
+        context["target_distance_m"] = float(estimate.get("distance_m", 0.0) or 0.0)
+        context["target_confidence"] = float(estimate.get("confidence", 0.0) or 0.0)
+        context["target_uncertainty_m"] = float(estimate.get("uncertainty_m", 0.0) or 0.0)
+        if activation is not None:
+            context["target_activation_nav_xyz"] = [
+                round(float(value), 3)
+                for value in world_to_body(
+                    target_world,
+                    context["stage_activation"]["origin_world"],
+                    context["stage_activation"]["yaw_deg"],
+                )
+            ]
+        return context
+
     def roof_navigation_context(
         self,
         stage: Any,
@@ -960,10 +1026,18 @@ class MissionMemory:
             decision = MemoryCompletionDecision.not_complete(reason="memory disabled")
             self.last_completion_decision = decision
             return decision
-        large_surface_arrival = self.evaluate_large_surface_arrival(
-            stage,
-            current_world,
-            radius_m=float(self.config.get("SURFACE_APPROACH_RADIUS_M", 4.5)),
+        # Pure locked-surface memory may complete a large-building approach
+        # when the facade has disappeared at close range.  If a fresh visual
+        # claim exists, however, it must pass the normal identity/confidence
+        # constraints below instead of bypassing them through this shortcut.
+        large_surface_arrival = (
+            None
+            if fresh_visual_support or is_view_relative_stage(stage)
+            else self.evaluate_large_surface_arrival(
+                stage,
+                current_world,
+                radius_m=float(self.config.get("SURFACE_APPROACH_RADIUS_M", 4.5)),
+            )
         )
         if large_surface_arrival is not None:
             return large_surface_arrival
@@ -974,6 +1048,7 @@ class MissionMemory:
             and bool(instance.is_large_structure)
             and has_surface_samples(instance)
             and relation_kind(stage) == "near"
+            and not fresh_visual_support
         ):
             # For large structures the direct XY surface rule is the complete
             # contract.  Do not fall back to SURFACE_NEAR_RADIUS_M (which may
@@ -981,28 +1056,29 @@ class MissionMemory:
             distance_m = horizontal_distance_to_instance_surface_samples(current_world, instance)
             nearest = nearest_instance_surface_sample_point(current_world, instance)
             radius = max(0.0, float(self.config.get("SURFACE_APPROACH_RADIUS_M", 4.5)))
-            decision = MemoryCompletionDecision.not_complete(
-                instance_id=instance.instance_id,
-                confidence=float(instance.confidence),
-                distance_m=float(distance_m),
-                horizontal_distance_m=float(distance_m),
-                vertical_delta_m=abs(float(current_world[2]) - float(nearest[2])),
-                target_world=list(nearest),
-                uncertainty_m=float(instance.effective_uncertainty(
-                    stale_growth_per_s=float(self.config.get("STALE_UNCERTAINTY_GROWTH_MPS", 0.03))
-                )),
-                required_radius_m=radius,
-                reason="outside_large_surface_xy_radius",
-                details={
-                    "geometry": instance.geometry_kind,
-                    "large_structure": True,
-                    "uses_surface_samples": True,
-                    "xy_only": True,
-                },
-            )
-            self.last_completion_decision = decision
-            self._append_event({"type": "completion_decision", **decision.to_summary_dict()})
-            return decision
+            if distance_m > radius:
+                decision = MemoryCompletionDecision.not_complete(
+                    instance_id=instance.instance_id,
+                    confidence=float(instance.confidence),
+                    distance_m=float(distance_m),
+                    horizontal_distance_m=float(distance_m),
+                    vertical_delta_m=abs(float(current_world[2]) - float(nearest[2])),
+                    target_world=list(nearest),
+                    uncertainty_m=float(instance.effective_uncertainty(
+                        stale_growth_per_s=float(self.config.get("STALE_UNCERTAINTY_GROWTH_MPS", 0.03))
+                    )),
+                    required_radius_m=radius,
+                    reason="outside_large_surface_xy_radius",
+                    details={
+                        "geometry": instance.geometry_kind,
+                        "large_structure": True,
+                        "uses_surface_samples": True,
+                        "xy_only": True,
+                    },
+                )
+                self.last_completion_decision = decision
+                self._append_event({"type": "completion_decision", **decision.to_summary_dict()})
+                return decision
         trusted_surface = self.trusted_near_large_surface_estimate(stage, current_world)
         completion_config = self.config
         if trusted_surface is not None:
@@ -1286,8 +1362,15 @@ class MissionMemory:
             return {"accepted": True, "reason": "stage_not_locked"}
 
         view_name = str(view or getattr(detection, "camera", "front") or "front").lower()
+        camera_frame = getattr(detection, "camera_frame", None) or getattr(image, "camera_frame", None)
+        optical_axis = list(getattr(camera_frame, "optical_axis_world", []) or [])
+        camera_points_downward = bool(
+            len(optical_axis) >= 3
+            and float(optical_axis[2]) > 0.35
+            and float(optical_axis[2]) > 0.5 * math.hypot(float(optical_axis[0]), float(optical_axis[1]))
+        )
         current = [float(value) for value in observer_world[:3]]
-        if relation_kind(stage) == "above" and view_name.startswith("front"):
+        if relation_kind(stage) == "above" and not camera_points_downward:
             overhead = self.above_overhead_context(stage, current)
             roof_candidate = self.roof_navigation_context(stage, current)
             if (
@@ -1317,7 +1400,7 @@ class MissionMemory:
             )
             if observed_world is None:
                 return {"accepted": False, "reason": "metric_projection_failed"}
-            if relation_kind(stage) == "above" and view_name.startswith("down"):
+            if relation_kind(stage) == "above" and camera_points_downward:
                 if has_roof_geometry(instance):
                     distance_m = horizontal_distance_to_instance_roof(observed_world, instance)
                 else:
@@ -1356,15 +1439,31 @@ class MissionMemory:
                 "depth_state": depth_reason,
             }
 
-        if not view_name.startswith("front"):
+        world_ray = getattr(detection, "world_ray", None)
+        if world_ray is None and not view_name.startswith("front"):
             return {
                 "accepted": False,
                 "reason": f"{view_name}_without_metric_depth",
                 "instance_id": instance.instance_id,
                 "depth_state": depth_reason,
             }
-        fov = float(self.config.get("FRONT_FOV_DEG", self.sim_config.get("FRONT_FOV", 90.0)))
-        observed_angle = bbox_center_angle_deg(getattr(detection, "bbox", None), image, fov)
+        if world_ray is not None:
+            direction = world_ray.direction_world
+            if math.hypot(float(direction[0]), float(direction[1])) <= 1e-9:
+                observed_angle = None
+            else:
+                observed_angle = signed_angle_delta_deg(
+                    math.degrees(math.atan2(float(direction[1]), float(direction[0]))),
+                    observer_yaw_deg,
+                )
+        else:
+            intrinsics = getattr(camera_frame, "rgb_intrinsics", None)
+            fov = (
+                float(intrinsics.horizontal_fov_deg)
+                if intrinsics is not None
+                else float(self.config.get("FRONT_FOV_DEG", self.sim_config.get("FRONT_FOV", 90.0)))
+            )
+            observed_angle = bbox_center_angle_deg(getattr(detection, "bbox", None), image, fov)
         if observed_angle is None:
             return {"accepted": False, "reason": "rgb_bearing_unavailable"}
         target = (
@@ -1631,6 +1730,106 @@ class MissionMemory:
             memory.selection_rule = "ordinal"
         return memory
 
+    def _record_rgb_world_ray(
+        self,
+        *,
+        stage: Any,
+        detection: Any,
+        view_name: str,
+    ) -> Optional[list[float]]:
+        """Keep an RGB bearing and optionally triangulate a locked instance.
+
+        Unbound rays are direction-only evidence and never create a physical
+        target. This prevents two similar buildings from being cross-matched
+        before the ordinal/identity lock has been established by metric depth.
+        """
+        ray = getattr(detection, "world_ray", None)
+        if ray is None or not bool(self.config.get("WORLD_RAY_MEMORY_ENABLED", True)):
+            return None
+        key = stage_key(stage)
+        now = time.perf_counter()
+        max_age_s = max(0.5, float(self.config.get("WORLD_RAY_MAX_AGE_S", 20.0)))
+        track = [
+            entry
+            for entry in self._bearing_ray_tracks.get(key, [])
+            if now - float(entry.get("observed_at", 0.0)) <= max_age_s
+        ]
+        entry = {
+            "ray": ray,
+            "observed_at": now,
+            "camera_id": str(getattr(detection, "camera_id", "") or getattr(ray, "camera_id", "")),
+            "capture_id": str(getattr(detection, "capture_id", "") or getattr(ray, "capture_id", "")),
+            "score": float(getattr(detection, "score", 0.0) or 0.0),
+            "view": str(view_name or getattr(detection, "camera", "unknown")),
+        }
+        track.append(entry)
+        max_rays = max(2, int(self.config.get("WORLD_RAY_TRACK_MAX", 12)))
+        self._bearing_ray_tracks[key] = track[-max_rays:]
+
+        instance = self.primary_instance(stage)
+        if instance is not None and self.is_primary_locked(stage):
+            instance.bearing_rays.append({
+                "camera_id": entry["camera_id"],
+                "capture_id": entry["capture_id"],
+                "origin_world": [round(float(v), 4) for v in ray.origin_world[:3]],
+                "direction_world": [round(float(v), 7) for v in ray.direction_world[:3]],
+                "observed_at": now,
+            })
+            del instance.bearing_rays[:-max_rays]
+        if (
+            instance is None
+            or not self.is_primary_locked(stage)
+            or not bool(self.config.get("WORLD_RAY_TRIANGULATION_ENABLED", True))
+        ):
+            return None
+
+        # Use rays from distinct captures. Same-capture RGB boxes from two
+        # cameras are allowed; duplicate rays from one exact image are not.
+        candidates = []
+        seen = set()
+        for candidate in reversed(track):
+            identity = (candidate["camera_id"], candidate["capture_id"])
+            if identity in seen:
+                continue
+            seen.add(identity)
+            candidates.append(candidate["ray"])
+            if len(candidates) >= max(2, int(self.config.get("WORLD_RAY_TRIANGULATION_MAX_RAYS", 4))):
+                break
+        result = triangulate_world_rays(
+            candidates,
+            minimum_baseline_m=float(self.config.get("WORLD_RAY_MIN_BASELINE_M", 1.0)),
+            minimum_angle_deg=float(self.config.get("WORLD_RAY_MIN_ANGLE_DEG", 1.5)),
+        )
+        if result is None:
+            return None
+        world, residual_m = result
+        if residual_m > float(self.config.get("WORLD_RAY_MAX_RESIDUAL_M", 3.0)):
+            return None
+        range_m = distance3(ray.origin_world, world)
+        if not (
+            float(self.config.get("WORLD_RAY_MIN_RANGE_M", 1.0))
+            <= range_m
+            <= float(self.config.get("WORLD_RAY_MAX_RANGE_M", 250.0))
+        ):
+            return None
+        continuity_radius = max(
+            float(self.config.get("WORLD_RAY_LOCK_CONTINUITY_M", 12.0)),
+            float(instance.footprint_radius_m) + min(float(instance.uncertainty_m), 5.0) + 2.0,
+        )
+        if distance_to_instance_geometry(world, instance) > continuity_radius:
+            return None
+        detection.projection_source = "world_ray_triangulation"
+        self._append_event({
+            "type": "world_ray_triangulation",
+            "stage": key,
+            "instance": instance.instance_id,
+            "camera_id": entry["camera_id"],
+            "capture_id": entry["capture_id"],
+            "residual_m": round(float(residual_m), 3),
+            "world": [round(float(value), 3) for value in world[:3]],
+        })
+        return [float(value) for value in world[:3]]
+
     def _collect_observations(
         self,
         *,
@@ -1660,18 +1859,21 @@ class MissionMemory:
                 if quality <= 0.0:
                     continue
                 projection_detection = detection
-                world = estimate_detection_world(
-                    projection_detection,
-                    image,
-                    observer_world,
-                    observer_yaw_deg,
-                    memory_config=self.config,
-                    sim_config=self.sim_config,
-                )
-                if world is None:
-                    continue
                 depth_usable, depth_reason = metric_depth_usable(projection_detection, self.config)
-                if not depth_usable:
+                triangulated_world = None
+                if depth_usable:
+                    world = estimate_detection_world(
+                        projection_detection,
+                        image,
+                        observer_world,
+                        observer_yaw_deg,
+                        memory_config=self.config,
+                        sim_config=self.sim_config,
+                        camera_frame=getattr(projection_detection, "camera_frame", None),
+                    )
+                    if world is None:
+                        continue
+                else:
                     projection_detection = (
                         _large_structure_surface_lock_detection(
                             detection,
@@ -1683,32 +1885,52 @@ class MissionMemory:
                         else None
                     )
                     if projection_detection is None:
-                        # The RGB bearing remains useful, but an unreliable
-                        # range must not create or move a physical instance.
-                        continue
-                    depth_usable, _surface_reason = metric_depth_usable(
-                        projection_detection,
-                        self.config,
-                    )
-                    if not depth_usable:
-                        continue
-                    world = estimate_detection_world(
+                        triangulated_world = self._record_rgb_world_ray(
+                            stage=stage,
+                            detection=detection,
+                            view_name=view_name,
+                        )
+                        if triangulated_world is None:
+                            # Direction is retained, but an unbound or
+                            # degenerate ray must not invent a 3-D target.
+                            continue
+                        projection_detection = detection
+                        world = triangulated_world
+                    else:
+                        depth_usable, _surface_reason = metric_depth_usable(
+                            projection_detection,
+                            self.config,
+                        )
+                        if not depth_usable:
+                            self._record_rgb_world_ray(
+                                stage=stage,
+                                detection=detection,
+                                view_name=view_name,
+                            )
+                            continue
+                        world = estimate_detection_world(
+                            projection_detection,
+                            image,
+                            observer_world,
+                            observer_yaw_deg,
+                            memory_config=self.config,
+                            sim_config=self.sim_config,
+                            camera_frame=getattr(projection_detection, "camera_frame", None),
+                        )
+                        if world is None:
+                            continue
+                surface_world = (
+                    []
+                    if triangulated_world is not None
+                    else estimate_detection_surface_world(
                         projection_detection,
                         image,
                         observer_world,
                         observer_yaw_deg,
                         memory_config=self.config,
                         sim_config=self.sim_config,
+                        camera_frame=getattr(projection_detection, "camera_frame", None),
                     )
-                    if world is None:
-                        continue
-                surface_world = estimate_detection_surface_world(
-                    projection_detection,
-                    image,
-                    observer_world,
-                    observer_yaw_deg,
-                    memory_config=self.config,
-                    sim_config=self.sim_config,
                 )
                 dx = world[0] - float(observer_world[0])
                 dy = world[1] - float(observer_world[1])
@@ -1785,6 +2007,17 @@ class MissionMemory:
                         "lateral_projection": lateral_projection,
                         "observer_world": [float(v) for v in observer_world[:3]],
                         "observer_yaw_deg": float(observer_yaw_deg),
+                        "camera_id": str(getattr(projection_detection, "camera_id", "") or ""),
+                        "capture_id": str(getattr(projection_detection, "capture_id", "") or ""),
+                        "optical_axis_world": list(
+                            getattr(
+                                getattr(projection_detection, "camera_frame", None),
+                                "optical_axis_world",
+                                [],
+                            )
+                            or []
+                        )[:3],
+                        "projection_source": str(getattr(projection_detection, "projection_source", "legacy") or "legacy"),
                     }
                 )
         return observations
@@ -1855,9 +2088,6 @@ class MissionMemory:
 
     def _view_relative_observation_allowed(self, stage: Any, observation: dict) -> bool:
         """Apply the activation-view direction before a local instance exists."""
-        view = str(observation.get("view", "") or "").strip().lower()
-        if view and not view.startswith("front"):
-            return False
         forward = float(observation.get("forward_projection", 0.0) or 0.0)
         lateral = float(observation.get("lateral_projection", 0.0) or 0.0)
         activation = self.stage_activation_views.get(stage_key(stage))
@@ -1980,6 +2210,9 @@ class MissionMemory:
             depth_median=None if obs["depth"] is None else float(obs["depth"]),
             bbox_quality=float(obs["quality"]),
             last_seen_view=str(obs["view"]),
+            last_seen_optical_axis_world=[
+                float(value) for value in list(obs.get("optical_axis_world") or [])[:3]
+            ],
             last_label=str(getattr(obs["detection"], "label", "") or ""),
             identity_observer_world=list(obs.get("observer_world") or []),
             identity_observer_yaw_deg=obs.get("observer_yaw_deg"),
@@ -1992,6 +2225,8 @@ class MissionMemory:
             identity_world=[float(v) for v in obs["world"][:3]],
             identity_view=str(obs["view"]),
             identity_label=str(getattr(obs["detection"], "label", "") or ""),
+            observed_camera_ids=([str(obs.get("camera_id"))] if obs.get("camera_id") else []),
+            observed_capture_ids=([str(obs.get("capture_id"))] if obs.get("capture_id") else []),
         )
         memory.instances[instance_id] = instance
         return instance, "create"
@@ -2090,7 +2325,18 @@ class MissionMemory:
         instance.depth_median = None if obs["depth"] is None else float(obs["depth"])
         instance.bbox_quality = float(obs["quality"])
         instance.last_seen_view = str(obs["view"])
+        instance.last_seen_optical_axis_world = [
+            float(value) for value in list(obs.get("optical_axis_world") or [])[:3]
+        ]
         instance.last_label = str(getattr(obs["detection"], "label", "") or instance.last_label)
+        camera_id = str(obs.get("camera_id", "") or "")
+        capture_id = str(obs.get("capture_id", "") or "")
+        if camera_id and camera_id not in instance.observed_camera_ids:
+            instance.observed_camera_ids.append(camera_id)
+            del instance.observed_camera_ids[:-8]
+        if capture_id and capture_id not in instance.observed_capture_ids:
+            instance.observed_capture_ids.append(capture_id)
+            del instance.observed_capture_ids[:-12]
         key = stage_key(stage)
         if key and key not in instance.observed_stage_keys:
             instance.observed_stage_keys.append(key)

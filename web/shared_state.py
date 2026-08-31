@@ -37,6 +37,15 @@ class SharedState:
         self.frame_version = 0
         self.depth_version = 0
         self.down_frame_version = 0
+        self._camera_frames = {}
+        self._camera_metadata = {}
+        self._camera_versions = {}
+        self._camera_recording_status = {
+            "enabled": False,
+            "mode": "off",
+            "camera_ids": [],
+            "output_directory": "",
+        }
 
     def update(self, **kwargs):
         with self.lock:
@@ -75,6 +84,54 @@ class SharedState:
         with self.lock:
             return self._down_frame_png
 
+    def set_camera_frame(self, camera_id: str, png_bytes: bytes, metadata=None):
+        """Publish an arbitrary Camera API frame and maintain legacy aliases."""
+        camera_id = str(camera_id)
+        with self.lock:
+            self._camera_frames[camera_id] = png_bytes or b""
+            self._camera_metadata[camera_id] = dict(metadata or {})
+            self._camera_versions[camera_id] = int(self._camera_versions.get(camera_id, 0)) + 1
+            if camera_id == "front_center":
+                self._frame_png = png_bytes or b""
+                self.frame_version += 1
+            elif camera_id == "down_center":
+                self._down_frame_png = png_bytes or b""
+                self.down_frame_version += 1
+            self.version += 1
+
+    def get_camera_frame(self, camera_id: str) -> bytes:
+        with self.lock:
+            return self._camera_frames.get(str(camera_id), b"")
+
+    def get_camera_metadata(self, camera_id: str) -> dict:
+        with self.lock:
+            return dict(self._camera_metadata.get(str(camera_id), {}))
+
+    @property
+    def camera_ids(self) -> list[str]:
+        with self.lock:
+            return sorted(self._camera_frames)
+
+    def get_camera_list(self) -> list[dict]:
+        with self.lock:
+            return [
+                {
+                    "camera_id": camera_id,
+                    "version": int(self._camera_versions.get(camera_id, 0)),
+                    "metadata": dict(self._camera_metadata.get(camera_id, {})),
+                }
+                for camera_id in sorted(self._camera_frames)
+            ]
+
+    def set_camera_recording_status(self, status: dict):
+        with self.lock:
+            self._camera_recording_status = dict(status or {})
+            self.version += 1
+
+    def get_camera_recording_status(self) -> dict:
+        with self.lock:
+            return dict(self._camera_recording_status)
+
     def get_state(self) -> dict:
         with self.lock:
             return {
@@ -102,6 +159,9 @@ class SharedState:
                 "selected": self.selected_actions,
                 "reasoning_summary": self.reasoning_summary,
                 "down_frame_version": self.down_frame_version,
+                "camera_ids": sorted(self._camera_frames),
+                "camera_versions": dict(self._camera_versions),
+                "camera_recording": dict(self._camera_recording_status),
                 "task_done": self.task_done,
                 "model_name": self.model_name,
                 "error": self.error,

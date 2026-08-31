@@ -58,6 +58,7 @@ from agent.functions.memory.mission_memory import stage_key as _mission_stage_ke
 from agent.functions.obstacle_avoidance import DepthObstacleAvoider, build_depth_obstacle_avoider
 from agent.functions.perception import (
     TargetBearingTracker,
+    attach_detection_camera_context,
     detection_is_excluded_by_bearing,
     estimate_down_roof_plane,
     metric_depth_usable,
@@ -74,6 +75,9 @@ from agent.functions.task_parser import build_task_parser
 from agent.models.detection import build_detector
 from agent.models.world_model import build_world_model
 from sim.frame_capturer import FrameCapturer
+from sim.camera_api_recorder import CameraApiRecorder
+from sim.camera_frame_hub import CameraFrameHub
+from sim.camera_recording_options import CameraRecordingOptions
 from web.app import create_app
 from web.shared_state import SharedState
 
@@ -360,22 +364,27 @@ def _identity_approved_detections(objects, stage, bundle, view: str) -> list:
     memory = getattr(objects, "mission_memory", None)
     exclusions = (
         memory.previous_entity_exclusions(stage, bundle.observer_world, bundle.observer_yaw_deg)
-        if view_name == "front"
-        and memory is not None
+        if memory is not None
         and bundle.observer_world is not None
         and bundle.observer_yaw_deg is not None
         else []
     )
-    fov = float((getattr(memory, "sim_config", {}) or {}).get("FRONT_FOV", 90.0))
     image = getattr(bundle, f"{view_name}_image", None)
     approved = []
     rejected_reasons = []
     for detection in detections:
-        if view_name == "front" and detection_is_excluded_by_bearing(
+        intrinsics = getattr(getattr(detection, "camera_frame", None), "rgb_intrinsics", None)
+        fov = (
+            float(intrinsics.horizontal_fov_deg)
+            if intrinsics is not None
+            else float((getattr(memory, "sim_config", {}) or {}).get("FRONT_FOV", 90.0))
+        )
+        if detection_is_excluded_by_bearing(
             detection,
             image,
             exclusions,
             horizontal_fov_deg=fov,
+            observer_yaw_deg=bundle.observer_yaw_deg,
         ):
             rejected_reasons.append("previous_entity_bearing")
             continue
@@ -707,12 +716,23 @@ def _record_target_bearing(
     if tracker is None or bundle is None:
         return None
     detection = detection or _select_identity_approved_front_detection(objects, stage, bundle)
+    if detection is None:
+        detection = _select_identity_approved_down_detection(objects, stage, bundle)
     if detection is None or bundle.observer_world is None or bundle.observer_yaw_deg is None:
         return None
+    detection_frame = getattr(detection, "camera_frame", None)
+    down_frame_context = getattr(bundle.down_image, "camera_frame", None)
+    bearing_image = (
+        bundle.down_image
+        if detection_frame is not None and detection_frame is down_frame_context
+        else bundle.down_image
+        if str(getattr(detection, "camera", "") or "").lower().startswith("down")
+        else bundle.front_image
+    )
     observation = tracker.record(
         stage_key=_runtime_stage_key(stage),
         detection=detection,
-        image=bundle.front_image,
+        image=bearing_image,
         observer_yaw_deg=float(bundle.observer_yaw_deg),
         source=source,
     )
@@ -831,7 +851,8 @@ def _update_target_pose_from_bundle(objects: RuntimeObjects, stage, bundle: Dete
     approved_front_all = _identity_approved_detections(objects, stage, bundle, "front")
     approved_down_all = _identity_approved_detections(objects, stage, bundle, "down")
     approved_front = _select_identity_approved_front_detection(objects, stage, bundle)
-    bearing_observation = _record_target_bearing(objects, stage, bundle, approved_front)
+    approved_bearing = approved_front or _select_identity_approved_down_detection(objects, stage, bundle)
+    bearing_observation = _record_target_bearing(objects, stage, bundle, approved_bearing)
     if (
         getattr(objects, "mission_memory", None) is not None
         and bundle.observer_world is not None
@@ -880,12 +901,8 @@ def _update_target_pose_from_bundle(objects: RuntimeObjects, stage, bundle: Dete
                     preserve_activation_guard=True,
                 )
             lock_event = _primary_update_event(objects.mission_memory, stage, events)
-            approved_front = (
-                getattr(lock_event, "detection", None)
-                if str(getattr(lock_event, "view", "") or "").startswith("front")
-                else None
-            )
-            bearing_observation = _record_target_bearing(objects, stage, bundle, approved_front)
+            approved_front = getattr(lock_event, "detection", None)
+            bearing_observation = _record_target_bearing(objects, stage, bundle, approved_bearing)
             activation = (
                 tracker.activation_guard(_runtime_stage_key(stage))
                 if tracker is not None and hasattr(tracker, "activation_guard")
@@ -1669,6 +1686,10 @@ def _apply_above_altitude_path_guard(
     instance = memory.primary_instance(stage) if memory is not None else None
     surface_observations = int(getattr(instance, "surface_observation_count", 0) or 0)
     last_seen_view = str(getattr(instance, "last_seen_view", "") or "").strip().lower()
+    last_optical_axis = [
+        float(value)
+        for value in list(getattr(instance, "last_seen_optical_axis_world", []) or [])[:3]
+    ]
     roof = memory.roof_navigation_context(stage, current) if memory is not None else None
     roof_trusted = bool((roof or {}).get("trusted", False))
     climb_tolerance = max(
@@ -1700,9 +1721,23 @@ def _apply_above_altitude_path_guard(
             )
         runtime_state.pre_roof_climb_target_z = None
     if not roof_trusted and runtime_state.pre_roof_waiting_reobserve:
+        has_real_optical_axis = bool(
+            len(last_optical_axis) >= 3
+            and all(math.isfinite(value) for value in last_optical_axis[:3])
+        )
+        camera_points_clearly_downward = bool(
+            has_real_optical_axis
+            and last_optical_axis[2] > 0.35
+            and last_optical_axis[2]
+            > 0.5 * math.hypot(last_optical_axis[0], last_optical_axis[1])
+        )
+        latest_surface_is_facade_view = bool(
+            (has_real_optical_axis and not camera_points_clearly_downward)
+            or (not has_real_optical_axis and last_seen_view.startswith("front"))
+        )
         post_climb_front_reobserved = bool(
             surface_observations > runtime_state.pre_roof_climb_surface_observations
-            and last_seen_view.startswith("front")
+            and latest_surface_is_facade_view
         )
         if (
             roof is None
@@ -1916,16 +1951,37 @@ def _record_synchronized_roof_plane(
     *,
     state=None,
     source: str,
+    camera_frame=None,
+    additional_camera_frames=None,
 ):
     memory = getattr(objects, "mission_memory", None)
-    if memory is None or down_depth is None or not _is_above_stage(stage):
+    if memory is None or (down_depth is None and not additional_camera_frames) or not _is_above_stage(stage):
         return None
-    estimate = estimate_down_roof_plane(
-        down_depth,
-        observer_world,
-        observer_yaw_deg,
-        config=memory.config,
-        sim_config=memory.sim_config,
+    primary = memory.primary_instance(stage)
+    target_xy_world = list(primary.target_world[:2]) if primary is not None else None
+    candidates = []
+    if down_depth is not None:
+        candidates.append((down_depth, camera_frame))
+    for extra_frame in list(additional_camera_frames or []):
+        if extra_frame is not None and getattr(extra_frame, "depth", None) is not None:
+            candidates.append((extra_frame.depth, extra_frame))
+    estimates = [
+        estimate_down_roof_plane(
+            depth_value,
+            observer_world,
+            observer_yaw_deg,
+            config=memory.config,
+            sim_config=memory.sim_config,
+            camera_frame=frame_value,
+            target_xy_world=target_xy_world,
+        )
+        for depth_value, frame_value in candidates
+    ]
+    valid_estimates = [value for value in estimates if value.valid]
+    estimate = (
+        max(valid_estimates, key=lambda value: float(value.confidence))
+        if valid_estimates
+        else estimates[0]
     )
     summary = estimate.to_summary_dict()
     if not estimate.valid:
@@ -2035,8 +2091,10 @@ def _detect_dual_view(
         down_future.cancel()
         raise
     for det in front_all:
+        attach_detection_camera_context(det, frame)
         _suppress_unreliable_detection(stage, det, frame)
     for det in down_all:
+        attach_detection_camera_context(det, down_frame)
         _suppress_unreliable_detection(stage, det, down_frame)
     enforce_view_relative_sector = bool(
         is_view_relative_stage(stage)
@@ -2471,11 +2529,7 @@ def _run_memory_observation_scan(
         )
         if id(query_stage) in prebind_stage_ids:
             lock_event = _primary_update_event(objects.mission_memory, query_stage, events)
-            approved_front = (
-                getattr(lock_event, "detection", None)
-                if str(getattr(lock_event, "view", "") or "").startswith("front")
-                else None
-            )
+            approved_front = getattr(lock_event, "detection", None)
             metric_usable, _depth_state = metric_depth_usable(
                 approved_front,
                 objects.mission_memory.config,
@@ -3043,6 +3097,18 @@ def _submit_plan_if_needed(
             down_depth_meters=down_depth,
             observer_world=pos_now,
             observer_yaw_deg=yaw_now,
+            camera_frames=[
+                camera_frame
+                for camera_frame in (
+                    client.camera_frame_for_image(front_depth)
+                    if hasattr(client, "camera_frame_for_image")
+                    else None,
+                    client.camera_frame_for_image(down_depth)
+                    if hasattr(client, "camera_frame_for_image")
+                    else None,
+                )
+                if camera_frame is not None
+            ],
         )
         if updated:
             # 这里只输出稀疏cell数量，不打印点云；避障memory本身不保存原始深度图。
@@ -3094,6 +3160,8 @@ def _submit_plan_if_needed(
             frame,
             _caption_for_stage(stage, instruction),
             stage=stage,
+            additional_images=[down_frame] if down_frame is not None else [],
+            observer_yaw_deg=yaw_now,
             excluded_bearings=(
                 memory.previous_entity_exclusions(stage, pos_now, yaw_now)
                 if memory is not None
@@ -3170,6 +3238,14 @@ def _submit_plan_if_needed(
             "do not invent a far world coordinate. "
         )
     direction_text = direction_hint.text
+    camera_images, geometry_context = _planning_geometry_context(
+        objects,
+        client,
+        stage,
+        pos_now,
+        yaw_now,
+        [frame, down_frame],
+    )
     print(
         f"  [PlanInput] instruction={inst!r} pending={len(pending_for_model)} "
         f"pending_wp={_format_waypoints(pending_for_model)} "
@@ -3189,6 +3265,8 @@ def _submit_plan_if_needed(
             relation=getattr(stage, "relation", "") if stage else "",
             target=getattr(stage, "target_query", "") if stage else "",
             memory_hint=memory_hint,
+            camera_images=camera_images,
+            geometry_context=geometry_context,
         )
         output._selection_front_frame = frame
         output._selection_down_frame = down_frame
@@ -3211,6 +3289,89 @@ def _submit_plan_if_needed(
             f"remaining={len(objects.controller.queue.world_waypoints)}"
         )
     return submitted
+
+
+def _planning_geometry_context(objects, client, stage, pos_now, yaw_now, images):
+    """Build a compact world/navigation-frame description for the VLM.
+
+    Camera roles come from the pose carried by each Camera API response.  The
+    image list order is only a transport order and does not imply front/down.
+    """
+    camera_images = []
+    camera_views = []
+    seen_images = set()
+    seen_cameras = set()
+    frame_lookup = getattr(client, "camera_frame_for_image", None)
+    for image in list(images or []):
+        if image is None or id(image) in seen_images:
+            continue
+        seen_images.add(id(image))
+        camera_frame = (
+            frame_lookup(image)
+            if callable(frame_lookup)
+            else getattr(image, "camera_frame", None)
+        )
+        camera_images.append(image)
+        if camera_frame is None or camera_frame.camera_id in seen_cameras:
+            continue
+        seen_cameras.add(camera_frame.camera_id)
+        rgb_intrinsics = getattr(camera_frame, "rgb_intrinsics", None)
+        depth_intrinsics = getattr(camera_frame, "depth_intrinsics", None)
+        camera_views.append({
+            "camera_id": str(camera_frame.camera_id),
+            "capture_id": str(camera_frame.capture_id),
+            "camera_position_world": [round(float(v), 3) for v in camera_frame.camera_position_world[:3]],
+            "optical_axis_world": [round(float(v), 6) for v in camera_frame.optical_axis_world[:3]],
+            "rgb_size": (
+                [int(rgb_intrinsics.width), int(rgb_intrinsics.height)]
+                if rgb_intrinsics is not None
+                else list(getattr(image, "size", []) or [])[:2]
+            ),
+            "rgb_hfov_deg": (
+                round(float(rgb_intrinsics.horizontal_fov_deg), 3)
+                if rgb_intrinsics is not None
+                else None
+            ),
+            "depth_size": (
+                [int(depth_intrinsics.width), int(depth_intrinsics.height)]
+                if depth_intrinsics is not None
+                else None
+            ),
+            "depth_available": bool(getattr(camera_frame, "depth", None) is not None),
+        })
+
+    memory = getattr(objects, "mission_memory", None)
+    if memory is not None and hasattr(memory, "navigation_context"):
+        context = memory.navigation_context(stage, pos_now, yaw_now)
+    else:
+        context = {
+            "coordinate_convention": "AirSim NED; +x forward, +y right, +z down in navigation frame",
+            "current_origin_world": [float(v) for v in pos_now[:3]],
+            "current_yaw_deg": float(yaw_now),
+        }
+    context["camera_views"] = camera_views
+    context["image_camera_order"] = [
+        str(getattr(getattr(image, "camera_frame", None), "camera_id", f"view_{index}"))
+        for index, image in enumerate(camera_images)
+    ]
+
+    avoider = getattr(objects, "obstacle_avoider", None)
+    obstacle_summary = avoider.summary() if avoider is not None and hasattr(avoider, "summary") else {}
+    obstacle_samples = []
+    for sample in list(obstacle_summary.get("sample") or []):
+        world = list(sample.get("world") or [])
+        if len(world) < 3:
+            continue
+        obstacle_samples.append({
+            "nav_xyz": [round(float(v), 2) for v in world_to_body(world, pos_now, yaw_now)],
+            "confidence": float(sample.get("confidence", 0.0) or 0.0),
+            "age_s": float(sample.get("age_s", 0.0) or 0.0),
+        })
+    context["obstacles"] = {
+        "cell_count": int(obstacle_summary.get("cells", 0) or 0),
+        "samples_nav": obstacle_samples,
+    }
+    return camera_images, context
 
 
 def _format_waypoints(waypoints, limit: int = 5) -> str:
@@ -4039,6 +4200,16 @@ def _capture_and_submit_plan(
             snapshot_pos,
             snapshot_yaw,
             source="planning_snapshot",
+            camera_frame=(
+                client.camera_frame_for_image(snapshot_down_depth)
+                if hasattr(client, "camera_frame_for_image")
+                else None
+            ),
+            additional_camera_frames=[
+                client.camera_frame_for_image(snapshot_front_depth)
+                if hasattr(client, "camera_frame_for_image")
+                else None
+            ],
         )
     if need_depth and front_depth is None:
         try:
@@ -4267,15 +4438,30 @@ def _build_locked_relocalization_validator(objects, client, stage):
             return None
         observer_world, observer_yaw = client.get_pose()
         view = str(getattr(candidate, "camera", "front") or "front").lower()
-        image = down_image if view.startswith("down") else front_image
-        if memory is not None and view.startswith("front"):
+        candidate_camera_id = str(getattr(candidate, "camera_id", "") or "")
+        image = front_image
+        for candidate_image in (front_image, down_image):
+            camera_frame = getattr(candidate_image, "camera_frame", None) if candidate_image is not None else None
+            if camera_frame is not None and candidate_camera_id == str(camera_frame.camera_id):
+                image = candidate_image
+                break
+        else:
+            if view.startswith("down"):
+                image = down_image
+        if memory is not None:
             exclusions = memory.previous_entity_exclusions(stage, observer_world, observer_yaw)
-            fov = float((getattr(memory, "sim_config", {}) or {}).get("FRONT_FOV", 90.0))
+            intrinsics = getattr(getattr(candidate, "camera_frame", None), "rgb_intrinsics", None)
+            fov = (
+                float(intrinsics.horizontal_fov_deg)
+                if intrinsics is not None
+                else float((getattr(memory, "sim_config", {}) or {}).get("FRONT_FOV", 90.0))
+            )
             if detection_is_excluded_by_bearing(
                 candidate,
                 image,
                 exclusions,
                 horizontal_fov_deg=fov,
+                observer_yaw_deg=observer_yaw,
             ):
                 _debug_print("  [RelocalizeIdentity] rejected=previous_entity_bearing")
                 return None
@@ -4308,8 +4494,20 @@ def _bundle_from_relocalization_result(result) -> DetectionDepthBundle:
     # Keeping the other raw same-class boxes here would let the normal update
     # selector choose a higher-DINO-score candidate that relocalization had
     # explicitly rejected.
-    front_detection = detection if view == "front" else None
-    down_detection = detection if view == "down" else None
+    front_image = getattr(result, "front_image", None)
+    down_image = getattr(result, "down_image", None)
+    detection_camera_id = str(getattr(detection, "camera_id", "") or "")
+    front_camera_id = str(getattr(getattr(front_image, "camera_frame", None), "camera_id", "") or "")
+    down_camera_id = str(getattr(getattr(down_image, "camera_frame", None), "camera_id", "") or "")
+    belongs_down = bool(
+        detection is not None
+        and (
+            detection_camera_id and detection_camera_id == down_camera_id
+            or not detection_camera_id and view == "down"
+        )
+    )
+    front_detection = detection if detection is not None and not belongs_down else None
+    down_detection = detection if belongs_down else None
     front_detections = [detection] if front_detection is not None else []
     down_detections = [detection] if down_detection is not None else []
     observer_world = getattr(result, "observer_world", None)
@@ -4319,14 +4517,22 @@ def _bundle_from_relocalization_result(result) -> DetectionDepthBundle:
         down_detection=down_detection,
         front_detections=front_detections,
         down_detections=down_detections,
-        front_image=getattr(result, "front_image", None),
-        down_image=getattr(result, "down_image", None),
+        front_image=front_image,
+        down_image=down_image,
         front_depth=getattr(result, "front_depth", None),
         down_depth=getattr(result, "down_depth", None),
         observer_world=(list(observer_world) if observer_world is not None else None),
         observer_yaw_deg=getattr(result, "observer_yaw_deg", None),
         capture_timestamp_s=float(getattr(result, "capture_timestamp_s", 0.0) or 0.0),
-        distance_view=view if view in {"front", "down"} else "none",
+        camera_frames={
+            str(frame.camera_id): frame
+            for frame in (
+                getattr(front_image, "camera_frame", None),
+                getattr(down_image, "camera_frame", None),
+            )
+            if frame is not None
+        },
+        distance_view=(detection_camera_id or view) if detection is not None else "none",
         distance_reason="validated_relocalization",
     )
 
@@ -4356,7 +4562,7 @@ def _fresh_visual_support_matches_locked_memory(objects, stage, completion) -> b
     """Return whether completion vision supports the already locked target."""
     if not bool(getattr(completion, "target_detected", False)):
         return False
-    if str(getattr(completion, "accepted_view", "none") or "none").lower() not in {"front", "down"}:
+    if str(getattr(completion, "accepted_view", "none") or "none").lower() == "none":
         return False
 
     reason = str(getattr(completion, "reason", "") or "").strip().lower()
@@ -4567,6 +4773,11 @@ def _handle_background_target_lost(
         base_yaw_deg=session.preferred_yaw_deg,
         max_total_rotation_deg=max_rotation,
         session_id=session.session_id,
+        expected_target_world=(
+            list((memory.estimate_distance(stage, pos_now) or {}).get("target_world") or [])
+            if memory is not None
+            else None
+        ),
     )
     recovery.finish_small_session(
         session,
@@ -4671,6 +4882,16 @@ def _handle_above_completion_trigger(
         observer_yaw,
         state=state,
         source="above_completion",
+        camera_frame=(
+            client.camera_frame_for_image(down_depth)
+            if hasattr(client, "camera_frame_for_image")
+            else None
+        ),
+        additional_camera_frames=[
+            client.camera_frame_for_image(front_depth)
+            if hasattr(client, "camera_frame_for_image")
+            else None
+        ],
     )
 
     # Down RGB is optional semantic support.  The full-frame depth plane is
@@ -6323,13 +6544,17 @@ def print_last_navigation_summary(*, task_completed: bool = False) -> None:
 def run_fast_slow_web(
     *,
     target_snapshot_recorder: TargetSnapshotRecorder | None = None,
+    camera_recording_options: CameraRecordingOptions | None = None,
 ) -> None:
     script_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
     sys.path.insert(0, script_dir)
     get_cfg(os.path.join(script_dir, "config", "default.yaml"))
 
     state = SharedState()
-    app = create_app(state)
+    frame_hub = CameraFrameHub()
+    recording_options = camera_recording_options or CameraRecordingOptions()
+    camera_recorder = CameraApiRecorder(frame_hub, recording_options, state=state)
+    app = create_app(state, camera_recorder=camera_recorder)
     web_port = cfg.get("WEB", {}).get("PORT", 5000)
 
     def run_web():
@@ -6357,6 +6582,8 @@ def run_fast_slow_web(
 
     print("[AirSim] connecting...", flush=True)
     client = web_helpers.connect_web_airsim_client()
+    if hasattr(client, "attach_frame_hub"):
+        client.attach_frame_hub(frame_hub)
     client.warmup_capture()
     client.enable_api_control(True)
     client.arm(True)
@@ -6371,17 +6598,32 @@ def run_fast_slow_web(
     else:
         print("[AirSim] skip takeoff: vehicle already airborne")
 
-    capturer = FrameCapturer(state, interval=0.1)
+    capturer = FrameCapturer(
+        state,
+        interval=0.1,
+        frame_hub=frame_hub,
+        camera_ids=None,
+    )
     capturer.start()
     print("[FrameCapturer] background capture started")
+    if recording_options.enabled:
+        recording_status = camera_recorder.start()
+        print(
+            f"[CameraApiRecorder] enabled mode={recording_status['mode']} "
+            "output=created lazily on first frame"
+        )
+    else:
+        state.set_camera_recording_status(camera_recorder.status())
+        print("[CameraApiRecorder] disabled (CLI/Web can enable it explicitly)")
 
     warmup_from_config()
 
     print("[AirSim] waiting for first frame...")
     while True:
         rgb, depth = capturer.get_latest_frame()
-        if rgb is not None and depth is not None:
-            print(f"[Ready] first frame ready (depth shape={depth.shape})")
+        if rgb is not None:
+            depth_text = getattr(depth, "shape", None)
+            print(f"[Ready] first frame ready (depth shape={depth_text or 'unavailable'})")
             break
         time.sleep(0.1)
 
@@ -6414,6 +6656,8 @@ def run_fast_slow_web(
         print("\n[Exit] shutting down...")
         print_last_navigation_summary()
     finally:
+        camera_recorder.stop(reason="web_exit")
+        capturer.stop()
         try:
             client.cleanup()
         except Exception:

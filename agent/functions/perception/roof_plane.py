@@ -31,6 +31,7 @@ class RoofPlaneEstimate:
     full_frame: bool = False
     sample_points_world: list[list[float]] = field(default_factory=list)
     bounds_world: Optional[list[list[float]]] = None
+    camera_id: str = ""
 
     def to_summary_dict(self) -> dict:
         return {
@@ -53,6 +54,7 @@ class RoofPlaneEstimate:
             "confidence": round(float(self.confidence), 3),
             "full_frame": bool(self.full_frame),
             "samples": len(self.sample_points_world),
+            "camera_id": self.camera_id,
         }
 
 
@@ -63,6 +65,8 @@ def estimate_down_roof_plane(
     *,
     config: Optional[dict] = None,
     sim_config: Optional[dict] = None,
+    camera_frame=None,
+    target_xy_world: Optional[Sequence[float]] = None,
 ) -> RoofPlaneEstimate:
     """Estimate the horizontal plane underneath the down camera.
 
@@ -76,6 +80,13 @@ def estimate_down_roof_plane(
 
     config = dict(config or {})
     sim_config = dict(sim_config or {})
+    if camera_frame is not None:
+        return _estimate_roof_plane_from_camera_frame(
+            down_depth_meters,
+            camera_frame,
+            config=config,
+            target_xy_world=target_xy_world,
+        )
     try:
         import numpy as np
 
@@ -325,6 +336,158 @@ def _dominant_z_cluster_anchor(values, tolerance_m: float) -> float:
             best_start = start
             best_end = end + 1
     return float(np.median(ordered[best_start:best_end]))
+
+
+def _estimate_roof_plane_from_camera_frame(
+    depth_meters,
+    camera_frame,
+    *,
+    config: dict,
+    target_xy_world: Optional[Sequence[float]],
+) -> RoofPlaneEstimate:
+    """Find a horizontal world plane from an arbitrarily oriented camera."""
+    try:
+        import numpy as np
+
+        from agent.functions.perception.camera_geometry import depth_map_to_world_samples
+
+        depth = np.asarray(depth_meters, dtype=float)
+        if depth.ndim != 2 or depth.size == 0:
+            return RoofPlaneEstimate(False, "camera_depth_not_2d", camera_id=camera_frame.camera_id)
+        stride = max(1, int(config.get("ABOVE_ROOF_DEPTH_STRIDE", 4)))
+        min_depth = max(0.05, float(config.get("ABOVE_ROOF_MIN_DEPTH_M", 0.8)))
+        max_depth = max(min_depth, float(config.get("ABOVE_ROOF_MAX_DEPTH_M", 120.0)))
+        points, pixels, depths = depth_map_to_world_samples(
+            camera_frame,
+            depth,
+            stride=stride,
+            min_depth_m=min_depth,
+            max_depth_m=max_depth,
+        )
+    except (TypeError, ValueError):
+        return RoofPlaneEstimate(False, "camera_geometry_unavailable", camera_id=str(getattr(camera_frame, "camera_id", "")))
+    except Exception:
+        return RoofPlaneEstimate(False, "camera_depth_unavailable", camera_id=str(getattr(camera_frame, "camera_id", "")))
+
+    height, width = depth.shape
+    total_samples = max(1, len(range(stride // 2, height, stride)) * len(range(stride // 2, width, stride)))
+    valid_ratio = float(points.shape[0]) / float(total_samples)
+    min_valid_ratio = float(config.get("ABOVE_ROOF_MIN_VALID_RATIO", 0.35))
+    if points.shape[0] < 6 or valid_ratio < min_valid_ratio:
+        return RoofPlaneEstimate(
+            False,
+            "insufficient_valid_camera_depth",
+            valid_ratio=valid_ratio,
+            camera_id=camera_frame.camera_id,
+        )
+
+    tolerance = max(0.15, float(config.get("ABOVE_ROOF_PLANE_TOLERANCE_M", 0.9)))
+    max_normal_error = float(config.get("ABOVE_ROOF_MAX_NORMAL_ERROR_DEG", 15.0))
+    max_z_mad = max(0.05, float(config.get("ABOVE_ROOF_MAX_Z_MAD_M", 0.45)))
+    min_coverage = float(config.get("ABOVE_ROOF_ANY_CAMERA_MIN_COVERAGE_RATIO", 0.06))
+    centre_half_span = max(0.05, min(0.45, float(config.get("ABOVE_ROOF_CENTER_FRACTION", 0.22))))
+    centre_mask = (
+        (np.abs((pixels[:, 0] + 0.5) / max(float(width), 1.0) - 0.5) <= centre_half_span)
+        & (np.abs((pixels[:, 1] + 0.5) / max(float(height), 1.0) - 0.5) <= centre_half_span)
+    )
+    center_count = max(1, int(np.count_nonzero(centre_mask)))
+
+    # Candidate heights come from the densest quantized world-Z bands. Plane
+    # normal and Z dispersion then reject vertical facades and sloped clutter.
+    bucket_width = max(tolerance, 0.2)
+    bucket_ids = np.rint(points[:, 2] / bucket_width).astype(int)
+    unique, counts = np.unique(bucket_ids, return_counts=True)
+    ordered_buckets = unique[np.argsort(counts)[::-1]]
+    max_candidates = max(3, int(config.get("ABOVE_ROOF_MAX_HEIGHT_CANDIDATES", 12)))
+    candidates = []
+    for bucket in ordered_buckets[:max_candidates]:
+        seed = points[bucket_ids == bucket, 2]
+        if seed.size < 3:
+            continue
+        anchor_z = float(np.median(seed))
+        support_mask = np.abs(points[:, 2] - anchor_z) <= tolerance
+        support = points[support_mask]
+        coverage = float(support.shape[0]) / max(float(points.shape[0]), 1.0)
+        if support.shape[0] < 6 or coverage < min_coverage:
+            continue
+        roof_z = float(np.median(support[:, 2]))
+        z_mad = float(np.median(np.abs(support[:, 2] - roof_z)))
+        normal_error = _plane_normal_error_deg(support)
+        if (
+            normal_error is None
+            or normal_error > max_normal_error
+            or not math.isfinite(z_mad)
+            or z_mad > max_z_mad
+        ):
+            continue
+        center_support = float(np.count_nonzero(support_mask & centre_mask)) / float(center_count)
+        target_distance = 0.0
+        if target_xy_world is not None and len(target_xy_world) >= 2:
+            delta = support[:, :2] - np.asarray(target_xy_world[:2], dtype=float)[None, :]
+            target_distance = float(np.min(np.linalg.norm(delta, axis=1)))
+        target_scale = max(1.0, float(config.get("ABOVE_ROOF_TARGET_ASSOCIATION_M", 20.0)))
+        target_score = max(0.0, 1.0 - target_distance / target_scale)
+        normal_score = max(0.0, 1.0 - normal_error / max(max_normal_error, 1e-6))
+        noise_score = max(0.0, 1.0 - z_mad / max(max_z_mad, 1e-6))
+        score = 0.35 * coverage + 0.20 * center_support + 0.20 * normal_score + 0.10 * noise_score + 0.15 * target_score
+        candidates.append((score, support_mask, support, roof_z, z_mad, normal_error, coverage, center_support))
+
+    if not candidates:
+        return RoofPlaneEstimate(
+            False,
+            "no_horizontal_world_plane",
+            valid_ratio=valid_ratio,
+            camera_id=camera_frame.camera_id,
+        )
+
+    _score, support_mask, support, roof_z, z_mad, normal_error, coverage, center_support = max(
+        candidates,
+        key=lambda item: item[0],
+    )
+    centre_distance = (
+        ((pixels[:, 0] + 0.5) / max(float(width), 1.0) - 0.5) ** 2
+        + ((pixels[:, 1] + 0.5) / max(float(height), 1.0) - 0.5) ** 2
+    )
+    indices = np.flatnonzero(support_mask)
+    centre_index = int(indices[int(np.argmin(centre_distance[support_mask]))])
+    centre_world = [float(value) for value in points[centre_index, :3]]
+    centre_depth = float(depths[centre_index])
+    max_points = max(4, int(config.get("ABOVE_ROOF_MAX_PLANE_SAMPLES", 64)))
+    if support.shape[0] > max_points:
+        selected = np.linspace(0, support.shape[0] - 1, max_points).round().astype(int)
+        support = support[selected]
+    sample_points = [[float(value) for value in row[:3]] for row in support]
+    bounds = _bounds_from_points(sample_points)
+    full_frame_ratio = float(config.get("ABOVE_ROOF_FULL_FRAME_COVERAGE_RATIO", 0.65))
+    full_frame = bool(coverage >= full_frame_ratio)
+    confidence = max(
+        0.0,
+        min(
+            0.99,
+            0.20 * min(valid_ratio / max(min_valid_ratio, 1e-6), 1.0)
+            + 0.30 * min(coverage / max(min_coverage, 1e-6), 1.0)
+            + 0.15 * center_support
+            + 0.20 * max(0.0, 1.0 - normal_error / max(max_normal_error, 1e-6))
+            + 0.15 * max(0.0, 1.0 - z_mad / max(max_z_mad, 1e-6)),
+        ),
+    )
+    return RoofPlaneEstimate(
+        True,
+        "horizontal_world_plane_from_camera",
+        roof_z_world=roof_z,
+        center_world=centre_world,
+        center_depth_m=centre_depth,
+        valid_ratio=valid_ratio,
+        coverage_ratio=coverage,
+        center_support_ratio=center_support,
+        z_mad_m=z_mad,
+        normal_error_deg=normal_error,
+        confidence=confidence,
+        full_frame=full_frame,
+        sample_points_world=sample_points,
+        bounds_world=bounds,
+        camera_id=camera_frame.camera_id,
+    )
 
 
 def _plane_normal_error_deg(points) -> Optional[float]:

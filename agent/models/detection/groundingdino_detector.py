@@ -12,6 +12,7 @@ import requests
 from agent.functions.common.config_access import first_value, function_section
 from agent.models.detection import register_detector
 from agent.models.detection.base import BaseDetector, DetectionResult
+from agent.functions.perception.camera_geometry import attach_detection_camera_context
 from config import cfg
 
 
@@ -83,7 +84,7 @@ class GroundingDINODetector(BaseDetector):
                 continue
             depth_median, depth_bbox = _depth_for_bbox(image, bbox, depth_meters)
             results.append(
-                DetectionResult(
+                attach_detection_camera_context(DetectionResult(
                     visible=True,
                     bbox=bbox,
                     score=float(item.get("score", 0.0) or 0.0),
@@ -91,7 +92,7 @@ class GroundingDINODetector(BaseDetector):
                     depth_median=depth_median,
                     depth_bbox=depth_bbox,
                     camera=camera_name,
-                )
+                ), image)
             )
         return results
 

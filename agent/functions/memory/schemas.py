@@ -110,6 +110,10 @@ class TargetInstanceBelief:
     depth_median: Optional[float] = None
     bbox_quality: float = 0.0
     last_seen_view: str = "unknown"
+    # Real camera optical axis for the latest metric surface observation.
+    # Empty means legacy input without CameraFrame metadata; consumers may
+    # then fall back to the historical view label for compatibility.
+    last_seen_optical_axis_world: List[float] = field(default_factory=list)
     last_label: str = ""
     # Compact provenance for the observation that created this physical
     # instance. Raw RGB/depth frames remain runtime-only; these fields make the
@@ -125,6 +129,10 @@ class TargetInstanceBelief:
     identity_label: str = ""
     appearance_prototypes: List[AppearancePrototype] = field(default_factory=list)
     observed_stage_keys: List[str] = field(default_factory=list)
+    observed_camera_ids: List[str] = field(default_factory=list)
+    observed_capture_ids: List[str] = field(default_factory=list)
+    # Compact RGB-only bearings; no image data is retained.
+    bearing_rays: List[Dict[str, Any]] = field(default_factory=list)
 
     def age_s(self, now: Optional[float] = None) -> float:
         stamp = now_s() if now is None else float(now)
@@ -182,6 +190,12 @@ class TargetInstanceBelief:
             ),
             "large_structure": bool(self.is_large_structure),
             "view": self.last_seen_view,
+            "optical_axis_world": [
+                round(float(value), 5)
+                for value in self.last_seen_optical_axis_world[:3]
+            ],
+            "camera_ids": list(self.observed_camera_ids[-4:]),
+            "bearing_rays": len(self.bearing_rays),
             "identity_source": {
                 "view": self.identity_view,
                 "bbox": list(self.identity_bbox[:4]),
@@ -200,6 +214,8 @@ class TargetInstanceBelief:
                 ),
                 "world": [round(float(v), 2) for v in self.identity_world[:3]],
                 "label": self.identity_label,
+                "camera_id": self.observed_camera_ids[0] if self.observed_camera_ids else "",
+                "capture_id": self.observed_capture_ids[0] if self.observed_capture_ids else "",
             },
             "age_s": round(self.age_s(), 1),
             "status": self.status,

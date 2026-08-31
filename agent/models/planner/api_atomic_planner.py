@@ -104,9 +104,10 @@ class ApiAtomicPlanner(BasePlanner):
             "Output exactly 5 additional incremental body-frame waypoints as a JSON list.",
             (
                 "Each waypoint must be [dx, dy, dz], where the first pending "
-                "or output waypoint is relative to the current drone position/front-view frame "
+                "or output waypoint is relative to the current horizontal navigation frame "
                 "and each following waypoint is relative to the previous waypoint."
             ),
+            "The navigation frame is independent of camera pitch: +dx is heading, +dy is right, and AirSim NED +dz is down.",
             "Do not output any other text.",
         ])
         return "\n".join(parts)

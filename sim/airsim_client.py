@@ -2,10 +2,14 @@
 import contextlib
 import math, io, time
 import threading
+import uuid
+from collections import deque
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 import airsim
 from PIL import Image, ImageDraw, ImageFont
+
+from sim.camera_frames import CameraFrame, CameraIntrinsics, MultiCameraSnapshot
 
 
 class _SynchronizedAirSimRpcClient:
@@ -39,6 +43,8 @@ class AirSimClient:
     def __init__(self, ip: str = "", port: int = 41451, use_config_ip: bool = True, timeout_value: float | None = None):
         from config import cfg
         sim = cfg.get("SIM", {})
+        self._sim_config = dict(sim or {})
+        self._camera_role_ids, self._camera_specs = self._resolve_camera_roles(self._sim_config)
         if port == 41451:
             port = int(sim.get("AIRSIM_PORT", 41451))
         if not ip and use_config_ip:
@@ -55,6 +61,63 @@ class AirSimClient:
             )
         self.client = _SynchronizedAirSimRpcClient(raw_client)
         self._connected = False
+        self._camera_frame_hub = None
+        self._latest_capture_snapshot = None
+        self._capture_frame_by_object_id = {}
+        self._capture_object_ids = deque(maxlen=512)
+        self._camera_fov_cache = {}
+
+    @staticmethod
+    def _resolve_camera_roles(sim_config: dict) -> tuple[dict[str, str], dict[str, dict]]:
+        """Resolve transport roles without assigning any geometric meaning."""
+        configured = sim_config.get("CAMERAS") or {}
+        specs: dict[str, dict] = {}
+        if isinstance(configured, dict):
+            specs = {str(camera_id): dict(value or {}) for camera_id, value in configured.items()}
+        elif isinstance(configured, list):
+            for item in configured:
+                if isinstance(item, str):
+                    specs[str(item)] = {}
+                elif isinstance(item, dict):
+                    camera_id = item.get("ID") or item.get("id") or item.get("CAMERA_ID")
+                    if camera_id:
+                        specs[str(camera_id)] = dict(item)
+        roles: dict[str, str] = {}
+        for camera_id, spec in specs.items():
+            values = spec.get("ROLES", spec.get("roles", spec.get("ROLE", spec.get("role", []))))
+            if isinstance(values, str):
+                values = [values]
+            for role in list(values or []):
+                roles[str(role).strip().lower()] = camera_id
+        ordered_ids = list(specs)
+        roles.setdefault("primary", str(sim_config.get("PRIMARY_CAMERA_ID") or (ordered_ids[0] if ordered_ids else "front_center")))
+        roles.setdefault(
+            "auxiliary",
+            str(sim_config.get("AUXILIARY_CAMERA_ID") or (ordered_ids[1] if len(ordered_ids) > 1 else "down_center")),
+        )
+        for camera_id in roles.values():
+            specs.setdefault(camera_id, {})
+        return roles, specs
+
+    @property
+    def primary_camera_id(self) -> str:
+        return self._camera_role_ids["primary"]
+
+    @property
+    def auxiliary_camera_id(self) -> str:
+        return self._camera_role_ids["auxiliary"]
+
+    def attach_frame_hub(self, frame_hub) -> None:
+        """Publish subsequent formal planning captures to a shared FrameHub."""
+        self._camera_frame_hub = frame_hub
+
+    def latest_capture_snapshot(self):
+        return self._latest_capture_snapshot
+
+    def camera_frame_for_image(self, image_or_depth):
+        if image_or_depth is None:
+            return None
+        return self._capture_frame_by_object_id.get(id(image_or_depth))
 
     def connect(self, quiet: bool = False):
         # Do not redirect stdout here. `confirmConnection()` may be called from a
@@ -125,7 +188,7 @@ class AirSimClient:
 
     def get_image(self):
         responses = self.client.simGetImages([
-            airsim.ImageRequest("front_center", airsim.ImageType.Scene, False, True)
+            airsim.ImageRequest(self.primary_camera_id, airsim.ImageType.Scene, False, True)
         ])
         if not responses or not responses[0].image_data_uint8:
             return None
@@ -134,8 +197,8 @@ class AirSimClient:
     def get_scene_and_depth_meters(self):
         """Return RGB frame and raw DepthPerspective meters from one AirSim RPC."""
         responses = self.client.simGetImages([
-            airsim.ImageRequest("front_center", airsim.ImageType.Scene, False, True),
-            airsim.ImageRequest("front_center", airsim.ImageType.DepthPerspective, True, False),
+            airsim.ImageRequest(self.primary_camera_id, airsim.ImageType.Scene, False, True),
+            airsim.ImageRequest(self.primary_camera_id, airsim.ImageType.DepthPerspective, True, False),
         ])
         frame = None
         depth = None
@@ -241,7 +304,7 @@ class AirSimClient:
         so we normalize to 8-bit with a fixed 100m range.
         """
         responses = self.client.simGetImages([
-            airsim.ImageRequest("front_center", airsim.ImageType.DepthPerspective, True, False)
+            airsim.ImageRequest(self.primary_camera_id, airsim.ImageType.DepthPerspective, True, False)
         ])
         if not responses or not responses[0].image_data_float:
             return None
@@ -252,7 +315,7 @@ class AirSimClient:
     def get_depth_meters(self):
         """Return raw DepthPerspective meters as a float32 array."""
         responses = self.client.simGetImages([
-            airsim.ImageRequest("front_center", airsim.ImageType.DepthPerspective, True, False)
+            airsim.ImageRequest(self.primary_camera_id, airsim.ImageType.DepthPerspective, True, False)
         ])
         if not responses or not responses[0].image_data_float:
             return None
@@ -268,7 +331,7 @@ class AirSimClient:
         VLM reads the text label at the target location for precise depth.
         """
         responses = self.client.simGetImages([
-            airsim.ImageRequest("front_center", airsim.ImageType.DepthPerspective, True, False)
+            airsim.ImageRequest(self.primary_camera_id, airsim.ImageType.DepthPerspective, True, False)
         ])
         if not responses or not responses[0].image_data_float:
             return None
@@ -316,7 +379,7 @@ class AirSimClient:
         or None on failure.
         """
         responses = self.client.simGetImages([
-            airsim.ImageRequest("front_center", airsim.ImageType.DepthPerspective, True, False)
+            airsim.ImageRequest(self.primary_camera_id, airsim.ImageType.DepthPerspective, True, False)
         ])
         if not responses or not responses[0].image_data_float:
             return None
@@ -463,32 +526,34 @@ class AirSimClient:
 
     def _profile_requests(self, profile: str):
         profile = (profile or "").strip().lower()
+        primary_id = self.primary_camera_id
+        auxiliary_id = self.auxiliary_camera_id
         mapping = {
             "front_depth": [
-                ("front_rgb", airsim.ImageRequest("front_center", airsim.ImageType.Scene, False, True)),
-                ("front_depth", airsim.ImageRequest("front_center", airsim.ImageType.DepthPerspective, True, False)),
+                ("front_rgb", airsim.ImageRequest(primary_id, airsim.ImageType.Scene, False, True)),
+                ("front_depth", airsim.ImageRequest(primary_id, airsim.ImageType.DepthPerspective, True, False)),
             ],
             "front_depth_only": [
-                ("front_depth", airsim.ImageRequest("front_center", airsim.ImageType.DepthPerspective, True, False)),
+                ("front_depth", airsim.ImageRequest(primary_id, airsim.ImageType.DepthPerspective, True, False)),
             ],
             "front_down": [
-                ("front_rgb", airsim.ImageRequest("front_center", airsim.ImageType.Scene, False, True)),
-                ("down_rgb", airsim.ImageRequest("down_center", airsim.ImageType.Scene, False, True)),
+                ("front_rgb", airsim.ImageRequest(primary_id, airsim.ImageType.Scene, False, True)),
+                ("down_rgb", airsim.ImageRequest(auxiliary_id, airsim.ImageType.Scene, False, True)),
             ],
             "front_down_depth_only": [
-                ("front_depth", airsim.ImageRequest("front_center", airsim.ImageType.DepthPerspective, True, False)),
-                ("down_depth", airsim.ImageRequest("down_center", airsim.ImageType.DepthPerspective, True, False)),
+                ("front_depth", airsim.ImageRequest(primary_id, airsim.ImageType.DepthPerspective, True, False)),
+                ("down_depth", airsim.ImageRequest(auxiliary_id, airsim.ImageType.DepthPerspective, True, False)),
             ],
             "front_down_front_depth": [
-                ("front_rgb", airsim.ImageRequest("front_center", airsim.ImageType.Scene, False, True)),
-                ("down_rgb", airsim.ImageRequest("down_center", airsim.ImageType.Scene, False, True)),
-                ("front_depth", airsim.ImageRequest("front_center", airsim.ImageType.DepthPerspective, True, False)),
+                ("front_rgb", airsim.ImageRequest(primary_id, airsim.ImageType.Scene, False, True)),
+                ("down_rgb", airsim.ImageRequest(auxiliary_id, airsim.ImageType.Scene, False, True)),
+                ("front_depth", airsim.ImageRequest(primary_id, airsim.ImageType.DepthPerspective, True, False)),
             ],
             "front_down_both_depth": [
-                ("front_rgb", airsim.ImageRequest("front_center", airsim.ImageType.Scene, False, True)),
-                ("down_rgb", airsim.ImageRequest("down_center", airsim.ImageType.Scene, False, True)),
-                ("front_depth", airsim.ImageRequest("front_center", airsim.ImageType.DepthPerspective, True, False)),
-                ("down_depth", airsim.ImageRequest("down_center", airsim.ImageType.DepthPerspective, True, False)),
+                ("front_rgb", airsim.ImageRequest(primary_id, airsim.ImageType.Scene, False, True)),
+                ("down_rgb", airsim.ImageRequest(auxiliary_id, airsim.ImageType.Scene, False, True)),
+                ("front_depth", airsim.ImageRequest(primary_id, airsim.ImageType.DepthPerspective, True, False)),
+                ("down_depth", airsim.ImageRequest(auxiliary_id, airsim.ImageType.DepthPerspective, True, False)),
             ],
         }
         if profile not in mapping:
@@ -512,6 +577,179 @@ class AirSimClient:
         if request_name.endswith("_depth") and response.image_data_float:
             return np.array(response.image_data_float, dtype=np.float32).reshape(response.height, response.width)
         return None
+
+    @staticmethod
+    def _response_timestamp_ns(response) -> int:
+        value = int(getattr(response, "time_stamp", 0) or 0) if response is not None else 0
+        return value if value > 0 else time.time_ns()
+
+    @staticmethod
+    def _response_position(response):
+        value = getattr(response, "camera_position", None)
+        return [
+            float(getattr(value, "x_val", 0.0)),
+            float(getattr(value, "y_val", 0.0)),
+            float(getattr(value, "z_val", 0.0)),
+        ]
+
+    @staticmethod
+    def _response_quaternion(response):
+        value = getattr(response, "camera_orientation", None)
+        return [
+            float(getattr(value, "x_val", 0.0)),
+            float(getattr(value, "y_val", 0.0)),
+            float(getattr(value, "z_val", 0.0)),
+            float(getattr(value, "w_val", 1.0)),
+        ]
+
+    @classmethod
+    def _response_rotation(cls, response):
+        quaternion = cls._response_quaternion(response)
+        if not all(math.isfinite(value) for value in quaternion):
+            return np.eye(3, dtype=float).tolist()
+        try:
+            return R.from_quat(quaternion).as_matrix().tolist()
+        except ValueError:
+            return np.eye(3, dtype=float).tolist()
+
+    def _camera_fov(self, camera_id: str, fallback: float) -> float:
+        if camera_id in self._camera_fov_cache:
+            return self._camera_fov_cache[camera_id]
+        value = float(fallback)
+        try:
+            info = self.client.simGetCameraInfo(camera_id)
+            candidate = float(getattr(info, "fov", value))
+            if math.isfinite(candidate) and 0.0 < candidate < 180.0:
+                value = candidate
+        except Exception:
+            pass
+        self._camera_fov_cache[camera_id] = value
+        return value
+
+    def _capture_camera_id(self, request_name: str) -> str:
+        # This is the explicit legacy profile adapter. Downstream geometry uses
+        # only the pose stored in CameraFrame, never this semantic name.
+        return self.auxiliary_camera_id if str(request_name).startswith("down_") else self.primary_camera_id
+
+    def _vehicle_pose_for_snapshot(self):
+        try:
+            pose = self.client.simGetVehiclePose()
+            position = [float(pose.position.x_val), float(pose.position.y_val), float(pose.position.z_val)]
+            quaternion = [
+                float(pose.orientation.x_val),
+                float(pose.orientation.y_val),
+                float(pose.orientation.z_val),
+                float(pose.orientation.w_val),
+            ]
+            rotation = R.from_quat(quaternion).as_matrix().tolist()
+            siny = 2.0 * (quaternion[3] * quaternion[2] + quaternion[0] * quaternion[1])
+            cosy = 1.0 - 2.0 * (quaternion[1] ** 2 + quaternion[2] ** 2)
+            return position, rotation, math.degrees(math.atan2(siny, cosy))
+        except Exception:
+            return [0.0, 0.0, 0.0], np.eye(3, dtype=float).tolist(), 0.0
+
+    def _register_capture_snapshot(self, named_requests, responses, values, *, source: str):
+        """Wrap already-returned AirSim responses without issuing image RPCs."""
+        if not responses:
+            return None
+        from config import cfg
+
+        sim_cfg = dict(cfg.get("SIM", {}) or {})
+        grouped = {}
+        for index, (request_name, _request) in enumerate(named_requests):
+            if index >= len(responses):
+                continue
+            camera_id = self._capture_camera_id(request_name)
+            grouped.setdefault(camera_id, {})[request_name.rsplit("_", 1)[-1]] = (
+                responses[index],
+                values.get(request_name),
+            )
+        capture_id = f"{time.time_ns()}-{uuid.uuid4().hex[:8]}"
+        vehicle_position, body_rotation, navigation_yaw = self._vehicle_pose_for_snapshot()
+        frames = {}
+        for camera_id, entries in grouped.items():
+            rgb_entry = entries.get("rgb")
+            depth_entry = entries.get("depth")
+            rgb_response, rgb_image = rgb_entry if rgb_entry is not None else (None, None)
+            depth_response, depth_map = depth_entry if depth_entry is not None else (None, None)
+            pose_response = rgb_response if rgb_response is not None else depth_response
+            if pose_response is None:
+                continue
+            is_down_adapter = camera_id == self.auxiliary_camera_id
+            camera_spec = self._camera_specs.get(camera_id, {})
+            rgb_fallback = float(sim_cfg.get("DOWN_FOV" if is_down_adapter else "FRONT_FOV", 90.0))
+            depth_fallback = float(
+                sim_cfg.get(
+                    "DOWN_DEPTH_FOV" if is_down_adapter else "DEPTH_FOV",
+                    rgb_fallback,
+                )
+            )
+            rgb_fallback = float(camera_spec.get("FOV", camera_spec.get("fov", rgb_fallback)))
+            depth_fallback = float(camera_spec.get("DEPTH_FOV", camera_spec.get("depth_fov", depth_fallback)))
+            rgb_fov = self._camera_fov(camera_id, rgb_fallback)
+            rgb_intrinsics = None
+            if rgb_response is not None and int(getattr(rgb_response, "width", 0) or 0) > 0:
+                rgb_intrinsics = CameraIntrinsics.from_horizontal_fov(
+                    rgb_response.width, rgb_response.height, rgb_fov, depth_mode="radial"
+                )
+            depth_intrinsics = None
+            if depth_response is not None and int(getattr(depth_response, "width", 0) or 0) > 0:
+                depth_intrinsics = CameraIntrinsics.from_horizontal_fov(
+                    depth_response.width, depth_response.height, depth_fallback, depth_mode="radial"
+                )
+            frame = CameraFrame(
+                camera_id=camera_id,
+                capture_id=capture_id,
+                timestamp_ns=self._response_timestamp_ns(pose_response),
+                rgb=rgb_image,
+                depth=depth_map,
+                rgb_intrinsics=rgb_intrinsics,
+                depth_intrinsics=depth_intrinsics,
+                camera_position_world=self._response_position(pose_response),
+                camera_quaternion_world=self._response_quaternion(pose_response),
+                rotation_camera_to_world=self._response_rotation(pose_response),
+                depth_timestamp_ns=self._response_timestamp_ns(depth_response) if depth_response is not None else 0,
+                depth_camera_position_world=self._response_position(depth_response) if depth_response is not None else None,
+                depth_camera_quaternion_world=self._response_quaternion(depth_response) if depth_response is not None else None,
+                depth_rotation_camera_to_world=self._response_rotation(depth_response) if depth_response is not None else None,
+                vehicle_position_world=vehicle_position,
+                rotation_body_to_world=body_rotation,
+                navigation_yaw_deg=navigation_yaw,
+                captured_at=time.perf_counter(),
+                source=source,
+            )
+            frames[camera_id] = frame
+            for captured_value in (rgb_image, depth_map):
+                if captured_value is None:
+                    continue
+                object_id = id(captured_value)
+                if len(self._capture_object_ids) == self._capture_object_ids.maxlen:
+                    oldest = self._capture_object_ids.popleft()
+                    self._capture_frame_by_object_id.pop(oldest, None)
+                self._capture_object_ids.append(object_id)
+                self._capture_frame_by_object_id[object_id] = frame
+            if rgb_image is not None:
+                try:
+                    rgb_image.camera_frame = frame
+                    rgb_image.camera_id = frame.camera_id
+                    rgb_image.capture_id = frame.capture_id
+                except Exception:
+                    pass
+        if not frames:
+            return None
+        snapshot = MultiCameraSnapshot(
+            capture_id=capture_id,
+            frames=frames,
+            vehicle_position_world=vehicle_position,
+            rotation_body_to_world=body_rotation,
+            navigation_yaw_deg=navigation_yaw,
+            captured_at=time.perf_counter(),
+            source=source,
+        )
+        self._latest_capture_snapshot = snapshot
+        if self._camera_frame_hub is not None:
+            self._camera_frame_hub.publish(snapshot)
+        return snapshot
 
     def _print_capture_timing(self, timing: dict, front_rgb, front_depth, down_depth):
         rpc_s = timing.get("rpc_s", 0.0)
@@ -545,6 +783,12 @@ class AirSimClient:
         for idx, (name, _req) in enumerate(named_requests):
             if responses and len(responses) > idx:
                 values[name] = self._decode_capture_response(name, responses[idx])
+        snapshot = self._register_capture_snapshot(
+            named_requests,
+            responses,
+            values,
+            source=f"formal_batch:{profile}",
+        )
         t2 = time.perf_counter()
 
         timing = {
@@ -600,7 +844,27 @@ class AirSimClient:
             elif name == "down_rgb":
                 down = self._decode_capture_response(name, response)
 
-        pose = self._body_pose_from_camera_response(front_response, camera_offset)
+        snapshot = self._register_capture_snapshot(
+            named_requests,
+            responses,
+            {
+                "front_rgb": front,
+                "down_rgb": down,
+                "front_depth": None,
+                "down_depth": None,
+            },
+            source="formal_batch_with_pose:front_down",
+        )
+
+        pose = (
+            (
+                list(snapshot.vehicle_position_world),
+                float(snapshot.navigation_yaw_deg),
+                [list(row) for row in snapshot.rotation_body_to_world],
+            )
+            if snapshot is not None
+            else None
+        )
         if pose is None:
             pose = self.get_pose_full()
         t2 = time.perf_counter()
@@ -636,7 +900,27 @@ class AirSimClient:
             elif name == "down_depth":
                 down_depth = self._decode_capture_response(name, response)
 
-        pose = self._body_pose_from_camera_response(front_response, camera_offset)
+        snapshot = self._register_capture_snapshot(
+            named_requests,
+            responses,
+            {
+                "front_rgb": front,
+                "down_rgb": down,
+                "front_depth": front_depth,
+                "down_depth": down_depth,
+            },
+            source="formal_batch_with_pose:front_down_both_depth",
+        )
+
+        pose = (
+            (
+                list(snapshot.vehicle_position_world),
+                float(snapshot.navigation_yaw_deg),
+                [list(row) for row in snapshot.rotation_body_to_world],
+            )
+            if snapshot is not None
+            else None
+        )
         if pose is None:
             pose = self.get_pose_full()
         t2 = time.perf_counter()
@@ -671,13 +955,15 @@ class AirSimClient:
             t1 = time.perf_counter()
 
             value = None
+            response = None
             if responses:
-                resp = responses[0]
-                value = self._decode_capture_response(name, resp)
+                response = responses[0]
+                value = self._decode_capture_response(name, response)
             t2 = time.perf_counter()
             return {
                 "name": name,
                 "value": value,
+                "response": response,
                 "rpc_s": t1 - t0,
                 "decode_s": t2 - t1,
                 "total_s": t2 - t0,
@@ -698,6 +984,15 @@ class AirSimClient:
         down_rgb = results.get("down_rgb", {}).get("value")
         front_depth = results.get("front_depth", {}).get("value")
         down_depth = results.get("down_depth", {}).get("value")
+
+        ordered_responses = [results.get(name, {}).get("response") for name, _request in named_requests]
+        captured_values = {name: results.get(name, {}).get("value") for name, _request in named_requests}
+        self._register_capture_snapshot(
+            named_requests,
+            ordered_responses,
+            captured_values,
+            source=f"formal_parallel:{profile}",
+        )
 
         timing = {
             "wall_s": t_all1 - t_all0,
@@ -769,8 +1064,8 @@ class AirSimClient:
         # 第一次：前视 RGB + 深度
         _t0 = _time.perf_counter()
         resp1 = self.client.simGetImages([
-            airsim.ImageRequest("front_center", airsim.ImageType.Scene, False, True),
-            airsim.ImageRequest("front_center", airsim.ImageType.DepthPerspective, True, False),
+            airsim.ImageRequest(self.primary_camera_id, airsim.ImageType.Scene, False, True),
+            airsim.ImageRequest(self.primary_camera_id, airsim.ImageType.DepthPerspective, True, False),
         ])
         _t1 = _time.perf_counter()
         print(f"[TIMING] front RPC={_t1-_t0:.3f}s")
@@ -785,7 +1080,7 @@ class AirSimClient:
         # 第二次：下视 RGB
         _t2 = _time.perf_counter()
         resp2 = self.client.simGetImages([
-            airsim.ImageRequest("down_center", airsim.ImageType.Scene, False, True),
+            airsim.ImageRequest(self.auxiliary_camera_id, airsim.ImageType.Scene, False, True),
         ])
         _t3 = _time.perf_counter()
         print(f"[TIMING] down RPC={_t3-_t2:.3f}s")

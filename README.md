@@ -15,6 +15,10 @@
 - **目标实例锁定**：首次发现目标后锁定类别和世界坐标，减少同类目标误切换。
 - **轻量上下文管理**：只保留目标记忆和状态机，不负责重定位、局部前进或到达判断。
 - **按尺度目标丢失恢复**：建筑保持锁定几何并切换记忆/下视屋顶获取；小目标才进行身份校验后的有限扇形搜索。
+- **任意相机姿态统一投影**：每一帧使用 Camera API 返回的真实内参、外参和姿态投影到 AirSim 世界坐标，不要求主相机水平前视，也不从相机名称推断 Pitch。
+- **多相机互补**：目标方位、三维绑定、屋顶估计、局部避障、重定位和完成判断可共同使用 `SIM.CAMERAS` 中的相机。
+- **`above` 建筑任务保护**：屋顶高于无人机时先按至少 10 米的有效 AirSim 爬升段升高，纯垂直爬升保持 yaw，确认高于屋顶后再横向越过。
+- **Camera API 可选录制**：Web 与 CLI 均可预览/录制 `simGetImages()` 的真实画面；默认关闭，支持逐帧、视频和事件窗口模式。
 - **本地/远程 VLM 兼容**：支持云端 API，也支持内网 vLLM 部署的 `Qwen3-VL-4B-Instruct`。
 
 ## 系统流程
@@ -127,6 +131,30 @@ C:\Users\<用户名>\Documents\AirSim\settings.json
 - `ImageType: 2` = 原始深度矩阵（DepthPerspective）
 - 修改 `settings.json` 后必须重启 AirSim / Unreal 场景
 - 不建议直接把 `DepthPerspective` 开到 `1920x1080`，float 深度矩阵通过 RPC 传输会明显变慢
+- `settings.json` 中 Camera 的 `Pitch/Yaw/Roll` 可以按实验需要修改；Planner 使用每次 Camera API 响应的真实位姿，不需要同步修改投影代码。
+- `config/default.yaml` 的 `SIM.CAMERAS` 只配置抓图角色和 Camera ID。`primary/auxiliary` 是输入槽，不代表水平前视或垂直下视。
+- Web 启动写入 CaptureSettings 时，`PRESERVE_CAMERA_POSE_ON_SETTINGS_WRITE: true` 会保留本地相机姿态和安装位置。
+
+### Camera API 预览与录制
+
+录制默认关闭。Web 页面可直接选择 Camera ID 并开启；Web/CLI 启动参数一致：
+
+```bash
+python run_airsim_web.py --record-camera-api --camera-record-mode video
+python run_airsim_cli.py --record-camera-api --camera-record-mode frames
+```
+
+CLI 运行中还可输入：
+
+```text
+/camera-record on video
+/camera-record on frames
+/camera-record on events
+/camera-record event target_lost
+/camera-record off
+```
+
+输出目录在收到首帧时才创建；可在 `FUNCTIONS.CAMERA_API_OBSERVER` 中限制帧率、磁盘占用、事件前后窗口以及是否保存深度。
 
 ## API 与配置
 

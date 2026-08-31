@@ -24,6 +24,26 @@ FUNCTIONS:
     TIMEOUT: 120                          # 检测请求超时秒数
     PARALLEL: true                        # 是否并行检测 front/down
 
+  CAMERA_API_OBSERVER:
+    RECORDING_ENABLED: false              # 默认关闭；CLI/Web显式开启后才写磁盘
+    RECORDING_MODE: off                   # off | frames | video | events
+    CAMERA_IDS: []                        # 空列表表示录制SIM.CAMERAS中的全部相机
+    RECORD_FPS: 5.0
+    OUTPUT_ROOT: output/camera_api         # 首帧到达时才创建本次运行目录
+    FRAME_FORMAT: jpg
+    JPEG_QUALITY: 82
+    VIDEO_CODEC: mp4v
+    ASYNC_QUEUE_SIZE: 64
+    DROP_OLDEST_WHEN_FULL: true
+    EVENT_PRE_SECONDS: 2.0
+    EVENT_POST_SECONDS: 3.0
+    MAX_DISK_GB: 5.0
+    MIN_FREE_DISK_GB: 2.0
+    MAX_DURATION_MINUTES: 60.0
+    SAVE_METADATA: true
+    SAVE_DEPTH_PREVIEW: false
+    SAVE_RAW_DEPTH: false
+
   COMPLETION:
     NAME: depth_detector                  # 完成判定功能: depth_detector | api_completion
     MODEL: mimo-v2.5                      # 完成判定 VLM 模型名
@@ -48,9 +68,9 @@ FUNCTIONS:
     CAPTURE_PROFILE: front_down_both_depth # 重定位候选同时抓深度，供三维锁定身份连续性校验
     TURN_DEG: 90.0                         # 兼容旧入口；新运行时使用下方显式偏航序列
     MAX_TURNS: 4                           # 兼容旧入口；新运行时由有限偏航集合决定视图数
-    ACCEPT_DOWN_VIEW: false                # 定向重定位只接受前视目标，确保机头朝向目标
-    CENTER_ON_TARGET: true                 # 找到后按bbox水平中心进一步对准目标
-    CAMERA_HFOV_DEG: 90.0                  # 前视相机水平视场角，用于bbox到yaw修正
+    ACCEPT_DOWN_VIEW: false                # 仅无CameraFrame的旧接口使用；真实Camera API相机均可参与
+    CENTER_ON_TARGET: true                 # 找到后按世界射线与真实相机光轴决定是否微调yaw
+    CAMERA_HFOV_DEG: 90.0                  # 仅旧bbox适配器使用；统一模式读取每帧真实内参
     MIN_CENTER_OFFSET_DEG: 3.0             # 小于该角度不再微调机头
     MIN_CONFIDENCE: 0.4                    # 重定位接受目标框的最低置信度
     MIN_BBOX_AREA_RATIO: 0.002             # 近目标重定位拒绝过小的远处/噪声候选框
@@ -74,8 +94,8 @@ FUNCTIONS:
     MAX_RELIABLE_DEPTH_M: 120.0           # 更远深度只作粗距离/方位提示，不更新精确世界坐标
     DEPTH_MODE: radial                    # AirSim DepthPerspective按视线径向距离投影
     COMPLETION_CONFIRMATIONS: 2           # 首次观测已在半径内时至少需要两次一致观测
-    FRONT_CAMERA_OFFSET: [1.0, 0.0, 0.0] # front_center相对机体的NED偏移
-    DOWN_CAMERA_OFFSET: [0.0, 0.0, 0.0]  # down_center相对机体的NED偏移
+    FRONT_CAMERA_OFFSET: [1.0, 0.0, 0.0] # 仅缺少CameraFrame时的legacy回退
+    DOWN_CAMERA_OFFSET: [0.0, 0.0, 0.0]  # 仅缺少CameraFrame时的legacy回退
 
   MEMORY:
     NAME: mission_memory                  # 轻量级任务内记忆：只存目标坐标/置信度/外观统计，不存原图和深度图
@@ -423,6 +443,22 @@ AGENT:
   QWEN_RESIZE_MODE: square               # square=强制1024x1024 | long_edge=长边缩到1024并保持比例
 
 SIM:
+  CAMERA_GEOMETRY:
+    MODE: unified                         # unified | shadow | legacy；缺少逐帧位姿时自动回退legacy
+  CAMERAS:                                # 角色只决定抓图输入槽，不表示相机朝向
+    front_center:
+      ROLE: primary
+      RGB: true
+      DEPTH: true
+      FOV: 90
+      DEPTH_FOV: 90
+    down_center:
+      ROLE: auxiliary
+      RGB: true
+      DEPTH: true
+      FOV: 90
+      DEPTH_FOV: 90
+  PRESERVE_CAMERA_POSE_ON_SETTINGS_WRITE: true # Web写CaptureSettings时保留settings.json中的Pitch/Yaw/Roll/XYZ
   FRONT_WIDTH: 1920
   FRONT_HEIGHT: 1080
   FRONT_FOV: 90

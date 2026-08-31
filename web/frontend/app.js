@@ -38,6 +38,13 @@ const taskInput = document.getElementById("taskInput");
 const taskBtn = document.getElementById("taskBtn");
 const depthImg = document.getElementById("depthImage");
 const depthPh = document.getElementById("depthPlaceholder");
+const cameraApiSelect = document.getElementById("cameraApiSelect");
+const cameraApiImg = document.getElementById("cameraApiImage");
+const cameraApiPh = document.getElementById("cameraApiPlaceholder");
+const cameraApiStatus = document.getElementById("cameraApiStatus");
+const cameraApiMetadata = document.getElementById("cameraApiMetadata");
+const cameraRecordBtn = document.getElementById("cameraRecordBtn");
+let selectedCameraApiId = "";
 
 depthImg.onload = function () {
   depthImg.style.display = "block";
@@ -95,6 +102,24 @@ taskInput.addEventListener("keydown", function (e) {
   if (e.key === "Enter") updateTask();
 });
 
+cameraApiSelect.addEventListener("change", function () {
+  selectedCameraApiId = cameraApiSelect.value || "";
+  refreshCameraApi(state);
+});
+
+cameraRecordBtn.addEventListener("click", function () {
+  var recording = (state.camera_recording || {}).enabled;
+  var endpoint = recording ? "/camera_api/recording/stop" : "/camera_api/recording/start";
+  cameraRecordBtn.disabled = true;
+  fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: recording ? "{}" : JSON.stringify({ mode: "video" }),
+  }).finally(function () {
+    cameraRecordBtn.disabled = false;
+  });
+});
+
 function updateUI(s) {
   if (s.frame_version > 0) {
     camImg.src = "/frame?t=" + s.frame_version;
@@ -130,6 +155,44 @@ function updateUI(s) {
   if (sTrajectory) renderTrajectoryDebug(s);
   if (sMemory) renderMemoryDebug(s);
   renderLegacyCandidates(s);
+  refreshCameraApi(s);
+}
+
+function refreshCameraApi(s) {
+  var ids = s.camera_ids || [];
+  var currentOptions = Array.from(cameraApiSelect.options).map(function (o) { return o.value; });
+  if (JSON.stringify(currentOptions) !== JSON.stringify(ids)) {
+    cameraApiSelect.innerHTML = "";
+    ids.forEach(function (id) {
+      var option = document.createElement("option");
+      option.value = id;
+      option.textContent = id;
+      cameraApiSelect.appendChild(option);
+    });
+  }
+  if (!selectedCameraApiId || ids.indexOf(selectedCameraApiId) < 0) {
+    selectedCameraApiId = ids[0] || "";
+  }
+  cameraApiSelect.value = selectedCameraApiId;
+  if (selectedCameraApiId) {
+    var version = (s.camera_versions || {})[selectedCameraApiId] || 0;
+    if (version > 0) {
+      cameraApiImg.src = "/camera_api/frame/" + encodeURIComponent(selectedCameraApiId) + "?t=" + version;
+      cameraApiImg.style.display = "block";
+      cameraApiPh.style.display = "none";
+      fetch("/camera_api/metadata/" + encodeURIComponent(selectedCameraApiId))
+        .then(function (response) { return response.json(); })
+        .then(function (metadata) {
+          cameraApiMetadata.textContent = JSON.stringify(metadata, null, 2);
+        })
+        .catch(function () {});
+    }
+  }
+  var recording = s.camera_recording || {};
+  cameraRecordBtn.textContent = recording.enabled ? "Stop" : "Record";
+  cameraApiStatus.textContent = recording.enabled
+    ? ("recording " + (recording.mode || "") + " · " + (recording.written_frames || 0) + " frames")
+    : "recording off";
 }
 
 function renderMemoryDebug(s) {

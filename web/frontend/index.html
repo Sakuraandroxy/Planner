@@ -60,6 +60,22 @@
         </div>
       </div>
 
+      <!-- Raw Camera API observer. This is the image returned by simGetImages,
+           independent from the AirSim viewport selected with keyboard shortcut 3. -->
+      <div class="card camera-api-card">
+        <div class="card-header camera-api-header">
+          <span>Camera API</span>
+          <select id="cameraApiSelect" aria-label="Camera API camera"></select>
+          <button id="cameraRecordBtn" type="button">Record</button>
+        </div>
+        <div class="card-body">
+          <img id="cameraApiImage" style="width:100%;display:none;border-radius:4px" alt="Camera API frame"/>
+          <span class="cam-placeholder" id="cameraApiPlaceholder">waiting...</span>
+          <div class="camera-api-status" id="cameraApiStatus">recording off</div>
+          <pre class="camera-api-metadata" id="cameraApiMetadata">metadata waiting...</pre>
+        </div>
+      </div>
+
       <!-- Trajectory -->
       <div class="card trajectory-card">
         <div class="card-header">

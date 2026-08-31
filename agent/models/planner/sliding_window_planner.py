@@ -12,6 +12,7 @@ from __future__ import annotations
 import ast
 import base64
 import io
+import json
 import math
 import re
 import time
@@ -271,6 +272,7 @@ class SlidingWindowQwenPlanner(BasePlanner):
         pending_waypoints: Iterable[Sequence[float]] | None,
         direction: str = "",
         memory_hint: str = "",
+        geometry_context: dict | None = None,
     ) -> str:
         pending = normalize_xyz_waypoints(pending_waypoints)[:5]
         pending_str = "[" + ", ".join(
@@ -286,14 +288,24 @@ class SlidingWindowQwenPlanner(BasePlanner):
         memory_hint = str(memory_hint or "").strip()
         if memory_hint:
             parts.append(memory_hint)
+        if geometry_context:
+            parts.append(
+                "Unified camera/navigation geometry (JSON): "
+                + json.dumps(geometry_context, ensure_ascii=False, separators=(",", ":"))
+            )
         if pending:
             parts.append(f"Pending incremental body-frame waypoints: {pending_str}")
         parts.extend([
             "Output exactly 5 additional incremental body-frame waypoints as a JSON list.",
             (
                 "Each waypoint must be [dx, dy, dz], where the first pending "
-                "or output waypoint is relative to the current drone position/front-view frame "
+                "or output waypoint is relative to the current horizontal navigation frame "
                 "and each following waypoint is relative to the previous waypoint."
+            ),
+            (
+                "The navigation frame is independent of every camera pose: +dx is current heading, "
+                "+dy is right, and AirSim NED +dz is down. Use camera optical axes and the supplied "
+                "world/navigation geometry instead of assuming any image is horizontal or front-facing."
             ),
             "Do not output any other text.",
         ])
@@ -321,16 +333,30 @@ class SlidingWindowQwenPlanner(BasePlanner):
              relation: str = "", target: str = "",
              pending_waypoints=None,
              memory_hint: str = "",
+             camera_images=None,
+             geometry_context: dict | None = None,
              print_prompt: bool = True) -> TrajectoryResult:
-        prompt = self._build_prompt(instruction, pending_waypoints, direction=direction, memory_hint=memory_hint)
+        prompt = self._build_prompt(
+            instruction,
+            pending_waypoints,
+            direction=direction,
+            memory_hint=memory_hint,
+            geometry_context=geometry_context,
+        )
+        images = []
+        for image in list(camera_images or [front_img, down_img if down_img is not None else front_img]):
+            if image is not None and all(image is not existing for existing in images):
+                images.append(image)
+        if not images and front_img is not None:
+            images = [front_img]
         if print_prompt:
             print("[QwenSlidingPrompt]")
-            print(self._format_prompt_for_log(prompt))
+            print("<image>" * len(images) + prompt)
         content = [
-            {"type": "image_url", "image_url": {"url": self._image_url(front_img)}},
-            {"type": "image_url", "image_url": {"url": self._image_url(down_img if down_img else front_img)}},
-            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": self._image_url(image)}}
+            for image in images
         ]
+        content.append({"type": "text", "text": prompt})
         payload = {
             "model": self.model,
             "messages": [{"role": "user", "content": content}],

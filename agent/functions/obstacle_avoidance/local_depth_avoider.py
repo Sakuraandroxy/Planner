@@ -13,6 +13,7 @@ from typing import Iterable, List, Sequence
 
 from agent.functions.memory.geometry import world_to_body
 from agent.functions.obstacle_avoidance.schemas import AvoidanceResult, ObstacleCell
+from agent.functions.perception.camera_geometry import depth_map_to_world_points
 
 
 @dataclass
@@ -54,17 +55,32 @@ class DepthObstacleAvoider:
         down_depth_meters=None,
         observer_world: Sequence[float],
         observer_yaw_deg: float,
+        camera_frames=None,
     ) -> int:
         """Fuse a depth snapshot into the sparse local obstacle memory."""
         if not self.enabled:
             return 0
         added_or_updated = 0
-        for point_body, view in self._iter_depth_points(front_depth_meters, down_depth_meters):
+        world_samples = list(self._iter_camera_world_points(camera_frames))
+        if world_samples:
+            samples = (
+                (world_to_body(world, observer_world, observer_yaw_deg), world, view)
+                for world, view in world_samples
+            )
+        else:
+            samples = (
+                (
+                    point_body,
+                    self._body_to_world(point_body, observer_world, observer_yaw_deg),
+                    view,
+                )
+                for point_body, view in self._iter_depth_points(front_depth_meters, down_depth_meters)
+            )
+        for point_body, world, view in samples:
             if not self._accept_depth_point(point_body):
                 continue
-            world = self._body_to_world(point_body, observer_world, observer_yaw_deg)
             key = self._cell_key(world)
-            depth = max(float(point_body[0]), 0.1)
+            depth = max(self._distance3(world, observer_world), 0.1)
             conf = 1.0 - min(0.85, depth / max(float(self.config.get("FRONT_MAX_DEPTH_M", 30.0)), 1.0))
             existing = self.obstacle_cells.get(key)
             if existing is None:
@@ -90,6 +106,37 @@ class DepthObstacleAvoider:
         self.last_update_s = time.perf_counter()
         self._prune()
         return added_or_updated
+
+    def _iter_camera_world_points(self, camera_frames):
+        """Yield world obstacles from any camera pose using exact frame geometry."""
+        if not camera_frames:
+            return
+        if isinstance(camera_frames, dict):
+            frames = list(camera_frames.values())
+        else:
+            frames = list(camera_frames)
+        seen = set()
+        for frame in frames:
+            if frame is None or getattr(frame, "depth", None) is None:
+                continue
+            key = (str(getattr(frame, "camera_id", "")), str(getattr(frame, "capture_id", "")))
+            if key in seen:
+                continue
+            seen.add(key)
+            stride = max(1, int(self.config.get("CAMERA_DEPTH_STRIDE", self.config.get("FRONT_DEPTH_STRIDE", 8))))
+            min_depth = float(self.config.get("CAMERA_MIN_DEPTH_M", self.config.get("FRONT_MIN_DEPTH_M", 0.8)))
+            max_depth = float(self.config.get("CAMERA_MAX_DEPTH_M", self.config.get("FRONT_MAX_DEPTH_M", 28.0)))
+            try:
+                points = depth_map_to_world_points(
+                    frame,
+                    stride=stride,
+                    min_depth_m=min_depth,
+                    max_depth_m=max_depth,
+                )
+            except (TypeError, ValueError):
+                continue
+            for point in points:
+                yield [float(value) for value in point[:3]], str(frame.camera_id)
 
     def filter_cumulative_waypoints(
         self,

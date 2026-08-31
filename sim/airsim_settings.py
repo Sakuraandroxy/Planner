@@ -36,64 +36,92 @@ def load_local_airsim_settings() -> Dict[str, Any]:
 
 
 def build_airsim_settings_with_overrides() -> Dict[str, Any]:
-    """Use local settings.json as the base, then override key SIM camera params."""
+    """Update capture settings while preserving user-configured camera poses."""
     sim_cfg = cfg.get("SIM", {})
     base = load_local_airsim_settings()
+    vehicle_name = str(sim_cfg.get("VEHICLE_NAME", "Drone_1") or "Drone_1")
+    configured = sim_cfg.get("CAMERAS") or {}
+    if isinstance(configured, dict):
+        camera_specs = {str(camera_id): dict(value or {}) for camera_id, value in configured.items()}
+    else:
+        camera_specs = {}
+        for item in list(configured or []):
+            if isinstance(item, str):
+                camera_specs[str(item)] = {}
+            elif isinstance(item, dict):
+                camera_id = item.get("ID") or item.get("id") or item.get("CAMERA_ID")
+                if camera_id:
+                    camera_specs[str(camera_id)] = dict(item)
+    if not camera_specs:
+        camera_specs = {
+            "front_center": {"ROLE": "primary"},
+            "down_center": {"ROLE": "auxiliary"},
+        }
+
+    existing_cameras = (
+        ((base.get("Vehicles") or {}).get(vehicle_name) or {}).get("Cameras") or {}
+    )
+    preserve_pose = bool(sim_cfg.get("PRESERVE_CAMERA_POSE_ON_SETTINGS_WRITE", True))
+    camera_overrides = {}
+    for index, (camera_id, spec) in enumerate(camera_specs.items()):
+        roles = spec.get("ROLES", spec.get("ROLE", []))
+        if isinstance(roles, str):
+            roles = [roles]
+        role_names = {str(role).strip().lower() for role in list(roles or [])}
+        primary = "primary" in role_names or (not role_names and index == 0)
+        if primary:
+            rgb_width = int(spec.get("WIDTH", spec.get("RGB_WIDTH", sim_cfg.get("FRONT_WIDTH", 1920))))
+            rgb_height = int(spec.get("HEIGHT", spec.get("RGB_HEIGHT", sim_cfg.get("FRONT_HEIGHT", 1080))))
+            rgb_fov = float(spec.get("FOV", sim_cfg.get("FRONT_FOV", 90)))
+            depth_width = int(spec.get("DEPTH_WIDTH", sim_cfg.get("DEPTH_WIDTH", 256)))
+            depth_height = int(spec.get("DEPTH_HEIGHT", sim_cfg.get("DEPTH_HEIGHT", 256)))
+            depth_fov = float(spec.get("DEPTH_FOV", sim_cfg.get("DEPTH_FOV", rgb_fov)))
+        else:
+            rgb_width = int(spec.get("WIDTH", spec.get("RGB_WIDTH", sim_cfg.get("DOWN_WIDTH", 1920))))
+            rgb_height = int(spec.get("HEIGHT", spec.get("RGB_HEIGHT", sim_cfg.get("DOWN_HEIGHT", 1080))))
+            rgb_fov = float(spec.get("FOV", sim_cfg.get("DOWN_FOV", 90)))
+            depth_width = int(spec.get("DEPTH_WIDTH", sim_cfg.get("DOWN_DEPTH_WIDTH", 256)))
+            depth_height = int(spec.get("DEPTH_HEIGHT", sim_cfg.get("DOWN_DEPTH_HEIGHT", 256)))
+            depth_fov = float(spec.get("DEPTH_FOV", sim_cfg.get("DOWN_DEPTH_FOV", rgb_fov)))
+        camera_update = {
+            "CaptureSettings": [
+                {
+                    "ImageType": 0,
+                    "Width": rgb_width,
+                    "Height": rgb_height,
+                    "FOV_Degrees": rgb_fov,
+                },
+                {
+                    "ImageType": 2,
+                    "Width": depth_width,
+                    "Height": depth_height,
+                    "FOV_Degrees": depth_fov,
+                },
+            ],
+        }
+        existing = dict(existing_cameras.get(camera_id) or {})
+        if not existing or not preserve_pose:
+            pose_defaults = {
+                "X": 1.0 if primary else 0.0,
+                "Y": 0.0,
+                "Z": 0.0,
+                "Pitch": 0.0 if primary else -90.0,
+                "Roll": 0.0,
+                "Yaw": 0.0,
+            }
+            for key, default in pose_defaults.items():
+                camera_update[key] = float(spec.get(key, spec.get(f"DEFAULT_{key}", default)))
+        camera_overrides[camera_id] = camera_update
 
     overrides = {
         "SettingsVersion": base.get("SettingsVersion", 1.2),
         "SimMode": base.get("SimMode", "Multirotor"),
         "ClockSpeed": base.get("ClockSpeed", 1),
         "Vehicles": {
-            "Drone_1": {
+            vehicle_name: {
                 "VehicleType": "SimpleFlight",
                 "AutoCreate": True,
-                "Cameras": {
-                    "front_center": {
-                        "X": 1,
-                        "Y": 0,
-                        "Z": 0,
-                        "Pitch": 0,
-                        "Roll": 0,
-                        "Yaw": 0,
-                        "CaptureSettings": [
-                            {
-                                "ImageType": 0,
-                                "Width": int(sim_cfg.get("FRONT_WIDTH", 1920)),
-                                "Height": int(sim_cfg.get("FRONT_HEIGHT", 1080)),
-                                "FOV_Degrees": float(sim_cfg.get("FRONT_FOV", 90)),
-                            },
-                            {
-                                "ImageType": 2,
-                                "Width": int(sim_cfg.get("DEPTH_WIDTH", 640)),
-                                "Height": int(sim_cfg.get("DEPTH_HEIGHT", 360)),
-                                "FOV_Degrees": float(sim_cfg.get("DEPTH_FOV", sim_cfg.get("FRONT_FOV", 90))),
-                            },
-                        ],
-                    },
-                    "down_center": {
-                        "X": 0,
-                        "Y": 0,
-                        "Z": 0,
-                        "Pitch": -90,
-                        "Roll": 0,
-                        "Yaw": 0,
-                        "CaptureSettings": [
-                            {
-                                "ImageType": 0,
-                                "Width": int(sim_cfg.get("DOWN_WIDTH", 640)),
-                                "Height": int(sim_cfg.get("DOWN_HEIGHT", 640)),
-                                "FOV_Degrees": float(sim_cfg.get("DOWN_FOV", 90)),
-                            },
-                            {
-                                "ImageType": 2,
-                                "Width": int(sim_cfg.get("DOWN_DEPTH_WIDTH", sim_cfg.get("DEPTH_WIDTH", 640))),
-                                "Height": int(sim_cfg.get("DOWN_DEPTH_HEIGHT", sim_cfg.get("DEPTH_HEIGHT", 360))),
-                                "FOV_Degrees": float(sim_cfg.get("DOWN_DEPTH_FOV", sim_cfg.get("DOWN_FOV", 90))),
-                            },
-                        ],
-                    },
-                },
+                "Cameras": camera_overrides,
             }
         },
     }
