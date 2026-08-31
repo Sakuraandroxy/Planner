@@ -36,6 +36,22 @@ class _SynchronizedAirSimRpcClient:
 
         return synchronized_call
 
+    def call_async_and_wait(self, name, *args, **kwargs):
+        """Submit an AirSim async RPC and wait under the same transport lock.
+
+        AirSim's ``*Async`` methods return a msgpackrpc Future.  Calling the
+        method through ``__getattr__`` only protects creation of that Future;
+        a later ``future.join()`` would otherwise run Tornado's shared IOLoop
+        after the lock has already been released.  A concurrent pose/image
+        RPC can then enter the same IOLoop and raise ``IOLoop is already
+        running``.  Synchronous uses of async commands must cross this helper
+        so submission and waiting form one serialized RPC operation.
+        """
+
+        with self._lock:
+            future = getattr(self._client, str(name))(*args, **kwargs)
+            return future.join()
+
 
 class AirSimClient:
     """Singleton-style wrapper around the AirSim MultirotorClient."""
@@ -134,10 +150,10 @@ class AirSimClient:
         self.client.armDisarm(armed)
 
     def takeoff(self):
-        self.client.takeoffAsync().join()
+        self.client.call_async_and_wait("takeoffAsync")
 
     def land(self):
-        self.client.landAsync().join()
+        self.client.call_async_and_wait("landAsync")
 
     def get_multirotor_state(self):
         return self.client.getMultirotorState()
@@ -167,10 +183,21 @@ class AirSimClient:
         if velocity is None:
             from config import cfg
             velocity = float(cfg.get("SIM", {}).get("AIRSIM_VELOCITY", 2.0))
-        self.client.moveToPositionAsync(x, y, z, velocity, timeout_sec=timeout).join()
+        self.client.call_async_and_wait(
+            "moveToPositionAsync",
+            x,
+            y,
+            z,
+            velocity,
+            timeout_sec=timeout,
+        )
 
     def rotate_to_yaw(self, yaw_deg, timeout=5.0):
-        self.client.rotateToYawAsync(yaw_deg, timeout_sec=timeout).join()
+        self.client.call_async_and_wait(
+            "rotateToYawAsync",
+            yaw_deg,
+            timeout_sec=timeout,
+        )
 
     def rotate_yaw(self, delta_deg, timeout=5.0):
         """Rotate relative to the current yaw angle."""
@@ -514,7 +541,7 @@ class AirSimClient:
             self.client.cancelLastTask()
         except Exception:
             pass
-        self.client.hoverAsync().join()
+        self.client.call_async_and_wait("hoverAsync")
 
     def cleanup(self):
         try:
@@ -1195,7 +1222,8 @@ class AirSimClient:
                 print(f"  [PathHeading] vertical_hold yaw={float(before_yaw):.1f}deg")
             used_fallback = False
             try:
-                self.client.moveOnPathAsync(
+                self.client.call_async_and_wait(
+                    "moveOnPathAsync",
                     path=path,
                     velocity=velocity,
                     timeout_sec=move_timeout,
@@ -1203,7 +1231,7 @@ class AirSimClient:
                     yaw_mode=yaw_mode,
                     lookahead=lookahead,
                     adaptive_lookahead=adaptive_lookahead,
-                ).join()
+                )
             except Exception as e:
                 print(f"  [Path] moveOnPath error: {e}; falling back to moveToPosition")
                 used_fallback = True
@@ -1213,14 +1241,15 @@ class AirSimClient:
             if not used_fallback and path_len > 0.5 and moved < 0.05:
                 print("  [Path] moveOnPath produced no displacement; falling back to moveToPosition")
                 try:
-                    self.client.hoverAsync().join()
+                    self.client.call_async_and_wait("hoverAsync")
                 except Exception:
                     pass
                 used_fallback = True
 
             if used_fallback:
                 for target in active_wps:
-                    self.client.moveToPositionAsync(
+                    self.client.call_async_and_wait(
+                        "moveToPositionAsync",
                         float(target[0]),
                         float(target[1]),
                         float(target[2]),
@@ -1228,7 +1257,7 @@ class AirSimClient:
                         timeout_sec=move_timeout,
                         drivetrain=drivetrain,
                         yaw_mode=yaw_mode,
-                    ).join()
+                    )
                 after_pos, after_yaw = self.get_pose()
                 moved = float(np.linalg.norm(np.array(after_pos, dtype=float) - np.array(before_pos, dtype=float)))
 
@@ -1259,11 +1288,12 @@ class AirSimClient:
                 ]
                 try:
                     print(f"  [Move] ({pos[0]:.1f},{pos[1]:.1f},{pos[2]:.1f}) + ({dx},{dy},{dz}) -> ({target[0]:.1f},{target[1]:.1f},{target[2]:.1f})")
-                    result = self.client.moveToPositionAsync(
+                    result = self.client.call_async_and_wait(
+                        "moveToPositionAsync",
                         target[0], target[1], target[2], velocity,
                         timeout_sec=move_timeout, drivetrain=airsim.DrivetrainType.MaxDegreeOfFreedom,
                         yaw_mode=airsim.YawMode(False, 0)
-                    ).join()
+                    )
                     if result:
                         collided = True
                 except Exception as e:

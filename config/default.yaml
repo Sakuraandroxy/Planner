@@ -5,7 +5,7 @@ FUNCTIONS:
   TASK_PARSER:
     NAME: vlm_task_parser                 # 任务解析功能实现
     MODEL: openai_chat                    # 任务解析模型接口类型
-    URL: http://172.27.162.190:8000/v1    # 任务解析 API base_url
+    URL: http://172.27.26.139:8000/v1     # 任务解析 API base_url
     MODEL_NAME: /data/sakura/models/Qwen2.5-7B-Instruct-AWQ # 任务解析模型名或路径
     API_KEY: no-key                       # 本地服务通常 no-key
     MAX_TOKENS: 1024                      # 任务解析最大输出 token 数
@@ -14,7 +14,7 @@ FUNCTIONS:
   PERCEPTION:
     NAME: dual_view_detector              # 双视图目标检测功能
     MODEL: groundingdino                  # 检测模型后端: groundingdino | vlm_detector | noop
-    URL: http://172.27.162.190:8003/detect # GroundingDINO 检测服务地址
+    URL: http://172.27.26.139:8003/detect  # GroundingDINO 检测服务地址
     MODEL_NAME: ""                        # VLM detector 模型名；GroundingDINO 留空
     API_KEY: no-key                       # VLM detector API key；GroundingDINO 不使用
     BOX_THRESHOLD: 0.4                    # GroundingDINO box threshold
@@ -350,7 +350,7 @@ FUNCTIONS:
     NAME: sliding_window_planning  #api_atomic_planner #sliding_window_planning         # 滑动窗口规划功能
     MODEL: qwen_sliding_window_planner    # 滑窗 Qwen 后端
     URL:  #https://api.xiaomimimo.com/v1/chat/completions                           # 完整 chat URL，留空则拼 SERVER_IP/PORT/CHAT_PATH
-    SERVER_IP: 172.27.162.190             # 滑窗 Qwen 服务器 IP
+    SERVER_IP: 172.27.26.139              # 滑窗 Qwen 服务器 IP
     SERVER_PORT: 8004                     # 滑窗 Qwen 服务端口
     CHAT_PATH: /v1/chat/completions       # OpenAI 兼容 chat 路径
     MODEL_NAME: /data/sakura/models/3DG-VLN-finetuned-sliding_window_2  #/data/sakura/models/3DG-VLN-finetuned-sliding_window_2 # 滑窗 Qwen 模型名或路径
@@ -404,7 +404,7 @@ FUNCTIONS:
 AGENT:
   # 任务解析器: vlm_parser | simple_parser
   TASK_PARSER: vlm_parser
-  TASK_PARSER_URL: http://172.27.162.190:8000/v1  # 本地程序连服务器任务解析: http://172.27.162.190:8000/v1  |  云: https://api.xiaomimimo.com/v1
+  TASK_PARSER_URL: http://172.27.26.139:8000/v1  # 本地程序连服务器任务解析: http://172.27.26.139:8000/v1  |  云: https://api.xiaomimimo.com/v1
   TASK_PARSER_MODEL: /data/sakura/models/Qwen2.5-7B-Instruct-AWQ  # 本地: /data/sakura/models/Qwen2.5-7B-Instruct-AWQ  |  云: mimo-v2.5
   TASK_API_KEY: no-key  # 本地: no-key  |  云: sk-...
   TASK_PARSER_MAX_TOKENS: 1024
@@ -420,11 +420,11 @@ AGENT:
   DETECTOR_BOX_THRESHOLD: 0.4
   DETECTOR_MIN_CONFIDENCE: 0.4
   DETECTOR_TEXT_THRESHOLD: 0.3
-  GROUNDINGDINO_URL: http://172.27.162.190:8003/detect
+  GROUNDINGDINO_URL: http://172.27.26.139:8003/detect
 
   # 轨迹规划器默认使用滑动窗口 Qwen；旧版 qwen_planner 只给旧入口对照使用
   PLANNER: qwen_sliding_window_planner
-  PLANNER_URL: http://172.27.162.190:8004/v1/chat/completions
+  PLANNER_URL: http://172.27.26.139:8004/v1/chat/completions
   PLANNER_MODEL: /data/sakura/models/3DG-VLN-finetuned-sliding_window_2
   PLANNER_API_KEY: no-key  # 本地: no-key  |  云: sk-...
   PLANNER_MAX_TOKENS: 2048
@@ -479,7 +479,7 @@ SIM:
   # auto 只抓规划所需 RGB 双视图；任务完成判定需要深度时会在运行时请求 TASK_COMPLETION.DEPTH_CAPTURE_PROFILE
   CAPTURE_PROFILE: auto
   # AirSim 连接 (本地留空=localhost:41451, 远程填服务器IP)
-  AIRSIM_IP: ""        # "172.27.162.190"
+  AIRSIM_IP: ""        # "172.27.26.139"
   AIRSIM_PORT: 41451
   APPLY_SETTINGS_ON_WEB_START: true       # run_airsim_web启动时先把SIM相机参数写入本地AirSim settings.json
   WAIT_FOR_AIRSIM_ON_WEB_START: true      # AirSim未启动时不报错退出，而是等待你手动打开UE/AirSim
