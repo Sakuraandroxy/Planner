@@ -1,0 +1,32 @@
+{
+  "__init__.py": {
+    "mtime": 1785308188.1107607,
+    "seen": 1788349873.001673,
+    "ast_hash": "f47f569b39c823ef1666c412bc32e8f4",
+    "semantic_hash": "f47f569b39c823ef1666c412bc32e8f4"
+  },
+  "completion_pipeline.py": {
+    "mtime": 1788340064.0338864,
+    "seen": 1788349873.001673,
+    "ast_hash": "74561dccfce689d48f15d67aceea74d4",
+    "semantic_hash": "74561dccfce689d48f15d67aceea74d4"
+  },
+  "controller.py": {
+    "mtime": 1788344914.6002762,
+    "seen": 1788349873.001673,
+    "ast_hash": "caee57a4869a8ae406fa442b334c8154",
+    "semantic_hash": "caee57a4869a8ae406fa442b334c8154"
+  },
+  "path_stream.py": {
+    "mtime": 1787736020.6814964,
+    "seen": 1788349873.001673,
+    "ast_hash": "61bace65a370d85fbe32f09521d75b33",
+    "semantic_hash": "61bace65a370d85fbe32f09521d75b33"
+  },
+  "runtime.py": {
+    "mtime": 1788344914.6048963,
+    "seen": 1788349873.001673,
+    "ast_hash": "f3c83688780183cb8baf5cd210d82ea9",
+    "semantic_hash": "f3c83688780183cb8baf5cd210d82ea9"
+  }
+}

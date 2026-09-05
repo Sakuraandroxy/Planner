@@ -1,0 +1,118 @@
+{
+  "generated_at": "2026-09-02T12:01:59.359007+00:00",
+  "nodes": {
+    "completion_pipeline_completionpipeline": {
+      "code_fingerprint": "04c53236401886e0fc1ea94446d3d7b26ffa639a19c8ee7df0b31ae36ffa8ca5",
+      "label": "CompletionPipeline",
+      "last": "2026-09-02T11:51:56.100574+00:00",
+      "provenance": [
+        {
+          "date": "2026-09-02T11:51:56.100574+00:00",
+          "outcome": "useful",
+          "q": "请你看一下当前的项目代码，跟我讲一下runtime.py是干啥的啊"
+        }
+      ],
+      "score": 0.999838691,
+      "source_file": "completion_pipeline.py",
+      "status": "tentative",
+      "uses": 1
+    },
+    "controller_fastslowcontroller": {
+      "code_fingerprint": "273b32efaac19d4b93309e6ffafb3e93919004913657fa77e3af7f0b313ed93e",
+      "label": "FastSlowController",
+      "last": "2026-09-02T11:51:56.100574+00:00",
+      "provenance": [
+        {
+          "date": "2026-09-02T11:51:56.100574+00:00",
+          "outcome": "useful",
+          "q": "请你看一下当前的项目代码，跟我讲一下runtime.py是干啥的啊"
+        }
+      ],
+      "score": 0.999838691,
+      "source_file": "controller.py",
+      "status": "tentative",
+      "uses": 1
+    },
+    "path_stream_continuouspathstream": {
+      "code_fingerprint": "08945fb45179ea22e857f3a48b8d111e9b79972a0f1de48fd658155701ea210e",
+      "label": "ContinuousPathStream",
+      "last": "2026-09-02T11:51:56.100574+00:00",
+      "provenance": [
+        {
+          "date": "2026-09-02T11:51:56.100574+00:00",
+          "outcome": "useful",
+          "q": "请你看一下当前的项目代码，跟我讲一下runtime.py是干啥的啊"
+        }
+      ],
+      "score": 0.999838691,
+      "source_file": "path_stream.py",
+      "status": "tentative",
+      "uses": 1
+    },
+    "runtime_handle_background_target_lost": {
+      "code_fingerprint": "5bf0fcf4fe1ebc671a44eba3bdff5c1e4e49e11edb453fa4175e740fedbaa43a",
+      "label": "_handle_background_target_lost()",
+      "last": "2026-09-02T11:51:56.100574+00:00",
+      "provenance": [
+        {
+          "date": "2026-09-02T11:51:56.100574+00:00",
+          "outcome": "useful",
+          "q": "请你看一下当前的项目代码，跟我讲一下runtime.py是干啥的啊"
+        }
+      ],
+      "score": 0.999838691,
+      "source_file": "runtime.py",
+      "status": "tentative",
+      "uses": 1
+    },
+    "runtime_handle_distance_completion_trigger": {
+      "code_fingerprint": "5bf0fcf4fe1ebc671a44eba3bdff5c1e4e49e11edb453fa4175e740fedbaa43a",
+      "label": "_handle_distance_completion_trigger()",
+      "last": "2026-09-02T11:51:56.100574+00:00",
+      "provenance": [
+        {
+          "date": "2026-09-02T11:51:56.100574+00:00",
+          "outcome": "useful",
+          "q": "请你看一下当前的项目代码，跟我讲一下runtime.py是干啥的啊"
+        }
+      ],
+      "score": 0.999838691,
+      "source_file": "runtime.py",
+      "status": "tentative",
+      "uses": 1
+    },
+    "runtime_run_fast_slow_loop": {
+      "code_fingerprint": "5bf0fcf4fe1ebc671a44eba3bdff5c1e4e49e11edb453fa4175e740fedbaa43a",
+      "label": "run_fast_slow_loop()",
+      "last": "2026-09-02T11:51:56.100574+00:00",
+      "provenance": [
+        {
+          "date": "2026-09-02T11:51:56.100574+00:00",
+          "outcome": "useful",
+          "q": "请你看一下当前的项目代码，跟我讲一下runtime.py是干啥的啊"
+        }
+      ],
+      "score": 0.999838691,
+      "source_file": "runtime.py",
+      "status": "tentative",
+      "uses": 1
+    },
+    "runtime_runtimeobjects": {
+      "code_fingerprint": "5bf0fcf4fe1ebc671a44eba3bdff5c1e4e49e11edb453fa4175e740fedbaa43a",
+      "label": "RuntimeObjects",
+      "last": "2026-09-02T11:51:56.100574+00:00",
+      "provenance": [
+        {
+          "date": "2026-09-02T11:51:56.100574+00:00",
+          "outcome": "useful",
+          "q": "请你看一下当前的项目代码，跟我讲一下runtime.py是干啥的啊"
+        }
+      ],
+      "score": 0.999838691,
+      "source_file": "runtime.py",
+      "status": "tentative",
+      "uses": 1
+    }
+  },
+  "version": 1
+}

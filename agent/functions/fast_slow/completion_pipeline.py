@@ -331,13 +331,21 @@ class CompletionPipeline:
         return front_det, down_det, front_all, down_all, time.perf_counter() - t0
 
     def _capture_detect_depth_bundle(self, stage: Any, task_text: str) -> DetectionDepthBundle:
-        profile = "front_down"
+        # RGB, depth and pose must come from one AirSim image batch.  A second
+        # depth-only RPC here blocks the fast loop and pairs depth with a later
+        # pose, which is exactly the source of avoidable pauses and stale
+        # completion distances.
+        # The asynchronous observation feeds both target distance and the
+        # small-target/roof gates.  Always include both depth streams here;
+        # using the checker default ``front_down_front_depth`` would silently
+        # remove the down-view depth needed by ``above`` stages.
+        profile = "front_down_both_depth"
         t0 = time.perf_counter()
         (
             frame,
             down_frame,
-            _front_depth,
-            _down_depth,
+            front_depth,
+            down_depth,
             timing,
             observer_world,
             observer_yaw_deg,
@@ -355,7 +363,7 @@ class CompletionPipeline:
         front_det, down_det, front_all, down_all, detect_elapsed = self._detect_dual_view(stage, task_text, frame, down_frame)
         bundle = self._make_bundle(job=None, front_det=front_det, down_det=down_det,
                                    front_detections=front_all, down_detections=down_all,
-                                   front_depth=None, down_depth=None,
+                                   front_depth=front_depth, down_depth=down_depth,
                                    detect_elapsed=detect_elapsed, depth_elapsed=0.0,
                                    frame=frame, down_frame=down_frame, stage=stage)
         bundle.observer_world = list(observer_world)
@@ -366,19 +374,10 @@ class CompletionPipeline:
             bundle.distance_reason = "target_not_detected_in_rgb"
             return bundle
 
-        depth_profile = web_helpers.depth_only_profile("front_down_both_depth")
-        depth_t0 = time.perf_counter()
-        _front_rgb, _down_rgb, front_depth, down_depth, depth_timing = web_helpers.capture_profile_isolated(
-            self.client,
-            depth_profile,
-        )
-        depth_elapsed = time.perf_counter() - depth_t0
-        depth_timing = dict(depth_timing or {})
-        depth_timing.setdefault("total_s", depth_elapsed)
+        depth_elapsed = 0.0
         if self.debug_logs:
             print(
-                f"  [CompletionDepth] profile={depth_profile} "
-                f"time={depth_timing.get('total_s', depth_elapsed):.2f}s  "
+                f"  [CompletionDepth] profile={profile} "
                 f"front_depth={web_helpers.shape_text(front_depth)} "
                 f"down_depth={web_helpers.shape_text(down_depth)}"
             )

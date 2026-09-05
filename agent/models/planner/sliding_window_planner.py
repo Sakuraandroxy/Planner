@@ -165,7 +165,12 @@ class SlidingWindowTrajectoryQueue:
         # self.world_waypoints which may have been partially consumed by
         # the fast executor.  This matches what Qwen saw as "pending" at
         # submission time.
-        anchor_world = list(anchor_world_waypoints or self.world_waypoints)
+        # ``[]`` is meaningful for a stale-plan rebase: the new suffix starts
+        # at the live pose instead of after the frozen pending prefix.  Only
+        # ``None`` means "use the current queue as the anchor".
+        anchor_world = list(
+            self.world_waypoints if anchor_world_waypoints is None else anchor_world_waypoints
+        )
         existing_cumulative = world_to_cumulative_body(
             anchor_world,
             anchor_pos,
@@ -273,6 +278,7 @@ class SlidingWindowQwenPlanner(BasePlanner):
         direction: str = "",
         memory_hint: str = "",
         geometry_context: dict | None = None,
+        planning_horizon_m: float | None = None,
     ) -> str:
         pending = normalize_xyz_waypoints(pending_waypoints)[:5]
         pending_str = "[" + ", ".join(
@@ -292,6 +298,13 @@ class SlidingWindowQwenPlanner(BasePlanner):
             parts.append(
                 "Unified camera/navigation geometry (JSON): "
                 + json.dumps(geometry_context, ensure_ascii=False, separators=(",", ":"))
+            )
+        if planning_horizon_m is not None and float(planning_horizon_m) > 0.0:
+            parts.append(
+                f"Continuous planning horizon: {float(planning_horizon_m):.1f}m. "
+                "Distribute the five output waypoints across this horizon when the target is farther away; "
+                "do not compress the whole leg into the first few meters. "
+                "Stop at the target approach boundary instead of crossing it."
             )
         if pending:
             parts.append(f"Pending incremental body-frame waypoints: {pending_str}")
@@ -335,6 +348,7 @@ class SlidingWindowQwenPlanner(BasePlanner):
              memory_hint: str = "",
              camera_images=None,
              geometry_context: dict | None = None,
+             planning_horizon_m: float | None = None,
              print_prompt: bool = True) -> TrajectoryResult:
         prompt = self._build_prompt(
             instruction,
@@ -342,6 +356,7 @@ class SlidingWindowQwenPlanner(BasePlanner):
             direction=direction,
             memory_hint=memory_hint,
             geometry_context=geometry_context,
+            planning_horizon_m=planning_horizon_m,
         )
         images = []
         for image in list(camera_images or [front_img, down_img if down_img is not None else front_img]):

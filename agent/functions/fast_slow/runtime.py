@@ -3,45 +3,142 @@
 from __future__ import annotations
 
 import math
-import io
-import os
-import sys
-import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 from types import SimpleNamespace
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future
 
-from config import cfg, get_cfg
+from config import cfg
 
 from agent.functions.candidate.pipeline import prepare_candidates_for_world_model, select_best_candidate
 from agent.models.planner.sliding_window_planner import cumulative_to_incremental, incremental_to_cumulative
 from agent.functions.common.config_access import function_section
-from agent.functions.common.detection_policy import (
-    detection_caption_for_stage,
-    detection_reliability as shared_detection_reliability,
-    is_large_structure_stage,
-)
-from agent.functions.common.task_manager import TaskManager
-from agent.functions.common.warmup import warmup_from_config
+from agent.functions.common.detection_policy import is_large_structure_stage
 from agent.functions.common import web_runtime_helpers as web_helpers
 from agent.functions.completion import (
     CompletionResult,
     NavigationMetricsTracker,
-    build_distance_arrival_completion,
-    build_task_completion_checker,
 )
-from agent.functions.direction import build_direction_estimator
-from agent.functions.distance_estimation import build_distance_estimator
 from agent.functions.debug import TargetSnapshotRecorder
 from agent.functions.fast_slow.completion_pipeline import CompletionPipeline
 from agent.functions.fast_slow.completion_pipeline import DetectionDepthBundle
-from agent.functions.fast_slow.controller import FastSlowController
 from agent.functions.fast_slow.path_stream import ContinuousPathStream
+from agent.functions.fast_slow.runtime_context import (
+    RuntimeObjects,
+    build_runtime_objects as _build_runtime_objects,
+)
+from agent.functions.fast_slow.above_runtime import (
+    AboveStageRuntimeState,
+    _above_max_allowed_world_z,
+    _above_pre_roof_facade_clearance_context,
+    _above_queue_violation_reason,
+    _above_roof_candidate_ready,
+    _above_stage_state,
+    _apply_above_altitude_path_guard,
+    _apply_above_roof_acquisition_path_guard,
+    _apply_airsim_vertical_path_quantization,
+    _cumulative_path_length,
+    _apply_small_above_target_guidance,
+    _handle_small_above_down_center_observation,
+    _small_above_confirmation_pending,
+    _is_above_stage,
+    _locked_large_above_requires_roof,
+    _small_above_target,
+    _minimum_airsim_climb_command_m,
+    _minimum_airsim_vertical_command_m,
+    _normalize_direct_vertical_action_m,
+    _quantized_climb_body_z,
+    _record_synchronized_roof_plane,
+    _straight_body_path,
+)
+from agent.functions.fast_slow.target_runtime import (
+    _active_relocalization_session_id,
+    _bearing_only_active,
+    _bump_lock_generation,
+    _bump_stage_generation,
+    _detection_matches_view_relative_sector,
+    _generation_map,
+    _identity_approved_detections,
+    _locked_instance_id,
+    _lock_generation,
+    _memory_estimate_is_trustworthy,
+    _prebind_target_from_bundle,
+    _primary_update_event,
+    _record_locked_target_snapshot,
+    _record_target_bearing,
+    _select_identity_approved_down_detection,
+    _select_identity_approved_front_detection,
+    _select_prebind_front_detection,
+    _stage_generation,
+    _target_lost_event_is_stale,
+    _target_lost_recovery,
+)
+from agent.functions.fast_slow.relocalization_runtime import (
+    _build_locked_relocalization_validator,
+    _bundle_from_relocalization_result,
+    _large_target_expected_offscreen,
+    _relocalization_memory_is_reliable,
+)
+from agent.functions.fast_slow.planning_runtime import (
+    _apply_memory_path_guard,
+    _apply_obstacle_path_guard,
+    _candidate_trace_text,
+    _clamp,
+    _clip_path_at_target_radius,
+    _closest_path_distance_to_target,
+    _direct_memory_waypoint,
+    _distance3_body,
+    _format_waypoints,
+    _guard_distance,
+    _limit_cumulative_path_length,
+    _memory_near_approach_radius,
+    _memory_near_approach_radius_from_values,
+    _memory_near_standoff_radius,
+    _memory_path_clip_radius,
+    _norm3,
+    _planning_geometry_context,
+    _project_xy,
+    _segment_circle_entry_xy,
+    _segment_point_distance,
+    _segment_point_distance_xy,
+    _segment_sphere_entry,
+)
+from agent.functions.fast_slow.completion_runtime import (
+    _attach_depth_to_detection_lists,
+    _best_detection_from_list,
+    _capture_completion_depth,
+    _capture_fresh_completion_frames,
+    _capture_fresh_rgb_frames,
+    _capture_rgb_for_stage,
+    _caption_for_stage,
+    _detect_dual_view,
+    _detection_reliability,
+    _estimated_pose_xy_distance,
+    _evaluate_completion,
+    _evaluate_completion_fast_slow,
+    _publish_frames,
+    _select_reliable_detection,
+    _suppress_unreliable_detection,
+    _update_memory_from_fresh_detection,
+    _wait_completion_depth,
+)
+from agent.functions.fast_slow.execution_runtime import (
+    CompletionRadiusWatchdog as _ExecutionCompletionRadiusWatchdog,
+    _clear_stopped_queue,
+    _continuous_path_velocity,
+    _drop_path_points_behind_vehicle,
+    _execute_action_stage,
+    _execute_one_from_queue,
+    _needs_planning_snapshot,
+    _sync_path_if_ready as _execution_sync_path_if_ready,
+)
+from agent.functions.fast_slow.guidance_runtime import (
+    apply_bearing_path_guard as _guidance_apply_bearing_path_guard,
+    apply_locked_target_direction_guard as _apply_locked_target_direction_guard,
+)
+from agent.functions.fast_slow.web_runtime import run_fast_slow_web
 from agent.functions.memory import (
-    MissionMemory,
-    build_mission_memory,
     is_view_relative_stage,
     view_relative_direction,
 )
@@ -50,15 +147,11 @@ from agent.functions.memory.geometry import (
     has_surface_geometry,
     has_surface_samples,
     instance_surface_sample_points,
-    nearest_instance_surface_point,
     world_to_body,
 )
 from agent.functions.memory.spatial_reasoning import relation_kind
 from agent.functions.memory.mission_memory import stage_key as _mission_stage_key
-from agent.functions.obstacle_avoidance import DepthObstacleAvoider, build_depth_obstacle_avoider
 from agent.functions.perception import (
-    TargetBearingTracker,
-    attach_detection_camera_context,
     detection_is_excluded_by_bearing,
     estimate_down_roof_plane,
     metric_depth_usable,
@@ -68,79 +161,10 @@ from agent.functions.planning.direction_hint import (
     direction_hint_from_locked_body_target,
     direction_hint_from_angle,
 )
-from agent.functions.planning.sliding_window_planning import SlidingWindowPlanningFunction
-from agent.functions.recovery.collision_recovery import CollisionRecovery
-from agent.functions.relocalization import TargetLostRecoveryState, TargetRelocalizer
 from agent.functions.task_parser import build_task_parser
-from agent.models.detection import build_detector
-from agent.models.world_model import build_world_model
-from sim.frame_capturer import FrameCapturer
-from sim.camera_api_recorder import CameraApiRecorder
-from sim.camera_frame_hub import CameraFrameHub
-from sim.camera_recording_options import CameraRecordingOptions
-from web.app import create_app
-from web.shared_state import SharedState
 
 
 _LAST_NAVIGATION_METRICS: NavigationMetricsTracker | None = None
-
-
-@dataclass
-class RuntimeObjects:
-    detector: Any
-    direction_estimator: Any
-    completion_checker: Any
-    planner: SlidingWindowPlanningFunction
-    controller: FastSlowController
-    task_manager: TaskManager
-    relocalizer: TargetRelocalizer
-    collision_recovery: CollisionRecovery
-    detect_executor: ThreadPoolExecutor
-    slow_executor: ThreadPoolExecutor
-    future_detect_executor: ThreadPoolExecutor
-    future_scan_executor: ThreadPoolExecutor
-    distance_estimator: Any
-    arrival_completion: Any
-    navigation_metrics: NavigationMetricsTracker
-    mission_memory: MissionMemory
-    obstacle_avoider: DepthObstacleAvoider
-    target_bearing_tracker: TargetBearingTracker
-    target_lost_recovery: TargetLostRecoveryState | None = None
-    target_snapshot_recorder: TargetSnapshotRecorder | None = None
-    world_model: Any = None
-    completion_pipeline: CompletionPipeline | None = None
-    display_step: int = 0
-    display_max_steps: int = 0
-    task_failed: bool = False
-    completion_attempts: dict[tuple, int] = field(default_factory=dict)
-    completion_retry_after: dict[tuple, float] = field(default_factory=dict)
-    # future_scan_index/last_future_scan_s 控制低频轮询未来目标，避免每帧都检测所有目标。
-    future_scan_index: int = 0
-    last_future_scan_s: float = 0.0
-    future_scan_job: Any = None
-    above_stage_states: dict[tuple, "AboveStageRuntimeState"] = field(default_factory=dict)
-    stage_generations: dict[tuple, int] = field(default_factory=dict)
-    lock_generations: dict[tuple, int] = field(default_factory=dict)
-
-
-@dataclass
-class AboveStageRuntimeState:
-    entry_z: float
-    last_lock_id: str = ""
-    last_anchor_world: list[float] | None = None
-    pending_queue_review: str = ""
-    require_roof_before_next_completion: bool = False
-    completion_resume_pose: list[float] | None = None
-    roof_acquire_origin_world: list[float] | None = None
-    roof_acquire_direction_world: list[float] | None = None
-    roof_acquire_goal_distance_m: float = 0.0
-    # Before a roof plane is visible, front-depth facade samples provide a
-    # conservative vertical envelope.  Climb legs are executed without XY
-    # motion, then one newer facade observation is required before crossing.
-    pre_roof_climb_target_z: float | None = None
-    pre_roof_climb_surface_observations: int = 0
-    pre_roof_waiting_reobserve: bool = False
-    last_facade_clearance_z: float | None = None
 
 
 @dataclass(frozen=True)
@@ -184,654 +208,20 @@ def _debug_print(message: str) -> None:
         print(message)
 
 
-def _build_runtime_objects(
-    target_snapshot_recorder: TargetSnapshotRecorder | None = None,
-) -> RuntimeObjects:
-    detector = build_detector()
-    direction_estimator = build_direction_estimator()
-    completion_checker = build_task_completion_checker(
-        detector=detector,
-        direction_estimator=direction_estimator,
-    )
-    planner_cfg = {**(cfg.get("SLIDING_WINDOW", {}) or {}), **function_section(cfg, "PLANNING")}
-    fast_slow_cfg = {**(cfg.get("FAST_SLOW", {}) or {}), **function_section(cfg, "FAST_SLOW")}
-    relocalization_cfg = {**cfg, "RELOCALIZATION": {**(cfg.get("RELOCALIZATION", {}) or {}), **function_section(cfg, "RELOCALIZATION")}}
-    collision_cfg = {**cfg, "COLLISION_RECOVERY": {**(cfg.get("COLLISION_RECOVERY", {}) or {}), **function_section(cfg, "COLLISION_RECOVERY")}}
-    planner = SlidingWindowPlanningFunction(planner_cfg)
-    controller = FastSlowController(fast_slow_cfg)
-    detect_executor = ThreadPoolExecutor(
-        max_workers=int(fast_slow_cfg.get("DETECT_WORKERS", 2)),
-        thread_name_prefix="fast_slow_detect",
-    )
-    slow_executor = ThreadPoolExecutor(
-        max_workers=int(fast_slow_cfg.get("SLOW_WORKERS", 2)),
-        thread_name_prefix="fast_slow_slow",
-    )
-    # Future-target work must never occupy the current-stage detector workers.
-    # One scan worker plus a small dedicated detector pool also provides hard
-    # backpressure: at most one opportunistic scan can be active at a time.
-    future_detect_executor = ThreadPoolExecutor(
-        max_workers=max(1, int(fast_slow_cfg.get("FUTURE_DETECT_WORKERS", 1))),
-        thread_name_prefix="future_memory_detect",
-    )
-    future_scan_executor = ThreadPoolExecutor(
-        max_workers=1,
-        thread_name_prefix="future_memory_scan",
-    )
-    arrival_completion = build_distance_arrival_completion(cfg)
-    mission_memory = build_mission_memory()
-    return RuntimeObjects(
-        detector=detector,
-        direction_estimator=direction_estimator,
-        completion_checker=completion_checker,
-        planner=planner,
-        controller=controller,
-        task_manager=TaskManager(enabled=True),
-        relocalizer=TargetRelocalizer(relocalization_cfg, detector=detector),
-        collision_recovery=CollisionRecovery.from_config(collision_cfg),
-        detect_executor=detect_executor,
-        slow_executor=slow_executor,
-        future_detect_executor=future_detect_executor,
-        future_scan_executor=future_scan_executor,
-        distance_estimator=build_distance_estimator(),
-        arrival_completion=arrival_completion,
-        navigation_metrics=NavigationMetricsTracker(arrival_completion.arrival_radius_m),
-        mission_memory=mission_memory,
-        obstacle_avoider=build_depth_obstacle_avoider(),
-        target_bearing_tracker=TargetBearingTracker(
-            mission_memory.config,
-            cfg.get("SIM", {}) or {},
-        ),
-        target_lost_recovery=TargetLostRecoveryState(relocalization_cfg.get("RELOCALIZATION", {})),
-        target_snapshot_recorder=target_snapshot_recorder,
-        world_model=build_world_model(),
-    )
-
-
 def _runtime_stage_key(stage) -> tuple:
     return CompletionPipeline.stage_key(stage)
 
 
-def _target_lost_recovery(objects) -> TargetLostRecoveryState:
-    recovery = getattr(objects, "target_lost_recovery", None)
-    if recovery is None:
-        memory_cfg = dict(getattr(getattr(objects, "mission_memory", None), "config", {}) or {})
-        relocalization_cfg = {
-            **memory_cfg,
-            **dict(function_section(cfg, "RELOCALIZATION") or {}),
-        }
-        recovery = TargetLostRecoveryState(relocalization_cfg)
-        setattr(objects, "target_lost_recovery", recovery)
-    return recovery
-
-
-def _generation_map(objects, name: str) -> dict:
-    values = getattr(objects, name, None)
-    if values is None:
-        values = {}
-        setattr(objects, name, values)
-    return values
-
-
-def _stage_generation(objects, stage) -> int:
-    return int(_generation_map(objects, "stage_generations").get(_runtime_stage_key(stage), 0))
-
-
-def _lock_generation(objects, stage) -> int:
-    return int(_generation_map(objects, "lock_generations").get(_runtime_stage_key(stage), 0))
-
-
-def _bump_stage_generation(objects, stage) -> int:
-    key = _runtime_stage_key(stage)
-    generations = _generation_map(objects, "stage_generations")
-    generations[key] = int(generations.get(key, 0)) + 1
-    return generations[key]
-
-
-def _bump_lock_generation(objects, stage) -> int:
-    key = _runtime_stage_key(stage)
-    generations = _generation_map(objects, "lock_generations")
-    generations[key] = int(generations.get(key, 0)) + 1
-    return generations[key]
-
-
-def _locked_instance_id(objects, stage) -> str:
-    memory = getattr(objects, "mission_memory", None)
-    if memory is None:
-        return ""
-    instance = memory.primary_instance(stage)
-    locked_fn = getattr(memory, "is_primary_locked", None)
-    if instance is None or not callable(locked_fn) or not locked_fn(stage):
-        return ""
-    return str(getattr(instance, "instance_id", "") or "")
-
-
-def _active_relocalization_session_id(objects, stage) -> str:
-    recovery = _target_lost_recovery(objects)
-    session = recovery.sessions.get(_runtime_stage_key(stage))
-    return str(getattr(session, "session_id", "") or "") if session is not None else ""
-
-
-def _target_lost_event_is_stale(objects, stage, event) -> tuple[bool, str]:
-    """Reject a TargetLost result captured before newer navigation identity state."""
-    if event is None:
-        return False, ""
-    event_stage_generation = int(getattr(event, "stage_generation", 0) or 0)
-    current_stage_generation = _stage_generation(objects, stage)
-    if event_stage_generation != current_stage_generation:
-        return True, f"stage_generation {event_stage_generation}!={current_stage_generation}"
-    event_lock_generation = int(getattr(event, "lock_generation", 0) or 0)
-    current_lock_generation = _lock_generation(objects, stage)
-    if event_lock_generation != current_lock_generation:
-        return True, f"lock_generation {event_lock_generation}!={current_lock_generation}"
-    event_instance = str(getattr(event, "locked_instance_id", "") or "")
-    current_instance = _locked_instance_id(objects, stage)
-    if event_instance != current_instance:
-        return True, f"locked_instance {event_instance or 'none'}!={current_instance or 'none'}"
-    event_session = str(getattr(event, "session_id", "") or "")
-    current_session = _active_relocalization_session_id(objects, stage)
-    if event_session and event_session != current_session:
-        return True, f"session {event_session}!={current_session or 'none'}"
-
-    capture_timestamp = float(
-        getattr(getattr(event, "bundle", None), "capture_timestamp_s", 0.0) or 0.0
-    )
-    if capture_timestamp > 0.0:
-        tracker = getattr(objects, "target_bearing_tracker", None)
-        latest_bearing = (
-            float(tracker.latest_observed_at(_runtime_stage_key(stage)))
-            if tracker is not None and hasattr(tracker, "latest_observed_at")
-            else 0.0
-        )
-        memory = getattr(objects, "mission_memory", None)
-        primary = memory.primary_instance(stage) if memory is not None else None
-        latest_memory = float(getattr(primary, "last_seen_s", 0.0) or 0.0)
-        latest_valid = max(latest_bearing, latest_memory)
-        if latest_valid > capture_timestamp:
-            return True, f"newer_target_observation {latest_valid:.3f}>{capture_timestamp:.3f}"
-    return False, ""
-
-
-def _identity_approved_detections(objects, stage, bundle, view: str) -> list:
-    if bundle is None:
-        return []
-    view_name = str(view or "front").lower()
-    detections = list(getattr(bundle, f"{view_name}_detections", None) or [])
-    fallback = getattr(bundle, f"{view_name}_detection", None)
-    if not detections and fallback is not None:
-        detections = [fallback]
-    detections = [d for d in detections if d is not None and getattr(d, "visible", False)]
-    memory = getattr(objects, "mission_memory", None)
-    exclusions = (
-        memory.previous_entity_exclusions(stage, bundle.observer_world, bundle.observer_yaw_deg)
-        if memory is not None
-        and bundle.observer_world is not None
-        and bundle.observer_yaw_deg is not None
-        else []
-    )
-    image = getattr(bundle, f"{view_name}_image", None)
-    approved = []
-    rejected_reasons = []
-    for detection in detections:
-        intrinsics = getattr(getattr(detection, "camera_frame", None), "rgb_intrinsics", None)
-        fov = (
-            float(intrinsics.horizontal_fov_deg)
-            if intrinsics is not None
-            else float((getattr(memory, "sim_config", {}) or {}).get("FRONT_FOV", 90.0))
-        )
-        if detection_is_excluded_by_bearing(
-            detection,
-            image,
-            exclusions,
-            horizontal_fov_deg=fov,
-            observer_yaw_deg=bundle.observer_yaw_deg,
-        ):
-            rejected_reasons.append("previous_entity_bearing")
-            continue
-        if (
-            memory is not None
-            and bundle.observer_world is not None
-            and bundle.observer_yaw_deg is not None
-        ):
-            identity = memory.evaluate_locked_detection_identity(
-                stage,
-                detection,
-                image,
-                observer_world=bundle.observer_world,
-                observer_yaw_deg=bundle.observer_yaw_deg,
-                view=view_name,
-            )
-            if not bool(identity.get("accepted", False)):
-                rejected_reasons.append(str(identity.get("reason", "locked_identity_mismatch")))
-                _debug_print(
-                    "  [TargetIdentity] "
-                    f"view={view_name} rejected={identity.get('reason')} "
-                    f"details={identity}"
-                )
-                continue
-        approved.append(detection)
-    if not approved:
-        if detections and rejected_reasons:
-            _debug_print(
-                f"  [TargetIdentity] all {view_name} detections rejected "
-                f"reasons={','.join(sorted(set(rejected_reasons)))}"
-            )
-        return []
-    return approved
-
-
-def _select_identity_approved_front_detection(objects, stage, bundle):
-    approved = _identity_approved_detections(objects, stage, bundle, "front")
-    if not approved:
-        return None
-    return max(approved, key=lambda d: _detection_reliability(stage, d, bundle.front_image))
-
-
-def _select_identity_approved_down_detection(objects, stage, bundle):
-    approved = _identity_approved_detections(objects, stage, bundle, "down")
-    if not approved:
-        return None
-    return max(approved, key=lambda d: _detection_reliability(stage, d, bundle.down_image))
-
-
-def _select_prebind_front_detection(objects, stage, bundle):
-    """Select the first RGB candidate without creating a metric landmark."""
-
-    approved = _identity_approved_detections(objects, stage, bundle, "front")
-    approved = [
-        detection
-        for detection in approved
-        if _detection_reliability(stage, detection, bundle.front_image) > 0.0
-        and (
-            not is_view_relative_stage(stage)
-            or _detection_matches_view_relative_sector(
-                stage,
-                detection,
-                bundle.front_image,
-                camera_name="front",
-            )
-        )
-    ]
-    if not approved:
-        return None
-
-    if is_view_relative_stage(stage):
-        # RGB prebinding has no metric range. Use perspective proximity
-        # (lower box edge, then occupied area) to approximate encounter order;
-        # detector score remains only a semantic tie-breaker.
-        image = bundle.front_image
-        width, height = image.size if image is not None and hasattr(image, "size") else (1, 1)
-
-        def perspective_rank(detection):
-            bbox = list(getattr(detection, "bbox", []) or [])
-            if len(bbox) < 4:
-                return (0.0, 0.0, 0.0)
-            box_width = max(0.0, float(bbox[2]) - float(bbox[0]))
-            box_height = max(0.0, float(bbox[3]) - float(bbox[1]))
-            return (
-                min(1.0, float(bbox[3]) / max(float(height), 1.0)),
-                (box_width * box_height) / max(float(width * height), 1.0),
-                _detection_reliability(stage, detection, image),
-            )
-
-        ordered = sorted(approved, key=perspective_rank, reverse=True)
-        ordinal = max(1, int(getattr(stage, "ordinal", None) or 1))
-        return ordered[ordinal - 1] if ordinal <= len(ordered) else None
-
-    preferred = getattr(bundle, "front_detection", None)
-    if preferred is not None and any(preferred is candidate for candidate in approved):
-        return preferred
-    return max(
-        approved,
-        key=lambda detection: _detection_reliability(stage, detection, bundle.front_image),
-    )
-
-
-def _primary_update_event(memory, stage, events):
-    primary = memory.primary_instance(stage) if memory is not None else None
-    if primary is None:
-        return None
-    candidates = [
-        event
-        for event in list(events or [])
-        if str(getattr(event, "instance_id", "") or "") == str(primary.instance_id)
-    ]
-    if not candidates:
-        return None
-    return max(
-        candidates,
-        key=lambda event: (
-            float(getattr(event, "reliability", 0.0) or 0.0),
-            float(getattr(event, "score", 0.0) or 0.0),
-        ),
-    )
-
-
-def _prebind_target_from_bundle(
-    objects,
-    stage,
-    bundle: DetectionDepthBundle | None,
-    *,
-    source: str,
-) -> bool:
-    """Prebind one RGB bearing and optionally save its first boxed frame.
-
-    Prebinding deliberately strips every depth field before updating the
-    bearing tracker.  It therefore cannot create or move a MissionMemory
-    instance; reliable depth observations still own the formal surface lock.
-    """
-
-    memory = getattr(objects, "mission_memory", None)
-    config = getattr(memory, "config", {}) or {}
-    if not bool(config.get("PREBIND_ENABLED", True)) or bundle is None:
-        return False
-    if getattr(stage, "mode", "") not in {"target", "detect"}:
-        return False
-    if (
-        bundle.front_image is None
-        or bundle.observer_world is None
-        or bundle.observer_yaw_deg is None
-    ):
-        return False
-
-    detection = _select_prebind_front_detection(objects, stage, bundle)
-    if detection is None:
-        return False
-    tracker = getattr(objects, "target_bearing_tracker", None)
-    if tracker is None:
-        return False
-
-    rgb_detection = SimpleNamespace(
-        visible=bool(getattr(detection, "visible", False)),
-        bbox=list(getattr(detection, "bbox", None) or []),
-        score=float(getattr(detection, "score", 0.0) or 0.0),
-        camera="front",
-        depth_median=None,
-        depth_valid_ratio=None,
-        depth_mad_m=None,
-    )
-    observation = tracker.record(
-        stage_key=_runtime_stage_key(stage),
-        detection=rgb_detection,
-        image=bundle.front_image,
-        observer_yaw_deg=float(bundle.observer_yaw_deg),
-        source=source,
-    )
-    if observation is None:
-        return False
-
-    target_name = str(
-        getattr(stage, "target_query", None)
-        or getattr(stage, "target", None)
-        or getattr(detection, "label", None)
-        or "target"
-    )
-    print(
-        "  [TargetPrebind] "
-        f"target={target_name!r} angle={observation.relative_angle_deg:+.1f}deg "
-        f"score={observation.score:.2f} source={source}"
-    )
-
-    recorder = getattr(objects, "target_snapshot_recorder", None)
-    if recorder is not None and bool(getattr(recorder, "enabled", False)):
-        stage_index = getattr(stage, "index", None)
-        try:
-            normalized_stage_index = int(stage_index) if stage_index is not None else None
-        except (TypeError, ValueError):
-            normalized_stage_index = None
-        destination = recorder.record_first(
-            stage_key=_runtime_stage_key(stage),
-            stage_index=normalized_stage_index,
-            instance_id="rgb_prebind",
-            target_name=target_name,
-            view="front",
-            image=bundle.front_image,
-            detection=detection,
-            observer_world=bundle.observer_world,
-            observer_yaw_deg=bundle.observer_yaw_deg,
-            source=source,
-            record_kind="prebind",
-        )
-        if destination is not None:
-            print(
-                "  [TargetSnapshot] "
-                f"saved={destination} target={target_name!r} kind=prebind view=front"
-            )
-    return True
-
-
-def _record_locked_target_snapshot(
-    objects,
-    stage,
-    bundle: DetectionDepthBundle | None,
-    *,
-    source: str,
-    events: list | tuple | None = None,
-) -> None:
-    """Save the exact detector observation assigned to the locked instance.
-
-    Never re-select a high-score box from the frame here. The memory update
-    event is the authoritative detection-to-instance association.
-    """
-
-    recorder = getattr(objects, "target_snapshot_recorder", None)
-    memory = getattr(objects, "mission_memory", None)
-    if (
-        recorder is None
-        or not bool(getattr(recorder, "enabled", False))
-        or memory is None
-        or bundle is None
-    ):
-        return
-    is_locked = getattr(memory, "is_primary_locked", None)
-    if not callable(is_locked) or not is_locked(stage):
-        return
-    primary = memory.primary_instance(stage)
-    if primary is None:
-        return
-
-    exact_events = [
-        event
-        for event in list(events or [])
-        if str(getattr(event, "instance_id", "") or "") == str(primary.instance_id)
-        and getattr(event, "image", None) is not None
-        and bool(getattr(getattr(event, "detection", None), "visible", False))
-    ]
-    if not exact_events:
-        _debug_print(
-            "  [TargetSnapshot] locked snapshot deferred: "
-            f"instance={primary.instance_id} has no exact observation in this update"
-        )
-        return
-    exact_event = max(
-        exact_events,
-        key=lambda event: (
-            float(getattr(event, "reliability", 0.0) or 0.0),
-            float(getattr(event, "score", 0.0) or 0.0),
-        ),
-    )
-    view_name = str(getattr(exact_event, "view", "front") or "front")
-    image = exact_event.image
-    detection = exact_event.detection
-    target_name = str(
-        getattr(stage, "target_query", None)
-        or getattr(stage, "target", None)
-        or getattr(detection, "label", None)
-        or "target"
-    )
-    stage_index = getattr(stage, "index", None)
-    try:
-        normalized_stage_index = int(stage_index) if stage_index is not None else None
-    except (TypeError, ValueError):
-        normalized_stage_index = None
-    destination = recorder.record_first(
-        stage_key=CompletionPipeline.stage_key(stage),
-        stage_index=normalized_stage_index,
-        instance_id=str(getattr(primary, "instance_id", "") or ""),
-        target_name=target_name,
-        view=view_name,
-        image=image,
-        detection=detection,
-        observer_world=(
-            list(getattr(exact_event, "observer_world", []) or [])
-            or bundle.observer_world
-        ),
-        observer_yaw_deg=(
-            getattr(exact_event, "observer_yaw_deg", None)
-            if getattr(exact_event, "observer_yaw_deg", None) is not None
-            else bundle.observer_yaw_deg
-        ),
-        source=source,
-        record_kind="locked_final",
-        metadata={
-            "authoritative": True,
-            "association": "exact_memory_update_event",
-            "detection_world": [float(v) for v in list(getattr(exact_event, "world", []) or [])[:3]],
-            "final_target_world": [float(v) for v in list(getattr(primary, "target_world", []) or [])[:3]],
-            "memory_confidence": float(getattr(primary, "confidence", 0.0) or 0.0),
-            "memory_uncertainty_m": float(getattr(primary, "uncertainty_m", 0.0) or 0.0),
-            "reliability": float(getattr(exact_event, "reliability", 0.0) or 0.0),
-            "selection_rule": str(getattr(stage, "selection_rule", "") or "stable"),
-            "ordinal": getattr(stage, "ordinal", None),
-        },
-    )
-    if destination is not None:
-        print(
-            "  [TargetSnapshot] "
-            f"saved={destination} target={target_name!r} "
-            f"instance={getattr(primary, 'instance_id', '')} kind=locked_final "
-            f"view={view_name} association=exact_memory_update_event"
-        )
-
-
-def _record_target_bearing(
-    objects,
-    stage,
-    bundle,
-    detection=None,
-    *,
-    source: str = "active_observation",
-):
-    tracker = getattr(objects, "target_bearing_tracker", None)
-    if tracker is None or bundle is None:
-        return None
-    detection = detection or _select_identity_approved_front_detection(objects, stage, bundle)
-    if detection is None:
-        detection = _select_identity_approved_down_detection(objects, stage, bundle)
-    if detection is None or bundle.observer_world is None or bundle.observer_yaw_deg is None:
-        return None
-    detection_frame = getattr(detection, "camera_frame", None)
-    down_frame_context = getattr(bundle.down_image, "camera_frame", None)
-    bearing_image = (
-        bundle.down_image
-        if detection_frame is not None and detection_frame is down_frame_context
-        else bundle.down_image
-        if str(getattr(detection, "camera", "") or "").lower().startswith("down")
-        else bundle.front_image
-    )
-    observation = tracker.record(
-        stage_key=_runtime_stage_key(stage),
-        detection=detection,
-        image=bearing_image,
-        observer_yaw_deg=float(bundle.observer_yaw_deg),
-        source=source,
-    )
-    if observation is not None:
-        print(
-            "  [TargetBearing] "
-            f"angle={observation.relative_angle_deg:+.1f}deg "
-            f"score={observation.score:.2f} depth_state={observation.depth_state} "
-            f"range_hint={('none' if observation.range_hint_m is None else f'{observation.range_hint_m:.1f}m')} "
-            f"source={observation.source}"
-        )
-    return observation
-
-
-def _memory_estimate_is_trustworthy(objects, stage, current_world) -> bool:
-    memory = getattr(objects, "mission_memory", None)
-    if memory is None:
-        return False
-    estimate = memory.estimate_distance(stage, current_world)
-    if estimate is None:
-        return False
-    config = getattr(memory, "config", {}) or {}
-    return bool(
-        float(estimate.get("confidence", 0.0) or 0.0)
-        >= float(config.get("MEMORY_DISTANCE_MIN_CONFIDENCE", 0.45))
-        and float(estimate.get("uncertainty_m", 999.0) or 999.0)
-        <= float(config.get("BEARING_MEMORY_MAX_UNCERTAINTY_M", 5.0))
-        and float(estimate.get("observation_age_s", 999.0) or 999.0)
-        <= float(config.get("BEARING_MEMORY_MAX_AGE_S", 30.0))
-    )
-
-
-def _bearing_only_active(objects, stage, current_world) -> bool:
-    tracker = getattr(objects, "target_bearing_tracker", None)
-    activation = (
-        tracker.activation_guard(_runtime_stage_key(stage))
-        if tracker is not None and hasattr(tracker, "activation_guard")
-        else None
-    )
-    if activation is not None:
-        # The first accepted leg must still respect the activation-view RGB
-        # direction even if the same frame also produced a usable metric lock.
-        return True
-    observation = tracker.current(_runtime_stage_key(stage)) if tracker is not None else None
-    if observation is None:
-        return False
-    if "prebind" in str(getattr(observation, "source", "")).lower():
-        # The activation frame is newer identity evidence than any bootstrap
-        # anchor.  Keep it in charge of the first leg until a reliable metric
-        # observation upgrades the tracker.
-        return True
-    if observation.depth_state == "metric":
-        return False
-    return not _memory_estimate_is_trustworthy(objects, stage, current_world)
 
 
 def _apply_bearing_path_guard(objects, stage, cumulative_waypoints, *, selection_pos, selection_yaw):
-    tracker = getattr(objects, "target_bearing_tracker", None)
-    stage_key = _runtime_stage_key(stage)
-    activation = (
-        tracker.activation_guard(stage_key)
-        if tracker is not None and hasattr(tracker, "activation_guard")
-        else None
-    )
-    observation = activation or (tracker.current(stage_key) if tracker is not None else None)
-    if observation is None or (activation is None and observation.depth_state == "metric"):
-        return cumulative_waypoints, ""
-    memory = getattr(objects, "mission_memory", None)
-    memory_cfg = getattr(memory, "config", {}) or {}
-    is_prebind = activation is not None or "prebind" in str(getattr(observation, "source", "")).lower()
-    if is_prebind:
-        max_leg = float(memory_cfg.get("PREBIND_MAX_LEG_M", 10.0))
-        max_deviation = float(memory_cfg.get("PREBIND_MAX_PATH_DEVIATION_DEG", 18.0))
-    else:
-        max_leg = float(memory_cfg.get("BEARING_MAX_LEG_M", 12.0))
-        max_deviation = float(memory_cfg.get("BEARING_MAX_PATH_DEVIATION_DEG", 50.0))
-    if max_leg <= 0.0 or not cumulative_waypoints:
-        return cumulative_waypoints, ""
-    limited, was_limited = _limit_cumulative_path_length(
+    return _guidance_apply_bearing_path_guard(
+        objects,
+        stage,
         cumulative_waypoints,
-        {"PATH_MAX_GUIDED_LEG_M": max_leg},
+        selection_pos=selection_pos,
+        selection_yaw=selection_yaw,
     )
-    angle = observation.relative_to_yaw(float(selection_yaw))
-    endpoint = list(limited[-1] if limited else [0.0, 0.0, 0.0])
-    endpoint_angle = math.degrees(math.atan2(float(endpoint[1]), max(float(endpoint[0]), 1e-6)))
-    deviation = abs((endpoint_angle - angle + 180.0) % 360.0 - 180.0)
-    if limited and endpoint[0] > 0.0 and deviation <= max_deviation:
-        prefix = "prebind_" if is_prebind else ""
-        return limited, f"{prefix}limit_{max_leg:.1f}m" if was_limited else ""
-    distance = min(
-        max_leg,
-        float(observation.range_hint_m)
-        if observation.range_hint_m is not None and observation.range_hint_m > 0.0
-        else max_leg,
-    )
-    radians = math.radians(angle)
-    direct = [[round(distance * math.cos(radians), 3), round(distance * math.sin(radians), 3), 0.0]]
-    prefix = "prebind_" if is_prebind else ""
-    return direct, f"{prefix}replace_bearing_deviation_{deviation:.1f}deg"
 
 
 def _update_target_pose_from_bundle(objects: RuntimeObjects, stage, bundle: DetectionDepthBundle | None):
@@ -1099,832 +489,6 @@ def _update_target_pose_from_bundle(objects: RuntimeObjects, stage, bundle: Dete
     return estimate
 
 
-def _execute_action_stage(client, stage) -> None:
-    act = stage.action
-    val = stage.value or 0
-    if act in ("up", "down"):
-        requested = float(val or 0.0)
-        vertical_config = function_section(cfg, "MEMORY")
-        val = _normalize_direct_vertical_action_m(
-            requested,
-            vertical_config,
-            climb=(act == "up"),
-        )
-        if abs(val - abs(requested)) > 1e-6:
-            minimum = (
-                _minimum_airsim_climb_command_m(vertical_config)
-                if act == "up"
-                else _minimum_airsim_vertical_command_m(vertical_config)
-            )
-            print(
-                "  [Action] AirSim vertical displacement quantized "
-                f"requested={requested:.2f}m executed={val:.2f}m "
-                f"minimum={minimum:.2f}m direction={act}"
-            )
-    print(f"  [Action] direct execution: {act} {val}")
-    pos_before, yaw_before = client.get_pose()
-    try:
-        if act in ("left", "right"):
-            sign = 1 if act == "right" else -1
-            client.rotate_to_yaw(yaw_before + sign * val)
-        elif act == "forward":
-            rad = math.radians(yaw_before)
-            client.move_to_position(
-                pos_before[0] + val * math.cos(rad),
-                pos_before[1] + val * math.sin(rad),
-                pos_before[2],
-            )
-        elif act == "backward":
-            rad = math.radians(yaw_before)
-            client.move_to_position(
-                pos_before[0] - val * math.cos(rad),
-                pos_before[1] - val * math.sin(rad),
-                pos_before[2],
-            )
-        elif act == "up":
-            client.move_to_position(pos_before[0], pos_before[1], pos_before[2] - val)
-        elif act == "down":
-            client.move_to_position(pos_before[0], pos_before[1], pos_before[2] + val)
-        elif act == "land":
-            # 降落是物理动作，不能由memory完成判定替代，必须真正调用飞控执行。
-            client.land()
-    except Exception as exc:
-        print(f"  [Action] error: {exc}")
-    pos_after, yaw_after = client.get_pose()
-    print(
-        f"  [Action] from: ({pos_before[0]:.1f}, {pos_before[1]:.1f}, {pos_before[2]:.1f}) "
-        f"yaw={yaw_before:.1f}deg"
-    )
-    print(
-        f"           to:   ({pos_after[0]:.1f}, {pos_after[1]:.1f}, {pos_after[2]:.1f}) "
-        f"yaw={yaw_after:.1f}deg"
-    )
-
-
-def _capture_rgb_for_stage(client, completion_checker, current_stage, capture_mode: str):
-    """Capture only RGB frames for the fast loop.
-
-    Depth is requested only when a completion check is actually due.  This is
-    the key difference from the old per-step completion capture.
-    """
-    profile = getattr(completion_checker, "rgb_profile", None) or "front_down"
-    if current_stage and getattr(current_stage, "mode", "") == "detect":
-        profile = getattr(completion_checker, "rgb_profile", profile)
-    t0 = time.perf_counter()
-    frame, down_frame, front_depth, down_depth, timing = client.capture_views(
-        profile=profile,
-        mode=capture_mode,
-        verbose=False,
-    )
-    elapsed = time.perf_counter() - t0
-    timing = dict(timing or {})
-    timing.setdefault("total_s", elapsed)
-    _debug_print(
-        f"  [CaptureRGB] profile={profile} time={timing.get('total_s', elapsed):.2f}s  "
-        f"front={web_helpers.shape_text(frame)}  down={web_helpers.shape_text(down_frame)}"
-    )
-    return frame, down_frame, front_depth, down_depth, timing
-
-
-def _capture_completion_depth(client, completion_checker, capture_mode: str):
-    depth_profile = web_helpers.depth_only_profile(getattr(completion_checker, "depth_profile", "front_down_both_depth"))
-    t0 = time.perf_counter()
-    _front, _down, front_depth, down_depth, timing = web_helpers.capture_profile_isolated(client, depth_profile)
-    elapsed = time.perf_counter() - t0
-    timing = dict(timing or {})
-    timing.setdefault("total_s", elapsed)
-    _debug_print(
-        f"  [Depth] profile={depth_profile} time={timing.get('total_s', elapsed):.2f}s  "
-        f"front_depth={web_helpers.shape_text(front_depth)}  down_depth={web_helpers.shape_text(down_depth)}"
-    )
-    return front_depth, down_depth, timing
-
-
-def _publish_frames(state, client, frame, down_frame, depth_meters) -> None:
-    web_helpers.push_pil_png_to_frontend(state, frame, view="front")
-    if down_frame is not None:
-        web_helpers.push_pil_png_to_frontend(state, down_frame, view="down")
-    else:
-        state.set_down_frame(b"")
-    if depth_meters is not None:
-        preview = client.depth_meters_to_image(depth_meters)
-        if preview:
-            buf = io.BytesIO()
-            preview.save(buf, format="PNG")
-            state.set_depth_frame(buf.getvalue())
-
-
-def _evaluate_completion(objects: RuntimeObjects, stage, task_text, frame, down_frame, front_depth, down_depth):
-    return objects.completion_checker.evaluate(
-        stage,
-        task_text,
-        frame,
-        down_frame,
-        front_depth_meters=front_depth,
-        down_depth_meters=down_depth,
-    )
-
-
-def _caption_for_stage(stage, fallback_instruction: str) -> str:
-    return detection_caption_for_stage(stage, fallback_instruction)
-
-
-def _is_above_stage(stage: Any) -> bool:
-    return relation_kind(stage) == "above"
-
-
-def _above_stage_state(objects: RuntimeObjects, stage: Any, current_world) -> AboveStageRuntimeState:
-    key = CompletionPipeline.stage_key(stage)
-    states = getattr(objects, "above_stage_states", None)
-    if states is None:
-        states = {}
-        setattr(objects, "above_stage_states", states)
-    state = states.get(key)
-    if state is None:
-        memory = getattr(objects, "mission_memory", None)
-        primary = memory.primary_instance(stage) if memory is not None else None
-        lock_id = (
-            str(memory.stage_locks.get(_mission_stage_key(stage), "") or "")
-            if memory is not None
-            else ""
-        )
-        state = AboveStageRuntimeState(
-            entry_z=float(current_world[2]),
-            last_lock_id=lock_id,
-            last_anchor_world=list(primary.target_world) if primary is not None else None,
-        )
-        states[key] = state
-    return state
-
-
-def _locked_large_above_requires_roof(objects: RuntimeObjects, stage: Any) -> bool:
-    """Whether a facade point is forbidden from completing this ``above`` stage."""
-    if not _is_above_stage(stage):
-        return False
-    memory = getattr(objects, "mission_memory", None)
-    if memory is None or not bool(getattr(memory, "config", {}).get("ABOVE_REQUIRE_ROOF_GEOMETRY", True)):
-        return False
-    instance = memory.primary_instance(stage)
-    locked_fn = getattr(memory, "is_primary_locked", None)
-    return bool(
-        instance is not None
-        and callable(locked_fn)
-        and locked_fn(stage)
-        and bool(getattr(instance, "is_large_structure", False))
-    )
-
-
-def _above_roof_candidate_ready(
-    objects: RuntimeObjects,
-    stage: Any,
-    current_world,
-    *,
-    require_trusted: bool = False,
-) -> bool:
-    """Use one roof gate for the runtime, watchdog, idle trigger and queue hold.
-
-    One retained (but not yet trusted) roof plane may launch a synchronized
-    completion capture, which can provide the second consistent observation.
-    A facade-only point may never launch that capture.
-    """
-    if not _locked_large_above_requires_roof(objects, stage):
-        return True
-    memory = getattr(objects, "mission_memory", None)
-    roof = memory.roof_navigation_context(stage, current_world) if memory is not None else None
-    if roof is None:
-        return False
-    if require_trusted and not bool(roof.get("trusted", False)):
-        return False
-    return True
-
-
-def _cumulative_path_length(cumulative_waypoints: list) -> float:
-    previous = [0.0, 0.0, 0.0]
-    total = 0.0
-    for waypoint in list(cumulative_waypoints or []):
-        if waypoint is None or len(waypoint) < 3:
-            continue
-        current = [float(value) for value in waypoint[:3]]
-        total += math.sqrt(sum((current[index] - previous[index]) ** 2 for index in range(3)))
-        previous = current
-    return total
-
-
-def _straight_body_path(direction_body_xy, distance_m: float, spacing_m: float, max_points: int) -> list[list[float]]:
-    distance = max(0.0, float(distance_m))
-    norm = math.hypot(float(direction_body_xy[0]), float(direction_body_xy[1]))
-    if distance <= 1e-6 or norm <= 1e-6:
-        return []
-    unit = [float(direction_body_xy[0]) / norm, float(direction_body_xy[1]) / norm]
-    count = max(1, min(max(1, int(max_points)), int(math.ceil(distance / max(0.5, spacing_m)))))
-    return [
-        [
-            round(unit[0] * distance * index / count, 3),
-            round(unit[1] * distance * index / count, 3),
-            0.0,
-        ]
-        for index in range(1, count + 1)
-    ]
-
-
-def _apply_above_roof_acquisition_path_guard(
-    objects: RuntimeObjects,
-    stage: Any,
-    cumulative_waypoints: list,
-    *,
-    selection_pos,
-    selection_yaw: float,
-    planning_wall_s: float,
-) -> tuple[list, str]:
-    """Keep an altitude-held XY path alive until down depth finds the roof.
-
-    Close-range Qwen plans can be shorter than one model call.  For a locked
-    large building with no roof geometry, replace only those short plans with
-    a bounded memory-directed horizon.  Once close to the facade anchor, keep
-    the original approach direction and probe a short distance through the
-    anchor so the nadir camera can enter the roof footprint.
-    """
-    if not _locked_large_above_requires_roof(objects, stage):
-        return cumulative_waypoints, ""
-    memory = getattr(objects, "mission_memory", None)
-    current = [float(value) for value in list(selection_pos or [])[:3]]
-    if memory is None or len(current) < 3:
-        return cumulative_waypoints, ""
-    roof = memory.roof_navigation_context(stage, current)
-    runtime_state = _above_stage_state(objects, stage, current)
-    if roof is not None and (
-        bool(roof.get("trusted", False))
-        or not runtime_state.require_roof_before_next_completion
-    ):
-        # Even one retained plane is enough to stop blind facade probing.  The
-        # synchronized completion capture can now confirm the plane.
-        if bool(roof.get("trusted", False)):
-            runtime_state.roof_acquire_origin_world = None
-            runtime_state.roof_acquire_direction_world = None
-            runtime_state.roof_acquire_goal_distance_m = 0.0
-        return cumulative_waypoints, ""
-
-    instance = memory.primary_instance(stage)
-    target = list(getattr(instance, "target_world", None) or [])
-    if len(target) < 2:
-        return cumulative_waypoints, ""
-    dx = float(target[0]) - current[0]
-    dy = float(target[1]) - current[1]
-    horizontal = math.hypot(dx, dy)
-    memory_cfg = getattr(memory, "config", {}) or {}
-    overhead = memory.above_overhead_context(stage, current) or {}
-    acquisition_radius = max(
-        1.0,
-        float(overhead.get("trigger_radius_m", 0.0) or 0.0),
-        float(getattr(instance, "footprint_radius_m", 1.5) or 1.5)
-        + float(memory_cfg.get("ABOVE_HORIZONTAL_RADIUS_M", 3.5)),
-    )
-
-    nominal_speed = max(0.1, float(cfg.get("SIM", {}).get("AIRSIM_VELOCITY", 2.0)))
-    fallback_planning_s = max(0.1, float(memory_cfg.get("ABOVE_CONTINUOUS_FALLBACK_PLANNING_S", 5.5)))
-    margin_s = max(0.0, float(memory_cfg.get("ABOVE_CONTINUOUS_HORIZON_MARGIN_S", 1.5)))
-    horizon_s = max(fallback_planning_s, max(0.0, float(planning_wall_s)) + margin_s)
-    minimum_horizon = max(
-        1.0,
-        float(memory_cfg.get("ABOVE_MIN_CONTINUOUS_HORIZON_M", 12.0)),
-        nominal_speed * horizon_s,
-    )
-    max_leg = max(1.0, float(memory_cfg.get("PATH_MAX_GUIDED_LEG_M", 18.0)))
-    minimum_horizon = min(minimum_horizon, max_leg)
-
-    phase = "approach"
-    direction_world = None
-    desired_distance = minimum_horizon
-    if horizontal <= acquisition_radius:
-        phase = "roof_acquire"
-        if runtime_state.roof_acquire_direction_world is None:
-            if horizontal > 1e-6:
-                direction_world = [dx / horizontal, dy / horizontal]
-            else:
-                yaw_rad = math.radians(float(selection_yaw))
-                direction_world = [math.cos(yaw_rad), math.sin(yaw_rad)]
-            runtime_state.roof_acquire_origin_world = list(current)
-            runtime_state.roof_acquire_direction_world = list(direction_world)
-            beyond_anchor = max(1.0, float(memory_cfg.get("ABOVE_ROOF_PROBE_BEYOND_ANCHOR_M", 8.0)))
-            max_probe = max(beyond_anchor, float(memory_cfg.get("ABOVE_ROOF_PROBE_MAX_TRAVEL_M", 24.0)))
-            runtime_state.roof_acquire_goal_distance_m = min(
-                max_probe,
-                max(minimum_horizon, horizontal + beyond_anchor),
-            )
-        direction_world = list(runtime_state.roof_acquire_direction_world or [])
-        origin = list(runtime_state.roof_acquire_origin_world or current)
-        progress = max(
-            0.0,
-            (current[0] - float(origin[0])) * float(direction_world[0])
-            + (current[1] - float(origin[1])) * float(direction_world[1]),
-        )
-        remaining = max(0.0, float(runtime_state.roof_acquire_goal_distance_m) - progress)
-        if remaining <= 0.5:
-            return cumulative_waypoints, "roof_probe_exhausted_planner_control"
-        desired_distance = min(max_leg, remaining)
-    elif horizontal > 1e-6:
-        direction_world = [dx / horizontal, dy / horizontal]
-
-    if not direction_world or len(direction_world) < 2:
-        return cumulative_waypoints, ""
-    existing_length = _cumulative_path_length(cumulative_waypoints)
-    yaw_rad = math.radians(float(selection_yaw))
-    body_direction = [
-        math.cos(yaw_rad) * float(direction_world[0]) + math.sin(yaw_rad) * float(direction_world[1]),
-        -math.sin(yaw_rad) * float(direction_world[0]) + math.cos(yaw_rad) * float(direction_world[1]),
-    ]
-    endpoint = list(cumulative_waypoints[-1]) if cumulative_waypoints else [0.0, 0.0, 0.0]
-    endpoint_projection = (
-        float(endpoint[0]) * body_direction[0] + float(endpoint[1]) * body_direction[1]
-        if len(endpoint) >= 2
-        else 0.0
-    )
-    if existing_length >= desired_distance * 0.95 and endpoint_projection >= desired_distance * 0.75:
-        return cumulative_waypoints, ""
-
-    spacing = max(0.5, float(memory_cfg.get("ABOVE_ROOF_ACQUIRE_WAYPOINT_SPACING_M", 3.0)))
-    max_points = max(2, int(memory_cfg.get("ABOVE_ROOF_ACQUIRE_MAX_WAYPOINTS", 8)))
-    guarded = _straight_body_path(body_direction, desired_distance, spacing, max_points)
-    reason = (
-        f"{phase}_continuous_horizon_{desired_distance:.1f}m "
-        f"planner={float(planning_wall_s):.1f}s anchor={horizontal:.1f}m"
-    )
-    return guarded, reason
-
-
-def _above_pre_roof_facade_clearance_context(
-    objects: RuntimeObjects,
-    stage: Any,
-    current_world,
-) -> dict:
-    """Estimate a conservative climb envelope from locked front-facade depth.
-
-    A horizontal front camera cannot verify a roof plane while the UAV is
-    below it, but the uppermost retained facade samples still prove that the
-    building occupies that altitude.  NED Z decreases while climbing, so a
-    safe pre-roof target is above (more negative than) that highest sample.
-    """
-
-    if not _locked_large_above_requires_roof(objects, stage):
-        return {}
-    memory = getattr(objects, "mission_memory", None)
-    config = getattr(memory, "config", {}) or {}
-    if not bool(config.get("ABOVE_PRE_ROOF_FACADE_CLIMB_ENABLED", True)):
-        return {}
-    current = [float(value) for value in list(current_world or [])[:3]]
-    if memory is None or len(current) < 3:
-        return {}
-    roof = memory.roof_navigation_context(stage, current)
-    if bool((roof or {}).get("trusted", False)):
-        return {}
-    instance = memory.primary_instance(stage)
-    if instance is None:
-        return {}
-
-    facade_z_values = []
-    bounds = list(getattr(instance, "surface_bounds_world", None) or [])
-    if bounds and len(bounds[0]) >= 3:
-        facade_z_values.append(float(bounds[0][2]))
-    for point in list(getattr(instance, "surface_points_world", None) or []):
-        if point is not None and len(point) >= 3:
-            facade_z_values.append(float(point[2]))
-    for patch in list(getattr(instance, "surface_patches_world", None) or []):
-        for point in list(patch or []):
-            if point is not None and len(point) >= 3:
-                facade_z_values.append(float(point[2]))
-    facade_z_values = [value for value in facade_z_values if math.isfinite(value)]
-    if not facade_z_values:
-        return {}
-
-    highest_facade_z = min(facade_z_values)
-    clearance_m = max(0.5, float(config.get("ABOVE_PRE_ROOF_FACADE_CLEARANCE_M", 3.0)))
-    uncertainty_margin_m = max(
-        0.0,
-        float(config.get("ABOVE_PRE_ROOF_FACADE_UNCERTAINTY_MARGIN_M", 1.0)),
-    )
-    requested_z = highest_facade_z - clearance_m - uncertainty_margin_m
-    source = "front_facade"
-    # One untrusted down-view roof plane is not allowed to complete the stage,
-    # but using its height only to request an upward move is conservative.
-    if roof is not None and roof.get("roof_z_world") is not None:
-        requested_z = min(
-            requested_z,
-            float(roof["roof_z_world"]) - clearance_m - uncertainty_margin_m,
-        )
-        source = "front_facade_and_roof_candidate"
-
-    runtime_state = _above_stage_state(objects, stage, current)
-    max_total_climb_m = max(
-        clearance_m,
-        float(config.get("ABOVE_PRE_ROOF_MAX_TOTAL_CLIMB_M", 60.0)),
-    )
-    minimum_world_z = float(runtime_state.entry_z) - max_total_climb_m
-    target_z = max(requested_z, minimum_world_z)
-    return {
-        "target_world_z": float(target_z),
-        "requested_world_z": float(requested_z),
-        "highest_facade_world_z": float(highest_facade_z),
-        "clearance_m": float(clearance_m),
-        "uncertainty_margin_m": float(uncertainty_margin_m),
-        "source": source,
-        "limited": bool(target_z > requested_z + 1e-6),
-        "surface_observations": int(getattr(instance, "surface_observation_count", 0) or 0),
-    }
-
-
-def _minimum_airsim_vertical_command_m(config: dict | None = None) -> float:
-    """Return a vertical displacement that is strictly greater than 5 m."""
-
-    config = config or {}
-    return max(5.001, float(config.get("AIRSIM_MIN_VERTICAL_COMMAND_M", 5.5)))
-
-
-def _minimum_airsim_climb_command_m(config: dict | None = None) -> float:
-    """Return the configured climb minimum without weakening AirSim's limit."""
-
-    config = config or {}
-    return max(
-        _minimum_airsim_vertical_command_m(config),
-        float(
-            config.get(
-                "AIRSIM_MIN_CLIMB_COMMAND_M",
-                config.get("AIRSIM_MIN_VERTICAL_COMMAND_M", 5.5),
-            )
-        ),
-    )
-
-
-def _quantized_climb_body_z(
-    current_world_z: float,
-    requested_world_z: float,
-    *,
-    config: dict,
-    preferred_max_leg_m: float,
-) -> float:
-    """Quantize one NED climb leg so AirSim cannot silently ignore it."""
-
-    remaining = float(current_world_z) - float(requested_world_z)
-    if remaining <= 0.0:
-        return 0.0
-    minimum = _minimum_airsim_climb_command_m(config)
-    preferred = max(minimum, float(preferred_max_leg_m))
-    magnitude = min(preferred, remaining)
-    if magnitude < minimum:
-        magnitude = minimum
-    return -float(magnitude)
-
-
-def _normalize_direct_vertical_action_m(
-    value: Any,
-    config: dict | None = None,
-    *,
-    climb: bool = False,
-) -> float:
-    """Preserve direction while enforcing its configured displacement minimum."""
-
-    try:
-        magnitude = abs(float(value))
-    except (TypeError, ValueError):
-        magnitude = 0.0
-    minimum = (
-        _minimum_airsim_climb_command_m(config)
-        if climb
-        else _minimum_airsim_vertical_command_m(config)
-    )
-    return max(magnitude, minimum)
-
-
-def _apply_airsim_vertical_path_quantization(
-    cumulative_waypoints: list,
-    *,
-    config: dict | None = None,
-) -> tuple[list, str]:
-    """Drop intermediate altitude targets below the configured minimum.
-
-    Cumulative targets are compared with the last effective altitude. Small
-    increments are held until their accumulated change reaches the applicable
-    threshold (10 m for climbs by default, 5.5 m for descents). Horizontal
-    motion is preserved unchanged.
-    """
-
-    if not cumulative_waypoints:
-        return cumulative_waypoints, ""
-    vertical_minimum = _minimum_airsim_vertical_command_m(config)
-    climb_minimum = _minimum_airsim_climb_command_m(config)
-    minimum = vertical_minimum
-    effective_z = 0.0
-    changed = 0
-    guarded = []
-    for waypoint in cumulative_waypoints:
-        point = [float(value) for value in waypoint[:3]]
-        requested_z = point[2]
-        vertical_delta = requested_z - effective_z
-        minimum = climb_minimum if vertical_delta < -1e-6 else vertical_minimum
-        if 1e-6 < abs(vertical_delta) < minimum:
-            point[2] = effective_z
-            changed += 1
-        elif abs(vertical_delta) >= minimum:
-            effective_z = requested_z
-        else:
-            point[2] = effective_z
-        guarded.append([round(value, 3) for value in point])
-    if not changed:
-        return cumulative_waypoints, ""
-    return guarded, f"held_{changed}_sub_{minimum:.3f}m_vertical_targets"
-
-
-def _above_max_allowed_world_z(objects: RuntimeObjects, stage: Any, current_world) -> tuple[float, str, dict]:
-    """Return the deepest safe NED Z for the active above stage."""
-    memory = getattr(objects, "mission_memory", None)
-    config = getattr(memory, "config", {}) or {}
-    current = [float(value) for value in current_world[:3]]
-    if not _is_above_stage(stage) or not bool(config.get("ABOVE_ALTITUDE_GUARD_ENABLED", True)):
-        return float("inf"), "disabled", {}
-    runtime_state = _above_stage_state(objects, stage, current)
-    roof = memory.roof_navigation_context(stage, current) if memory is not None else None
-    if not bool((roof or {}).get("trusted", False)):
-        # ``above`` never needs a semantic descent. Before a roof is trusted,
-        # hold the entry altitude or climb above the observed facade.
-        hold_world_z = float(runtime_state.entry_z)
-        facade = _above_pre_roof_facade_clearance_context(objects, stage, current)
-        if facade:
-            return (
-                min(hold_world_z, float(facade["target_world_z"])),
-                "roof_unknown_climb_above_observed_facade",
-                facade,
-            )
-        return (
-            hold_world_z,
-            "roof_unknown_hold_entry_altitude",
-            roof or {},
-        )
-
-    roof_z = float(roof["roof_z_world"])
-    clearance = roof_z - current[2]
-    min_clearance = max(0.1, float(config.get("ABOVE_MIN_CLEARANCE_M", 0.3)))
-    allowed = current[2]
-    mode = "roof_confirmed_hold_clearance"
-    allowed = min(allowed, roof_z - min_clearance)
-    return float(allowed), mode, dict(roof)
-
-
-def _apply_above_altitude_path_guard(
-    objects: RuntimeObjects,
-    stage: Any,
-    cumulative_waypoints: list,
-    *,
-    selection_pos,
-) -> tuple[list, str]:
-    if not _is_above_stage(stage):
-        return cumulative_waypoints, ""
-    current = [float(value) for value in list(selection_pos or [])[:3]]
-    if len(current) < 3:
-        return cumulative_waypoints, ""
-    memory = getattr(objects, "mission_memory", None)
-    config = getattr(memory, "config", {}) or {}
-    runtime_state = _above_stage_state(objects, stage, current)
-    instance = memory.primary_instance(stage) if memory is not None else None
-    surface_observations = int(getattr(instance, "surface_observation_count", 0) or 0)
-    last_seen_view = str(getattr(instance, "last_seen_view", "") or "").strip().lower()
-    last_optical_axis = [
-        float(value)
-        for value in list(getattr(instance, "last_seen_optical_axis_world", []) or [])[:3]
-    ]
-    roof = memory.roof_navigation_context(stage, current) if memory is not None else None
-    roof_trusted = bool((roof or {}).get("trusted", False))
-    climb_tolerance = max(
-        0.05,
-        float(config.get("ABOVE_PRE_ROOF_CLIMB_TOLERANCE_M", 0.4)),
-    )
-    max_climb_leg = max(
-        _minimum_airsim_climb_command_m(config),
-        float(config.get("ABOVE_PRE_ROOF_MAX_CLIMB_LEG_M", 10.0)),
-    )
-
-    if roof_trusted:
-        runtime_state.pre_roof_climb_target_z = None
-        runtime_state.pre_roof_waiting_reobserve = False
-    elif runtime_state.pre_roof_climb_target_z is not None:
-        pending_target_z = float(runtime_state.pre_roof_climb_target_z)
-        if current[2] > pending_target_z + climb_tolerance:
-            climb_body_z = _quantized_climb_body_z(
-                current[2],
-                pending_target_z,
-                config=config,
-                preferred_max_leg_m=max_climb_leg,
-            )
-            next_target_z = current[2] + climb_body_z
-            return (
-                [[0.0, 0.0, round(climb_body_z, 3)]],
-                f"vertical_first_continue_climb target_world_z={pending_target_z:.2f} "
-                f"current_world_z={current[2]:.2f}",
-            )
-        runtime_state.pre_roof_climb_target_z = None
-    if not roof_trusted and runtime_state.pre_roof_waiting_reobserve:
-        has_real_optical_axis = bool(
-            len(last_optical_axis) >= 3
-            and all(math.isfinite(value) for value in last_optical_axis[:3])
-        )
-        camera_points_clearly_downward = bool(
-            has_real_optical_axis
-            and last_optical_axis[2] > 0.35
-            and last_optical_axis[2]
-            > 0.5 * math.hypot(last_optical_axis[0], last_optical_axis[1])
-        )
-        latest_surface_is_facade_view = bool(
-            (has_real_optical_axis and not camera_points_clearly_downward)
-            or (not has_real_optical_axis and last_seen_view.startswith("front"))
-        )
-        post_climb_front_reobserved = bool(
-            surface_observations > runtime_state.pre_roof_climb_surface_observations
-            and latest_surface_is_facade_view
-        )
-        if (
-            roof is None
-            and not post_climb_front_reobserved
-        ):
-            # Do not cross the facade using the same observation that caused
-            # the climb.  The normal target-observation pipeline keeps running
-            # while the queue is empty and will release this hold with a newer
-            # upper-facade envelope (or a roof plane).
-            return (
-                [],
-                "vertical_first_waiting_for_post_climb_facade_observation "
-                f"surface_observations={surface_observations} last_view={last_seen_view or 'none'}",
-            )
-        runtime_state.pre_roof_waiting_reobserve = False
-
-    max_world_z, mode, roof = _above_max_allowed_world_z(objects, stage, selection_pos)
-    if not math.isfinite(max_world_z):
-        return cumulative_waypoints, ""
-    if current[2] > float(max_world_z) + climb_tolerance:
-        if (
-            bool((roof or {}).get("limited", False))
-            and current[2] - float(max_world_z) + 1e-6
-            < _minimum_airsim_climb_command_m(config)
-        ):
-            return (
-                [],
-                "pre_roof_climb_tail_blocked_by_emergency_ceiling "
-                f"remaining={current[2] - float(max_world_z):.2f}m",
-            )
-        climb_body_z = _quantized_climb_body_z(
-            current[2],
-            float(max_world_z),
-            config=config,
-            preferred_max_leg_m=max_climb_leg,
-        )
-        next_target_z = current[2] + climb_body_z
-        runtime_state.pre_roof_climb_target_z = float(next_target_z)
-        runtime_state.pre_roof_climb_surface_observations = surface_observations
-        runtime_state.pre_roof_waiting_reobserve = not bool((roof or {}).get("trusted", False))
-        context_text = ""
-        if mode == "roof_unknown_climb_above_observed_facade" and roof:
-            context_text = (
-                f" facade_top_z={float(roof.get('highest_facade_world_z', 0.0)):.2f}"
-                f" clearance={float(roof.get('clearance_m', 0.0)):.1f}m"
-            )
-        return (
-            [[0.0, 0.0, round(climb_body_z, 3)]],
-            f"{mode} vertical_first target_world_z={float(max_world_z):.2f} "
-            f"leg_target_z={next_target_z:.2f}{context_text}",
-        )
-
-    if (
-        mode == "roof_unknown_climb_above_observed_facade"
-        and bool((roof or {}).get("limited", False))
-    ):
-        # The configured emergency ceiling is a hard safety boundary, not a
-        # license to cross a facade that still extends above it.
-        return (
-            [],
-            "pre_roof_climb_limit_reached_horizontal_crossing_blocked "
-            f"world_z={current[2]:.2f} requested_z={float(roof.get('requested_world_z', max_world_z)):.2f}",
-        )
-
-    if not cumulative_waypoints:
-        return cumulative_waypoints, ""
-    # Never ask an above stage to descend; excess roof clearance is valid.
-    max_body_z = min(0.0, float(max_world_z) - current[2])
-    guarded = []
-    changed = False
-    for waypoint in cumulative_waypoints:
-        point = [float(value) for value in waypoint[:3]]
-        if point[2] > max_body_z:
-            point[2] = max_body_z
-            changed = True
-        guarded.append([round(value, 3) for value in point])
-    if not changed:
-        return cumulative_waypoints, ""
-    if not roof:
-        roof_text = ""
-    elif roof.get("roof_z_world") is not None:
-        roof_text = (
-            f" roof_z={float(roof['roof_z_world']):.2f} "
-            f"clearance={float(roof.get('clearance_m', 0.0)):.2f}m"
-        )
-    else:
-        roof_text = (
-            f" facade_top_z={float(roof.get('highest_facade_world_z', 0.0)):.2f} "
-            f"required_z={float(roof.get('target_world_z', max_world_z)):.2f}"
-        )
-    return guarded, f"{mode} max_world_z={max_world_z:.2f}{roof_text}"
-
-
-def _above_queue_violation_reason(objects: RuntimeObjects, stage: Any, current_world) -> str:
-    queue = list(
-        getattr(
-            getattr(getattr(objects, "controller", None), "queue", None),
-            "world_waypoints",
-            [],
-        )
-        or []
-    )
-    if not queue:
-        return ""
-    max_world_z, _mode, _roof = _above_max_allowed_world_z(objects, stage, current_world)
-    memory = getattr(objects, "mission_memory", None)
-    memory_cfg = getattr(memory, "config", {}) or {}
-    tolerance = float(memory_cfg.get("ABOVE_QUEUE_Z_TOLERANCE_M", 0.15))
-    current = [float(value) for value in current_world[:3]]
-    climb_required = bool(current[2] > max_world_z + tolerance)
-    if climb_required:
-        xy_tolerance = max(
-            0.05,
-            float(memory_cfg.get("ABOVE_VERTICAL_FIRST_XY_TOLERANCE_M", 0.35)),
-        )
-        if any(
-            math.hypot(float(point[0]) - current[0], float(point[1]) - current[1]) > xy_tolerance
-            for point in queue
-            if len(point) >= 3
-        ):
-            return "queued_xy_motion_before_above_facade_clearance"
-        if any(float(point[2]) > current[2] + tolerance for point in queue if len(point) >= 3):
-            return "queued_descent_while_above_climb_required"
-    elif any(float(point[2]) > max_world_z + tolerance for point in queue if len(point) >= 3):
-        return "queued_descent_exceeds_above_envelope"
-    estimate = memory.estimate_distance(stage, current_world) if memory is not None else None
-    target = list((estimate or {}).get("target_world") or [])
-    if len(target) >= 2:
-        current_distance = math.hypot(
-            float(current_world[0]) - float(target[0]),
-            float(current_world[1]) - float(target[1]),
-        )
-        endpoint = queue[-1]
-        endpoint_distance = math.hypot(float(endpoint[0]) - float(target[0]), float(endpoint[1]) - float(target[1]))
-        margin = float(memory.config.get("ABOVE_QUEUE_DIVERGENCE_MARGIN_M", 2.0))
-        above_state = _above_stage_state(objects, stage, current)
-        probe_origin = list(above_state.roof_acquire_origin_world or [])
-        probe_direction = list(above_state.roof_acquire_direction_world or [])
-        roof = memory.roof_navigation_context(stage, current) if memory is not None else None
-        probe_active = bool(
-            len(probe_origin) >= 2
-            and len(probe_direction) >= 2
-            and float(above_state.roof_acquire_goal_distance_m) > 0.0
-            and not bool((roof or {}).get("trusted", False))
-        )
-        if probe_active:
-            direction_norm = math.hypot(float(probe_direction[0]), float(probe_direction[1]))
-            if direction_norm <= 1e-6:
-                return "queued_roof_probe_has_invalid_direction"
-            direction = [
-                float(probe_direction[0]) / direction_norm,
-                float(probe_direction[1]) / direction_norm,
-            ]
-            progress_tolerance = max(
-                0.1,
-                float(memory.config.get("ABOVE_ROOF_PROBE_PROGRESS_TOLERANCE_M", 1.0)),
-            )
-            corridor_half_width = max(
-                0.25,
-                float(memory.config.get("ABOVE_ROOF_PROBE_CORRIDOR_HALF_WIDTH_M", 3.0)),
-            )
-            current_offset = [current[0] - float(probe_origin[0]), current[1] - float(probe_origin[1])]
-            current_progress = current_offset[0] * direction[0] + current_offset[1] * direction[1]
-            goal_progress = float(above_state.roof_acquire_goal_distance_m)
-            last_progress = current_progress
-            for point in queue:
-                if point is None or len(point) < 2:
-                    continue
-                offset = [float(point[0]) - float(probe_origin[0]), float(point[1]) - float(probe_origin[1])]
-                progress = offset[0] * direction[0] + offset[1] * direction[1]
-                lateral = abs(offset[0] * direction[1] - offset[1] * direction[0])
-                if progress < last_progress - progress_tolerance:
-                    return "queued_roof_probe_moves_backward"
-                if progress > goal_progress + progress_tolerance:
-                    return "queued_roof_probe_exceeds_goal"
-                if lateral > corridor_half_width:
-                    return "queued_roof_probe_leaves_corridor"
-                last_progress = max(last_progress, progress)
-            # Moving beyond a facade point is the intended roof-acquisition
-            # motion.  Once the path is inside this bounded corridor, do not
-            # reinterpret increasing distance from the facade anchor as drift.
-            return ""
-        if endpoint_distance > current_distance + margin:
-            return "queued_path_diverges_from_locked_above_target"
-    return ""
-
-
 def _review_pending_above_queue(objects, path_stream, state, stage, current_world) -> bool:
     if not _is_above_stage(stage):
         return False
@@ -1942,457 +506,6 @@ def _review_pending_above_queue(objects, path_stream, state, stage, current_worl
     return True
 
 
-def _record_synchronized_roof_plane(
-    objects: RuntimeObjects,
-    stage: Any,
-    down_depth,
-    observer_world,
-    observer_yaw_deg: float,
-    *,
-    state=None,
-    source: str,
-    camera_frame=None,
-    additional_camera_frames=None,
-):
-    memory = getattr(objects, "mission_memory", None)
-    if memory is None or (down_depth is None and not additional_camera_frames) or not _is_above_stage(stage):
-        return None
-    primary = memory.primary_instance(stage)
-    target_xy_world = list(primary.target_world[:2]) if primary is not None else None
-    candidates = []
-    if down_depth is not None:
-        candidates.append((down_depth, camera_frame))
-    for extra_frame in list(additional_camera_frames or []):
-        if extra_frame is not None and getattr(extra_frame, "depth", None) is not None:
-            candidates.append((extra_frame.depth, extra_frame))
-    estimates = [
-        estimate_down_roof_plane(
-            depth_value,
-            observer_world,
-            observer_yaw_deg,
-            config=memory.config,
-            sim_config=memory.sim_config,
-            camera_frame=frame_value,
-            target_xy_world=target_xy_world,
-        )
-        for depth_value, frame_value in candidates
-    ]
-    valid_estimates = [value for value in estimates if value.valid]
-    estimate = (
-        max(valid_estimates, key=lambda value: float(value.confidence))
-        if valid_estimates
-        else estimates[0]
-    )
-    summary = estimate.to_summary_dict()
-    if not estimate.valid:
-        z_mad_text = "n/a" if summary["z_mad_m"] is None else f"{float(summary['z_mad_m']):.3f}m"
-        normal_text = (
-            "n/a"
-            if summary["normal_error_deg"] is None
-            else f"{float(summary['normal_error_deg']):.2f}deg"
-        )
-        print(
-            f"  [RoofPlane] source={source} accepted=False reason={estimate.reason} "
-            f"valid={summary['valid_ratio']:.3f} coverage={summary['coverage_ratio']:.3f} "
-            f"center={summary['center_support_ratio']:.3f} z_mad={z_mad_text} normal={normal_text}"
-        )
-        return estimate
-    previous_event = dict(memory.events[-1]) if getattr(memory, "events", None) else None
-    roof_context = memory.record_roof_plane(stage, estimate, observer_world=observer_world)
-    current_event = dict(memory.events[-1]) if getattr(memory, "events", None) else None
-    rejection_reason = ""
-    if roof_context is None:
-        if current_event != previous_event and str((current_event or {}).get("type", "")).startswith("reject_roof_plane"):
-            rejection_reason = str(current_event.get("type"))
-        elif float(estimate.confidence) < float(memory.config.get("ABOVE_ROOF_MIN_CONFIDENCE", 0.45)):
-            rejection_reason = "roof_plane_confidence_below_threshold"
-        else:
-            rejection_reason = "roof_plane_memory_association_rejected"
-    print(
-        f"  [RoofPlane] source={source} accepted={roof_context is not None} "
-        f"reason={rejection_reason or estimate.reason} "
-        f"z={float(estimate.roof_z_world):.2f}m depth={float(estimate.center_depth_m):.2f}m "
-        f"confidence={estimate.confidence:.2f} valid={estimate.valid_ratio:.2f} "
-        f"coverage={estimate.coverage_ratio:.2f} center={estimate.center_support_ratio:.2f} "
-        f"z_mad={float(estimate.z_mad_m or 0.0):.3f}m "
-        f"normal={float(estimate.normal_error_deg or 0.0):.2f}deg "
-        f"full_frame={estimate.full_frame}"
-    )
-    if roof_context is not None and state is not None:
-        state.update(memory_summary=memory.summary(stage))
-    if roof_context is not None and bool(roof_context.get("trusted", False)):
-        above_state = _above_stage_state(objects, stage, observer_world)
-        above_state.roof_acquire_origin_world = None
-        above_state.roof_acquire_direction_world = None
-        above_state.roof_acquire_goal_distance_m = 0.0
-        above_state.require_roof_before_next_completion = False
-        above_state.completion_resume_pose = None
-    return estimate
-
-
-def _detection_reliability(stage: Any, detection: Any, image: Any = None) -> float:
-    return shared_detection_reliability(stage, detection, image)
-
-
-def _suppress_unreliable_detection(stage: Any, detection: Any, image: Any = None) -> None:
-    """Normalize detector output before it can drive distance, VLM, or target-loss state."""
-    if detection is None or not getattr(detection, "visible", False):
-        return
-    if _detection_reliability(stage, detection, image) > 0.0:
-        return
-    try:
-        detection.score = 0.0
-        detection.visible = False
-    except Exception:
-        pass
-
-
-def _select_reliable_detection(stage: Any, front_det: Any, down_det: Any, frame: Any, down_frame: Any):
-    candidates = []
-    for det, image in ((front_det, frame), (down_det, down_frame)):
-        reliability = _detection_reliability(stage, det, image)
-        if reliability > 0.0:
-            candidates.append((reliability, det))
-    if not candidates:
-        return None
-    return max(candidates, key=lambda item: item[0])[1]
-
-
-def _detect_dual_view(
-    objects: RuntimeObjects,
-    stage,
-    task_text,
-    frame,
-    down_frame,
-    *,
-    detect_executor: ThreadPoolExecutor | None = None,
-):
-    caption = _caption_for_stage(stage, task_text)
-
-    def detect_one(image, camera_name: str):
-        if image is None:
-            return []
-        if hasattr(objects.detector, "detect_all"):
-            return list(objects.detector.detect_all(image, caption, depth_meters=None, camera_name=camera_name) or [])
-        result = objects.detector.detect(image, caption, depth_meters=None, camera_name=camera_name)
-        return [result] if result and result.visible else []
-
-    t0 = time.perf_counter()
-    executor = detect_executor or objects.detect_executor
-    front_future = executor.submit(detect_one, frame, "front")
-    down_future = executor.submit(detect_one, down_frame, "down")
-    try:
-        front_all = front_future.result()
-        down_all = down_future.result()
-    except Exception:
-        # Avoid leaving a queued second-view request behind after the first
-        # request fails, especially in the single-worker future-scan pool.
-        front_future.cancel()
-        down_future.cancel()
-        raise
-    for det in front_all:
-        attach_detection_camera_context(det, frame)
-        _suppress_unreliable_detection(stage, det, frame)
-    for det in down_all:
-        attach_detection_camera_context(det, down_frame)
-        _suppress_unreliable_detection(stage, det, down_frame)
-    enforce_view_relative_sector = bool(
-        is_view_relative_stage(stage)
-        and getattr(objects, "mission_memory", None) is not None
-        and objects.mission_memory.primary_instance(stage) is None
-    )
-    front_det = _best_detection_from_list(
-        stage,
-        front_all,
-        frame,
-        camera_name="front",
-        enforce_view_relative_sector=enforce_view_relative_sector,
-    )
-    down_det = _best_detection_from_list(
-        stage,
-        down_all,
-        down_frame,
-        camera_name="down",
-        enforce_view_relative_sector=enforce_view_relative_sector,
-    )
-    elapsed = time.perf_counter() - t0
-    visible = [d for d in (front_det, down_det) if d and d.visible]
-    best = _select_reliable_detection(stage, front_det, down_det, frame, down_frame) if visible else None
-
-    def describe(name, det):
-        if det and det.visible:
-            return f"{name}:bbox={det.bbox} score={float(det.score or 0.0):.2f}"
-        if det and det.score:
-            return f"{name}:not_visible score={float(det.score or 0.0):.2f}"
-        return f"{name}:not_visible"
-
-    front_rel = _detection_reliability(stage, front_det, frame)
-    down_rel = _detection_reliability(stage, down_det, down_frame)
-    _debug_print(
-        f"  [DetectRGB] {describe('front', front_det)}  {describe('down', down_det)}  "
-        f"best={(best.camera if best else 'none')} "
-        f"front_rel={front_rel:.3f} down_rel={down_rel:.3f} time={elapsed:.2f}s"
-    )
-    return best, front_det, down_det, elapsed, front_all, down_all
-
-
-def _best_detection_from_list(
-    stage: Any,
-    detections: list,
-    image: Any,
-    *,
-    camera_name: str,
-    enforce_view_relative_sector: bool = False,
-):
-    from agent.models.detection.base import DetectionResult
-
-    visible = [
-        detection for detection in list(detections or [])
-        if detection and getattr(detection, "visible", False)
-        and _detection_reliability(stage, detection, image) > 0.0
-        and (
-            not enforce_view_relative_sector
-            or _detection_matches_view_relative_sector(stage, detection, image, camera_name=camera_name)
-        )
-    ]
-    if not visible:
-        return DetectionResult(visible=False, camera=camera_name)
-    return max(visible, key=lambda d: float(getattr(d, "score", 0.0) or 0.0))
-
-
-def _detection_matches_view_relative_sector(
-    stage: Any,
-    detection: Any,
-    image: Any,
-    *,
-    camera_name: str,
-) -> bool:
-    if str(camera_name or "").lower() != "front":
-        return False
-    bbox = list(getattr(detection, "bbox", []) or [])
-    if len(bbox) < 4 or image is None or not hasattr(image, "size"):
-        return False
-    width = float(image.size[0])
-    if width <= 1.0:
-        return False
-    center_ratio = (float(bbox[0]) + float(bbox[2])) / (2.0 * width)
-    text = " ".join((
-        str(getattr(stage, "instruction", "") or ""),
-        str(getattr(stage, "completion_condition", "") or ""),
-    )).lower().replace("-", " ")
-    if any(token in text for token in ("front right", "right front", "on the right", "right side", "右前方", "右侧", "右边")):
-        return center_ratio > 0.5
-    if any(token in text for token in ("front left", "left front", "on the left", "left side", "左前方", "左侧", "左边")):
-        return center_ratio < 0.5
-    return True
-
-
-def _evaluate_completion_fast_slow(
-    objects: RuntimeObjects,
-    client,
-    stage,
-    task_text,
-    frame,
-    down_frame,
-    capture_mode: str,
-):
-    checker = objects.completion_checker
-    started = time.perf_counter()
-
-    if not checker.should_check_stage(stage):
-        return None
-
-    if getattr(checker, "uses_detector", False) and checker.is_detector_enabled():
-        best_det, front_det, down_det, detect_elapsed, front_all, down_all = _detect_dual_view(
-            objects,
-            stage,
-            task_text,
-            frame,
-            down_frame,
-        )
-        if best_det is None or not getattr(best_det, "visible", False):
-            return CompletionResult(
-                checked=True,
-                done=False,
-                target_detected=False,
-                accepted_view="none",
-                reason="fresh target not detected",
-                elapsed=time.perf_counter() - started,
-            )
-        front_depth, down_depth, depth_timing = _capture_completion_depth(
-            client,
-            checker,
-            capture_mode,
-        )
-        if front_depth is not None or down_depth is not None:
-            _debug_print(
-                "  [TargetDepth] "
-                + web_helpers.target_depth_text("front", front_det, frame, front_depth)
-                + "  "
-                + web_helpers.target_depth_text("down", down_det, down_frame, down_depth)
-            )
-            _attach_depth_to_detection_lists(front_all, down_all, frame, down_frame, front_depth, down_depth)
-            _update_memory_from_fresh_detection(
-                objects,
-                client,
-                stage,
-                frame=frame,
-                down_frame=down_frame,
-                front_all=front_all,
-                down_all=down_all,
-            )
-        completion = checker.evaluate_with_detection(
-            stage,
-            task_text,
-            frame,
-            down_frame,
-            best_det,
-            front_detection=front_det,
-            down_detection=down_det,
-            front_depth_meters=front_depth,
-            down_depth_meters=down_depth,
-        )
-        completion.elapsed = time.perf_counter() - started
-        return completion
-
-    if getattr(checker, "name", "") == "api_completion" and hasattr(checker, "analyze_rgb"):
-        analysis = checker.analyze_rgb(stage, task_text, frame, down_frame)
-        if not analysis or analysis.get("target_detected", False):
-            front_depth, down_depth, _depth_timing = _capture_completion_depth(
-                client,
-                checker,
-                capture_mode,
-            )
-        else:
-            front_depth = down_depth = None
-        completion = checker.finalize_analysis(
-            stage,
-            analysis,
-            frame,
-            down_frame,
-            front_depth_meters=front_depth,
-            down_depth_meters=down_depth,
-        )
-        completion.elapsed = time.perf_counter() - started
-        return completion
-
-    completion = _evaluate_completion(objects, stage, task_text, frame, down_frame, None, None)
-    completion.elapsed = time.perf_counter() - started
-    return completion
-
-
-def _capture_fresh_completion_frames(client, completion_checker, capture_mode: str):
-    profile = getattr(completion_checker, "depth_profile", "front_down_both_depth")
-    t0 = time.perf_counter()
-    frame, down_frame, front_depth, down_depth, timing = client.capture_views(
-        profile=profile,
-        mode=capture_mode,
-        verbose=False,
-    )
-    elapsed = time.perf_counter() - t0
-    timing = dict(timing or {})
-    timing.setdefault("total_s", elapsed)
-    _debug_print(
-        f"  [ConfirmCapture] profile={profile} time={timing.get('total_s', elapsed):.2f}s  "
-        f"front={web_helpers.shape_text(frame)} down={web_helpers.shape_text(down_frame)} "
-        f"front_depth={web_helpers.shape_text(front_depth)} down_depth={web_helpers.shape_text(down_depth)}"
-    )
-    return frame, down_frame, front_depth, down_depth, float(timing.get("total_s", elapsed))
-
-
-def _capture_fresh_rgb_frames(client, completion_checker, capture_mode: str):
-    profile = getattr(completion_checker, "rgb_profile", None) or "front_down"
-    t0 = time.perf_counter()
-    frame, down_frame, _front_depth, _down_depth, timing = client.capture_views(
-        profile=profile,
-        mode=capture_mode,
-        verbose=False,
-    )
-    elapsed = time.perf_counter() - t0
-    timing = dict(timing or {})
-    timing.setdefault("total_s", elapsed)
-    _debug_print(
-        f"  [ConfirmRGB] profile={profile} time={timing.get('total_s', elapsed):.2f}s  "
-        f"front={web_helpers.shape_text(frame)} down={web_helpers.shape_text(down_frame)}"
-    )
-    return frame, down_frame, float(timing.get("total_s", elapsed))
-
-
-def _wait_completion_depth(depth_future):
-    try:
-        front_depth, down_depth, timing = depth_future.result()
-        return front_depth, down_depth, float((timing or {}).get("total_s", 0.0) or 0.0)
-    except Exception as exc:
-        print(f"  [Depth] completion depth capture failed: {exc}")
-        return None, None, 0.0
-
-
-def _attach_depth_to_detection_lists(front_all, down_all, frame, down_frame, front_depth, down_depth) -> None:
-    # memory需要每个候选实例的depth_median来投影世界坐标；这里只写入检测对象的轻量字段。
-    for index, detection in enumerate(list(front_all or [])):
-        web_helpers.target_depth_text(f"front#{index}", detection, frame, front_depth)
-    for index, detection in enumerate(list(down_all or [])):
-        web_helpers.target_depth_text(f"down#{index}", detection, down_frame, down_depth)
-
-
-def _update_memory_from_fresh_detection(
-    objects: RuntimeObjects,
-    client,
-    stage,
-    *,
-    frame,
-    down_frame,
-    front_all,
-    down_all,
-) -> None:
-    if getattr(objects, "mission_memory", None) is None:
-        return
-    try:
-        observer_world, observer_yaw = client.get_pose()
-        identity_bundle = SimpleNamespace(
-            front_detections=list(front_all or []),
-            down_detections=list(down_all or []),
-            front_detection=None,
-            down_detection=None,
-            front_image=frame,
-            down_image=down_frame,
-            observer_world=list(observer_world),
-            observer_yaw_deg=float(observer_yaw),
-        )
-        approved_front = _identity_approved_detections(objects, stage, identity_bundle, "front")
-        approved_down = _identity_approved_detections(objects, stage, identity_bundle, "down")
-        events = objects.mission_memory.update_from_detections(
-            stage=stage,
-            detections_by_view={"front": approved_front, "down": approved_down},
-            images_by_view={"front": frame, "down": down_frame},
-            observer_world=observer_world,
-            observer_yaw_deg=observer_yaw,
-        )
-        if events:
-            primary = objects.mission_memory.primary_instance(stage)
-            facade_fallbacks = sum(
-                bool(getattr(event.detection, "surface_lock_fallback", False))
-                for event in events
-            )
-            fallback_text = (
-                f" facade_surface_locks={facade_fallbacks}"
-                if facade_fallbacks
-                else ""
-            )
-            print(
-                f"  [Memory] fresh_updates={len(events)} "
-                f"primary={(primary.instance_id if primary else 'none')}"
-                f"{fallback_text}"
-            )
-            _record_locked_target_snapshot(
-                objects,
-                stage,
-                identity_bundle,
-                source="fresh_completion_observation",
-                events=events,
-            )
-    except Exception as exc:
-        print(f"  [Memory] update skipped: {exc}")
 
 
 def _memory_auxiliary_stages(stage) -> list:
@@ -3255,6 +1368,14 @@ def _submit_plan_if_needed(
         f"pose=({pos_now[0]:.2f},{pos_now[1]:.2f},{pos_now[2]:.2f}) yaw={yaw_now:.1f}"
     )
 
+    nominal_velocity = max(0.1, float(cfg.get("SIM", {}).get("AIRSIM_VELOCITY", 2.0)))
+    horizon_fn = getattr(objects.controller, "planning_horizon_m", None)
+    planning_horizon_m = (
+        float(horizon_fn(nominal_velocity))
+        if callable(horizon_fn)
+        else nominal_velocity * float(getattr(objects.controller, "reserve_time_s", 4.5))
+    )
+
     def plan_fn(pending_waypoints):
         output = objects.planner.plan(
             frame,
@@ -3267,6 +1388,7 @@ def _submit_plan_if_needed(
             memory_hint=memory_hint,
             camera_images=camera_images,
             geometry_context=geometry_context,
+            planning_horizon_m=planning_horizon_m,
         )
         output._selection_front_frame = frame
         output._selection_down_frame = down_frame
@@ -3280,6 +1402,7 @@ def _submit_plan_if_needed(
         current_pos=pos_now,
         current_yaw_deg=yaw_now,
         current_rot_body_to_world=plan_rot,
+        velocity_mps=nominal_velocity,
         plan_fn=plan_fn,
     )
     if submitted:
@@ -3291,496 +1414,6 @@ def _submit_plan_if_needed(
     return submitted
 
 
-def _planning_geometry_context(objects, client, stage, pos_now, yaw_now, images):
-    """Build a compact world/navigation-frame description for the VLM.
-
-    Camera roles come from the pose carried by each Camera API response.  The
-    image list order is only a transport order and does not imply front/down.
-    """
-    camera_images = []
-    camera_views = []
-    seen_images = set()
-    seen_cameras = set()
-    frame_lookup = getattr(client, "camera_frame_for_image", None)
-    for image in list(images or []):
-        if image is None or id(image) in seen_images:
-            continue
-        seen_images.add(id(image))
-        camera_frame = (
-            frame_lookup(image)
-            if callable(frame_lookup)
-            else getattr(image, "camera_frame", None)
-        )
-        camera_images.append(image)
-        if camera_frame is None or camera_frame.camera_id in seen_cameras:
-            continue
-        seen_cameras.add(camera_frame.camera_id)
-        rgb_intrinsics = getattr(camera_frame, "rgb_intrinsics", None)
-        depth_intrinsics = getattr(camera_frame, "depth_intrinsics", None)
-        camera_views.append({
-            "camera_id": str(camera_frame.camera_id),
-            "capture_id": str(camera_frame.capture_id),
-            "camera_position_world": [round(float(v), 3) for v in camera_frame.camera_position_world[:3]],
-            "optical_axis_world": [round(float(v), 6) for v in camera_frame.optical_axis_world[:3]],
-            "rgb_size": (
-                [int(rgb_intrinsics.width), int(rgb_intrinsics.height)]
-                if rgb_intrinsics is not None
-                else list(getattr(image, "size", []) or [])[:2]
-            ),
-            "rgb_hfov_deg": (
-                round(float(rgb_intrinsics.horizontal_fov_deg), 3)
-                if rgb_intrinsics is not None
-                else None
-            ),
-            "depth_size": (
-                [int(depth_intrinsics.width), int(depth_intrinsics.height)]
-                if depth_intrinsics is not None
-                else None
-            ),
-            "depth_available": bool(getattr(camera_frame, "depth", None) is not None),
-        })
-
-    memory = getattr(objects, "mission_memory", None)
-    if memory is not None and hasattr(memory, "navigation_context"):
-        context = memory.navigation_context(stage, pos_now, yaw_now)
-    else:
-        context = {
-            "coordinate_convention": "AirSim NED; +x forward, +y right, +z down in navigation frame",
-            "current_origin_world": [float(v) for v in pos_now[:3]],
-            "current_yaw_deg": float(yaw_now),
-        }
-    context["camera_views"] = camera_views
-    context["image_camera_order"] = [
-        str(getattr(getattr(image, "camera_frame", None), "camera_id", f"view_{index}"))
-        for index, image in enumerate(camera_images)
-    ]
-
-    avoider = getattr(objects, "obstacle_avoider", None)
-    obstacle_summary = avoider.summary() if avoider is not None and hasattr(avoider, "summary") else {}
-    obstacle_samples = []
-    for sample in list(obstacle_summary.get("sample") or []):
-        world = list(sample.get("world") or [])
-        if len(world) < 3:
-            continue
-        obstacle_samples.append({
-            "nav_xyz": [round(float(v), 2) for v in world_to_body(world, pos_now, yaw_now)],
-            "confidence": float(sample.get("confidence", 0.0) or 0.0),
-            "age_s": float(sample.get("age_s", 0.0) or 0.0),
-        })
-    context["obstacles"] = {
-        "cell_count": int(obstacle_summary.get("cells", 0) or 0),
-        "samples_nav": obstacle_samples,
-    }
-    return camera_images, context
-
-
-def _format_waypoints(waypoints, limit: int = 5) -> str:
-    points = []
-    for wp in list(waypoints or [])[:limit]:
-        if not isinstance(wp, (list, tuple)) or len(wp) < 3:
-            continue
-        points.append(f"[{float(wp[0]):.2f}, {float(wp[1]):.2f}, {float(wp[2]):.2f}]")
-    suffix = " ..." if len(list(waypoints or [])) > limit else ""
-    return "[" + ", ".join(points) + "]" + suffix if points else "[]"
-
-
-def _candidate_trace_text(cand) -> str:
-    if cand is None:
-        return "none"
-    if isinstance(cand, dict):
-        getter = cand.get
-    else:
-        getter = lambda key, default=None: getattr(cand, key, default)
-    breakdown = getter("score_breakdown", {}) or {}
-    parts = [
-        f"score={float(getter('pre_score', 0.0) or 0.0):.4f}",
-        f"conf={float(getter('confidence', 0.0) or 0.0):.2f}",
-        f"source={getter('source', '')}",
-        f"wp={_format_waypoints(getter('waypoints', []))}",
-    ]
-    if breakdown:
-        parts.append("breakdown=" + ",".join(f"{k}:{float(v):.3f}" for k, v in breakdown.items()))
-    return " ".join(parts)
-
-
-def _memory_path_clip_radius(objects: RuntimeObjects) -> float:
-    memory_cfg = getattr(getattr(objects, "mission_memory", None), "config", {}) or {}
-    distance_cfg = function_section(cfg, "DISTANCE_ESTIMATION")
-    return float(memory_cfg.get(
-        "PATH_CLIP_RADIUS_M",
-        distance_cfg.get(
-            "TRIGGER_RADIUS_M",
-            getattr(objects.completion_checker, "stop_depth", cfg.get("AGENT", {}).get("STOP_DEPTH_THRESHOLD", 4.0)),
-        ),
-    ))
-
-
-def _memory_near_standoff_radius(objects: RuntimeObjects, memory_context: dict, base_radius: float) -> float:
-    memory_cfg = getattr(getattr(objects, "mission_memory", None), "config", {}) or {}
-    target = memory_context.get("target_body") or []
-    radius = max(float(base_radius), float(memory_cfg.get("NEAR_STANDOFF_M", base_radius)))
-    footprint = float(memory_context.get("footprint_radius_m", 1.5) or 1.5)
-    uncertainty = float(memory_context.get("uncertainty_m", 0.0) or 0.0)
-    radius = max(
-        radius,
-        footprint
-        + float(memory_cfg.get("NEAR_TARGET_EXTRA_STANDOFF_M", 0.0))
-        + min(max(uncertainty, 0.0), float(memory_cfg.get("STANDOFF_UNCERTAINTY_CAP_M", 0.0))) * 0.35,
-    )
-    # 低空贴近车辆/箱子时不要按目标中心飞，额外留一点外圈距离，避免擦到碰撞盒。
-    if len(target) >= 3 and abs(float(target[2])) <= float(memory_cfg.get("LOW_ALTITUDE_Z_DELTA_M", 3.0)):
-        radius += float(memory_cfg.get("LOW_ALTITUDE_EXTRA_STANDOFF_M", 0.0))
-    return max(0.8, radius)
-
-
-def _memory_near_approach_radius_from_values(
-    memory_cfg: dict,
-    *,
-    footprint: float,
-    uncertainty: float,
-    outer_radius: float,
-) -> float:
-    explicit = memory_cfg.get("NEAR_APPROACH_RADIUS_M", None)
-    if explicit is None:
-        return max(0.8, float(outer_radius))
-    radius = float(explicit)
-    radius = max(
-        radius,
-        float(footprint)
-        + float(memory_cfg.get("NEAR_APPROACH_TARGET_CLEARANCE_M", 2.2))
-        + min(max(float(uncertainty), 0.0), float(memory_cfg.get("NEAR_APPROACH_UNCERTAINTY_CAP_M", 1.5))) * 0.25,
-    )
-    min_gap = float(memory_cfg.get("NEAR_APPROACH_OUTER_GAP_M", 1.0))
-    if float(outer_radius) > min_gap + 0.8:
-        radius = min(radius, float(outer_radius) - min_gap)
-    return max(0.8, radius)
-
-
-def _memory_near_approach_radius(objects: RuntimeObjects, memory_context: dict, outer_radius: float) -> float:
-    memory_cfg = getattr(getattr(objects, "mission_memory", None), "config", {}) or {}
-    return _memory_near_approach_radius_from_values(
-        memory_cfg,
-        footprint=float(memory_context.get("footprint_radius_m", 1.5) or 1.5),
-        uncertainty=float(memory_context.get("uncertainty_m", 0.0) or 0.0),
-        outer_radius=float(outer_radius),
-    )
-
-
-def _apply_memory_path_guard(objects: RuntimeObjects, stage, cumulative_waypoints: list, memory_context: dict) -> tuple[list, str]:
-    """Clip or replace a Qwen path so it cannot fly far past the locked memory target."""
-    memory_cfg = getattr(getattr(objects, "mission_memory", None), "config", {}) or {}
-    if not bool(memory_cfg.get("PATH_CLIP_ENABLED", True)):
-        return cumulative_waypoints, ""
-    if not memory_context or not bool(memory_context.get("enabled", False)):
-        return cumulative_waypoints, ""
-    target = memory_context.get("target_body") or []
-    if len(target) < 3 or not cumulative_waypoints:
-        return cumulative_waypoints, ""
-    target = [float(target[0]), float(target[1]), float(target[2])]
-    target_dist = _norm3(target)
-    if target_dist <= 1e-6:
-        return [], "already_at_memory_target"
-
-    relation = str(memory_context.get("relation", "near") or "near").lower()
-    base_radius = _memory_path_clip_radius(objects)
-    if relation == "above":
-        outer_radius = max(
-            base_radius,
-            float(memory_context.get("footprint_radius_m", 1.5) or 1.5)
-            + float(memory_cfg.get("ABOVE_HORIZONTAL_RADIUS_M", 3.5)),
-        )
-        # 已经进入“上方”的水平范围时，不要把所有轨迹清空；还需要允许Qwen继续做高度/位置微调。
-        if _guard_distance([0.0, 0.0, 0.0], target, relation) <= outer_radius:
-            return cumulative_waypoints, ""
-        radius = float(memory_cfg.get("ABOVE_APPROACH_RADIUS_M", max(2.0, min(outer_radius * 0.65, outer_radius - 1.0))))
-    else:
-        outer_radius = _memory_near_standoff_radius(objects, memory_context, base_radius)
-        radius = _memory_near_approach_radius(objects, memory_context, outer_radius)
-    radius = max(0.8, float(radius))
-    current_dist = _guard_distance([0.0, 0.0, 0.0], target, relation)
-    start_inside_outer = current_dist <= float(outer_radius)
-
-    clipped = _clip_path_at_target_radius(
-        cumulative_waypoints,
-        target,
-        radius,
-        relation=relation,
-        near_max_descent_m=float(memory_cfg.get("PATH_NEAR_MAX_DESCENT_M", 0.2)),
-        near_max_climb_m=float(memory_cfg.get("PATH_NEAR_MAX_CLIMB_M", 0.5)),
-        empty_if_start_inside=not start_inside_outer,
-    )
-    if clipped is not None:
-        clipped, leg_limited = _limit_cumulative_path_length(clipped, memory_cfg)
-        leg_reason = f"_leg_{float(memory_cfg.get('PATH_MAX_GUIDED_LEG_M', 0.0)):.1f}m" if leg_limited else ""
-        return clipped, f"clip_enter_approach_{radius:.1f}m{leg_reason}"
-
-    endpoint = [float(v) for v in cumulative_waypoints[-1][:3]]
-    endpoint_dist = _distance3_body(endpoint, target)
-    closest_dist = _closest_path_distance_to_target(cumulative_waypoints, target, relation=relation)
-    target_xy_norm = math.sqrt(target[0] * target[0] + target[1] * target[1])
-    endpoint_projection = _project_xy(endpoint, target)
-    overshoot = target_xy_norm > 1e-6 and endpoint_projection > target_xy_norm + radius
-    if start_inside_outer:
-        # 已在完成圆内部时，只拦截明显飞离目标的路径，允许继续向圆内部微调。
-        diverging = endpoint_dist > max(
-            float(outer_radius) * float(memory_cfg.get("PATH_EXIT_RADIUS_RATIO", 1.20)),
-            current_dist + float(memory_cfg.get("PATH_EXIT_MARGIN_M", 2.0)),
-        )
-    else:
-        diverging = endpoint_dist > target_dist * float(memory_cfg.get("PATH_DIVERGE_RATIO", 0.90))
-    missed_close = closest_dist <= radius * float(memory_cfg.get("PATH_CLOSE_MISS_RATIO", 1.35))
-    target_behind = (
-        not start_inside_outer
-        and target[0] < -float(memory_cfg.get("PATH_TARGET_BEHIND_X_M", 2.0))
-    )
-    if overshoot or diverging or missed_close or target_behind:
-        direct = _direct_memory_waypoint(
-            target,
-            radius,
-            relation=relation,
-            near_max_descent_m=float(memory_cfg.get("PATH_NEAR_MAX_DESCENT_M", 0.2)),
-            near_max_climb_m=float(memory_cfg.get("PATH_NEAR_MAX_CLIMB_M", 0.5)),
-        )
-        reason_bits = []
-        if overshoot:
-            reason_bits.append("overshoot")
-        if diverging:
-            reason_bits.append("diverging")
-        if missed_close:
-            reason_bits.append("near_miss")
-        if target_behind:
-            reason_bits.append("target_behind")
-        direct, leg_limited = _limit_cumulative_path_length(direct, memory_cfg)
-        if leg_limited:
-            reason_bits.append(f"leg_{float(memory_cfg.get('PATH_MAX_GUIDED_LEG_M', 0.0)):.1f}m")
-        return direct, "replace_" + "_".join(reason_bits)
-    limited, leg_limited = _limit_cumulative_path_length(cumulative_waypoints, memory_cfg)
-    if leg_limited:
-        return limited, f"clip_active_leg_{float(memory_cfg.get('PATH_MAX_GUIDED_LEG_M', 0.0)):.1f}m"
-    return cumulative_waypoints, ""
-
-
-def _limit_cumulative_path_length(cumulative_waypoints: list, memory_cfg: dict) -> tuple[list, bool]:
-    """Bound one newly appended memory-guided leg while preserving its shape."""
-    max_length = float(memory_cfg.get("PATH_MAX_GUIDED_LEG_M", 0.0) or 0.0)
-    if max_length <= 0.0 or not cumulative_waypoints:
-        return cumulative_waypoints, False
-    prev = [0.0, 0.0, 0.0]
-    traveled = 0.0
-    limited = []
-    for waypoint in cumulative_waypoints:
-        cur = [float(v) for v in waypoint[:3]]
-        segment = [cur[i] - prev[i] for i in range(3)]
-        segment_length = _norm3(segment)
-        if traveled + segment_length <= max_length + 1e-6:
-            limited.append([round(v, 3) for v in cur])
-            traveled += segment_length
-            prev = cur
-            continue
-        remaining = max(0.0, max_length - traveled)
-        if remaining > 1e-3 and segment_length > 1e-6:
-            scale = remaining / segment_length
-            limited.append([
-                round(prev[i] + segment[i] * scale, 3)
-                for i in range(3)
-            ])
-        return limited, True
-    return limited, False
-
-
-def _clip_path_at_target_radius(
-    cumulative_waypoints: list,
-    target: list[float],
-    radius: float,
-    *,
-    relation: str = "near",
-    near_max_descent_m: float = 0.2,
-    near_max_climb_m: float = 0.5,
-    empty_if_start_inside: bool = True,
-):
-    prev = [0.0, 0.0, 0.0]
-    prev_dist = _guard_distance(prev, target, relation)
-    if prev_dist <= radius:
-        return [] if empty_if_start_inside else None
-    out = []
-    for waypoint in cumulative_waypoints:
-        cur = [float(v) for v in waypoint[:3]]
-        cur_dist = _guard_distance(cur, target, relation)
-        if cur_dist <= radius:
-            if relation == "above":
-                hit = _segment_circle_entry_xy(prev, cur, target, radius) or cur
-            else:
-                hit = _segment_circle_entry_xy(prev, cur, target, radius) or cur
-                # “旁边/附近”不应该把高度也插值到目标中心；低空靠近车辆时尤其容易撞。
-                hit[2] = _clamp(hit[2], -abs(float(near_max_climb_m)), abs(float(near_max_descent_m)))
-            out.append([round(hit[0], 3), round(hit[1], 3), round(hit[2], 3)])
-            return out
-        out.append([round(cur[0], 3), round(cur[1], 3), round(cur[2], 3)])
-        prev = cur
-    return None
-
-
-def _segment_sphere_entry(a: list[float], b: list[float], center: list[float], radius: float):
-    dx = b[0] - a[0]
-    dy = b[1] - a[1]
-    dz = b[2] - a[2]
-    ax = a[0] - center[0]
-    ay = a[1] - center[1]
-    az = a[2] - center[2]
-    qa = dx * dx + dy * dy + dz * dz
-    if qa <= 1e-9:
-        return None
-    qb = 2.0 * (ax * dx + ay * dy + az * dz)
-    qc = ax * ax + ay * ay + az * az - radius * radius
-    disc = qb * qb - 4.0 * qa * qc
-    if disc < 0.0:
-        return None
-    root = math.sqrt(disc)
-    candidates = [(-qb - root) / (2.0 * qa), (-qb + root) / (2.0 * qa)]
-    valid = [t for t in candidates if 0.0 <= t <= 1.0]
-    if not valid:
-        return None
-    t = min(valid)
-    return [a[0] + t * dx, a[1] + t * dy, a[2] + t * dz]
-
-
-def _segment_circle_entry_xy(a: list[float], b: list[float], center: list[float], radius: float):
-    dx = b[0] - a[0]
-    dy = b[1] - a[1]
-    ax = a[0] - center[0]
-    ay = a[1] - center[1]
-    qa = dx * dx + dy * dy
-    if qa <= 1e-9:
-        return None
-    qb = 2.0 * (ax * dx + ay * dy)
-    qc = ax * ax + ay * ay - radius * radius
-    disc = qb * qb - 4.0 * qa * qc
-    if disc < 0.0:
-        return None
-    root = math.sqrt(disc)
-    candidates = [(-qb - root) / (2.0 * qa), (-qb + root) / (2.0 * qa)]
-    valid = [t for t in candidates if 0.0 <= t <= 1.0]
-    if not valid:
-        return None
-    t = min(valid)
-    return [a[0] + t * dx, a[1] + t * dy, a[2] + t * (b[2] - a[2])]
-
-
-def _direct_memory_waypoint(
-    target: list[float],
-    radius: float,
-    *,
-    relation: str = "near",
-    near_max_descent_m: float = 0.2,
-    near_max_climb_m: float = 0.5,
-) -> list:
-    dist = _norm3(target) if relation == "above" else math.sqrt(target[0] * target[0] + target[1] * target[1])
-    if dist <= max(radius, 1e-6):
-        return []
-    scale = max(0.0, (dist - radius) / dist)
-    z = target[2] * scale if relation == "above" else _clamp(0.0, -abs(float(near_max_climb_m)), abs(float(near_max_descent_m)))
-    return [[
-        round(target[0] * scale, 3),
-        round(target[1] * scale, 3),
-        round(z, 3),
-    ]]
-
-
-def _closest_path_distance_to_target(cumulative_waypoints: list, target: list[float], *, relation: str = "near") -> float:
-    prev = [0.0, 0.0, 0.0]
-    best = _guard_distance(prev, target, relation)
-    for waypoint in cumulative_waypoints:
-        cur = [float(v) for v in waypoint[:3]]
-        if relation == "above":
-            best = min(best, _segment_point_distance_xy(prev, cur, target))
-        else:
-            best = min(best, _segment_point_distance_xy(prev, cur, target))
-        prev = cur
-    return best
-
-
-def _segment_point_distance(a: list[float], b: list[float], point: list[float]) -> float:
-    vx = b[0] - a[0]
-    vy = b[1] - a[1]
-    vz = b[2] - a[2]
-    wx = point[0] - a[0]
-    wy = point[1] - a[1]
-    wz = point[2] - a[2]
-    denom = vx * vx + vy * vy + vz * vz
-    if denom <= 1e-9:
-        return _distance3_body(a, point)
-    t = max(0.0, min(1.0, (wx * vx + wy * vy + wz * vz) / denom))
-    closest = [a[0] + t * vx, a[1] + t * vy, a[2] + t * vz]
-    return _distance3_body(closest, point)
-
-
-def _segment_point_distance_xy(a: list[float], b: list[float], point: list[float]) -> float:
-    vx = b[0] - a[0]
-    vy = b[1] - a[1]
-    wx = point[0] - a[0]
-    wy = point[1] - a[1]
-    denom = vx * vx + vy * vy
-    if denom <= 1e-9:
-        return math.sqrt((a[0] - point[0]) ** 2 + (a[1] - point[1]) ** 2)
-    t = max(0.0, min(1.0, (wx * vx + wy * vy) / denom))
-    closest_x = a[0] + t * vx
-    closest_y = a[1] + t * vy
-    return math.sqrt((closest_x - point[0]) ** 2 + (closest_y - point[1]) ** 2)
-
-
-def _guard_distance(point: list[float], target: list[float], relation: str = "near") -> float:
-    if str(relation or "near").lower() == "above":
-        return math.sqrt((float(point[0]) - float(target[0])) ** 2 + (float(point[1]) - float(target[1])) ** 2)
-    return math.sqrt((float(point[0]) - float(target[0])) ** 2 + (float(point[1]) - float(target[1])) ** 2)
-
-
-def _clamp(value: float, lo: float, hi: float) -> float:
-    return max(float(lo), min(float(hi), float(value)))
-
-
-def _project_xy(point: list[float], direction: list[float]) -> float:
-    denom = math.sqrt(direction[0] * direction[0] + direction[1] * direction[1])
-    if denom <= 1e-9:
-        return 0.0
-    return (point[0] * direction[0] + point[1] * direction[1]) / denom
-
-
-def _norm3(point: list[float]) -> float:
-    return math.sqrt(point[0] * point[0] + point[1] * point[1] + point[2] * point[2])
-
-
-def _distance3_body(a: list[float], b: list[float]) -> float:
-    return math.sqrt(sum((float(a[i]) - float(b[i])) ** 2 for i in range(3)))
-
-
-def _apply_obstacle_path_guard(
-    objects: RuntimeObjects,
-    cumulative_waypoints: list,
-    *,
-    selection_pos,
-    selection_yaw: float,
-    memory_context: dict,
-) -> tuple[list, str, Any]:
-    avoider = getattr(objects, "obstacle_avoider", None)
-    if avoider is None or not getattr(avoider, "enabled", False):
-        return cumulative_waypoints, "", None
-    result = avoider.filter_cumulative_waypoints(
-        cumulative_waypoints,
-        current_world=selection_pos,
-        yaw_deg=float(selection_yaw),
-        memory_context=memory_context,
-    )
-    if not getattr(result, "changed", False):
-        return cumulative_waypoints, "", result
-    obstacle = getattr(result, "obstacle_body", None)
-    obstacle_text = "" if obstacle is None else f" obstacle_body={obstacle}"
-    return (
-        list(getattr(result, "waypoints", []) or []),
-        f"{result.reason}{obstacle_text}",
-        result,
-    )
-
-
 def _select_and_transform_plan(objects: RuntimeObjects, stage, result, frame, down_frame):
     if result is None:
         return None
@@ -3790,6 +1423,34 @@ def _select_and_transform_plan(objects: RuntimeObjects, stage, result, frame, do
             [list(wp) for wp in (getattr(result, "waypoints", []) or [])]
         )
         memory = getattr(objects, "mission_memory", None)
+        selection_pos = getattr(result, "_selection_pos", [0.0, 0.0, 0.0])
+        selection_yaw = float(getattr(result, "_selection_yaw", 0.0) or 0.0)
+        guided, guidance_reason = _apply_locked_target_direction_guard(
+            objects,
+            stage,
+            raw_cumulative,
+            selection_pos=selection_pos,
+            selection_yaw=selection_yaw,
+        )
+        if guidance_reason:
+            print(
+                f"  [TargetGuidance] {guidance_reason} "
+                f"from={_format_waypoints(raw_cumulative)} to={_format_waypoints(guided)}"
+            )
+            raw_cumulative = guided
+        bearing_guarded, bearing_reason = _apply_bearing_path_guard(
+            objects,
+            stage,
+            raw_cumulative,
+            selection_pos=selection_pos,
+            selection_yaw=selection_yaw,
+        )
+        if bearing_reason:
+            print(
+                f"  [BearingPathGuard] {bearing_reason} "
+                f"from={_format_waypoints(raw_cumulative)} to={_format_waypoints(bearing_guarded)}"
+            )
+            raw_cumulative = bearing_guarded
         vertical_guarded, vertical_reason = _apply_airsim_vertical_path_quantization(
             raw_cumulative,
             config=getattr(memory, "config", {}) or {},
@@ -3799,7 +1460,7 @@ def _select_and_transform_plan(objects: RuntimeObjects, stage, result, frame, do
                 f"  [AirSimVerticalGuard] {vertical_reason} "
                 f"from={_format_waypoints(raw_cumulative)} to={_format_waypoints(vertical_guarded)}"
             )
-            result.waypoints = cumulative_to_incremental(vertical_guarded)
+        result.waypoints = cumulative_to_incremental(vertical_guarded)
         return result
 
     qwen_incremental = [list(wp) for wp in (getattr(result, "waypoints", []) or [])]
@@ -3911,6 +1572,35 @@ def _select_and_transform_plan(objects: RuntimeObjects, stage, result, frame, do
             )
             chosen_cumulative = bearing_guarded
             guard_reason = bearing_reason
+    small_guided, small_guidance_reason = _apply_small_above_target_guidance(
+        objects,
+        stage,
+        chosen_cumulative,
+        memory_context,
+        selection_pos=selection_pos,
+        planning_wall_s=qwen_elapsed,
+    )
+    if small_guidance_reason:
+        print(
+            f"  [AboveSmallGuidance] {small_guidance_reason} "
+            f"from={_format_waypoints(chosen_cumulative)} to={_format_waypoints(small_guided)}"
+        )
+        chosen_cumulative = small_guided
+        guard_reason = small_guidance_reason
+    target_guarded, target_guidance_reason = _apply_locked_target_direction_guard(
+        objects,
+        stage,
+        chosen_cumulative,
+        selection_pos=selection_pos,
+        selection_yaw=selection_yaw,
+    )
+    if target_guidance_reason:
+        print(
+            f"  [TargetGuidance] {target_guidance_reason} "
+            f"from={_format_waypoints(chosen_cumulative)} to={_format_waypoints(target_guarded)}"
+        )
+        chosen_cumulative = target_guarded
+        guard_reason = target_guidance_reason
     if bearing_only:
         roof_guarded, roof_guard_reason = chosen_cumulative, ""
     else:
@@ -4018,9 +1708,27 @@ def _select_and_transform_plan(objects: RuntimeObjects, stage, result, frame, do
     return transformed
 
 
-def _poll_plan(objects: RuntimeObjects, stage=None, frame=None, down_frame=None, state=None) -> None:
+def _poll_plan(objects: RuntimeObjects, stage=None, frame=None, down_frame=None, state=None, client=None) -> None:
     select_fn = lambda r: _select_and_transform_plan(objects, stage, r, frame, down_frame)
-    result = objects.controller.poll_plan(select_fn=select_fn)
+    current_pos = current_yaw = None
+    if client is not None:
+        try:
+            current_pos, current_yaw = client.get_pose()
+        except Exception:
+            current_pos = current_yaw = None
+    try:
+        result = objects.controller.poll_plan(
+            select_fn=select_fn,
+            current_pos=current_pos,
+            current_yaw_deg=current_yaw,
+        )
+    except TypeError as exc:
+        # Keep compatibility with lightweight controller doubles and older
+        # integrations that expose the pre-rebase ``poll_plan(select_fn)``
+        # signature.  Real controller errors are re-raised.
+        if "unexpected keyword" not in str(exc):
+            raise
+        result = objects.controller.poll_plan(select_fn=select_fn)
     if result is None:
         return
     qwen_inc = getattr(result, "waypoints", []) or []
@@ -4040,6 +1748,11 @@ def _poll_plan(objects: RuntimeObjects, stage=None, frame=None, down_frame=None,
     if rejection_reason:
         print(f"  [PlanRejected] {rejection_reason}; existing queue kept")
     _debug_print(f"  [QwenSliding] raw={_format_waypoints(qwen_inc)}")
+    if bool(getattr(result, "_stale_plan_rebased", False)):
+        print(
+            "  [PlanRebase] stale Qwen suffix rebased to live pose "
+            f"reason={getattr(result, '_stale_plan_rebase_reason', 'pose_drift')}"
+        )
     print(f"  [Queue] added={len(qwen_inc)} remaining={len(objects.controller.queue.world_waypoints)}")
     print(
         f"  [WorldQueue] remaining={len(objects.controller.queue.world_waypoints)} "
@@ -4050,51 +1763,6 @@ def _poll_plan(objects: RuntimeObjects, stage=None, frame=None, down_frame=None,
             qwen_waypoints=qwen_inc,
             trajectory_queue=[list(wp) for wp in objects.controller.queue.world_waypoints],
         )
-
-
-def _execute_one_from_queue(objects: RuntimeObjects, client, state, count: int | None = None) -> bool:
-    queue_len = len(objects.controller.queue.world_waypoints)
-    requested = objects.controller.execute_count if count is None else int(count)
-    n = min(max(1, requested), queue_len)
-    n = max(1, n)
-    exec_waypoints = [list(wp) for wp in objects.controller.queue.world_waypoints[:n]]
-    if not exec_waypoints:
-        return False
-    if all(all(abs(v) < 1e-6 for v in wp) for wp in exec_waypoints):
-        objects.controller.mark_executed(len(exec_waypoints))
-        return False
-
-    print(
-        f"  [FastExec] execute={len(exec_waypoints)} "
-        f"queue_before={len(objects.controller.queue.world_waypoints)} "
-        f"world_wp={exec_waypoints}"
-    )
-    state.update(status="executing")
-    t0 = time.perf_counter()
-    pos_final, yaw_final, collided = client.execute_waypoints(exec_waypoints)
-    elapsed = time.perf_counter() - t0
-    state.update(pose=pos_final, yaw=yaw_final, collided=collided)
-    if collided:
-        objects.controller.queue.clear()
-        recovery = objects.collision_recovery.recover(client)
-        print(f"  [Collision] collided=True recovery_attempted={recovery.attempted}")
-    else:
-        objects.controller.mark_executed(len(exec_waypoints))
-        settle = float(cfg.get("FUNCTIONS", {}).get("FAST_SLOW", {}).get("EXECUTION_SETTLE_S", 0.0))
-        if settle > 0:
-            time.sleep(settle)
-    print(
-        f"  [FastExec] done time={elapsed:.2f}s "
-        f"queue_after={len(objects.controller.queue.world_waypoints)}"
-    )
-    return True
-
-
-def _needs_planning_snapshot(objects: RuntimeObjects) -> bool:
-    return (
-        len(objects.controller.queue.world_waypoints) == 0
-        and objects.controller.can_submit_plan()
-    )
 
 
 def _capture_and_submit_plan(
@@ -4336,23 +2004,6 @@ def _complete_stage_from_memory(objects, path_stream, state, stage, decision) ->
     return task_done
 
 
-def _clear_stopped_queue(objects, path_stream, state) -> None:
-    emergency_stop = getattr(path_stream, "emergency_stop", None)
-    if callable(emergency_stop):
-        emergency_stop()
-    else:
-        path_stream.stop()
-    objects.controller.clear()
-    if objects.completion_pipeline is not None:
-        objects.completion_pipeline.clear()
-    state.update(
-        trajectory_queue=[],
-        qwen_waypoints=[],
-        trajectory_candidates=[],
-        selected_trajectory={},
-    )
-
-
 def _fail_current_stage_after_relocalization(objects, path_stream, state, stage_key, reason: str) -> bool:
     _clear_stopped_queue(objects, path_stream, state)
     objects.distance_estimator.clear()
@@ -4366,175 +2017,6 @@ def _fail_current_stage_after_relocalization(objects, path_stream, state, stage_
     return True
 
 
-def _large_target_expected_offscreen(objects, stage, current_world) -> tuple[bool, str]:
-    """Recognize normal facade disappearance without attempting a yaw scan."""
-    memory = getattr(objects, "mission_memory", None)
-    instance = memory.primary_instance(stage) if memory is not None else None
-    if instance is None:
-        return False, "large target has no metric lock yet"
-    if _is_above_stage(stage):
-        overhead = memory.above_overhead_context(stage, current_world)
-        if bool((overhead or {}).get("active", False)):
-            return True, f"above_{(overhead or {}).get('phase', 'overhead')}"
-        roof = memory.roof_navigation_context(stage, current_world)
-        if roof is not None:
-            return True, "roof acquisition uses down view"
-
-    estimate = memory.estimate_distance(stage, current_world)
-    distance_m = float((estimate or {}).get("distance_m", float("inf")))
-    close_threshold = max(
-        4.0,
-        float((getattr(memory, "config", {}) or {}).get("LARGE_EXPECTED_OFFSCREEN_NEAR_M", 14.0)),
-    )
-    if distance_m <= close_threshold:
-        return True, f"locked facade is close ({distance_m:.1f}m)"
-
-    target_world = (
-        nearest_instance_surface_point(current_world, instance)
-        if has_surface_geometry(instance)
-        else list(instance.target_world)
-    )
-    horizontal = math.hypot(
-        float(target_world[0]) - float(current_world[0]),
-        float(target_world[1]) - float(current_world[1]),
-    )
-    down_delta = float(target_world[2]) - float(current_world[2])
-    elevation_down_deg = math.degrees(math.atan2(down_delta, max(horizontal, 0.1)))
-    offscreen_deg = float(
-        (getattr(memory, "config", {}) or {}).get("LARGE_EXPECTED_OFFSCREEN_DOWN_ANGLE_DEG", 32.0)
-    )
-    if down_delta > 0.0 and elevation_down_deg >= offscreen_deg:
-        return True, f"target is {elevation_down_deg:.1f}deg below front view"
-    return False, "facade should still be front-visible"
-
-
-def _relocalization_memory_is_reliable(objects, stage, current_world) -> bool:
-    memory = getattr(objects, "mission_memory", None)
-    if memory is None or not memory.has_primary(stage):
-        return False
-    locked_fn = getattr(memory, "is_primary_locked", None)
-    if not callable(locked_fn) or not locked_fn(stage):
-        return False
-    estimate = memory.estimate_distance(stage, current_world)
-    if estimate is None:
-        return False
-    memory_cfg = getattr(memory, "config", {}) or {}
-    return bool(
-        float(estimate.get("confidence", 0.0) or 0.0)
-        >= float(memory_cfg.get("RELOCALIZATION_MEMORY_MIN_CONFIDENCE", 0.35))
-        and float(estimate.get("uncertainty_m", 999.0) or 999.0)
-        <= float(memory_cfg.get("RELOCALIZATION_MEMORY_MAX_UNCERTAINTY_M", 8.0))
-        and float(estimate.get("observation_age_s", 999.0) or 999.0)
-        <= float(memory_cfg.get("RELOCALIZATION_MEMORY_MAX_AGE_S", 60.0))
-    )
-
-
-def _build_locked_relocalization_validator(objects, client, stage):
-    """Accept only the locked entity, not merely another matching noun."""
-    memory = getattr(objects, "mission_memory", None)
-
-    def validate(_stage, front_image, down_image, _front_det, _down_det, candidate):
-        if candidate is None or not bool(getattr(candidate, "visible", False)):
-            return None
-        observer_world, observer_yaw = client.get_pose()
-        view = str(getattr(candidate, "camera", "front") or "front").lower()
-        candidate_camera_id = str(getattr(candidate, "camera_id", "") or "")
-        image = front_image
-        for candidate_image in (front_image, down_image):
-            camera_frame = getattr(candidate_image, "camera_frame", None) if candidate_image is not None else None
-            if camera_frame is not None and candidate_camera_id == str(camera_frame.camera_id):
-                image = candidate_image
-                break
-        else:
-            if view.startswith("down"):
-                image = down_image
-        if memory is not None:
-            exclusions = memory.previous_entity_exclusions(stage, observer_world, observer_yaw)
-            intrinsics = getattr(getattr(candidate, "camera_frame", None), "rgb_intrinsics", None)
-            fov = (
-                float(intrinsics.horizontal_fov_deg)
-                if intrinsics is not None
-                else float((getattr(memory, "sim_config", {}) or {}).get("FRONT_FOV", 90.0))
-            )
-            if detection_is_excluded_by_bearing(
-                candidate,
-                image,
-                exclusions,
-                horizontal_fov_deg=fov,
-                observer_yaw_deg=observer_yaw,
-            ):
-                _debug_print("  [RelocalizeIdentity] rejected=previous_entity_bearing")
-                return None
-        if memory is not None and hasattr(memory, "evaluate_relocalization_identity"):
-            identity = memory.evaluate_relocalization_identity(
-                stage,
-                candidate,
-                image,
-                observer_world=observer_world,
-                observer_yaw_deg=observer_yaw,
-                view=view,
-            )
-            if not bool(identity.get("accepted", False)):
-                _debug_print(
-                    "  [RelocalizeIdentity] "
-                    f"candidate={getattr(candidate, 'label', '')!r} "
-                    f"score={float(getattr(candidate, 'score', 0.0) or 0.0):.2f} "
-                    f"rejected={identity.get('reason')} details={identity}"
-                )
-                return None
-        return candidate
-
-    return validate
-
-
-def _bundle_from_relocalization_result(result) -> DetectionDepthBundle:
-    detection = getattr(result, "detection", None)
-    view = str(getattr(detection, "camera", "none") or "none").lower()
-    # Only the validator-approved physical instance may enter MissionMemory.
-    # Keeping the other raw same-class boxes here would let the normal update
-    # selector choose a higher-DINO-score candidate that relocalization had
-    # explicitly rejected.
-    front_image = getattr(result, "front_image", None)
-    down_image = getattr(result, "down_image", None)
-    detection_camera_id = str(getattr(detection, "camera_id", "") or "")
-    front_camera_id = str(getattr(getattr(front_image, "camera_frame", None), "camera_id", "") or "")
-    down_camera_id = str(getattr(getattr(down_image, "camera_frame", None), "camera_id", "") or "")
-    belongs_down = bool(
-        detection is not None
-        and (
-            detection_camera_id and detection_camera_id == down_camera_id
-            or not detection_camera_id and view == "down"
-        )
-    )
-    front_detection = detection if detection is not None and not belongs_down else None
-    down_detection = detection if belongs_down else None
-    front_detections = [detection] if front_detection is not None else []
-    down_detections = [detection] if down_detection is not None else []
-    observer_world = getattr(result, "observer_world", None)
-    return DetectionDepthBundle(
-        best_detection=detection,
-        front_detection=front_detection,
-        down_detection=down_detection,
-        front_detections=front_detections,
-        down_detections=down_detections,
-        front_image=front_image,
-        down_image=down_image,
-        front_depth=getattr(result, "front_depth", None),
-        down_depth=getattr(result, "down_depth", None),
-        observer_world=(list(observer_world) if observer_world is not None else None),
-        observer_yaw_deg=getattr(result, "observer_yaw_deg", None),
-        capture_timestamp_s=float(getattr(result, "capture_timestamp_s", 0.0) or 0.0),
-        camera_frames={
-            str(frame.camera_id): frame
-            for frame in (
-                getattr(front_image, "camera_frame", None),
-                getattr(down_image, "camera_frame", None),
-            )
-            if frame is not None
-        },
-        distance_view=(detection_camera_id or view) if detection is not None else "none",
-        distance_reason="validated_relocalization",
-    )
 
 
 def _evaluate_memory_completion_now(
@@ -4980,6 +2462,14 @@ def _handle_distance_completion_trigger(
     trigger_radius_m: float,
 ) -> bool:
     current_stage_key = CompletionPipeline.stage_key(stage)
+    # Small ``above`` targets (fountains, cars, people, ...) are completed by
+    # two fresh down-view center confirmations.  A distance trigger must never
+    # stop or clear their target-guided path before that visual contract is met.
+    # Keeping this guard here as well as in ``_should_trigger_completion_vlm``
+    # protects callers that submit a stale/asynchronous trigger directly.
+    if _small_above_target(objects, stage) is not None:
+        print("  [CompletionGate] small_above_distance_trigger_ignored; down-view center confirmation owns completion")
+        return False
     cached_distance_m = float(
         cached_distance.get("distance_m") if isinstance(cached_distance, dict)
         else getattr(cached_distance, "distance_m", 0.0)
@@ -4988,6 +2478,41 @@ def _handle_distance_completion_trigger(
         cached_distance.get("trigger_radius_m") if isinstance(cached_distance, dict) and cached_distance.get("trigger_radius_m") is not None
         else getattr(cached_distance, "trigger_radius_m", trigger_radius_m)
     )
+    # Never clear an active path from an old/asynchronous distance estimate.
+    # Re-read the pose and compare it with the same locked target before the
+    # stop-and-confirm transition.
+    try:
+        live_pos, _live_yaw = client.get_pose()
+    except Exception:
+        live_pos = None
+    live_distance = _estimated_pose_xy_distance(cached_distance, live_pos)
+    live_tolerance = max(
+        0.0,
+        float(function_section(cfg, "FAST_SLOW").get("COMPLETION_LIVE_DISTANCE_TOLERANCE_M", 0.25)),
+    )
+    if live_distance is not None and live_distance > trigger_display_m + live_tolerance:
+        print(
+            "  [CompletionGate] stale_trigger_ignored "
+            f"live_distance={live_distance:.2f}m "
+            f"estimate={cached_distance_m:.2f}m radius={trigger_display_m:.2f}m"
+        )
+        return False
+    if live_distance is None:
+        cached_target = (
+            cached_distance.get("target_world")
+            if isinstance(cached_distance, dict)
+            else getattr(cached_distance, "target_world", None)
+        )
+        if live_pos is None or cached_target:
+            # A cached distance is not sufficient evidence to stop an active
+            # path when the same target can be recomputed from the live pose.
+            # Surface-only completion records may intentionally omit a point
+            # target; those are evaluated by MissionMemory below.
+            print(
+                "  [CompletionGate] live_pose_unavailable "
+                f"estimate={cached_distance_m:.2f}m radius={trigger_display_m:.2f}m; queue kept"
+            )
+            return False
     _clear_stopped_queue(objects, path_stream, state)
     source = str(
         cached_distance.get("source", "distance_estimator")
@@ -5181,6 +2706,43 @@ def _handle_distance_completion_trigger(
     )
     _print_completion_evidence(stage, front_det, down_det, frame, down_frame)
 
+    # Small ``above`` targets use a down-view center contract, not the VLM
+    # building/roof completion path.  Apply the same contract here as in the
+    # asynchronous observation pipeline; otherwise a visible-but-off-center
+    # fountain/car would stop the path and enter a VLM retry loop.
+    if _small_above_target(objects, stage) is not None:
+        try:
+            observer_world, observer_yaw = client.get_pose()
+        except Exception:
+            observer_world, observer_yaw = [], 0.0
+        small_bundle = DetectionDepthBundle(
+            best_detection=best_det,
+            front_detection=front_det,
+            down_detection=down_det,
+            front_detections=list(front_all or []),
+            down_detections=list(down_all or []),
+            front_image=frame,
+            down_image=down_frame,
+            front_depth=front_depth,
+            down_depth=down_depth,
+            observer_world=list(observer_world or []),
+            observer_yaw_deg=float(observer_yaw or 0.0),
+            distance_view="down" if down_det is not None else "front",
+            distance_reason="synchronous_small_above_completion",
+            capture_id=f"sync-{time.perf_counter_ns()}",
+        )
+        small_handled, small_done = _handle_small_above_down_center_observation(
+            objects,
+            path_stream,
+            state,
+            stage,
+            small_bundle,
+        )
+        if small_handled:
+            return bool(small_done)
+        print("  [AboveSmall] target not centered in down view; resuming target-guided path")
+        return False
+
     judge_started = time.perf_counter()
     completion = objects.completion_checker.evaluate_with_detection(
         stage,
@@ -5354,6 +2916,14 @@ def _cached_target_distance(objects, stage, current_world):
             estimated = memory_ns
     if estimated is None:
         return None
+    # Keep the live pose beside the estimate.  Completion decisions may run
+    # after an RGB/depth or Qwen call, so the stored estimator distance alone
+    # is not sufficient to prove that AirSim has entered the arrival region.
+    try:
+        estimated.current_world = [float(value) for value in current_world[:3]]
+        estimated.distance_observed_at_s = time.perf_counter()
+    except (AttributeError, TypeError, ValueError):
+        pass
     if str(getattr(estimated, "source", "") or "") == "mission_memory":
         objects.navigation_metrics.update_target(
             CompletionPipeline.stage_key(stage),
@@ -5445,6 +3015,11 @@ def _memory_completion_outer_radius(objects, stage, trigger_radius_m: float) -> 
 def _should_trigger_completion_vlm(objects, stage, estimated, trigger_radius_m: float) -> bool:
     if estimated is None:
         return False
+    # Small ``above`` completion is a visual center contract, not a radius
+    # contract.  Distance-based stopping here used to clear the active queue
+    # while the target was still off-center, leaving no path to recover.
+    if _small_above_target(objects, stage) is not None:
+        return False
     if _is_above_stage(stage):
         current = list(
             (estimated.get("current_world") if isinstance(estimated, dict) else getattr(estimated, "current_world", None))
@@ -5489,6 +3064,23 @@ def _should_trigger_completion_vlm(objects, stage, estimated, trigger_radius_m: 
         estimated.trigger_radius_m = radius
     except Exception:
         pass
+    live_distance = _estimated_pose_xy_distance(estimated)
+    tolerance = max(
+        0.0,
+        float(
+            function_section(cfg, "FAST_SLOW").get(
+                "COMPLETION_LIVE_DISTANCE_TOLERANCE_M",
+                0.25,
+            )
+        ),
+    )
+    if live_distance is not None and live_distance > radius + tolerance:
+        _debug_print(
+            "  [CompletionGate] stale_estimate_ignored "
+            f"live_distance={live_distance:.2f}m estimate={float(getattr(estimated, 'distance_m', live_distance)):.2f}m "
+            f"radius={radius:.2f}m"
+        )
+        return False
     return bool(float(estimated.distance_m) <= float(radius))
 
 
@@ -5543,9 +3135,12 @@ def _truncate_queue_at_completion_radius(
     if cached_distance is None:
         return "none"
     relation = relation_kind(stage)
-    if relation != "near":
-        # Above/over stages still use their relation-specific 3-D completion
-        # rules; this guard is deliberately the near-target XY contract.
+    if relation != "near" or _is_above_stage(stage):
+        # ``above`` stages are governed by their own completion contract:
+        # buildings use roof geometry and small targets use down-view center
+        # confirmations.  Neither should be clipped by the generic XY radius
+        # guard, which can stop a small target before its visual center is
+        # observable and can also fight the roof-acquisition path.
         return "none"
     queue = list(getattr(getattr(objects, "controller", None), "queue", SimpleNamespace(world_waypoints=[])).world_waypoints or [])
     if not queue:
@@ -5829,10 +3424,58 @@ def _reorient_to_locked_target_if_behind(
         return False
 
     current_pos, current_yaw = client.get_pose()
+    above_state = None
     if _is_above_stage(stage):
-        overhead = memory.above_overhead_context(stage, current_pos)
-        if bool((overhead or {}).get("active", False)):
+        above_state = _above_stage_state(objects, stage, current_pos)
+        # A vertical-first facade climb is deliberately yaw invariant.  The
+        # next RGB/depth observation must be captured before any horizontal
+        # recovery can rotate the camera away from the wall.
+        pending_climb_z = getattr(above_state, "pre_roof_climb_target_z", None)
+        climb_tolerance = float(memory_cfg.get("ABOVE_PRE_ROOF_CLIMB_TOLERANCE_M", 0.4))
+        if pending_climb_z is not None and float(current_pos[2]) > float(pending_climb_z) + climb_tolerance:
             return False
+        overhead_fn = getattr(memory, "above_overhead_context", None)
+        overhead = overhead_fn(stage, current_pos) if callable(overhead_fn) else {}
+        primary_fn = getattr(memory, "primary_instance", None)
+        target_instance = primary_fn(stage) if callable(primary_fn) else None
+        target_world = list(getattr(target_instance, "target_world", None) or []) if target_instance is not None else []
+        target_body = world_to_body(target_world, current_pos, current_yaw) if len(target_world) >= 3 else []
+        target_is_behind = bool(
+            len(target_body) >= 2
+            and float(target_body[0]) < -float(memory_cfg.get("PATH_TARGET_BEHIND_X_M", 2.0))
+        )
+        try:
+            roof_ready = _above_roof_candidate_ready(
+                objects,
+                stage,
+                current_pos,
+                require_trusted=bool(getattr(above_state, "require_roof_before_next_completion", False)),
+            )
+        except (AttributeError, TypeError):
+            # Lightweight clients/tests may expose only the legacy memory
+            # methods.  In that case a behind-target recovery is safer than
+            # assuming a roof is already trusted.
+            roof_ready = False
+        overhead_active = bool((overhead or {}).get("active", False))
+        # Being inside the overhead envelope is not by itself a reason to
+        # forbid recovery.  A target can be at the edge of that envelope and
+        # already behind the UAV after an overshoot.  Only a roof-confirmed,
+        # completion-ready large target suppresses the turn.
+        if overhead_active and roof_ready and not target_is_behind:
+            return False
+        if overhead_active and roof_ready and target_is_behind:
+            overhead_radius = float((overhead or {}).get("trigger_radius_m", 0.0) or 0.0)
+            horizontal = math.hypot(float(target_body[0]), float(target_body[1])) if len(target_body) >= 2 else float("inf")
+            if overhead_radius > 0.0 and horizontal <= overhead_radius:
+                return False
+        if above_state is not None:
+            max_attempts = max(1, int(memory_cfg.get("ABOVE_MAX_REORIENT_ATTEMPTS", 1)))
+            if int(getattr(above_state, "reorient_attempts", 0) or 0) >= max_attempts:
+                print("  [MemoryReorient] bounded recovery already used; keeping target-directed queue")
+                return False
+            cooldown = max(0.0, float(memory_cfg.get("ABOVE_REORIENT_COOLDOWN_S", 4.0)))
+            if time.perf_counter() - float(getattr(above_state, "last_reorient_at", 0.0) or 0.0) < cooldown:
+                return False
     preferred_yaw = memory.preferred_yaw_deg(stage, current_pos)
     if preferred_yaw is None:
         return False
@@ -5842,6 +3485,22 @@ def _reorient_to_locked_target_if_behind(
         return False
 
     path_stream.stop()
+    # For an ``above`` recovery the queued path was generated from the old
+    # heading and may already have crossed the target, so the next scheduler
+    # pass must capture a fresh view.  Ordinary near/return stages preserve an
+    # intentional world-coordinate return waypoint after rotating.
+    if above_state is not None:
+        clear_controller = getattr(controller, "clear", None)
+        if callable(clear_controller):
+            clear_controller()
+        elif getattr(controller, "queue", None) is not None:
+            controller.queue.world_waypoints[:] = []
+        if getattr(objects, "completion_pipeline", None) is not None:
+            objects.completion_pipeline.clear()
+        state.update(trajectory_queue=[], qwen_waypoints=[])
+    if above_state is not None:
+        above_state.reorient_attempts = int(getattr(above_state, "reorient_attempts", 0) or 0) + 1
+        above_state.last_reorient_at = time.perf_counter()
     print(
         f"  [MemoryReorient] target_behind yaw={float(current_yaw):.1f}->"
         f"{float(preferred_yaw):.1f} delta={yaw_delta:.1f}deg"
@@ -5866,207 +3525,38 @@ def _reorient_to_locked_target_if_behind(
         return False
 
 
-def _drop_path_points_behind_vehicle(objects, current_pos, current_yaw_deg) -> int:
-    """Remove horizontally passed queue-head points behind the vehicle.
-
-    Pure vertical commands intentionally keep nearly the same XY position as
-    the vehicle.  Tiny pose/planning round-off can otherwise make their
-    forward projection slightly negative and incorrectly discard the climb
-    before it reaches AirSim.
-    """
-    waypoints = objects.controller.queue.world_waypoints
-    if not waypoints:
-        return 0
-
-    fast_slow_cfg = {
-        **(cfg.get("FAST_SLOW", {}) or {}),
-        **function_section(cfg, "FAST_SLOW"),
-    }
-    vertical_xy_tolerance_m = max(
-        0.01,
-        float(fast_slow_cfg.get("PATH_VERTICAL_XY_TOLERANCE_M", 0.15)),
-    )
-    yaw = math.radians(float(current_yaw_deg))
-    forward_x = math.cos(yaw)
-    forward_y = math.sin(yaw)
-    dropped = 0
-    while waypoints:
-        point = waypoints[0]
-        dx = float(point[0]) - float(current_pos[0])
-        dy = float(point[1]) - float(current_pos[1])
-        # Heading has no geometric meaning for a vertical leg.  Preserve the
-        # point so ContinuousPathStream can issue it with vertical_hold yaw.
-        if math.hypot(dx, dy) <= vertical_xy_tolerance_m:
-            break
-        forward_projection = dx * forward_x + dy * forward_y
-        if forward_projection >= 0.0:
-            break
-        waypoints.pop(0)
-        dropped += 1
-    if dropped:
-        print(
-            f"  [PathProgress] dropped_behind={dropped} "
-            f"pose=({float(current_pos[0]):.2f},{float(current_pos[1]):.2f},{float(current_pos[2]):.2f}) "
-            f"yaw={float(current_yaw_deg):.1f}"
-        )
-    return dropped
-
-
-def _sync_path_if_ready(
-    objects,
-    path_stream,
-    client,
-    state,
-    stage=None,
-) -> int:
-    current_pos, current_yaw = client.get_pose()
-    progress = path_stream.poll(objects.controller.queue.world_waypoints, current_pos)
-    if progress.consumed > 0:
-        objects.controller.mark_executed(progress.consumed)
-        print(
-            f"  [FlightPose] world=({current_pos[0]:.2f},{current_pos[1]:.2f},{current_pos[2]:.2f}) "
-            f"yaw={current_yaw:.1f} consumed={progress.consumed} "
-            f"remaining={len(objects.controller.queue.world_waypoints)}"
-        )
-        state.update(
-            pose=current_pos,
-            yaw=current_yaw,
-            trajectory_queue=[list(wp) for wp in objects.controller.queue.world_waypoints],
-        )
-        _debug_print(
-            f"  [PathProgress] consumed={progress.consumed} before_reissue "
-            f"remaining={len(objects.controller.queue.world_waypoints)}"
-        )
-    if progress.collided:
-        contact = _record_locked_target_collision(objects, stage, current_pos, current_yaw) if stage is not None else None
-        objects.controller.clear()
-        recovery = objects.collision_recovery.recover(client)
-        print(f"  [Collision] before_path_reissue=True recovery_attempted={recovery.attempted}")
-        if contact is not None:
-            print(
-                "  [TargetSurfaceContact] collision matched locked facade "
-                f"range={contact['contact_range_m']:.2f}m memory_distance={contact['distance_m']:.2f}m"
-            )
-        state.update(collided=True, trajectory_queue=[])
-        return progress.consumed
-
-    # A newly planned return waypoint may intentionally be behind the old
-    # heading. Rotate first so the generic stale-prefix filter does not delete
-    # that valid waypoint as if it had already been passed.
-    if _reorient_to_locked_target_if_behind(
+def _sync_path_if_ready(objects, path_stream, client, state, stage=None) -> int:
+    """Compatibility wrapper that injects runtime collision/reorientation policies."""
+    return _execution_sync_path_if_ready(
         objects,
-        client,
         path_stream,
+        client,
         state,
-        stage,
-        allow_queued=True,
-    ):
-        current_pos, current_yaw = client.get_pose()
-    dropped_behind = _drop_path_points_behind_vehicle(objects, current_pos, current_yaw)
-    waypoints = objects.controller.queue.world_waypoints
-    if not waypoints:
-        return progress.consumed
-    was_active = path_stream.active
-    velocity = _continuous_path_velocity(objects, current_pos)
-    issued = path_stream.sync(waypoints, current_pos, velocity)
-    if issued:
-        state.update(status="executing")
-        mode = "extended" if was_active else "started"
-        print(
-            f"  [WorldPath] {mode} velocity={velocity:.2f}m/s "
-            f"world_wp={_format_waypoints(waypoints, limit=20)}"
-        )
-        if not was_active:
-            print(f"  [Flight] started remaining={len(waypoints)} velocity={velocity:.1f}m/s")
-    return progress.consumed + dropped_behind
-def _continuous_path_velocity(objects, current_pos) -> float:
-    """Avoid near-hover speed while preserving some planner response time."""
-    nominal = float(cfg.get("SIM", {}).get("AIRSIM_VELOCITY", 2.0))
-    if not objects.controller.planning:
-        return nominal
-    waypoints = objects.controller.queue.world_waypoints
-    if not waypoints:
-        return nominal
-    previous = [float(current_pos[0]), float(current_pos[1]), float(current_pos[2])]
-    path_length = 0.0
-    for waypoint in waypoints:
-        point = [float(waypoint[0]), float(waypoint[1]), float(waypoint[2])]
-        path_length += math.sqrt(sum((point[i] - previous[i]) ** 2 for i in range(3)))
-        previous = point
-    reserve_time = max(float(objects.controller.reserve_time_s), 1e-6)
-    fast_slow_cfg = function_section(cfg, "FAST_SLOW")
-    minimum = max(0.0, float(fast_slow_cfg.get("CONTINUOUS_MIN_SPEED_MPS", 1.0)))
-    minimum = min(minimum, nominal)
-    return max(minimum, min(nominal, path_length / reserve_time))
+        stage=stage,
+        record_collision=_record_locked_target_collision,
+        reorient_if_behind=_reorient_to_locked_target_if_behind,
+        debug_print=_debug_print,
+        drop_behind=_drop_path_points_behind_vehicle,
+        velocity_fn=_continuous_path_velocity,
+        format_fn=_format_waypoints,
+    )
 
 
-class _CompletionRadiusWatchdog:
-    """Keep the completion circle monitored while RPC/model calls block."""
+class _CompletionRadiusWatchdog(_ExecutionCompletionRadiusWatchdog):
+    """Compatibility wrapper binding runtime completion callbacks."""
 
     def __init__(self, objects, client, path_stream, stage, trigger_radius_m: float, interval_s: float):
-        self.objects = objects
-        self.client = client
-        self.path_stream = path_stream
-        self.stage = stage
-        self.stage_key = CompletionPipeline.stage_key(stage)
-        self.trigger_radius_m = float(trigger_radius_m)
-        self.interval_s = max(0.02, float(interval_s))
-        self._stop_event = threading.Event()
-        self._thread = threading.Thread(
-            target=self._run,
-            name="completion-radius-watchdog",
-            daemon=True,
+        super().__init__(
+            objects,
+            client,
+            path_stream,
+            stage,
+            trigger_radius_m,
+            interval_s,
+            stage_key_fn=CompletionPipeline.stage_key,
+            distance_fn=_cached_target_distance,
+            trigger_fn=_should_trigger_completion_vlm,
         )
-
-    def start(self) -> None:
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._stop_event.set()
-        if self._thread.is_alive() and threading.current_thread() is not self._thread:
-            self._thread.join(timeout=max(0.1, self.interval_s * 3.0))
-
-    def _run(self) -> None:
-        while not self._stop_event.wait(self.interval_s):
-            try:
-                current_stage = self.objects.task_manager.current_stage()
-                if CompletionPipeline.stage_key(current_stage) != self.stage_key:
-                    return
-                controller = getattr(self.objects, "controller", None)
-                queue = getattr(controller, "queue", None)
-                if not (
-                    self.path_stream.active
-                    or bool(getattr(queue, "world_waypoints", []) or [])
-                    or bool(getattr(controller, "planning", False))
-                    or bool(getattr(controller, "has_plan_job", False))
-                ):
-                    continue
-                current_world, _yaw = self.client.get_pose()
-                estimated = _cached_target_distance(self.objects, self.stage, current_world)
-                if not _should_trigger_completion_vlm(
-                    self.objects,
-                    self.stage,
-                    estimated,
-                    self.trigger_radius_m,
-                ):
-                    continue
-                # This is deliberately the only action performed by the
-                # watchdog.  Completion/VLM/memory decisions remain on the
-                # runtime thread after it regains control.
-                emergency_stop = getattr(self.path_stream, "emergency_stop", None)
-                if callable(emergency_stop):
-                    emergency_stop()
-                else:
-                    self.path_stream.stop()
-                if controller is not None:
-                    controller.clear()
-                print("  [CompletionWatchdog] live pose entered target radius; path stopped")
-                return
-            except Exception:
-                # AirSim can reject one concurrent pose RPC while an image is
-                # being captured. The next tick retries without affecting the
-                # navigation state.
-                continue
 
 
 def run_fast_slow_loop(
@@ -6349,7 +3839,7 @@ def run_fast_slow_loop(
         with web_helpers.pause_background_capture(capturer):
             state.update(step=step, status="running", error="")
 
-            _poll_plan(objects, stage=stage, frame=frame, down_frame=down_frame, state=state)
+            _poll_plan(objects, stage=stage, frame=frame, down_frame=down_frame, state=state, client=client)
 
             event = objects.completion_pipeline.poll() if objects.completion_pipeline is not None else None
             if event is not None:
@@ -6382,6 +3872,17 @@ def run_fast_slow_loop(
                         break
                     continue
                 elif event.kind == "observation":
+                    small_handled, small_done = _handle_small_above_down_center_observation(
+                        objects,
+                        path_stream,
+                        state,
+                        stage,
+                        event.bundle,
+                    )
+                    if small_handled:
+                        if small_done:
+                            break
+                        continue
                     _update_target_pose_from_bundle(objects, stage, event.bundle)
                     review_pos, _review_yaw = client.get_pose()
                     if _review_pending_above_queue(objects, path_stream, state, stage, review_pos):
@@ -6390,13 +3891,50 @@ def run_fast_slow_loop(
                     # Compatibility guard for stale jobs created before the
                     # distance-only mode was enabled. They may refresh the
                     # target pose but can never complete or reject a stage.
+                    small_handled, small_done = _handle_small_above_down_center_observation(
+                        objects,
+                        path_stream,
+                        state,
+                        stage,
+                        event.bundle,
+                    )
+                    if small_handled:
+                        if small_done:
+                            break
+                        continue
                     _update_target_pose_from_bundle(objects, stage, event.bundle)
                     review_pos, _review_yaw = client.get_pose()
                     if _review_pending_above_queue(objects, path_stream, state, stage, review_pos):
                         continue
 
             # Poll again because Qwen may have finished while detector results were processed.
-            _poll_plan(objects, stage=stage, frame=frame, down_frame=down_frame, state=state)
+            _poll_plan(objects, stage=stage, frame=frame, down_frame=down_frame, state=state, client=client)
+
+            if _small_above_confirmation_pending(objects, stage):
+                # The first centered down-view hit already stopped the path.
+                # Hold that pose until the next distinct observation arrives;
+                # submitting another Qwen leg here would move away from the
+                # target and make the two-frame completion contract flaky.
+                path_stream.stop()
+                objects.controller.clear()
+                if (
+                    objects.completion_pipeline is not None
+                    and objects.controller.should_check_completion()
+                    and not objects.completion_pipeline.active
+                ):
+                    submitted = objects.completion_pipeline.submit(
+                        stage,
+                        task_text,
+                        None,
+                        None,
+                        stage_generation=_stage_generation(objects, stage),
+                        lock_generation=_lock_generation(objects, stage),
+                        session_id=_active_relocalization_session_id(objects, stage),
+                        locked_instance_id=_locked_instance_id(objects, stage),
+                    )
+                    if submitted:
+                        _debug_print("  [AboveSmall] waiting for distinct centered down-view confirmation")
+                continue
 
             pos_for_plan, _yaw_for_plan = client.get_pose()
             velocity = float(cfg.get("SIM", {}).get("AIRSIM_VELOCITY", 2.0))
@@ -6510,7 +4048,7 @@ def run_fast_slow_loop(
                 if submitted:
                     _debug_print("  [TargetObservation] submitted detector+depth snapshot")
 
-            _poll_plan(objects, stage=stage, frame=frame, down_frame=down_frame, state=state)
+            _poll_plan(objects, stage=stage, frame=frame, down_frame=down_frame, state=state, client=client)
 
         if capturer is not None and hasattr(capturer, "resume"):
             capturer.resume()
@@ -6539,126 +4077,3 @@ def print_last_navigation_summary(*, task_completed: bool = False) -> None:
     """Print the active run's metrics after an outer-loop interruption."""
     if _LAST_NAVIGATION_METRICS is not None:
         _LAST_NAVIGATION_METRICS.print_summary(task_completed=task_completed)
-
-
-def run_fast_slow_web(
-    *,
-    target_snapshot_recorder: TargetSnapshotRecorder | None = None,
-    camera_recording_options: CameraRecordingOptions | None = None,
-) -> None:
-    script_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-    sys.path.insert(0, script_dir)
-    get_cfg(os.path.join(script_dir, "config", "default.yaml"))
-
-    state = SharedState()
-    frame_hub = CameraFrameHub()
-    recording_options = camera_recording_options or CameraRecordingOptions()
-    camera_recorder = CameraApiRecorder(frame_hub, recording_options, state=state)
-    app = create_app(state, camera_recorder=camera_recorder)
-    web_port = cfg.get("WEB", {}).get("PORT", 5000)
-
-    def run_web():
-        import logging
-
-        logging.getLogger("werkzeug").setLevel(logging.ERROR)
-        cli = sys.modules.get("flask.cli")
-        if cli:
-            cli.show_server_banner = lambda *_, **__: None
-        app.run(host="0.0.0.0", port=web_port, debug=False, use_reloader=False)
-
-    threading.Thread(target=run_web, daemon=True).start()
-    print("=" * 50)
-    print(f"  Dashboard: http://localhost:{web_port}")
-    print("  Config: config/default.yaml")
-    print("  Runtime: fast_slow")
-    print("=" * 50)
-
-    if bool(cfg.get("SIM", {}).get("APPLY_SETTINGS_ON_WEB_START", True)):
-        from sim.airsim_settings import write_local_airsim_settings
-
-        settings_path = write_local_airsim_settings(make_backup=True)
-        print(f"[AirSimSettings] wrote: {settings_path}")
-        print("[AirSimSettings] start/restart AirSim now so the camera settings take effect")
-
-    print("[AirSim] connecting...", flush=True)
-    client = web_helpers.connect_web_airsim_client()
-    if hasattr(client, "attach_frame_hub"):
-        client.attach_frame_hub(frame_hub)
-    client.warmup_capture()
-    client.enable_api_control(True)
-    client.arm(True)
-    should_takeoff, start_pos, start_yaw, landed_text = web_helpers.should_takeoff(client)
-    print(
-        f"[AirSim] startup pose=({start_pos[0]:.1f}, {start_pos[1]:.1f}, {start_pos[2]:.1f}) "
-        f"yaw={start_yaw:.1f}deg landed_state={landed_text}"
-    )
-    if should_takeoff:
-        print("[AirSim] takeoff...")
-        client.takeoff()
-    else:
-        print("[AirSim] skip takeoff: vehicle already airborne")
-
-    capturer = FrameCapturer(
-        state,
-        interval=0.1,
-        frame_hub=frame_hub,
-        camera_ids=None,
-    )
-    capturer.start()
-    print("[FrameCapturer] background capture started")
-    if recording_options.enabled:
-        recording_status = camera_recorder.start()
-        print(
-            f"[CameraApiRecorder] enabled mode={recording_status['mode']} "
-            "output=created lazily on first frame"
-        )
-    else:
-        state.set_camera_recording_status(camera_recorder.status())
-        print("[CameraApiRecorder] disabled (CLI/Web can enable it explicitly)")
-
-    warmup_from_config()
-
-    print("[AirSim] waiting for first frame...")
-    while True:
-        rgb, depth = capturer.get_latest_frame()
-        if rgb is not None:
-            depth_text = getattr(depth, "shape", None)
-            print(f"[Ready] first frame ready (depth shape={depth_text or 'unavailable'})")
-            break
-        time.sleep(0.1)
-
-    current_task = ""
-    while not current_task.strip():
-        time.sleep(1)
-        current_task = state.get_state().get("task", "").strip()
-
-    try:
-        while True:
-            print(f"\n{'=' * 50}")
-            print(f"  New task: {current_task}")
-            print(f"{'=' * 50}")
-            state.update(status="running", task_done=False)
-            run_fast_slow_loop(
-                state,
-                initial_task=current_task,
-                max_steps=int(cfg.get("EVAL", {}).get("MAX_STEPS", 100)),
-                client=client,
-                capturer=capturer,
-                target_snapshot_recorder=target_snapshot_recorder,
-            )
-            state.update(status="waiting_task", task="", task_done=True)
-            print("\n[TASK] task complete, waiting for next task...")
-            current_task = ""
-            while not current_task.strip():
-                time.sleep(1)
-                current_task = state.get_state().get("task", "").strip()
-    except KeyboardInterrupt:
-        print("\n[Exit] shutting down...")
-        print_last_navigation_summary()
-    finally:
-        camera_recorder.stop(reason="web_exit")
-        capturer.stop()
-        try:
-            client.cleanup()
-        except Exception:
-            pass
