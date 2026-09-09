@@ -1,72 +1,113 @@
 {
-  "generated_at": "2026-09-02T12:01:59.359007+00:00",
+  "generated_at": "2026-09-08T12:38:48.887788+00:00",
   "nodes": {
     "completion_pipeline_completionpipeline": {
-      "code_fingerprint": "04c53236401886e0fc1ea94446d3d7b26ffa639a19c8ee7df0b31ae36ffa8ca5",
+      "code_fingerprint": "4a2eee14e2864ca0aa5087baaeaa9768a8a10fee1b2526627ef2e9c708aff3a5",
       "label": "CompletionPipeline",
-      "last": "2026-09-02T11:51:56.100574+00:00",
+      "last": "2026-09-02T12:05:21.883420+00:00",
       "provenance": [
+        {
+          "date": "2026-09-02T12:05:21.883420+00:00",
+          "outcome": "useful",
+          "q": "我发现随着我们的改进，我们的一个是default.yaml中的记忆模块的参数太大了（170个行左右，远远超出其它配置的参数），这很不符合一个正常好项目的配置文件，还有一个就是runtim.py是不是太长了啊，都已经六千多行了，我感觉是否太大了，将这么多内容塞入一个文件中"
+        },
         {
           "date": "2026-09-02T11:51:56.100574+00:00",
           "outcome": "useful",
           "q": "请你看一下当前的项目代码，跟我讲一下runtime.py是干啥的啊"
         }
       ],
-      "score": 0.999838691,
+      "score": 1.739979447,
       "source_file": "completion_pipeline.py",
-      "status": "tentative",
-      "uses": 1
+      "status": "preferred",
+      "uses": 2
     },
     "controller_fastslowcontroller": {
-      "code_fingerprint": "273b32efaac19d4b93309e6ffafb3e93919004913657fa77e3af7f0b313ed93e",
+      "code_fingerprint": "f98e2f49b20e92ddcd0261a90233a4ad9a136c74720e345e2b76f3b7d1c271b6",
       "label": "FastSlowController",
-      "last": "2026-09-02T11:51:56.100574+00:00",
+      "last": "2026-09-08T12:34:12.981162+00:00",
       "provenance": [
+        {
+          "date": "2026-09-08T12:34:12.981162+00:00",
+          "outcome": "useful",
+          "q": "所以当前我们的数据集格式能满足你的吗，我看我师兄的微调数据的格式好像是D:\\Codex_code\\world_model\\UAV-VLN-FOV\\finetune_sliding_window_2\\，由于images太多，我没有讲image拉到本地，我将json等文件给你看一下，和我们的train.json有什么区别，我们的格式还有什么要改进的吗"
+        },
+        {
+          "date": "2026-09-02T12:05:21.883420+00:00",
+          "outcome": "useful",
+          "q": "我发现随着我们的改进，我们的一个是default.yaml中的记忆模块的参数太大了（170个行左右，远远超出其它配置的参数），这很不符合一个正常好项目的配置文件，还有一个就是runtim.py是不是太长了啊，都已经六千多行了，我感觉是否太大了，将这么多内容塞入一个文件中"
+        },
         {
           "date": "2026-09-02T11:51:56.100574+00:00",
           "outcome": "useful",
           "q": "请你看一下当前的项目代码，跟我讲一下runtime.py是干啥的啊"
         }
       ],
-      "score": 0.999838691,
+      "score": 2.739905667,
       "source_file": "controller.py",
-      "status": "tentative",
-      "uses": 1
+      "status": "preferred",
+      "uses": 3
     },
     "path_stream_continuouspathstream": {
       "code_fingerprint": "08945fb45179ea22e857f3a48b8d111e9b79972a0f1de48fd658155701ea210e",
       "label": "ContinuousPathStream",
-      "last": "2026-09-02T11:51:56.100574+00:00",
+      "last": "2026-09-02T12:05:21.883420+00:00",
       "provenance": [
+        {
+          "date": "2026-09-02T12:05:21.883420+00:00",
+          "outcome": "useful",
+          "q": "我发现随着我们的改进，我们的一个是default.yaml中的记忆模块的参数太大了（170个行左右，远远超出其它配置的参数），这很不符合一个正常好项目的配置文件，还有一个就是runtim.py是不是太长了啊，都已经六千多行了，我感觉是否太大了，将这么多内容塞入一个文件中"
+        },
         {
           "date": "2026-09-02T11:51:56.100574+00:00",
           "outcome": "useful",
           "q": "请你看一下当前的项目代码，跟我讲一下runtime.py是干啥的啊"
         }
       ],
-      "score": 0.999838691,
+      "score": 1.739979447,
       "source_file": "path_stream.py",
-      "status": "tentative",
-      "uses": 1
+      "status": "preferred",
+      "uses": 2
     },
-    "runtime_handle_background_target_lost": {
-      "code_fingerprint": "5bf0fcf4fe1ebc671a44eba3bdff5c1e4e49e11edb453fa4175e740fedbaa43a",
-      "label": "_handle_background_target_lost()",
-      "last": "2026-09-02T11:51:56.100574+00:00",
+    "runtime_abovestageruntimestate": {
+      "code_fingerprint": "2ada541ce5dbc004bae60211850d3ce3945c344c3540822644c15d3448f078e9",
+      "label": "AboveStageRuntimeState",
+      "last": "2026-09-02T12:05:21.883420+00:00",
       "provenance": [
         {
-          "date": "2026-09-02T11:51:56.100574+00:00",
+          "date": "2026-09-02T12:05:21.883420+00:00",
           "outcome": "useful",
-          "q": "请你看一下当前的项目代码，跟我讲一下runtime.py是干啥的啊"
+          "q": "我发现随着我们的改进，我们的一个是default.yaml中的记忆模块的参数太大了（170个行左右，远远超出其它配置的参数），这很不符合一个正常好项目的配置文件，还有一个就是runtim.py是不是太长了啊，都已经六千多行了，我感觉是否太大了，将这么多内容塞入一个文件中"
         }
       ],
-      "score": 0.999838691,
+      "score": 0.870083456,
       "source_file": "runtime.py",
       "status": "tentative",
       "uses": 1
     },
+    "runtime_handle_background_target_lost": {
+      "code_fingerprint": "2ada541ce5dbc004bae60211850d3ce3945c344c3540822644c15d3448f078e9",
+      "label": "_handle_background_target_lost()",
+      "last": "2026-09-02T12:05:21.883420+00:00",
+      "provenance": [
+        {
+          "date": "2026-09-02T12:05:21.883420+00:00",
+          "outcome": "useful",
+          "q": "我发现随着我们的改进，我们的一个是default.yaml中的记忆模块的参数太大了（170个行左右，远远超出其它配置的参数），这很不符合一个正常好项目的配置文件，还有一个就是runtim.py是不是太长了啊，都已经六千多行了，我感觉是否太大了，将这么多内容塞入一个文件中"
+        },
+        {
+          "date": "2026-09-02T11:51:56.100574+00:00",
+          "outcome": "useful",
+          "q": "请你看一下当前的项目代码，跟我讲一下runtime.py是干啥的啊"
+        }
+      ],
+      "score": 1.739979447,
+      "source_file": "runtime.py",
+      "status": "preferred",
+      "uses": 2
+    },
     "runtime_handle_distance_completion_trigger": {
-      "code_fingerprint": "5bf0fcf4fe1ebc671a44eba3bdff5c1e4e49e11edb453fa4175e740fedbaa43a",
+      "code_fingerprint": "2ada541ce5dbc004bae60211850d3ce3945c344c3540822644c15d3448f078e9",
       "label": "_handle_distance_completion_trigger()",
       "last": "2026-09-02T11:51:56.100574+00:00",
       "provenance": [
@@ -76,40 +117,82 @@
           "q": "请你看一下当前的项目代码，跟我讲一下runtime.py是干啥的啊"
         }
       ],
-      "score": 0.999838691,
+      "score": 0.86989599,
       "source_file": "runtime.py",
       "status": "tentative",
       "uses": 1
     },
     "runtime_run_fast_slow_loop": {
-      "code_fingerprint": "5bf0fcf4fe1ebc671a44eba3bdff5c1e4e49e11edb453fa4175e740fedbaa43a",
+      "code_fingerprint": "2ada541ce5dbc004bae60211850d3ce3945c344c3540822644c15d3448f078e9",
       "label": "run_fast_slow_loop()",
-      "last": "2026-09-02T11:51:56.100574+00:00",
+      "last": "2026-09-02T12:05:21.883420+00:00",
       "provenance": [
+        {
+          "date": "2026-09-02T12:05:21.883420+00:00",
+          "outcome": "useful",
+          "q": "我发现随着我们的改进，我们的一个是default.yaml中的记忆模块的参数太大了（170个行左右，远远超出其它配置的参数），这很不符合一个正常好项目的配置文件，还有一个就是runtim.py是不是太长了啊，都已经六千多行了，我感觉是否太大了，将这么多内容塞入一个文件中"
+        },
         {
           "date": "2026-09-02T11:51:56.100574+00:00",
           "outcome": "useful",
           "q": "请你看一下当前的项目代码，跟我讲一下runtime.py是干啥的啊"
         }
       ],
-      "score": 0.999838691,
+      "score": 1.739979447,
+      "source_file": "runtime.py",
+      "status": "preferred",
+      "uses": 2
+    },
+    "runtime_runtimeobjects": {
+      "code_fingerprint": "2ada541ce5dbc004bae60211850d3ce3945c344c3540822644c15d3448f078e9",
+      "label": "RuntimeObjects",
+      "last": "2026-09-02T12:05:21.883420+00:00",
+      "provenance": [
+        {
+          "date": "2026-09-02T12:05:21.883420+00:00",
+          "outcome": "useful",
+          "q": "我发现随着我们的改进，我们的一个是default.yaml中的记忆模块的参数太大了（170个行左右，远远超出其它配置的参数），这很不符合一个正常好项目的配置文件，还有一个就是runtim.py是不是太长了啊，都已经六千多行了，我感觉是否太大了，将这么多内容塞入一个文件中"
+        },
+        {
+          "date": "2026-09-02T11:51:56.100574+00:00",
+          "outcome": "useful",
+          "q": "请你看一下当前的项目代码，跟我讲一下runtime.py是干啥的啊"
+        }
+      ],
+      "score": 1.739979447,
+      "source_file": "runtime.py",
+      "status": "preferred",
+      "uses": 2
+    },
+    "runtime_select_and_transform_plan": {
+      "code_fingerprint": "2ada541ce5dbc004bae60211850d3ce3945c344c3540822644c15d3448f078e9",
+      "label": "_select_and_transform_plan()",
+      "last": "2026-09-02T12:05:21.883420+00:00",
+      "provenance": [
+        {
+          "date": "2026-09-02T12:05:21.883420+00:00",
+          "outcome": "useful",
+          "q": "我发现随着我们的改进，我们的一个是default.yaml中的记忆模块的参数太大了（170个行左右，远远超出其它配置的参数），这很不符合一个正常好项目的配置文件，还有一个就是runtim.py是不是太长了啊，都已经六千多行了，我感觉是否太大了，将这么多内容塞入一个文件中"
+        }
+      ],
+      "score": 0.870083456,
       "source_file": "runtime.py",
       "status": "tentative",
       "uses": 1
     },
-    "runtime_runtimeobjects": {
-      "code_fingerprint": "5bf0fcf4fe1ebc671a44eba3bdff5c1e4e49e11edb453fa4175e740fedbaa43a",
-      "label": "RuntimeObjects",
-      "last": "2026-09-02T11:51:56.100574+00:00",
+    "worldtrajectoryqueue": {
+      "code_fingerprint": "",
+      "label": "WorldTrajectoryQueue",
+      "last": "2026-09-08T12:34:12.981162+00:00",
       "provenance": [
         {
-          "date": "2026-09-02T11:51:56.100574+00:00",
+          "date": "2026-09-08T12:34:12.981162+00:00",
           "outcome": "useful",
-          "q": "请你看一下当前的项目代码，跟我讲一下runtime.py是干啥的啊"
+          "q": "所以当前我们的数据集格式能满足你的吗，我看我师兄的微调数据的格式好像是D:\\Codex_code\\world_model\\UAV-VLN-FOV\\finetune_sliding_window_2\\，由于images太多，我没有讲image拉到本地，我将json等文件给你看一下，和我们的train.json有什么区别，我们的格式还有什么要改进的吗"
         }
       ],
-      "score": 0.999838691,
-      "source_file": "runtime.py",
+      "score": 0.99992622,
+      "source_file": "",
       "status": "tentative",
       "uses": 1
     }
