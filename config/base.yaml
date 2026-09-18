@@ -1,0 +1,31 @@
+task_parser:
+  url: http://172.27.100.117:8000/v1
+  model: /data/sakura/models/Qwen2.5-7B-Instruct-AWQ
+  api_key: no-key
+  api_key_env: TASK_PARSER_API_KEY
+  timeout_s: 120
+
+trajectory_planner:
+  url: http://172.27.100.117:8004/v1
+  model: /data/sakura/models/3DG-VLN-finetuned-sliding_window_2
+  api_key: no-key
+  api_key_env: TRAJECTORY_PLANNER_API_KEY
+  timeout_s: 120
+
+airsim:
+  host: ""
+  port: 41451
+  camera_id: front_center
+  connect_timeout_s: 5
+  move_timeout_s: 60
+  speed_mps: 2.0
+
+depth:
+  min_m: 0.5
+  max_m: 200.0
+
+trajectory:
+  point_count: 5
+  max_step_m: 30.0
+  max_yaw_step_deg: 90.0
+

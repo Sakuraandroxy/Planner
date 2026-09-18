@@ -28,14 +28,12 @@ Fast-Planner
 lora_example
 legcy
 AirsimNH
-planner
 see-point-fly
 TravelUAV
 *.pdf
 *.doc
 3DG-VLN-main
 test
-tests
 tools
 .cph
 graphify-out/
