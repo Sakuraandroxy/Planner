@@ -13,6 +13,7 @@ __pycache__/
 *.egg-info/
 .env
 **/.env
+config/deepseek.yaml
 .cph
 .agents
 .pytest_cache

@@ -1,6 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from planner.domain.motion import MotionLimits
+
+
+@dataclass(frozen=True)
+class MotionConfig:
+    enabled: bool = True
+    limits: MotionLimits = MotionLimits()
 
 
 @dataclass(frozen=True)
@@ -9,6 +16,7 @@ class ApiConfig:
     model: str
     api_key: str
     timeout_s: float
+    thinking: str | None = None
 
 
 @dataclass(frozen=True)
@@ -35,10 +43,19 @@ class TrajectoryConfig:
 
 
 @dataclass(frozen=True)
+class RecordingConfig:
+    output_root: str
+    fps: float
+
+
+@dataclass(frozen=True)
 class PlannerConfig:
     task_parser: ApiConfig
     trajectory_planner: ApiConfig
     airsim: AirSimConfig
     depth: DepthConfig
     trajectory: TrajectoryConfig
+    recording: RecordingConfig
+    navigation_max_rounds: int = 1
+    motion: MotionConfig = MotionConfig()
 

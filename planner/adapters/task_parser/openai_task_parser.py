@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import logging
+import time
+
 import requests
+
+logger = logging.getLogger(__name__)
 
 from planner.adapters.task_parser.prompt import SYSTEM_PROMPT, user_prompt
 from planner.adapters.task_parser.response_schema import parse_json_object
@@ -22,6 +27,8 @@ class OpenAITaskParser:
         headers = {"Content-Type": "application/json"}
         if self.api_key and self.api_key != "no-key":
             headers["Authorization"] = f"Bearer {self.api_key}"
+        logger.info("[TaskParser] model=%s instruction=%s", self.model, instruction)
+        started = time.perf_counter()
         response = requests.post(
             self.url,
             headers=headers,
@@ -38,6 +45,7 @@ class OpenAITaskParser:
         )
         response.raise_for_status()
         content = response.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+        logger.info("[TaskParser] %.2fs raw response:\n%s", time.perf_counter() - started, content)
         return mission_from_dict(parse_json_object(content))
 
 

@@ -2,32 +2,43 @@ from __future__ import annotations
 
 import base64
 import io
+import logging
+import time
 
 import requests
 
-from planner.adapters.trajectory_planner.prompt import build_prompt
+from planner.adapters.trajectory_planner.prompts import NavigationTrajectoryPrompt, TrajectoryPromptBuilder
 from planner.adapters.trajectory_planner.response_parser import parse_trajectory
 from planner.domain.observation import Observation
 from planner.domain.trajectory import RelativeTrajectory
 
+logger = logging.getLogger(__name__)
+
 
 class QwenVLPlanner:
-    def __init__(self, url: str, model: str, api_key: str, timeout_s: float, expected_points: int = 5):
+    def __init__(self, url: str, model: str, api_key: str, timeout_s: float,
+                 expected_points: int = 5, thinking: str | None = None,
+                 prompt_builder: TrajectoryPromptBuilder | None = None):
         self.url = _chat_url(url)
         self.model = model
         self.api_key = api_key
         self.timeout_s = timeout_s
         self.expected_points = expected_points
+        self.thinking = thinking
+        self.prompt_builder = prompt_builder or NavigationTrajectoryPrompt()
 
     def plan(self, observation: Observation, instruction: str) -> RelativeTrajectory:
+        logger.info("[TrajectoryPlanner] model=%s instruction=%s", self.model, instruction)
+        logger.info("[TrajectoryPlanner] RGB=%s depth=%s pose=%s", observation.rgb.size, observation.depth_image.size, observation.vehicle_pose)
         content = [
             {"type": "image_url", "image_url": {"url": _image_url(observation.rgb, "JPEG")}},
             {"type": "image_url", "image_url": {"url": _image_url(observation.depth_image, "PNG")}},
-            {"type": "text", "text": build_prompt(instruction, observation)},
+            {"type": "text", "text": self.prompt_builder.build(instruction, observation, self.expected_points)},
         ]
         headers = {"Content-Type": "application/json"}
         if self.api_key and self.api_key != "no-key":
             headers["Authorization"] = f"Bearer {self.api_key}"
+        started = time.perf_counter()
         response = requests.post(
             self.url,
             headers=headers,
@@ -36,11 +47,14 @@ class QwenVLPlanner:
                 "messages": [{"role": "user", "content": content}],
                 "temperature": 0.0,
                 "max_tokens": 256,
+                **({"thinking": {"type": self.thinking}} if self.thinking is not None else {}),
             },
             timeout=self.timeout_s,
         )
         response.raise_for_status()
-        raw = response.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+        choice = response.json().get("choices", [{}])[0]
+        raw = choice.get("message", {}).get("content", "")
+        logger.info("[TrajectoryPlanner] %.2fs finish_reason=%s raw response:\n%s", time.perf_counter() - started, choice.get("finish_reason"), raw)
         return parse_trajectory(raw, self.expected_points)
 
 

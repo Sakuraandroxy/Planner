@@ -34,6 +34,24 @@ python run_airsim_cli.py --instruction "Follow the road"
 python run_airsim_cli.py --no-takeoff
 ```
 
+To continuously save the actual Camera API view, including cameras configured
+with pitch/yaw/roll, run:
+
+```bash
+python run_airsim_cli.py --record-camera-api --camera-record-mode frames
+```
+
+To use DeepSeek, copy `config/deepseek.example.yaml` to the ignored local file
+`config/deepseek.yaml`, fill `trajectory_planner.api_key`, and run:
+
+```powershell
+python run_airsim_cli.py --config config/deepseek.yaml --record-camera-api --camera-record-mode frames
+```
+
+Frames are written under `output/camera_api/<timestamp>/rgb`, `depth`, and
+`metadata`. Recording uses an independent AirSim RPC connection so image
+capture continues while the primary connection waits for a flight command.
+
 The base planner has no semantic completion detector. `Mission executed`
 means that every validated trajectory stage was executed without a reported
 collision or API error; it does not claim that a visual target was reached.

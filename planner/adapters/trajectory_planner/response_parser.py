@@ -16,8 +16,8 @@ def parse_trajectory(text: str, expected_points: int = 5) -> RelativeTrajectory:
         value = json.loads(match.group(0))
     except json.JSONDecodeError as exc:
         raise ProtocolError(f"trajectory planner returned invalid JSON: {exc}") from exc
-    if not isinstance(value, list) or len(value) != expected_points:
-        raise ProtocolError(f"trajectory planner must return exactly {expected_points} points")
+    if not isinstance(value, list) or not 1 <= len(value) <= expected_points:
+        raise ProtocolError(f"trajectory planner must return 1 to {expected_points} points; received {len(value) if isinstance(value, list) else type(value).__name__}")
     points = []
     for index, raw in enumerate(value):
         if not isinstance(raw, list) or len(raw) != 4:

@@ -15,10 +15,13 @@ class ExecutionService:
                 self.vehicle.execute_segment(segment)
                 if self.vehicle.collision_state():
                     raise ExecutionError("AirSim reported a collision")
-        except Exception as exc:
+        except (Exception, KeyboardInterrupt) as exc:
             self.vehicle.cancel()
             self.vehicle.hover()
-            if isinstance(exc, ExecutionError):
+            if isinstance(exc, (ExecutionError, KeyboardInterrupt)):
                 raise
             raise ExecutionError(str(exc)) from exc
+
+    def hold(self) -> None:
+        self.vehicle.hover()
 
