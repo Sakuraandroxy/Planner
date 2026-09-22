@@ -37,3 +37,6 @@ test
 tools
 .cph
 graphify-out/
+.idea/
+.cph/
+.vscode/
