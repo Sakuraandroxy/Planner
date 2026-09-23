@@ -23,6 +23,7 @@ $PROFILE.txt
 # Logs / outputs
 *.log
 output/
+/docs/
 AVLN
 周报
 Fast-Planner

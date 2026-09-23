@@ -26,6 +26,6 @@ class Observation:
     camera_id: str
     intrinsics: CameraIntrinsics
     camera_position_world: tuple[float, float, float]
-    rotation_camera_to_world: tuple[tuple[float, float, float], ...]
+    rotation_camera_to_world: tuple[tuple[float, float, float], ...] #3x3 rotation matrix
     timestamp_ns: int
 

@@ -5,7 +5,7 @@ import math
 from planner.domain.pose import WorldPose, wrap_yaw_deg
 from planner.domain.trajectory import RelativeTrajectory, WorldTrajectory
 
-
+#将相对航点转为世界坐标的绝对航点
 def relative_to_world(trajectory: RelativeTrajectory, start: WorldPose) -> WorldTrajectory:
     """Apply each body-frame delta relative to its preceding predicted pose."""
     x, y, z, yaw = start.x, start.y, start.z, start.yaw_deg

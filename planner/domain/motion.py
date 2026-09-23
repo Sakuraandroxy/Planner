@@ -6,7 +6,7 @@ from .trajectory import MotionSegment, MotionTrajectory
 
 @dataclass(frozen=True)
 class MotionLimits:
-    """Shared physical limits and tracking tolerances, in meters/degrees/seconds."""
+    """通用的物理运动限制与跟踪容差，单位为米 / 度 / 秒"""
 
     max_acceleration_mps2: float = 1.5
     max_yaw_rate_deg_s: float = 30.0

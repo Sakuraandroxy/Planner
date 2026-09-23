@@ -70,12 +70,9 @@ def _motion_config(raw: dict) -> MotionConfig:
     if not isinstance(raw, dict):
         raise ConfigurationError("motion must be a mapping")
     names = {field.name for field in fields(MotionLimits)}
-    unknown = set(raw) - names - {"enabled"}
+    unknown = set(raw) - names
     if unknown:
         raise ConfigurationError(f"unknown motion settings: {sorted(unknown)}")
-    enabled = raw.get("enabled", True)
-    if not isinstance(enabled, bool):
-        raise ConfigurationError("motion.enabled must be a boolean")
     limits = MotionLimits(**{name: float(raw[name]) for name in names if name in raw})
-    return MotionConfig(enabled, limits)
+    return MotionConfig(limits)
 

@@ -7,7 +7,7 @@ from planner.domain.pose import RelativePoseDelta
 from planner.domain.trajectory import RelativeTrajectory
 from planner.errors import ProtocolError
 
-
+#把模型返回的文本解析成 Planner 内部使用的 RelativeTrajectory
 def parse_trajectory(text: str, expected_points: int = 5) -> RelativeTrajectory:
     match = re.search(r"\[\s*\[.*?\]\s*\]", str(text or ""), re.DOTALL)
     if not match:

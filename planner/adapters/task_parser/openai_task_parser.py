@@ -13,7 +13,7 @@ from planner.adapters.task_parser.task_factory import mission_from_dict
 from planner.domain.mission import MissionPlan
 from planner.errors import ProtocolError
 
-
+#把用户的自然语言指令发给任务解析大模型
 class OpenAITaskParser:
     def __init__(self, url: str, model: str, api_key: str, timeout_s: float):
         self.url = _chat_url(url)

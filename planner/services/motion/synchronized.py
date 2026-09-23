@@ -8,14 +8,16 @@ from planner.domain.trajectory import MotionSegment, MotionTrajectory, WorldTraj
 
 SMOOTH_PROFILE = "synchronized_quintic"
 
-
+"""
+同步平滑运动规划器里的核心物理计算函数,计算从一个航点飞到下一个航点，至少应该安排多少秒
+"""
 def duration_for(start: WorldPose, end: WorldPose, speed: float, limits: MotionLimits) -> float:
     if not math.isfinite(speed) or speed <= 0:
         raise ValueError("motion speed must be finite and positive")
     distance = math.dist((start.x, start.y, start.z), (end.x, end.y, end.z))
     angle = abs(wrap_yaw_deg(end.yaw_deg - start.yaw_deg))
     # Max derivatives of 10u^3 - 15u^4 + 6u^5: 1.875 and 10/sqrt(3).
-    peak_accel = 10 / math.sqrt(3)
+    peak_accel = 10 / math.sqrt(3)#峰值加速度
     return max(
         limits.min_duration_s, 1.875 * distance / speed,
         1.875 * angle / limits.max_yaw_rate_deg_s,
@@ -47,9 +49,9 @@ def sample_segment(segment: MotionSegment, elapsed: float) -> MotionSample:
         tuple(value*rate for value in delta), yaw_delta*rate,
     )
 
-
+#同步平滑运动规划器
 class SynchronizedMotionPlanner:
-    """Stop at each waypoint, with translation and yaw sharing one smooth phase."""
+    """在每个航点处停稳，且平移与偏航在同一个平滑周期内同步完成"""
 
     def __init__(self, speed_mps: float, limits: MotionLimits):
         self.speed_mps = speed_mps
@@ -60,8 +62,11 @@ class SynchronizedMotionPlanner:
         segments = []
         for pose in trajectory.poses:
             segments.append(MotionSegment(
-                previous, pose, duration_for(previous, pose, self.speed_mps, self.limits),
-                self.speed_mps, SMOOTH_PROFILE,
+                start=previous,
+                end=pose,
+                profile=SMOOTH_PROFILE,
+                duration_s=duration_for(previous, pose, self.speed_mps, self.limits),
+                target_speed_mps=self.speed_mps,
             ))
             previous = pose
         return MotionTrajectory(tuple(segments))

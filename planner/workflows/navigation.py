@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 class NavigationWorkflow:
-    """Bounded observe-plan-execute loop with an optional progress reviewer."""
+    """带有可选进度复核器、执行轮数受限的“观测—规划—执行”循环"""
 
     def __init__(
         self,

@@ -2,7 +2,7 @@ from planner.domain.mission import MissionStage, TaskKind
 from planner.errors import ProtocolError
 from planner.workflows.base import Workflow
 
-
+#工作流分发器
 class WorkflowRouter:
     def __init__(self, workflows: dict[TaskKind, Workflow]):
         self._workflows = dict(workflows)

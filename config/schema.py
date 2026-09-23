@@ -6,7 +6,6 @@ from planner.domain.motion import MotionLimits
 
 @dataclass(frozen=True)
 class MotionConfig:
-    enabled: bool = True
     limits: MotionLimits = MotionLimits()
 
 

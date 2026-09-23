@@ -7,6 +7,7 @@ from planner.adapters.airsim import (
     AirSimVehicle,
     CameraApiRecorder,
 )
+from planner.adapters.airsim.observation_gate import ObservationGate
 from planner.adapters.task_parser import OpenAITaskParser
 from planner.adapters.trajectory_planner import QwenVLPlanner
 from planner.adapters.trajectory_planner.prompts import NavigationProgressPrompt, NavigationTrajectoryPrompt
@@ -16,7 +17,7 @@ from planner.application.mission_validator import MissionValidator
 from planner.application.workflow_router import WorkflowRouter
 from planner.domain.mission import TaskKind
 from planner.services.execution import ExecutionService
-from planner.services.motion import PassThroughMotionPlanner, SynchronizedMotionPlanner
+from planner.services.motion import SynchronizedMotionPlanner
 from planner.services.trajectory_validation import TrajectoryValidator
 from planner.workflows import NavigationWorkflow
 from planner.workflows.termination import NavigationExitPolicy
@@ -34,13 +35,14 @@ class RecordingRuntime:
     recorder: CameraApiRecorder
     connection: AirSimConnection
 
-
+#“组装和注册不同模块”的入口,注册所有模块，后续根据不同的任务类型走不同的workflow
 def build_runtime(config: PlannerConfig) -> Runtime:
     connection = AirSimConnection(config.airsim.host, config.airsim.port, config.airsim.connect_timeout_s)
     vehicle = AirSimVehicle(connection, config.airsim.speed_mps, config.airsim.move_timeout_s,
                            config.motion.limits)
-    motion_planner = (SynchronizedMotionPlanner(config.airsim.speed_mps, config.motion.limits)
-                      if config.motion.enabled else PassThroughMotionPlanner(config.airsim.speed_mps))
+    motion_planner = SynchronizedMotionPlanner(config.airsim.speed_mps, config.motion.limits)
+    observation_gate = ObservationGate(vehicle, config.motion.limits, config.airsim.move_timeout_s)
+    vehicle.motion_tracker.observation_gate = observation_gate
     observation = AirSimObservationSource(
         connection, vehicle, config.airsim.camera_id, config.depth.min_m, config.depth.max_m
     )
@@ -82,7 +84,8 @@ def build_recording_runtime(
     connection = AirSimConnection(config.airsim.host, config.airsim.port, config.airsim.connect_timeout_s)
     vehicle = AirSimVehicle(connection, config.airsim.speed_mps, config.airsim.move_timeout_s)
     source = AirSimObservationSource(
-        connection, vehicle, config.airsim.camera_id, config.depth.min_m, config.depth.max_m
+        connection, vehicle, config.airsim.camera_id, config.depth.min_m, config.depth.max_m,
+        observation_gate=observation_gate,
     )
     recorder = CameraApiRecorder(
         source,

@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from planner.adapters.airsim.motion_tracker import AirSimMotionTracker
+from planner.adapters.airsim.observation_gate import ObservationGate
 from planner.domain.motion import MotionLimits
 from planner.domain.pose import WorldPose, wrap_yaw_deg
 from planner.domain.trajectory import WorldTrajectory
@@ -104,5 +105,49 @@ def test_collision_checked_during_segment():
 def test_duration_over_timeout_rejected_before_motion():
     connection, segment, tracker = run_motion(WorldPose(0, 0, -5, 0), WorldPose(30, 0, -5, 90), timeout=5)
     with pytest.raises(ExecutionError, match="duration"):
+        tracker.execute(segment)
+    assert not connection.commands
+
+
+def test_observation_mid_segment_resumes_original_goal():
+    start, end = WorldPose(0, 0, -5, 0), WorldPose(8, 2, -5, 90)
+    connection, segment, tracker = run_motion(start, end)
+    vehicle = SimpleNamespace(
+        hover=lambda: connection.call_async_and_wait("hoverAsync"),
+        current_pose=lambda: connection.pose,
+        collision_state=lambda: False,
+    )
+    gate = ObservationGate(vehicle, MotionLimits(), 40,
+                           clock=lambda: connection.time, sleep=connection.sleep)
+    tracker.observation_gate = gate
+    captured = []
+
+    def sleep(seconds):
+        connection.sleep(seconds)
+        if len(connection.commands) >= 10 and not captured:
+            with gate.capture():
+                captured.append(connection.pose)
+                connection.sleep(50)  # Observation wait must not consume flight timeout.
+
+    tracker.sleep = sleep
+    tracker.execute(segment)
+    assert len(captured) == 1
+    assert 0 < captured[0].x < end.x
+    assert math.dist((connection.pose.x, connection.pose.y, connection.pose.z),
+                     (end.x, end.y, end.z)) <= 0.3
+    assert abs(wrap_yaw_deg(connection.pose.yaw_deg - end.yaw_deg)) <= 2
+
+
+def test_failed_capture_blocks_further_motion():
+    connection, segment, tracker = run_motion(WorldPose(0, 0, -5, 0), WorldPose(3, 0, -5, 0))
+    vehicle = SimpleNamespace(hover=lambda: None, current_pose=lambda: connection.pose,
+                              collision_state=lambda: False)
+    gate = ObservationGate(vehicle, MotionLimits(), 40,
+                           clock=lambda: connection.time, sleep=connection.sleep)
+    with pytest.raises(RuntimeError):
+        with gate.capture():
+            raise RuntimeError("image unavailable")
+    tracker.observation_gate = gate
+    with pytest.raises(ExecutionError, match="observation failed"):
         tracker.execute(segment)
     assert not connection.commands

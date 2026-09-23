@@ -4,8 +4,10 @@ import math
 
 from planner.domain.trajectory import RelativeTrajectory, WorldTrajectory
 from planner.errors import ProtocolError
-
-
+'''
+轨迹安全与协议校验器，负责在执行前拒绝明显不合法或过大的轨迹
+合法轨迹为:模型输出1～5个航点；每个航点必须恰好包含4个有限数值；每一步三维位移不超过30米；每一步相对 yaw 不超过配置上限（当前为±180°）。
+'''
 class TrajectoryValidator:
     def __init__(self, expected_points: int, max_step_m: float, max_yaw_step_deg: float):
         self.expected_points = expected_points

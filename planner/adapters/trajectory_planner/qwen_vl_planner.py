@@ -58,6 +58,10 @@ class QwenVLPlanner:
         return parse_trajectory(raw, self.expected_points)
 
 
+'''
+把一张 PIL 图片转换成 Base64 编码的 data:image/...;base64,... 字符串，
+从而可以直接作为图像 URL 发送给 Qwen/OpenAI 兼容的多模态接口
+'''
 def _image_url(image, image_format: str) -> str:
     converted = image.convert("RGB") if image.mode != "RGB" else image
     buffer = io.BytesIO()
@@ -66,7 +70,7 @@ def _image_url(image, image_format: str) -> str:
     mime = "jpeg" if image_format == "JPEG" else "png"
     return f"data:image/{mime};base64,{base64.b64encode(buffer.getvalue()).decode('ascii')}"
 
-
+'''确保你传入的基础 API 地址最后一定指向 /chat/completions 接口'''
 def _chat_url(url: str) -> str:
     value = str(url).rstrip("/")
     return value if value.endswith("/chat/completions") else f"{value}/chat/completions"

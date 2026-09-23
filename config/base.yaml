@@ -10,7 +10,7 @@ trajectory_planner:
   model: /roxy/zhusai/qwen_lora/models/3dg_vln_segment_v3_checkpoint_700
   api_key: no-key
   api_key_env: TRAJECTORY_PLANNER_API_KEY
-  timeout_s: 120
+  timeout_s: 120 # 超时时间
 
 airsim:
   host: ""
@@ -18,7 +18,7 @@ airsim:
   camera_id: front_center
   connect_timeout_s: 5
   move_timeout_s: 60
-  speed_mps: 2.0
+  speed_mps: 2.0 # 在平滑控制中表示三维最高合速度上限
 
 depth:
   min_m: 0.5
@@ -27,10 +27,9 @@ depth:
 trajectory:
   point_count: 5
   max_step_m: 30.0
-  max_yaw_step_deg: 90.0
+  max_yaw_step_deg: 180.0
 
 motion:
-  enabled: true
   control_hz: 20.0
   max_acceleration_mps2: 1.5
   max_yaw_rate_deg_s: 30.0
