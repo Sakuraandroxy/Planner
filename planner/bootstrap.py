@@ -85,7 +85,6 @@ def build_recording_runtime(
     vehicle = AirSimVehicle(connection, config.airsim.speed_mps, config.airsim.move_timeout_s)
     source = AirSimObservationSource(
         connection, vehicle, config.airsim.camera_id, config.depth.min_m, config.depth.max_m,
-        observation_gate=observation_gate,
     )
     recorder = CameraApiRecorder(
         source,
@@ -93,4 +92,3 @@ def build_recording_runtime(
         config.recording.fps if fps is None else fps,
     )
     return RecordingRuntime(recorder, connection)
-
