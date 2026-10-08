@@ -7,7 +7,7 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-from planner.adapters.task_parser.prompt import SYSTEM_PROMPT, user_prompt
+from planner.adapters.task_parser.prompt import TASK_PARSER_SYSTEM_PROMPT, user_prompt
 from planner.adapters.task_parser.response_schema import parse_json_object
 from planner.adapters.task_parser.task_factory import mission_from_dict
 from planner.domain.mission import MissionPlan
@@ -35,7 +35,7 @@ class OpenAITaskParser:
             json={
                 "model": self.model,
                 "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "system", "content": TASK_PARSER_SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt(instruction)},
                 ],
                 "temperature": 0.0,

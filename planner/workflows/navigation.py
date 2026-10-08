@@ -41,18 +41,28 @@ class NavigationWorkflow:
             logger.info("[Stage %s] start: %s", stage.stage_id, stage.parameters.instruction)
             observation = self.observation_source.capture()
             initial = observation
-            remaining = stage.parameters.instruction
+            stage_instruction = stage.parameters.instruction
+            current_guidance = None
+            previous_trajectory = None
             self.exit_policy.begin()
             round_index = 0
             while True:
                 round_index += 1
                 logger.info("[Stage %s] round %s", stage.stage_id, round_index)
-                relative = self.trajectory_planner.plan(observation, remaining)
+                relative = self.trajectory_planner.plan(
+                    observation,
+                    stage_instruction,
+                    current_guidance=current_guidance,
+                    round_index=round_index,
+                    initial_pose=initial.vehicle_pose,
+                    previous_trajectory=previous_trajectory,
+                )
                 self.validator.validate_relative(relative)
                 world = relative_to_world(relative, observation.vehicle_pose)
                 self.validator.validate_world(world)
                 logger.info("[Stage %s] validated world trajectory: %s", stage.stage_id, world)
                 self.execution.execute(self.motion_planner.create_motion(world))
+                previous_trajectory = relative
                 if self.reviewer is None:
                     logger.info("Trajectory executed; task completion NOT verified")
                     return StageResult(stage_id=stage.stage_id, success=True, value=world)
@@ -70,7 +80,7 @@ class NavigationWorkflow:
                     })
                 if exit_decision.should_stop:
                     raise RuntimeError(f"{exit_decision.status.value}: {exit_decision.reason}")
-                remaining = decision.next_instruction
+                current_guidance = decision.next_instruction
                 observation = current
         except Exception as exc:
             if self.reviewer is not None:
@@ -80,4 +90,3 @@ class NavigationWorkflow:
                     logger.exception("Failed to hover after navigation failure")
             logger.error("[Stage %s] failed: %s", stage.stage_id, exc)
             return StageResult(stage_id=stage.stage_id, success=False, error=str(exc))
-

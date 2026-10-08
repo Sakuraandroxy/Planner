@@ -44,8 +44,10 @@ def load_config(path: str | Path) -> PlannerConfig:
         )
     except (KeyError, TypeError, ValueError, yaml.YAMLError) as exc:
         raise ConfigurationError(f"invalid config {config_path}: {exc}") from exc
-    if result.trajectory.point_count <= 0 or result.airsim.speed_mps <= 0:
-        raise ConfigurationError("point_count and speed_mps must be positive")
+    if not 1 <= result.trajectory.point_count <= 5:
+        raise ConfigurationError("trajectory.point_count must be between 1 and 5")
+    if result.airsim.speed_mps <= 0:
+        raise ConfigurationError("speed_mps must be positive")
     if not 0 < result.depth.min_m < result.depth.max_m:
         raise ConfigurationError("depth range must satisfy 0 < min_m < max_m")
     if result.recording.fps <= 0:

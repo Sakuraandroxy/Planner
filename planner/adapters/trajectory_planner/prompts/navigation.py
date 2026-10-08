@@ -1,34 +1,46 @@
-import json
-
 from planner.domain.observation import Observation
+from planner.domain.pose import WorldPose
+from planner.domain.trajectory import RelativeTrajectory
+
+from .base import BASE_TRAJECTORY_SYSTEM_PROMPT, build_base_user_prompt
+
+
+# Navigation currently adopts the complete base prompt. Keep a task-level
+# constant so future navigation experiments can extend or replace it without
+# changing the shared baseline used by other task prompt builders.
+NAVIGATION_TRAJECTORY_SYSTEM_PROMPT = BASE_TRAJECTORY_SYSTEM_PROMPT
 
 
 class NavigationTrajectoryPrompt:
-    def build(self, instruction: str, observation: Observation, max_points: int) -> str:
-        camera = {
-            "camera_id": observation.camera_id,
-            "horizontal_fov_deg": round(observation.intrinsics.horizontal_fov_deg, 3),
-            "camera_position_world": [round(value, 4) for value in observation.camera_position_world],
-            "rotation_camera_to_world": [
-                [round(value, 6) for value in row]
-                for row in observation.rotation_camera_to_world
-            ],
-        }
-        return "\n".join([
-            "Visual inputs: image 1 is RGB. Image 2 is aligned depth; brighter means nearer, darker gray means farther, and black means invalid depth.",
-            f"Instruction: {instruction.strip()}",
-            "Camera geometry (JSON): " + json.dumps(camera, separators=(",", ":")),
-            f"Output 1 to {max_points} incremental pose waypoints as a JSON list. Use fewer points for simple motions.",
-            "Each waypoint must be [dx, dy, dz, dyaw_deg] relative to the previous predicted pose; the first is relative to the current vehicle pose.",
-            "+dx is forward and +dy is right in the previous pose horizontal body frame. AirSim NED +dz is down. Positive dyaw_deg turns right.",
-            "Z is not altitude: positive dz DESCENDS, negative dz ASCENDS, and dz=0 maintains altitude. Camera pitch does not change these signs.",
-            "Translation and viewing direction are independent. Do not infer yaw from translation.",
-            "For explicit motion distances, preserve the requested total displacement. Ascending 12 meters with no rotation is [[0,0,-12,0]].",
-            "Descending 12 meters with no rotation is [[0,0,12,0]].",
-            "Do not output any other text.",
-        ])
+    def system_prompt(self) -> str:
+        return NAVIGATION_TRAJECTORY_SYSTEM_PROMPT
 
+    def build_user_prompt(
+        self,
+        instruction: str,
+        observation: Observation,
+        max_points: int,
+        *,
+        current_guidance: str | None = None,
+        round_index: int = 1,
+        initial_pose: WorldPose | None = None,
+        previous_trajectory: RelativeTrajectory | None = None,
+    ) -> str:
+        return build_base_user_prompt(
+            instruction,
+            observation,
+            max_points,
+            current_guidance=current_guidance,
+            round_index=round_index,
+            initial_pose=initial_pose,
+            previous_trajectory=previous_trajectory,
+        )
 
+'''
+任务阶段完成判断提示词，每5个点执行后会使用，当前也是发送给规划器模型的，待修改
+如果后续要不使用大模型判断任务是否完成要删去这
+如果后续继续使用大模型判断任务是否完成则需要根据不同的任务设计不同的提示词
+'''
 class NavigationProgressPrompt:
     def build(self, instruction: str, initial: Observation, current: Observation,
               round_index: int) -> str:

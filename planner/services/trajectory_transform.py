@@ -2,8 +2,25 @@ from __future__ import annotations
 
 import math
 
-from planner.domain.pose import WorldPose, wrap_yaw_deg
+from planner.domain.pose import RelativePoseDelta, WorldPose, wrap_yaw_deg
 from planner.domain.trajectory import RelativeTrajectory, WorldTrajectory
+
+
+def world_pose_delta_in_reference_frame(
+    start: WorldPose,
+    end: WorldPose,
+) -> RelativePoseDelta:
+    """Express a measured world-pose change in the start pose horizontal frame."""
+    world_dx = end.x - start.x
+    world_dy = end.y - start.y
+    angle = math.radians(start.yaw_deg)
+    return RelativePoseDelta(
+        dx=math.cos(angle) * world_dx + math.sin(angle) * world_dy,
+        dy=-math.sin(angle) * world_dx + math.cos(angle) * world_dy,
+        dz=end.z - start.z,
+        dyaw_deg=wrap_yaw_deg(end.yaw_deg - start.yaw_deg),
+    )
+
 
 #将相对航点转为世界坐标的绝对航点
 def relative_to_world(trajectory: RelativeTrajectory, start: WorldPose) -> WorldTrajectory:

@@ -10,6 +10,7 @@ import requests
 from planner.adapters.trajectory_planner.prompts import NavigationTrajectoryPrompt, TrajectoryPromptBuilder
 from planner.adapters.trajectory_planner.response_parser import parse_trajectory
 from planner.domain.observation import Observation
+from planner.domain.pose import WorldPose
 from planner.domain.trajectory import RelativeTrajectory
 
 logger = logging.getLogger(__name__)
@@ -27,13 +28,32 @@ class QwenVLPlanner:
         self.thinking = thinking
         self.prompt_builder = prompt_builder or NavigationTrajectoryPrompt()
 
-    def plan(self, observation: Observation, instruction: str) -> RelativeTrajectory:
+    def plan(
+        self,
+        observation: Observation,
+        instruction: str,
+        *,
+        current_guidance: str | None = None,
+        round_index: int = 1,
+        initial_pose: WorldPose | None = None,
+        previous_trajectory: RelativeTrajectory | None = None,
+    ) -> RelativeTrajectory:
         logger.info("[TrajectoryPlanner] model=%s instruction=%s", self.model, instruction)
         logger.info("[TrajectoryPlanner] RGB=%s depth=%s pose=%s", observation.rgb.size, observation.depth_image.size, observation.vehicle_pose)
+        system_prompt = self.prompt_builder.system_prompt()
+        user_prompt = self.prompt_builder.build_user_prompt(
+            instruction,
+            observation,
+            self.expected_points,
+            current_guidance=current_guidance,
+            round_index=round_index,
+            initial_pose=initial_pose or observation.vehicle_pose,
+            previous_trajectory=previous_trajectory,
+        )
         content = [
             {"type": "image_url", "image_url": {"url": _image_url(observation.rgb, "JPEG")}},
             {"type": "image_url", "image_url": {"url": _image_url(observation.depth_image, "PNG")}},
-            {"type": "text", "text": self.prompt_builder.build(instruction, observation, self.expected_points)},
+            {"type": "text", "text": user_prompt},
         ]
         headers = {"Content-Type": "application/json"}
         if self.api_key and self.api_key != "no-key":
@@ -44,7 +64,10 @@ class QwenVLPlanner:
             headers=headers,
             json={
                 "model": self.model,
-                "messages": [{"role": "user", "content": content}],
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": content},
+                ],
                 "temperature": 0.0,
                 "max_tokens": 256,
                 **({"thinking": {"type": self.thinking}} if self.thinking is not None else {}),

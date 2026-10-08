@@ -44,7 +44,13 @@ def test_task_specific_prompt_builder_is_injected_into_planner(monkeypatch):
     response.json.return_value = {"choices": [{"message": {"content": "[[1,0,0,0]]"}}]}
     monkeypatch.setattr(adapter.requests, "post", Mock(return_value=response))
     builder = Mock()
-    builder.build.return_value = "inspection-specific-prompt"
+    builder.system_prompt.return_value = "trajectory-system-prompt"
+    builder.build_user_prompt.return_value = "inspection-specific-prompt"
     planner = QwenVLPlanner("https://example.com", "model", "key", 10, prompt_builder=builder)
     planner.plan(Mock(), "inspect tower")
-    builder.build.assert_called_once_with("inspect tower", builder.build.call_args.args[1], 5)
+    builder.system_prompt.assert_called_once_with()
+    call = builder.build_user_prompt.call_args
+    assert call.args[0] == "inspect tower"
+    assert call.args[2] == 5
+    assert call.kwargs["round_index"] == 1
+    assert call.kwargs["previous_trajectory"] is None

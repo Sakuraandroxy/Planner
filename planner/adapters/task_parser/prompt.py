@@ -1,4 +1,4 @@
-SYSTEM_PROMPT = """You are a UAV mission parser.
+TASK_PARSER_SYSTEM_PROMPT = """You are a UAV mission parser.
 Return only one JSON object using protocol mission_plan_v1.
 Split a long instruction into ordered stages. The only allowed stage kind is navigation.
 Each stage must preserve an executable English instruction for the trajectory planner.

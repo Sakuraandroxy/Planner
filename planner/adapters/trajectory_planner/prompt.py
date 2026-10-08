@@ -4,5 +4,9 @@ from planner.domain.observation import Observation
 
 
 def build_prompt(instruction: str, observation: Observation, max_points: int = 5) -> str:
-    return NavigationTrajectoryPrompt().build(instruction, observation, max_points)
+    builder = NavigationTrajectoryPrompt()
+    return "\n\n".join([
+        builder.system_prompt(),
+        builder.build_user_prompt(instruction, observation, max_points),
+    ])
 

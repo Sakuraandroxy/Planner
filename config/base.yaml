@@ -41,3 +41,6 @@ recording:
   output_root: output/camera_api
   fps: 5.0
 
+navigation:
+  max_rounds: 10
+

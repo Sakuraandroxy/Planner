@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -30,13 +31,17 @@ def test_backend_request(monkeypatch, thinking):
     post = Mock(return_value=response)
     monkeypatch.setattr(adapter.requests, "post", post)
     prompt_builder = Mock()
-    prompt_builder.build.return_value = "test"
+    prompt_builder.system_prompt.return_value = "system"
+    prompt_builder.build_user_prompt.return_value = "user"
     planner = QwenVLPlanner("https://example.com", "test", "test-key", 120,
                             thinking=thinking, prompt_builder=prompt_builder)
     assert len(planner.plan(Mock(), "ascend 12m").points) == 1
     payload = post.call_args.kwargs["json"]
-    assert len(payload["messages"][0]["content"]) == 3
-    prompt_builder.build.assert_called_once()
+    assert payload["messages"][0] == {"role": "system", "content": "system"}
+    assert payload["messages"][1]["role"] == "user"
+    assert len(payload["messages"][1]["content"]) == 3
+    prompt_builder.system_prompt.assert_called_once_with()
+    prompt_builder.build_user_prompt.assert_called_once()
     if thinking:
         assert payload["thinking"] == {"type": "disabled"}
     else:
@@ -49,6 +54,18 @@ def test_deepseek_config(monkeypatch):
     assert config.trajectory_planner.thinking == "disabled"
     assert config.trajectory_planner.model == "deepseek-flash"
     assert "checkpoint_700" in load_config("config/base.yaml").trajectory_planner.model
+
+
+def test_config_rejects_point_count_above_prompt_protocol_limit(tmp_path, monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    source = Path("config/deepseek.example.yaml").read_text(encoding="utf-8")
+    path = tmp_path / "invalid-point-count.yaml"
+    path.write_text(source.replace("point_count: 5", "point_count: 6"), encoding="utf-8")
+
+    from planner.errors import ConfigurationError
+
+    with pytest.raises(ConfigurationError, match="between 1 and 5"):
+        load_config(path)
 
 
 def test_inline_key_fallback(monkeypatch):
