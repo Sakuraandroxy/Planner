@@ -5,7 +5,7 @@ import threading
 import time
 
 from planner.domain.pose import wrap_yaw_deg
-from planner.errors import ExecutionError
+from planner.errors import BudgetExceeded, ExecutionError
 
 
 class ObservationGate:
@@ -20,11 +20,13 @@ class ObservationGate:
         self._failed = False
 
     @contextmanager
-    def capture(self):
+    def capture(self, *, budget=None):
         with self._condition:
+            if self._failed:
+                raise ExecutionError("observation failed; restart runtime before another capture")
             try:
                 self.vehicle.hover()
-                self._wait_stable()
+                self._wait_stable(budget)
                 yield
             except BaseException:
                 self._failed = True
@@ -46,11 +48,13 @@ class ObservationGate:
                 raise ExecutionError("observation failed; motion remains stopped (restart runtime to retry)")
             yield self._generation
 
-    def _wait_stable(self):
+    def _wait_stable(self, budget=None):
         started = previous_time = self.clock()
         previous = self.vehicle.current_pose()
         stable_since = None
         while self.clock() - started < self.timeout_s:
+            if budget is not None and budget.remaining(self.clock()) <= 0:
+                raise BudgetExceeded("deadline while waiting for stopped observation")
             self.sleep(1 / self.limits.control_hz)
             now = self.clock()
             current = self.vehicle.current_pose()

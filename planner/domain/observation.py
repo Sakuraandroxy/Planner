@@ -28,4 +28,12 @@ class Observation:
     camera_position_world: tuple[float, float, float]
     rotation_camera_to_world: tuple[tuple[float, float, float], ...] #3x3 rotation matrix
     timestamp_ns: int
+    depth_intrinsics: CameraIntrinsics | None = None
+    depth_kind: str = "unknown"
+    captured_monotonic: float = 0.0
+    capture_id: str = ""
+    depth_timestamp_ns: int = 0
+    stopped: bool = False
+    capture_started_monotonic: float = 0.0
+    capture_finished_monotonic: float = 0.0
 

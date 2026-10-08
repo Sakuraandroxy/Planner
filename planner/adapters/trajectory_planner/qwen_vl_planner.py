@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import base64
-import io
 import logging
 import time
 
@@ -12,6 +10,10 @@ from planner.adapters.trajectory_planner.response_parser import parse_trajectory
 from planner.domain.observation import Observation
 from planner.domain.pose import WorldPose
 from planner.domain.trajectory import RelativeTrajectory
+from planner.domain.execution import ExecutionBudget
+from planner.domain.visual_goal import VisualGoalPlanningContext
+from planner.errors import BudgetExceeded, ProtocolError
+from planner.adapters.image_encoding import image_url
 
 logger = logging.getLogger(__name__)
 
@@ -37,10 +39,15 @@ class QwenVLPlanner:
         round_index: int = 1,
         initial_pose: WorldPose | None = None,
         previous_trajectory: RelativeTrajectory | None = None,
+        visual_goal_context: VisualGoalPlanningContext | None = None,
+        budget: ExecutionBudget | None = None,
     ) -> RelativeTrajectory:
         logger.info("[TrajectoryPlanner] model=%s instruction=%s", self.model, instruction)
         logger.info("[TrajectoryPlanner] RGB=%s depth=%s pose=%s", observation.rgb.size, observation.depth_image.size, observation.vehicle_pose)
         system_prompt = self.prompt_builder.system_prompt()
+        if visual_goal_context is not None and getattr(self.prompt_builder, "supports_visual_goal_context", False) is not True:
+            raise ProtocolError("backend prompt does not support visual-goal context")
+        extra = {} if visual_goal_context is None else {"visual_goal_context": visual_goal_context}
         user_prompt = self.prompt_builder.build_user_prompt(
             instruction,
             observation,
@@ -49,6 +56,7 @@ class QwenVLPlanner:
             round_index=round_index,
             initial_pose=initial_pose or observation.vehicle_pose,
             previous_trajectory=previous_trajectory,
+            **extra,
         )
         content = [
             {"type": "image_url", "image_url": {"url": _image_url(observation.rgb, "JPEG")}},
@@ -59,6 +67,9 @@ class QwenVLPlanner:
         if self.api_key and self.api_key != "no-key":
             headers["Authorization"] = f"Bearer {self.api_key}"
         started = time.perf_counter()
+        timeout = self.timeout_s if budget is None else min(self.timeout_s, budget.remaining(time.monotonic()))
+        if timeout <= 0:
+            raise BudgetExceeded("deadline before trajectory request")
         response = requests.post(
             self.url,
             headers=headers,
@@ -72,9 +83,11 @@ class QwenVLPlanner:
                 "max_tokens": 256,
                 **({"thinking": {"type": self.thinking}} if self.thinking is not None else {}),
             },
-            timeout=self.timeout_s,
+            timeout=timeout,
         )
         response.raise_for_status()
+        if budget is not None and budget.remaining(time.monotonic()) <= 0:
+            raise BudgetExceeded("late trajectory response discarded")
         choice = response.json().get("choices", [{}])[0]
         raw = choice.get("message", {}).get("content", "")
         logger.info("[TrajectoryPlanner] %.2fs finish_reason=%s raw response:\n%s", time.perf_counter() - started, choice.get("finish_reason"), raw)
@@ -86,12 +99,7 @@ class QwenVLPlanner:
 从而可以直接作为图像 URL 发送给 Qwen/OpenAI 兼容的多模态接口
 '''
 def _image_url(image, image_format: str) -> str:
-    converted = image.convert("RGB") if image.mode != "RGB" else image
-    buffer = io.BytesIO()
-    save_options = {"quality": 90} if image_format == "JPEG" else {}
-    converted.save(buffer, format=image_format, **save_options)
-    mime = "jpeg" if image_format == "JPEG" else "png"
-    return f"data:image/{mime};base64,{base64.b64encode(buffer.getvalue()).decode('ascii')}"
+    return image_url(image, image_format)
 
 '''确保你传入的基础 API 地址最后一定指向 /chat/completions 接口'''
 def _chat_url(url: str) -> str:

@@ -10,7 +10,8 @@ from planner.adapters.airsim.observation_gate import ObservationGate
 from planner.domain.motion import MotionLimits
 from planner.domain.pose import WorldPose, wrap_yaw_deg
 from planner.domain.trajectory import WorldTrajectory
-from planner.errors import ExecutionError
+from planner.errors import ExecutionError, BudgetExceeded
+from planner.domain.execution import ExecutionBudget
 from planner.services.motion.synchronized import SynchronizedMotionPlanner
 
 
@@ -93,6 +94,13 @@ def test_stalled_vehicle_does_not_report_success():
     connection, segment, tracker = run_motion(WorldPose(0, 0, -5, 0), WorldPose(3, 0, -5, 45), moving=False, timeout=10)
     with pytest.raises(ExecutionError, match="timed out"):
         tracker.execute(segment)
+
+
+def test_motion_rejects_budget_too_short_before_first_velocity_command():
+    connection, segment, tracker = run_motion(WorldPose(0, 0, -5, 0), WorldPose(3, 0, -5, 0))
+    with pytest.raises(BudgetExceeded):
+        tracker.execute(segment, budget=ExecutionBudget(1))
+    assert not connection.commands
 
 
 def test_collision_checked_during_segment():

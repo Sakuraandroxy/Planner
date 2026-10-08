@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from planner.domain.motion import MotionLimits
+from .visual_goal import VisualGoalConfig
 
 
 @dataclass(frozen=True)
@@ -57,4 +58,6 @@ class PlannerConfig:
     recording: RecordingConfig
     navigation_max_rounds: int = 1
     motion: MotionConfig = MotionConfig()
+    visual_goal: VisualGoalConfig = VisualGoalConfig()
+    goal_observer: ApiConfig | None = None
 

@@ -12,7 +12,7 @@ class FakeVehicle:
     def current_pose(self):
         return self.pose
 
-    def execute_segment(self, segment):
+    def execute_segment(self, segment, *, budget=None):
         if self.fail:
             raise RuntimeError("execution failed")
         self.segments.append(segment)

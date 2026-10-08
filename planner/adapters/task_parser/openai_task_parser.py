@@ -7,19 +7,22 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-from planner.adapters.task_parser.prompt import TASK_PARSER_SYSTEM_PROMPT, user_prompt
+from planner.adapters.task_parser.prompt import user_prompt
 from planner.adapters.task_parser.response_schema import parse_json_object
 from planner.adapters.task_parser.task_factory import mission_from_dict
 from planner.domain.mission import MissionPlan
+from planner.domain.mission import TaskKind
+from planner.adapters.task_parser.prompt import task_parser_system_prompt
 from planner.errors import ProtocolError
 
 #把用户的自然语言指令发给任务解析大模型
 class OpenAITaskParser:
-    def __init__(self, url: str, model: str, api_key: str, timeout_s: float):
+    def __init__(self, url: str, model: str, api_key: str, timeout_s: float, supported_kinds=None):
         self.url = _chat_url(url)
         self.model = model
         self.api_key = api_key
         self.timeout_s = timeout_s
+        self.system_prompt = task_parser_system_prompt(supported_kinds or {TaskKind.NAVIGATION})
 
     def parse(self, instruction: str) -> MissionPlan:
         if not instruction.strip():
@@ -35,7 +38,7 @@ class OpenAITaskParser:
             json={
                 "model": self.model,
                 "messages": [
-                    {"role": "system", "content": TASK_PARSER_SYSTEM_PROMPT},
+                    {"role": "system", "content": self.system_prompt},
                     {"role": "user", "content": user_prompt(instruction)},
                 ],
                 "temperature": 0.0,

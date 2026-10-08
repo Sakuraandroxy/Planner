@@ -6,6 +6,7 @@ from pathlib import Path
 
 from config import load_config
 from planner.bootstrap import build_recording_runtime, build_runtime
+from planner.domain.visual_goal import VisualGoalNavigationResult
 
 
 def parse_args() -> argparse.Namespace:
@@ -64,10 +65,22 @@ def main() -> int:
 
 
 def _run(runtime, instruction: str) -> int:
-    result = runtime.application.execute(instruction)
+    try:
+        result = runtime.application.execute(instruction)
+    except Exception as exc:
+        print(f"Task rejected: {exc}")
+        return 1
+    visual = [stage.value for stage in result.stages if isinstance(stage.value, VisualGoalNavigationResult)]
+    for item in visual:
+        print(f"Visual goal: {item.status.value}; distance={item.final_distance_m}; "
+              f"elapsed={item.elapsed_s:.1f}s; calls={item.planning_calls}; "
+              f"stop_confirmed={item.stop.confirmed}; reason={item.reason}")
+        if item.run_directory:
+            print(f"Visual goal diagnostics: {item.run_directory}")
     if result.success:
         reviewed = all(isinstance(stage.value, dict) and stage.value.get("completion") == "model_review" for stage in result.stages)
-        print(f"Task completion reported by model review: {len(result.stages)} stage(s)" if reviewed
+        print(f"Visual goal arrival confirmed: {len(visual)} stage(s)" if len(visual) == len(result.stages)
+              else f"Task completion reported by model review: {len(result.stages)} stage(s)" if reviewed
               else f"Trajectory execution finished: {len(result.stages)} stage(s); task completion not verified")
         return 0
     print(f"Mission failed: {result.error}")

@@ -44,7 +44,10 @@ def build_runtime(config: PlannerConfig) -> Runtime:
     observation_gate = ObservationGate(vehicle, config.motion.limits, config.airsim.move_timeout_s)
     vehicle.motion_tracker.observation_gate = observation_gate
     observation = AirSimObservationSource(
-        connection, vehicle, config.airsim.camera_id, config.depth.min_m, config.depth.max_m
+        connection, vehicle, config.airsim.camera_id, config.depth.min_m, config.depth.max_m,
+        observation_gate=observation_gate,
+        depth_horizontal_fov_deg=(config.visual_goal.depth_horizontal_fov_deg if config.visual_goal.enabled else None),
+        verify_image_pair=config.visual_goal.enabled,
     )
     trajectory_prompt = NavigationTrajectoryPrompt()
     planner = QwenVLPlanner(
@@ -65,12 +68,22 @@ def build_runtime(config: PlannerConfig) -> Runtime:
                   if config.navigation_max_rounds > 1 else None),
         exit_policy=NavigationExitPolicy(config.navigation_max_rounds),
     )
-    router = WorkflowRouter({TaskKind.NAVIGATION: workflow})
+    workflows = {TaskKind.NAVIGATION: workflow}
+    if config.visual_goal.enabled:
+        from planner.visual_goal_bootstrap import build_visual_goal_workflow
+        workflows[TaskKind.VISUAL_GOAL_NAVIGATION] = build_visual_goal_workflow(
+            config, observation, motion_planner, ExecutionService(vehicle),
+            TrajectoryValidator(config.trajectory.point_count, config.trajectory.max_step_m,
+                                config.trajectory.max_yaw_step_deg),
+        )
+    router = WorkflowRouter(workflows)
     parser = OpenAITaskParser(
         config.task_parser.url, config.task_parser.model,
         config.task_parser.api_key, config.task_parser.timeout_s,
+        supported_kinds=router.supported_kinds,
     )
-    app = PlannerApplication(parser, MissionValidator(router.supported_kinds), MissionRunner(router))
+    app = PlannerApplication(parser, MissionValidator(router.supported_kinds,
+        config.visual_goal.limits if config.visual_goal.enabled else None, config.depth.max_m), MissionRunner(router))
     return Runtime(app, connection)
 
 

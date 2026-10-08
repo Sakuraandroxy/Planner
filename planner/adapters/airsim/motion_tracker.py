@@ -7,9 +7,10 @@ from dataclasses import replace
 from typing import Callable
 
 from planner.domain.motion import MotionLimits
+from planner.domain.execution import ExecutionBudget
 from planner.domain.pose import WorldPose, wrap_yaw_deg
 from planner.domain.trajectory import MotionSegment
-from planner.errors import ExecutionError
+from planner.errors import BudgetExceeded, ExecutionError
 from planner.services.motion.synchronized import duration_for, sample_segment
 
 logger = logging.getLogger(__name__)
@@ -32,7 +33,7 @@ class AirSimMotionTracker:
         self.sleep = sleep
         self.observation_gate = None
 
-    def execute(self, segment: MotionSegment) -> None:
+    def execute(self, segment: MotionSegment, *, budget: ExecutionBudget | None = None) -> None:
         import airsim
 
         limits = self.limits
@@ -42,6 +43,7 @@ class AirSimMotionTracker:
             raise ExecutionError("smooth motion requires a speed limit")
         start = self.current_pose()
         duration = max(segment.duration_s or 0, duration_for(start, segment.end, speed, limits))
+        self._check_budget(budget, duration + limits.settle_time_s)
         if duration + limits.settle_time_s >= self.timeout_s:
             raise ExecutionError(f"smooth duration {duration:.2f}s exceeds available execution timeout")
         # Re-anchor interpolation to measured position, but keep the original world goal.
@@ -62,6 +64,7 @@ class AirSimMotionTracker:
                 if resumed:
                     start = self.current_pose()
                     duration = duration_for(start, segment.end, speed, limits)
+                    self._check_budget(budget, duration + limits.settle_time_s)
                     if duration + limits.settle_time_s >= self.timeout_s:
                         raise ExecutionError("resumed motion exceeds execution timeout")
                     segment = replace(segment, start=start, duration_s=duration)
@@ -71,6 +74,7 @@ class AirSimMotionTracker:
                     settled_since = None
                     logger.info("[Motion] resume from measured pose toward original target: %s", segment.end)
                 tick = self.clock()
+                self._check_budget(budget)
                 elapsed = tick - began
                 if elapsed >= self.timeout_s:
                     raise ExecutionError("synchronized motion timed out before position/yaw settled")
@@ -119,3 +123,7 @@ class AirSimMotionTracker:
                 last_velocity, last_yaw_rate = velocity, yaw_rate
                 previous_time, previous_pose = tick, actual
                 self.sleep(max(0.0, period-(self.clock()-tick)))
+
+    def _check_budget(self, budget, required_s=0.0):
+        if budget is not None and budget.remaining(self.clock()) <= required_s:
+            raise BudgetExceeded("motion/task deadline exhausted")

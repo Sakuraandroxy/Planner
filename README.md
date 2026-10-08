@@ -1,6 +1,8 @@
 # Base Planner
 
-这是一个面向 AirSim 的基础无人机规划器。当前版本保留任务解析、视觉轨迹规划、相机观测、轨迹校验与 AirSim 飞行控制等最小执行链路；暂不包含目标检测与目标绑定、记忆、语义完成判定、避障与恢复、候选轨迹评分、滑动窗口队列、Web UI，以及旧版快慢速运行模式。
+这是一个面向 AirSim 的模块化无人机规划器。基础 `navigation` 保留任务解析、视觉航点规划、相机观测、校验和平滑飞行链路；本分支新增可选的低空平视 `visual_goal_navigation`：通过 VLM 定位静态目标、深度测距，执行安全航段前缀，并确认在目标附近停稳。新任务默认关闭，不改变旧配置的任务选择。
+
+当前不包含 GroundingDINO、全局地图、完整避障/绕行、持久记忆、动态目标跟随、连续滑动窗口或候选轨迹评分。目标定位、关联及几何完成判断依赖观测质量和人工校准，不能保证所有天气或任意未知环境下成功。
 
 ## 当前运行流程
 
@@ -18,7 +20,7 @@
 
 每个航点的平移量和偏航量，都相对于前一个预测航点表示。AirSim 执行时将位置与偏航结合控制，因此无人机的移动方向可以与机头/相机朝向不同。相机适配器会读取图像返回的相机位姿，并获取相机 FOV；不会假设相机一定水平朝前。
 
-当前没有语义层面的任务完成检测。因此，`Mission executed` 只表示已验证的轨迹阶段执行完成，期间没有检测到碰撞或 API 错误；它不代表已经确认到达用户描述的目标。
+基础 `navigation` 的轨迹执行完毕不代表目标达成；启用旧进度复核时，完成依据仍是模型复核。新 `visual_goal_navigation` 只有通过目标关联、深度距离带、安全条件和停稳观测确认，才返回 `reached`；其依据仍是估计证据，不是仿真器目标位置真值。
 
 ## 配置和启动
 
@@ -73,22 +75,27 @@ config/                       配置 schema、加载器和 YAML 配置
   loader.py
   base.yaml                   默认配置
   deepseek.example.yaml       不含密钥的 DeepSeek 配置模板
+  visual_goal.py              视觉目标任务的类型配置和校验
+  visual_goal_navigation.example.yaml  新任务无密钥模板（默认关闭）
 planner/
   domain/                     任务、观测、位姿、轨迹和结果等领域数据类型
   ports/                      可替换组件的类型化接口
   application/                计划校验、阶段运行和工作流路由
   workflows/                  面向具体任务的编排流程
     termination/              工作流退出策略接口及导航退出策略
-  capabilities/               多个工作流可复用的任务能力接口
+  capabilities/               可复用任务能力：目标关联、深度估计与完成条件
   services/                   共享的轨迹变换、校验和执行协调逻辑
     motion/                   从世界轨迹生成运动段与运动曲线
   adapters/                    模型、仿真器和外部服务的具体实现
     airsim/                   AirSim 连接、观测、车辆、运动跟踪和录制
     task_parser/              任务解析提示词、HTTP 调用和响应解析
+    goal_observer/            静态目标图像定位、提示词和严格协议解析
+    diagnostics/              实现 TaskTrace 的本地文件诊断输出
     trajectory_planner/       轨迹规划/复核客户端、提示词和响应解析
       prompts/                针对具体任务的规划提示词构造
   extensions/                  显式白名单注册骨架；当前不是动态插件系统
   bootstrap.py                 创建并组装运行时依赖
+  visual_goal_bootstrap.py     新任务依赖装配，不包含执行循环
   errors.py                    规划器异常类型
 tests/
   unit/                        单元测试
@@ -107,7 +114,12 @@ output/                        本地运行输出，例如相机画面和日志
 - `planner/application/` 校验解析结果、按顺序运行阶段，并通过 `TaskKind` 路由到工作流；不负责图像处理或 AirSim 细节。
 - `planner/workflows/` 编排某类任务的观测、规划、执行、复核和退出流程。不同任务应有各自的工作流，不要不断扩展一个万能工作流。
 - `planner/workflows/termination/` 放置退出策略接口及具体任务策略。后续任务可以定义自己的停止/完成判定，不必把规则塞入导航工作流。
-- `planner/capabilities/` 用于多个工作流共享的任务能力。目前这里只有接口骨架，尚未实现目标检测或记忆系统。
+- `planner/capabilities/` 放置多个工作流可以共享的任务能力，当前实现静态目标关联、深度估计和 near 完成条件；尚无持久记忆系统。
+- `planner/capabilities/targeting/` 实现目标关联及 RGB 射线到深度的几何映射；`completion/` 实现 near 到达条件。这里不发送模型 HTTP 请求。
+- `planner/adapters/goal_observer/` 实现独立的图像定位后端、定位提示词及严格返回解析，不需要启动 GroundingDINO。
+- `planner/workflows/visual_goal_navigation.py` 编排新任务；`visual_goal_session.py` 保存一次小任务的局部状态，`termination/visual_goal_navigation.py` 管理搜索、预算及退出策略。
+- `planner/services/trajectory_safety.py` 筛选完整安全航段前缀；`planner/adapters/diagnostics/visual_goal_trace.py` 实现 TaskTrace 接口，保存诊断证据。安全检查是单前视深度支持的采样检查，不是全向避障保证。
+- `planner/visual_goal_bootstrap.py` 只装配新任务依赖，由共同 bootstrap 显式调用，不处理任务运行循环。
 - `planner/services/` 放置跨适配器复用的流程和转换逻辑；运动段生成及运动曲线位于 `services/motion/`。
 - `planner/adapters/airsim/` 封装 AirSim RPC、车辆控制、相机观测、平滑运动跟踪和录制等仿真器相关实现。
 - `planner/adapters/task_parser/` 实现任务解析模型协议；`planner/adapters/trajectory_planner/` 实现轨迹规划/进度复核模型协议。对应提示词和响应解析应留在各自功能边界内。
@@ -185,3 +197,80 @@ python -m pytest -q
 ```
 
 根目录 `docs/` 当前被 Git 忽略，其中的本地文档不会随仓库共享。如需共享项目规范，请放入本 README，或在明确评估后调整忽略规则。
+
+## 本分支新增：低空平视视觉目标导航
+
+### 适用范围与闭环
+
+仅支持静态目标的 `near` 关系，例如“靠近前方红色房子并悬停”。不能把飞到屋顶上方、绕到背后、进入建筑或跟随移动目标偷偷改成 near。长任务仍先拆为 MissionStage，各阶段的目标、历史和预算独立。
+
+```text
+停稳观测 → VLM 定位/身份关联 → 原始深度测距
+             ├─ 不可见：有限原地搜索 → 再观测
+             ├─ 歧义/深度不足：有限恢复或退出
+             ├─ 未到达：航点规划 → 安全前缀 → 平滑执行 → 再观测
+             └─ 满足候选条件：第二次新观测确认 → reached
+```
+
+实验初值：到选定可见表面 4m，允许带 3～5m；加入 0.3m 工程余量后，估计值需在 3.3～4.7m 内。两次新采集观测至少间隔 0.5s。保持起始世界高度附近（±1m），相机初始 pitch 为 ±5° 内；这不是离地高度控制。
+
+每轮只执行累计不超过 6m/8s、得到空间证据支持的完整航段前缀；不会静默截短航点。较大转向后重新观测。默认搜索每步 30°、左右最多 90°，每次最多 9 步，整个任务最多 2 次/18 步，且必须确认旋转净空。原有每点 `[dx,dy,dz,dyaw_deg]` 协议、NED 符号和 `moveByVelocityAsync` 平滑控制保持不变。
+
+### 配置及启动
+
+先复制无密钥模板：
+
+```powershell
+Copy-Item config/visual_goal_navigation.example.yaml config/visual_goal_navigation.local.yaml
+```
+
+编辑本地文件，先完成以下准备，不要未经核查就把确认项改为 true：
+
+1. `goal_observer` 填写实测支持图片、归一化框/表面点协议的模型地址和模型名。可以和轨迹模型共用服务，但不能假定航点微调模型就会输出定位框。支持本地 `api_key` 或 `api_key_env`；本地配置已忽略，不提交密钥。
+2. 校准 RGB/DepthPerspective 的 FOV、画幅、视角和坐标基底，填写 `depth_horizontal_fov_deg`，确认后设置 `geometry_verified: true`。不同分辨率按内参射线映射，不直接拉伸做几何计算。
+3. 按机型实测填写 `vehicle_radius_m`、跟踪/障碍余量；确认**每次任务起点**周围所配置半径内的静态净空后，设置 `initial_clearance_confirmed: true`。如需搜索，也必须确认 `search_clearance_confirmed: true`。初始净空不是由单张前视图自动证明的。
+4. 最后设置 `visual_goal_navigation.enabled: true`。相机 FOV 若在运行中变化，需要重建运行时，当前缓存不支持动态 FOV。
+
+安全检查的占用半径叠加机体半径、额外障碍余量、跟踪余量及允许的观测起点漂移，不能用同一份余量同时抵扣后两项。默认合计 2.1m；显式停靠带下界必须同时满足该机型的派生安全半径和 minimum_standoff_m，不能只检查抽象的 2m 下限。
+
+检查配置（只读取文件，不连接仿真器、不起飞）：
+
+```powershell
+python -c "from config import load_config; c=load_config('config/visual_goal_navigation.local.yaml'); print('visual_goal_enabled:', c.visual_goal.enabled)"
+```
+
+模型和 AirSim 就绪且上述条件满足后启动：
+
+```powershell
+python run_airsim_cli.py --config config/visual_goal_navigation.local.yaml --record-camera-api --camera-record-mode frames --camera-record-fps 5
+```
+
+默认入口会自动起飞；已在合适空中起点可加 `--no-takeoff`。该选项不会自动验证初始净空。输入“靠近前方红色房子并悬停”，检查解析日志是否为 `visual_goal_navigation`。显式运动/道路指令仍可路由到基础 navigation。
+
+### 感知服务返回协议
+
+GoalObserver 是与航点规划分离的图像请求，返回严格 JSON，不返回航点或完成声明：
+
+```json
+{
+  "protocol_version": "goal_observation_v1",
+  "status": "visible",
+  "bbox": [0.38, 0.25, 0.69, 0.82],
+  "surface_point": [0.53, 0.57],
+  "description": "the red house ahead",
+  "evidence": "matching red facade is visible",
+  "same_target": true
+}
+```
+
+坐标相对**当前完整 RGB 图像**归一化至 0～1；visible 时点必须在非空框内。不可见或歧义时 `status` 为 `not_visible`/`ambiguous`，框和点为 null。`same_target` 明确表示相同目标及表面区域的关联依据；未知字段、重复字段、NaN/Inf 和越界坐标拒绝。不把 VLM 自报置信度当真值。
+
+### 输出与边界
+
+诊断保存在 `output/visual_goal/<时间戳_唯一编号>/`：RGB、深度可视化、原始米制 `.npy`、目标框/表面点叠加图、`events.jsonl`（模型名、实验配置、几何、规划/执行前缀、预算和最终状态）。背景 Camera API 录制仍只读，不触发悬停；正式任务观测通过 ObservationGate 停稳后依次采集图像与车辆姿态，并不宣称跨 RPC 严格同一时刻。
+
+只有 `reached` 是新任务成功；其他状态包括目标未找到/丢失/歧义/疑似移动、感知不可靠、blocked、stuck、timeout、safety_stop、模型/观测/执行错误及 cancelled。目标移动判断依据同表面关联下多次一致世界位移，仍依赖定位误差；不升级为动态跟随。不能可靠关联的表面切换会停止，不自动换表面继续。
+
+观测门控失败后必须重建运行时，不能在同一实例中恢复运动。失败时取消/悬停分别尝试，API 成功不等于反馈确认停稳；结果记录停止确认状态。任务 deadline 贯穿观测、模型请求和运动控制，拒绝迟到响应；RPC/future 阻塞仍可能造成超时滞后，不承诺硬实时停止。
+
+`path_length_m` 当前是**实测航段端点距离之和**，不是高频采样的完整实飞路径，不能直接用作 SPL。安全检查使用静态场景、人工起始净空和深度采样证据，不能认证未观察空间的全部风险，也不提供绕障路线。当前自动化测试通过不代表已通过 AirSim 实飞或真实 VLM 验收。

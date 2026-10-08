@@ -2,11 +2,13 @@ import io
 import sys
 from types import SimpleNamespace
 from unittest.mock import Mock
+import pytest
 
 from PIL import Image
 
 from planner.adapters.airsim.observation_source import AirSimObservationSource
 from planner.domain.pose import WorldPose
+from planner.errors import ObservationError
 
 
 def _png_bytes() -> bytes:
@@ -58,3 +60,10 @@ def test_capture_caches_fov_and_uses_image_response_camera_pose(monkeypatch):
     assert second.intrinsics.horizontal_fov_deg == 90.0
     assert [item.args[0] for item in connection.call.call_args_list].count("simGetCameraInfo") == 1
     assert vehicle.current_pose.call_count == 2
+
+
+def test_verified_pair_rejects_different_camera_pose():
+    rgb = SimpleNamespace(camera_position=_vector(), camera_orientation=_quaternion())
+    depth = SimpleNamespace(camera_position=_vector(x=1), camera_orientation=_quaternion())
+    with pytest.raises(ObservationError, match="registered"):
+        AirSimObservationSource._validate_pair(rgb, depth)
