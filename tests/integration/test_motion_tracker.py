@@ -10,6 +10,9 @@ from planner.adapters.airsim.observation_gate import ObservationGate
 from planner.domain.motion import MotionLimits
 from planner.domain.pose import WorldPose, wrap_yaw_deg
 from planner.domain.trajectory import WorldTrajectory
+from planner.domain.trajectory import RelativeTrajectory
+from planner.domain.pose import RelativePoseDelta
+from planner.services.trajectory_transform import relative_to_world
 from planner.errors import ExecutionError, BudgetExceeded
 from planner.domain.execution import ExecutionBudget
 from planner.services.motion.synchronized import SynchronizedMotionPlanner
@@ -159,3 +162,38 @@ def test_failed_capture_blocks_further_motion():
     with pytest.raises(ExecutionError, match="observation failed"):
         tracker.execute(segment)
     assert not connection.commands
+
+
+@pytest.mark.parametrize("angle", [180, -180])
+@pytest.mark.parametrize("pause", [False, True])
+def test_signed_half_turn_direction_and_pause_do_not_replay_rotation(angle, pause):
+    start = WorldPose(0, 0, -5, 170)
+    limits = MotionLimits()
+    connection = SimulatedConnection(start)
+    world = relative_to_world(RelativeTrajectory((RelativePoseDelta(0, 0, 0, angle),)), start)
+    segment = SynchronizedMotionPlanner(2, limits).create_motion(world).segments[0]
+    tracker = AirSimMotionTracker(connection, lambda: connection.pose, limits, 40,
+                                 clock=lambda: connection.time, sleep=connection.sleep)
+    captured = []
+    if pause:
+        vehicle = SimpleNamespace(hover=lambda: connection.call_async_and_wait("hoverAsync"),
+                                  current_pose=lambda: connection.pose, collision_state=lambda: False)
+        gate = ObservationGate(vehicle, limits, 40, clock=lambda: connection.time, sleep=connection.sleep)
+        tracker.observation_gate = gate
+        def sleep(seconds):
+            connection.sleep(seconds)
+            if len(connection.commands) >= 20 and not captured:
+                with gate.capture():
+                    captured.append(connection.pose)
+                    connection.sleep(5)
+        tracker.sleep = sleep
+    tracker.execute(segment)
+    # Integrate commands rather than just comparing normalized endpoints: a
+    # right half-turn and a left half-turn end at the same wrapped yaw.
+    total = sum(command[2]*0.05 for command in connection.commands)
+    assert total == pytest.approx(angle, abs=2)
+    first_rate = next(command[2] for command in connection.commands if abs(command[2]) > 0.01)
+    assert first_rate*angle > 0
+    assert all(math.hypot(*command[1]) == 0 for command in connection.commands)
+    assert abs(wrap_yaw_deg(connection.pose.yaw_deg-world.poses[-1].yaw_deg)) <= 2
+    assert len(captured) == int(pause)

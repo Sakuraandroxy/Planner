@@ -7,6 +7,9 @@ from planner.domain.motion import MotionLimits
 from planner.domain.pose import WorldPose, wrap_yaw_deg
 from planner.domain.trajectory import WorldTrajectory
 from planner.services.motion.synchronized import SynchronizedMotionPlanner, sample_segment
+from planner.domain.pose import RelativePoseDelta
+from planner.domain.trajectory import RelativeTrajectory, MotionSegment
+from planner.services.trajectory_transform import relative_to_world
 
 
 @pytest.mark.parametrize("end", [WorldPose(10, 5, -4, 90), WorldPose(0, 0, 0, -90), WorldPose(0, 0, -12, 0)])
@@ -49,3 +52,23 @@ def test_shortest_yaw_crosses_wrap_without_full_turn():
 def test_invalid_motion_config(values):
     with pytest.raises((ValueError, RuntimeError)):
         _motion_config(values)
+
+
+@pytest.mark.parametrize("angle", [180, -180, 90, -90, 0.0001])
+def test_signed_command_survives_world_conversion_and_motion_sampling(angle):
+    start = WorldPose(0, 0, -5, 170)
+    world = relative_to_world(RelativeTrajectory((RelativePoseDelta(0, 0, 0, angle),)), start)
+    segment = SynchronizedMotionPlanner(2, MotionLimits()).create_motion(world).segments[0]
+    assert world.yaw_deltas_deg == (angle,)
+    assert segment.yaw_delta_deg == angle
+    middle = sample_segment(segment, segment.duration_s/2)
+    assert middle.yaw_rate_deg_s*angle > 0
+
+
+def test_signed_metadata_must_match_segment_count_and_endpoint():
+    start, end = WorldPose(0, 0, -5, 0), WorldPose(0, 0, -5, -180)
+    with pytest.raises(ValueError):
+        WorldTrajectory(start, (end,), ())
+    for delta in (90, True, float("nan")):
+        with pytest.raises(ValueError):
+            MotionSegment(start, end, "synchronized_quintic", 10, 2, delta)

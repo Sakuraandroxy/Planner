@@ -26,7 +26,9 @@ def goal_parameters():
 
 def plan(parameters=None):
     return mission_from_dict({"protocol_version": "mission_plan_v1", "stages": [
-        {"stage_id": "first", "kind": "navigation", "parameters": {"instruction": "Turn right"}},
+        {"stage_id": "first", "kind": "basic_motion", "parameters": {
+            "instruction": "Turn right 90 degrees", "forward_m": 0, "right_m": 0,
+            "up_m": 0, "yaw_right_deg": 90}},
         {"stage_id": "second", "kind": "visual_goal_navigation", "parameters": parameters or goal_parameters()},
     ]})
 
@@ -48,7 +50,7 @@ def test_mission_json_rejects_duplicate_and_nonfinite_fields(text):
 
 def test_kind_requires_enabled_capabilities_and_safe_standoff():
     with pytest.raises(ProtocolError):
-        MissionValidator({TaskKind.NAVIGATION}).validate(plan())
+        MissionValidator({TaskKind.BASIC_MOTION}).validate(plan())
     parameters = goal_parameters()
     parameters["standoff_m"] = 2
     with pytest.raises(ProtocolError):
@@ -63,22 +65,24 @@ def test_mixed_stages_route_in_order_and_failure_stops_following_stages():
         def run(self, stage):
             calls.append(stage.kind)
             return StageResult(stage.stage_id, self.success, error=None if self.success else "blocked")
-    router = WorkflowRouter({TaskKind.NAVIGATION: FakeWorkflow(False),
+    router = WorkflowRouter({TaskKind.BASIC_MOTION: FakeWorkflow(False),
                              TaskKind.VISUAL_GOAL_NAVIGATION: FakeWorkflow(True)})
     assert not MissionRunner(router).run(plan()).success
-    assert calls == [TaskKind.NAVIGATION]
+    assert calls == [TaskKind.BASIC_MOTION]
     calls.clear()
     router = WorkflowRouter({kind: FakeWorkflow(True) for kind in TaskKind})
     assert MissionRunner(router).run(plan()).success
-    assert calls == [TaskKind.NAVIGATION, TaskKind.VISUAL_GOAL_NAVIGATION]
+    assert calls == [TaskKind.BASIC_MOTION, TaskKind.VISUAL_GOAL_NAVIGATION]
 
 
-def test_old_config_uses_exact_old_parser_prompt_and_no_goal_backend(monkeypatch):
+def test_default_config_assembles_basic_motion_and_no_goal_backend(monkeypatch):
     monkeypatch.setattr("planner.bootstrap.AirSimConnection", Mock())
     config = load_config("config/base.yaml")
     assert not config.visual_goal.enabled and config.goal_observer is None
     runtime = build_runtime(config)  # Assembly only: never connects or takes off.
-    assert runtime.application.task_parser.system_prompt == TASK_PARSER_SYSTEM_PROMPT
+    assert runtime.application.task_parser.system_prompt == task_parser_system_prompt({TaskKind.BASIC_MOTION})
+    assert TASK_PARSER_SYSTEM_PROMPT in runtime.application.task_parser.system_prompt
+    assert runtime.application.runner.router.supported_kinds == {TaskKind.BASIC_MOTION}
     assert "visual_goal_navigation" in task_parser_system_prompt(set(TaskKind))
 
 
@@ -100,3 +104,17 @@ def test_new_template_requires_verified_backend_and_geometry(tmp_path):
     broken["goal_observer"]["timeout_s"] = float("inf")
     with pytest.raises(ConfigurationError, match="timeout"):
         load(broken)
+
+
+def test_candidate_limit_is_injected_into_both_observer_and_selector(tmp_path, monkeypatch):
+    raw = yaml.safe_load(Path("config/visual_goal_navigation.example.yaml").read_text())
+    raw["goal_observer"]["model"] = "verified-image-model"
+    raw["visual_goal_navigation"].update(enabled=True, geometry_verified=True, initial_clearance_confirmed=True)
+    raw["visual_goal_navigation"]["limits"]["maximum_surface_candidates"] = 3
+    path = tmp_path/"test.yaml"
+    path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    monkeypatch.setattr("planner.bootstrap.AirSimConnection", Mock())
+    runtime = build_runtime(load_config(path))
+    workflow = runtime.application.runner.router._workflows[TaskKind.VISUAL_GOAL_NAVIGATION]
+    assert workflow.goal_observer.maximum_candidates == 3
+    assert workflow.surface_selector.limits.maximum_surface_candidates == 3

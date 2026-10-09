@@ -6,7 +6,8 @@ from typing import Callable
 
 import numpy as np
 
-from planner.capabilities.targeting.association import associate, make_reference, coherent_surface_motion
+from planner.capabilities.targeting.association import make_reference, coherent_surface_motion
+from planner.capabilities.targeting.surface_selection import SurfaceSelector
 from planner.domain.execution import ExecutionBudget, StopResult
 from planner.domain.pose import RelativePoseDelta, wrap_yaw_deg
 from planner.domain.result import StageResult
@@ -41,11 +42,13 @@ class VisualGoalNavigationWorkflow:
                  motion_planner: MotionPlanner, execution: ExecutionService,
                  geometry: DepthGeometry, completion: VisualGoalCompletion,
                  safety: TrajectorySafetyChecker, limits: VisualGoalLimits,
+                 surface_selector: SurfaceSelector,
                  trace_factory: Callable[[], TaskTrace] | None = None,
                  clock=time.monotonic, sleep=time.sleep):
         self.source, self.goal_observer, self.planner = observation_source, goal_observer, trajectory_planner
         self.validator, self.motion, self.execution = validator, motion_planner, execution
         self.geometry, self.completion, self.safety, self.limits = geometry, completion, safety, limits
+        self.surface_selector = surface_selector
         self.trace_factory, self.clock, self.sleep = trace_factory, clock, sleep
 
     def run(self, stage: MissionStage) -> StageResult[object]:
@@ -118,46 +121,58 @@ class VisualGoalNavigationWorkflow:
                 session.policy.unreliable_observation()
                 self._wait(self.limits.confirmation_interval_s, session)
                 continue
-            goal = model_call(lambda: self.goal_observer.observe(
+            observed_goal = model_call(lambda: self.goal_observer.observe(
                 observation, parameters.target_description, session.reference,
                 initial_pose=session.initial, budget=session.budget,
             ), session, self.limits, clock=self.clock)
             if trace:
-                trace.observation(observation, goal)
+                trace.observation(observation, observed_goal)
             if not session.policy.anchor_valid(observation, self.execution.current_pose(), self.clock()):
                 session.confirmations = 0
                 continue
-            if goal.status is GoalVisibility.NOT_VISIBLE:
+            if observed_goal.status is GoalVisibility.NOT_VISIBLE:
                 self._event(trace, "state", state=VisualGoalState.SEARCHING)
                 session.confirmations = 0
                 self._search(observation, parameters, session, trace)
                 continue
-            if goal.status is GoalVisibility.AMBIGUOUS:
+            if observed_goal.status is GoalVisibility.AMBIGUOUS:
                 session.confirmations = 0
                 session.policy.unreliable_observation(ambiguous=True)
                 continue
-            geometry = self.geometry.estimate(observation, goal, self.limits)
+            desired = parameters.standoff_m if parameters.standoff_m is not None else self.limits.standoff_m
+            estimates = self.geometry.estimate_candidates(observation, observed_goal, self.limits)
+            selection = self.surface_selector.select(observation, observed_goal, estimates,
+                                                    session.reference, session.initial, desired)
+            session.surface_selection = selection
+            geometry, goal = selection.geometry, selection.goal
             session.geometry = geometry
-            matched, evidence = associate(session.reference, goal, geometry, self.limits.association_gate_m)
-            self._event(trace, "target_geometry", geometry=geometry, identity=matched, evidence=evidence)
-            if not geometry.reliable or not matched:
+            self._event(trace, "surface_selection", selection=selection)
+            if trace:
+                trace.surface_selection(observation, selection)
+            if selection.selected is None:
                 session.confirmations = 0
-                if coherent_surface_motion(session.reference, goal, geometry, session.displaced_surface,
-                        self.limits.association_gate_m, self.limits.distance_uncertainty_margin_m):
+                suspect = self.surface_selector.motion_evidence(observed_goal, selection)
+                if suspect and coherent_surface_motion(session.reference, observed_goal.at(suspect.candidate),
+                        suspect.geometry, session.displaced_surface, self.limits.association_gate_m,
+                        self.limits.distance_uncertainty_margin_m,
+                        matches_reference_region=suspect.candidate.matches_reference_region):
                     raise VisualGoalFailure(VisualGoalStatus.TARGET_MOVED,
                         "associated surface has coherent multi-observation world displacement; static-target premise rejected")
-                session.displaced_surface = geometry.world_point if geometry.reliable and goal.same_target else None
+                session.displaced_surface = suspect.geometry.world_point if suspect else None
                 session.policy.unreliable_observation()
                 continue
             session.displaced_surface = None
             session.policy.unreliable = 0
             session.search.found()
             if session.reference is None:
-                session.reference = make_reference(observation, goal, geometry)
-            clearance = self.safety.clearance(observation) and not self.execution.collision_state()
+                session.reference = make_reference(observation, goal, geometry, selection.selected.candidate.description)
+            clearance = (self.safety.clearance(observation) and not self.execution.collision_state()
+                         and self.completion.surface_clearance(parameters, selection))
             if not clearance:
+                session.confirmations = 0
                 raise VisualGoalFailure(VisualGoalStatus.SAFETY_STOP, "observed obstacle/body clearance is insufficient")
-            if self.completion.candidate(parameters, observation, goal, geometry, session.initial, clearance):
+            if self.completion.candidate(parameters, observation, goal, geometry, session.initial, clearance,
+                                         surface_selection=selection):
                 if self.clock()-session.last_confirmation >= self.limits.confirmation_interval_s:
                     session.confirmations += 1
                     session.last_confirmation = self.clock()
@@ -168,7 +183,6 @@ class VisualGoalNavigationWorkflow:
                 self._wait(self.limits.confirmation_interval_s, session)
                 continue
             session.confirmations = 0
-            desired = parameters.standoff_m if parameters.standoff_m is not None else self.limits.standoff_m
             if geometry.distance_m < desired-self.limits.distance_tolerance_m:
                 raise VisualGoalFailure(VisualGoalStatus.SAFETY_STOP, "already too close; blind backward recovery is disabled")
             # Only post-execution approach rounds count toward distance progress.
@@ -196,7 +210,8 @@ class VisualGoalNavigationWorkflow:
             motion = self.motion.create_motion(world)
             selection = self.safety.select(motion, observation, session.initial, session.free_balls,
                                            context.geometry.world_point,
-                                           context.standoff_m-context.tolerance_m+self.limits.distance_uncertainty_margin_m)
+                                           context.standoff_m-context.tolerance_m+self.limits.distance_uncertainty_margin_m,
+                                           additional_standoff_points=session.surface_selection.reliable_world_points)
             self._event(trace, "plan", predicted=relative, selection=selection)
             if not session.policy.anchor_valid(observation, self.execution.current_pose(), self.clock()):
                 return

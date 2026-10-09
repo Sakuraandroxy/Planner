@@ -43,5 +43,9 @@ recording:
   output_root: output/camera_api
   fps: 5.0
 
-navigation:
-  max_rounds: 10
+basic_motion:
+  free_space:
+    confirmed: false
+    minimum_world_ned_m: null # Operator-certified STATIC world NED [x,y,z], meters.
+    maximum_world_ned_m: null
+    clearance_radius_m: 1.0 # Body envelope plus tracking/position error allowance.

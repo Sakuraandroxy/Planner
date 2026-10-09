@@ -6,6 +6,7 @@ from planner.domain.execution import ExecutionBudget
 from planner.domain.visual_goal import GoalReference, GoalGeometry, VisualGoalStatus
 from planner.domain.pose import WorldPose
 from planner.domain.trajectory import RelativeTrajectory
+from planner.domain.target_surface import SurfaceSelection
 from planner.errors import BudgetExceeded
 from .termination.visual_goal_navigation import VisualGoalExitPolicy, SearchPolicy, VisualGoalFailure
 
@@ -19,6 +20,7 @@ class VisualGoalSession:
     initial: WorldPose | None = None
     reference: GoalReference | None = None
     geometry: GoalGeometry | None = None
+    surface_selection: SurfaceSelection | None = None
     previous: RelativeTrajectory | None = None
     free_balls: list[tuple[tuple[float, float, float], float]] = field(default_factory=list)
     displaced_surface: tuple[float, float, float] | None = None

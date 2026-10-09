@@ -66,3 +66,15 @@ def test_anchor_displacement_and_tracking_error_have_separate_margins():
     assert limits.clearance_radius_m == pytest.approx(2.1)
     with pytest.raises(ValueError, match="safe standoff"):
         limits.validate_standoff(3, 200)  # 2m lower band is inside the 2.1m envelope.
+
+
+def test_additional_surface_constrains_safe_prefix_independently_of_anchor():
+    obs = wall_observation(distance=6)
+    checker = TrajectorySafetyChecker(DepthGeometry(.5, 200, True), VisualGoalLimits(), MotionLimits(), True)
+    motion = SynchronizedMotionPlanner(2, MotionLimits()).create_motion(WorldTrajectory(
+        obs.vehicle_pose, (WorldPose(2, 0, -4, 0),)))
+    free = checker.begin(obs)
+    assert checker.select(motion, obs, obs.vehicle_pose, free, (6, 0, -4), 3.3).motion.segments
+    chosen = checker.select(motion, obs, obs.vehicle_pose, free, (6, 0, -4), 3.3,
+                            additional_standoff_points=((4, 1, -4),))
+    assert not chosen.motion.segments and "standoff" in chosen.reason

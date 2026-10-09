@@ -9,8 +9,9 @@ from planner.adapters.airsim import (
 )
 from planner.adapters.airsim.observation_gate import ObservationGate
 from planner.adapters.task_parser import OpenAITaskParser
-from planner.adapters.trajectory_planner import QwenVLPlanner
-from planner.adapters.trajectory_planner.prompts import NavigationProgressPrompt, NavigationTrajectoryPrompt
+from planner.capabilities.basic_motion_conversion import BasicMotionConverter
+from planner.capabilities.basic_motion_safety import BasicMotionSafety
+from planner.capabilities.completion.basic_motion import BasicMotionCompletion
 from planner.application import PlannerApplication
 from planner.application.mission_runner import MissionRunner
 from planner.application.mission_validator import MissionValidator
@@ -19,9 +20,7 @@ from planner.domain.mission import TaskKind
 from planner.services.execution import ExecutionService
 from planner.services.motion import SynchronizedMotionPlanner
 from planner.services.trajectory_validation import TrajectoryValidator
-from planner.workflows import NavigationWorkflow
-from planner.workflows.termination import NavigationExitPolicy
-from planner.adapters.trajectory_planner.progress_review import VisualProgressReviewer
+from planner.workflows import BasicMotionWorkflow
 
 
 @dataclass(frozen=True)
@@ -49,32 +48,19 @@ def build_runtime(config: PlannerConfig) -> Runtime:
         depth_horizontal_fov_deg=(config.visual_goal.depth_horizontal_fov_deg if config.visual_goal.enabled else None),
         verify_image_pair=config.visual_goal.enabled,
     )
-    trajectory_prompt = NavigationTrajectoryPrompt()
-    planner = QwenVLPlanner(
-        config.trajectory_planner.url, config.trajectory_planner.model,
-        config.trajectory_planner.api_key, config.trajectory_planner.timeout_s,
-        config.trajectory.point_count,
-        thinking=config.trajectory_planner.thinking,
-        prompt_builder=trajectory_prompt,
+    execution = ExecutionService(vehicle)
+    validator = TrajectoryValidator(config.trajectory.point_count, config.trajectory.max_step_m,
+                                    config.trajectory.max_yaw_step_deg)
+    workflow = BasicMotionWorkflow(
+        observation, BasicMotionConverter(), BasicMotionSafety(config.basic_motion.free_space),
+        BasicMotionCompletion(config.motion.limits), validator, motion_planner, execution,
+        config.motion.limits, config.airsim.move_timeout_s,
     )
-    workflow = NavigationWorkflow(
-        observation, planner,
-        TrajectoryValidator(
-            config.trajectory.point_count, config.trajectory.max_step_m,
-            config.trajectory.max_yaw_step_deg,
-        ),
-        motion_planner, ExecutionService(vehicle),
-        reviewer=(VisualProgressReviewer(planner, NavigationProgressPrompt())
-                  if config.navigation_max_rounds > 1 else None),
-        exit_policy=NavigationExitPolicy(config.navigation_max_rounds),
-    )
-    workflows = {TaskKind.NAVIGATION: workflow}
+    workflows = {TaskKind.BASIC_MOTION: workflow}
     if config.visual_goal.enabled:
         from planner.visual_goal_bootstrap import build_visual_goal_workflow
         workflows[TaskKind.VISUAL_GOAL_NAVIGATION] = build_visual_goal_workflow(
-            config, observation, motion_planner, ExecutionService(vehicle),
-            TrajectoryValidator(config.trajectory.point_count, config.trajectory.max_step_m,
-                                config.trajectory.max_yaw_step_deg),
+            config, observation, motion_planner, execution, validator,
         )
     router = WorkflowRouter(workflows)
     parser = OpenAITaskParser(
@@ -83,7 +69,11 @@ def build_runtime(config: PlannerConfig) -> Runtime:
         supported_kinds=router.supported_kinds,
     )
     app = PlannerApplication(parser, MissionValidator(router.supported_kinds,
-        config.visual_goal.limits if config.visual_goal.enabled else None, config.depth.max_m), MissionRunner(router))
+        config.visual_goal.limits if config.visual_goal.enabled else None, config.depth.max_m,
+        maximum_step_m=config.trajectory.max_step_m,
+        maximum_yaw_step_deg=config.trajectory.max_yaw_step_deg,
+        basic_motion_ready=config.basic_motion.free_space.confirmed,
+    ), MissionRunner(router))
     return Runtime(app, connection)
 
 

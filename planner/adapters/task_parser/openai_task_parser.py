@@ -22,7 +22,9 @@ class OpenAITaskParser:
         self.model = model
         self.api_key = api_key
         self.timeout_s = timeout_s
-        self.system_prompt = task_parser_system_prompt(supported_kinds or {TaskKind.NAVIGATION})
+        self.system_prompt = task_parser_system_prompt(
+            {TaskKind.BASIC_MOTION} if supported_kinds is None else supported_kinds
+        )
 
     def parse(self, instruction: str) -> MissionPlan:
         if not instruction.strip():

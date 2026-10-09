@@ -43,6 +43,7 @@ class GoalVisibility(str, Enum):
 
 @dataclass(frozen=True)
 class GoalObservation:
+    """One locally selected region; not the raw goal_observation_v2 response."""
     status: GoalVisibility
     bbox: tuple[float, float, float, float] | None
     surface_point: tuple[float, float] | None
@@ -67,6 +68,9 @@ class GoalReference:
     crop: Any
     world_point: tuple[float, float, float]
     bbox: tuple[float, float, float, float]
+    region_crop: Any
+    region_description: str
+    region_point: tuple[float, float]  # Normalized within region_crop, not the current image.
 
 
 class VisualGoalState(str, Enum):

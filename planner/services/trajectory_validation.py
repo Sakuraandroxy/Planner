@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 
 from planner.domain.trajectory import RelativeTrajectory, WorldTrajectory
+from planner.domain.pose import resolve_yaw_delta_deg
 from planner.errors import ProtocolError
 '''
 轨迹安全与协议校验器，负责在执行前拒绝明显不合法或过大的轨迹
@@ -25,10 +26,16 @@ class TrajectoryValidator:
                 raise ProtocolError(f"relative point {index} exceeds max yaw step")
 
     def validate_world(self, trajectory: WorldTrajectory) -> None:
+        if not 1 <= len(trajectory.poses) <= self.expected_points:
+            raise ProtocolError("world trajectory must contain 1 to the configured maximum points")
         previous = trajectory.start
         for index, pose in enumerate(trajectory.poses):
             distance = math.sqrt((pose.x - previous.x) ** 2 + (pose.y - previous.y) ** 2 + (pose.z - previous.z) ** 2)
             if distance > self.max_step_m + 1e-6:
                 raise ProtocolError(f"world segment {index} exceeds max step distance")
+            explicit_yaw = None if trajectory.yaw_deltas_deg is None else trajectory.yaw_deltas_deg[index]
+            angle = resolve_yaw_delta_deg(previous.yaw_deg, pose.yaw_deg, explicit_yaw)
+            if abs(angle) > self.max_yaw_step_deg + 1e-6:
+                raise ProtocolError(f"world segment {index} exceeds max yaw step")
             previous = pose
 

@@ -5,7 +5,7 @@ import time
 
 import requests
 
-from planner.adapters.trajectory_planner.prompts import NavigationTrajectoryPrompt, TrajectoryPromptBuilder
+from planner.adapters.trajectory_planner.prompts import BaseTrajectoryPrompt, TrajectoryPromptBuilder
 from planner.adapters.trajectory_planner.response_parser import parse_trajectory
 from planner.domain.observation import Observation
 from planner.domain.pose import WorldPose
@@ -22,13 +22,15 @@ class QwenVLPlanner:
     def __init__(self, url: str, model: str, api_key: str, timeout_s: float,
                  expected_points: int = 5, thinking: str | None = None,
                  prompt_builder: TrajectoryPromptBuilder | None = None):
+        if expected_points != 5:
+            raise ValueError("trajectory model protocol requires exactly 5 new points")
         self.url = _chat_url(url)
         self.model = model
         self.api_key = api_key
         self.timeout_s = timeout_s
         self.expected_points = expected_points
         self.thinking = thinking
-        self.prompt_builder = prompt_builder or NavigationTrajectoryPrompt()
+        self.prompt_builder = prompt_builder or BaseTrajectoryPrompt()
 
     def plan(
         self,
@@ -39,9 +41,15 @@ class QwenVLPlanner:
         round_index: int = 1,
         initial_pose: WorldPose | None = None,
         previous_trajectory: RelativeTrajectory | None = None,
+        pending_trajectory: RelativeTrajectory | None = None,
         visual_goal_context: VisualGoalPlanningContext | None = None,
         budget: ExecutionBudget | None = None,
     ) -> RelativeTrajectory:
+        if pending_trajectory is not None:
+            if not isinstance(pending_trajectory, RelativeTrajectory):
+                raise ProtocolError("pending_trajectory must be a RelativeTrajectory or None")
+            if pending_trajectory.points:
+                raise ProtocolError("nonempty pending is reserved: queue snapshot and execution anchoring are not implemented yet")
         logger.info("[TrajectoryPlanner] model=%s instruction=%s", self.model, instruction)
         logger.info("[TrajectoryPlanner] RGB=%s depth=%s pose=%s", observation.rgb.size, observation.depth_image.size, observation.vehicle_pose)
         system_prompt = self.prompt_builder.system_prompt()
@@ -56,6 +64,7 @@ class QwenVLPlanner:
             round_index=round_index,
             initial_pose=initial_pose or observation.vehicle_pose,
             previous_trajectory=previous_trajectory,
+            pending_trajectory=pending_trajectory,
             **extra,
         )
         content = [
@@ -91,7 +100,10 @@ class QwenVLPlanner:
         choice = response.json().get("choices", [{}])[0]
         raw = choice.get("message", {}).get("content", "")
         logger.info("[TrajectoryPlanner] %.2fs finish_reason=%s raw response:\n%s", time.perf_counter() - started, choice.get("finish_reason"), raw)
-        return parse_trajectory(raw, self.expected_points)
+        trajectory = parse_trajectory(raw, self.expected_points)
+        if len(trajectory.points) != 5:
+            raise ProtocolError(f"trajectory model must return exactly 5 new points; received {len(trajectory.points)}")
+        return trajectory
 
 
 '''

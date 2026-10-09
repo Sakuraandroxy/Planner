@@ -3,6 +3,7 @@ from dataclasses import replace
 import pytest
 
 from planner.capabilities.targeting.depth_geometry import DepthGeometry
+from planner.capabilities.targeting.surface_selection import SurfaceSelector
 from planner.capabilities.completion.visual_goal import VisualGoalCompletion
 from planner.domain.mission import MissionStage, TaskKind
 from planner.domain.motion import MotionLimits
@@ -10,6 +11,7 @@ from planner.domain.visual_goal import GoalVisibility, VisualGoalStatus, VisualG
 from planner.domain.visual_goal_limits import VisualGoalLimits
 from planner.errors import ObservationError
 from planner.domain.pose import RelativePoseDelta
+from planner.domain.target_surface import SurfaceCandidate
 from planner.adapters.diagnostics.visual_goal_trace import VisualGoalTrace
 from planner.services.execution import ExecutionService
 from planner.services.motion import SynchronizedMotionPlanner
@@ -17,7 +19,7 @@ from planner.services.trajectory_safety import TrajectorySafetyChecker
 from planner.services.trajectory_validation import TrajectoryValidator
 from planner.workflows.visual_goal_navigation import VisualGoalNavigationWorkflow
 from tests.fakes.components import FakeVehicle
-from tests.fakes.visual_goal import Clock, WallSource, StaticObserver, ForwardPlanner, VISIBLE, INVISIBLE
+from tests.fakes.visual_goal import Clock, WallSource, StaticObserver, ForwardPlanner, VISIBLE, INVISIBLE, surface_observation
 
 
 def setup(target_x=6, goal=VISIBLE, limits=None):
@@ -30,6 +32,7 @@ def setup(target_x=6, goal=VISIBLE, limits=None):
     workflow = VisualGoalNavigationWorkflow(source, observer, planner, TrajectoryValidator(5, 30, 180),
         SynchronizedMotionPlanner(2, motion_limits), ExecutionService(vehicle, clock), geometry,
         VisualGoalCompletion(limits), TrajectorySafetyChecker(geometry, limits, motion_limits, True), limits,
+        SurfaceSelector(limits),
         clock=clock, sleep=clock.sleep)
     stage = MissionStage("goal", TaskKind.VISUAL_GOAL_NAVIGATION,
                          VisualGoalNavigationParameters("approach red house", "red house"))
@@ -188,3 +191,96 @@ def test_diagnostics_save_evidence_without_api_payloads(tmp_path):
     records = [json.loads(line) for line in (output/"events.jsonl").read_text(encoding="utf-8").splitlines()]
     assert records[-1]["result"]["status"] == "reached"
     assert "base64" not in (output/"events.jsonl").read_text(encoding="utf-8")
+
+
+def test_multi_surface_rollout_keeps_region_despite_id_and_order_changes(tmp_path):
+    workflow, stage, source, observer, planner, vehicle, clock = setup()
+    workflow.trace_factory = lambda: VisualGoalTrace(tmp_path)
+    def observe(observation, description, reference=None, **kwargs):
+        observer.calls.append((observation, description, reference, kwargs))
+        count = len(observer.calls)
+        candidates = [SurfaceCandidate(f"left-{count}", (.4, .5), "left facade"),
+                      SurfaceCandidate(f"middle-{count}", (.5, .5), "central facade", reference is not None),
+                      SurfaceCandidate(f"right-{count}", (.6, .5), "right facade")]
+        return surface_observation(candidates=candidates if count % 2 else reversed(candidates))
+    observer.observe = observe
+    result = workflow.run(stage)
+    assert result.success, result.error
+    assert len(vehicle.segments) == 1 and result.value.confirmation_count == 2
+    assert len(observer.calls) == 3 and observer.calls[-1][2] is observer.calls[1][2]
+    from pathlib import Path
+    import json
+    path = Path(result.value.run_directory)
+    assert len(list(path.glob("*_surface_selection.png"))) == 3
+    records = [json.loads(line) for line in (path/"events.jsonl").read_text(encoding="utf-8").splitlines()]
+    selections = [record["selection"] for record in records if record["event"] == "surface_selection"]
+    assert all(len(item["estimates"]) == 3 for item in selections)
+    anchors = [item["geometry"]["world_point"] for item in selections]
+    assert anchors[1] == anchors[2] == anchors[0]
+
+
+def test_all_candidate_depth_invalid_stops_without_motion():
+    workflow, stage, source, observer, planner, vehicle, clock = setup()
+    capture = source.capture
+    def bad(**kwargs):
+        observation = capture(**kwargs)
+        observation.depth_meters[:] = float("nan")
+        return observation
+    source.capture = bad
+    observer.goal = surface_observation(candidates=[SurfaceCandidate("a", (.4, .5), "left"),
+                                                   SurfaceCandidate("b", (.6, .5), "right")])
+    result = workflow.run(stage)
+    assert result.value.status is VisualGoalStatus.PERCEPTION_UNRELIABLE
+    assert len(observer.calls) == workflow.limits.maximum_unreliable_observations
+    assert not vehicle.segments and not planner.calls
+
+
+def test_visible_object_without_selected_region_does_not_switch_or_complete():
+    workflow, stage, source, observer, planner, vehicle, clock = setup()
+    def observe(observation, description, reference=None, **kwargs):
+        observer.calls.append((observation, description, reference, kwargs))
+        point = (.5, .5) if reference is None else (.7, .5)
+        # Same object, but another visible facade is NOT the selected region.
+        return surface_observation(candidates=[SurfaceCandidate("a", point, "another visible region", False)])
+    observer.observe = observe
+    result = workflow.run(stage)
+    assert result.value.status is VisualGoalStatus.PERCEPTION_UNRELIABLE
+    assert result.value.confirmation_count == 0 and len(vehicle.segments) == 1
+
+
+def test_multi_candidates_with_one_bad_window_can_still_reach():
+    workflow, stage, source, observer, planner, vehicle, clock = setup()
+    capture = source.capture
+    def partly_bad(**kwargs):
+        observation = capture(**kwargs)
+        observation.depth_meters[62:67, 49:54] = float("nan")
+        return observation
+    source.capture = partly_bad
+    def observe(observation, description, reference=None, **kwargs):
+        return surface_observation(candidates=[SurfaceCandidate("bad", (.4, .5), "bad depth"),
+            SurfaceCandidate("center", (.5, .5), "central wall", reference is not None)])
+    observer.observe = observe
+    result = workflow.run(stage)
+    assert result.success, result.error
+    assert len(vehicle.segments) == 1
+
+
+def test_other_near_surface_cancels_an_existing_arrival_confirmation():
+    workflow, stage, source, observer, planner, vehicle, clock = setup(target_x=4)
+    capture = source.capture
+    def near_wing(**kwargs):
+        obs = capture(**kwargs)
+        if source.captures > 1:
+            obs.depth_meters[62:67, 49:54] = 2.8
+        return obs
+    source.capture = near_wing
+    def observe(observation, description, reference=None, **kwargs):
+        candidates = [SurfaceCandidate("anchor", (.5, .5), "central wall", reference is not None)]
+        if reference is not None:
+            candidates.append(SurfaceCandidate("wing", (.4, .5), "closer wing"))
+        return surface_observation(candidates=candidates)
+    observer.observe = observe
+    result = workflow.run(stage)
+    assert result.value.status is VisualGoalStatus.SAFETY_STOP and not result.success
+    assert result.value.confirmation_count == 0
+    assert not vehicle.segments and not planner.calls

@@ -4,19 +4,6 @@ from dataclasses import dataclass
 from enum import Enum
 
 
-class ProgressStatus(str, Enum):
-    COMPLETE = "complete"
-    CONTINUE = "continue"
-    BLOCKED = "blocked"
-
-
-@dataclass(frozen=True)
-class ProgressDecision:
-    status: ProgressStatus
-    reason: str
-    next_instruction: str = ""
-
-
 class ExitStatus(str, Enum):
     CONTINUE = "continue"
     COMPLETED = "completed"

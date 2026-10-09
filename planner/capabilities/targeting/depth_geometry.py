@@ -9,6 +9,7 @@ import numpy as np
 from planner.domain.observation import Observation
 from planner.domain.visual_goal import GoalGeometry, GoalObservation
 from planner.domain.visual_goal_limits import VisualGoalLimits
+from planner.domain.target_surface import GoalSurfaceObservation, SurfaceEstimate
 
 
 class DepthGeometry:
@@ -97,6 +98,13 @@ class DepthGeometry:
                                 tuple(float(v) for v in world), ratio, mad)
         except (ValueError, TypeError, IndexError) as exc:
             return GoalGeometry(False, str(exc))
+
+    def estimate_candidates(self, obs: Observation, goal: GoalSurfaceObservation,
+                            limits: VisualGoalLimits) -> tuple[SurfaceEstimate, ...]:
+        """Use the same calibrated raw-depth estimator for every candidate."""
+        return tuple(SurfaceEstimate(candidate, estimate, estimate.reliable, estimate.reason)
+                     for candidate in goal.surface_candidates
+                     for estimate in (self.estimate(obs, goal.at(candidate), limits),))
 
     def point_cloud(self, obs):
         depth = self.validate(obs)

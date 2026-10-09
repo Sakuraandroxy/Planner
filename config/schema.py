@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from planner.domain.motion import MotionLimits
 from .visual_goal import VisualGoalConfig
+from .basic_motion import BasicMotionConfig
 
 
 @dataclass(frozen=True)
@@ -56,7 +57,7 @@ class PlannerConfig:
     depth: DepthConfig
     trajectory: TrajectoryConfig
     recording: RecordingConfig
-    navigation_max_rounds: int = 1
+    basic_motion: BasicMotionConfig = BasicMotionConfig()
     motion: MotionConfig = MotionConfig()
     visual_goal: VisualGoalConfig = VisualGoalConfig()
     goal_observer: ApiConfig | None = None

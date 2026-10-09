@@ -1,4 +1,4 @@
-from .navigation import NavigationWorkflow
+from .basic_motion import BasicMotionWorkflow
 
-__all__ = ["NavigationWorkflow"]
+__all__ = ["BasicMotionWorkflow"]
 

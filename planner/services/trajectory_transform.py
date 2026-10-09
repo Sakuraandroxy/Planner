@@ -32,7 +32,10 @@ def relative_to_world(trajectory: RelativeTrajectory, start: WorldPose) -> World
         x += math.cos(angle) * point.dx - math.sin(angle) * point.dy
         y += math.sin(angle) * point.dx + math.cos(angle) * point.dy
         z += point.dz
-        yaw = wrap_yaw_deg(yaw + point.dyaw_deg)
+        # Retain small signed commands exactly; wrap_yaw_deg intentionally
+        # snaps tiny measured errors to zero and would lose command metadata.
+        yaw = (yaw + point.dyaw_deg + 180.0) % 360.0 - 180.0
         poses.append(WorldPose(x=x, y=y, z=z, yaw_deg=yaw))
-    return WorldTrajectory(start=start, poses=tuple(poses))
+    return WorldTrajectory(start=start, poses=tuple(poses),
+                           yaw_deltas_deg=tuple(point.dyaw_deg for point in trajectory.points))
 

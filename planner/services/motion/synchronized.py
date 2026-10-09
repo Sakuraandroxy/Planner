@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import math
 
 from planner.domain.motion import MotionLimits
-from planner.domain.pose import WorldPose, wrap_yaw_deg
+from planner.domain.pose import WorldPose, wrap_yaw_deg, resolve_yaw_delta_deg
 from planner.domain.trajectory import MotionSegment, MotionTrajectory, WorldTrajectory
 
 SMOOTH_PROFILE = "synchronized_quintic"
@@ -11,11 +11,12 @@ SMOOTH_PROFILE = "synchronized_quintic"
 """
 同步平滑运动规划器里的核心物理计算函数,计算从一个航点飞到下一个航点，至少应该安排多少秒
 """
-def duration_for(start: WorldPose, end: WorldPose, speed: float, limits: MotionLimits) -> float:
+def duration_for(start: WorldPose, end: WorldPose, speed: float, limits: MotionLimits,
+                 *, yaw_delta_deg: float | None = None) -> float:
     if not math.isfinite(speed) or speed <= 0:
         raise ValueError("motion speed must be finite and positive")
     distance = math.dist((start.x, start.y, start.z), (end.x, end.y, end.z))
-    angle = abs(wrap_yaw_deg(end.yaw_deg - start.yaw_deg))
+    angle = abs(resolve_yaw_delta_deg(start.yaw_deg, end.yaw_deg, yaw_delta_deg))
     # Max derivatives of 10u^3 - 15u^4 + 6u^5: 1.875 and 10/sqrt(3).
     peak_accel = 10 / math.sqrt(3)#峰值加速度
     return max(
@@ -42,7 +43,7 @@ def sample_segment(segment: MotionSegment, elapsed: float) -> MotionSample:
     rate = 30*u**2 * (1-u)**2 / duration
     a, b = segment.start, segment.end
     delta = (b.x-a.x, b.y-a.y, b.z-a.z)
-    yaw_delta = wrap_yaw_deg(b.yaw_deg-a.yaw_deg)
+    yaw_delta = resolve_yaw_delta_deg(a.yaw_deg, b.yaw_deg, segment.yaw_delta_deg)
     return MotionSample(
         WorldPose(a.x+delta[0]*progress, a.y+delta[1]*progress, a.z+delta[2]*progress,
                   wrap_yaw_deg(a.yaw_deg+yaw_delta*progress)),
@@ -60,13 +61,15 @@ class SynchronizedMotionPlanner:
     def create_motion(self, trajectory: WorldTrajectory) -> MotionTrajectory:
         previous = trajectory.start
         segments = []
-        for pose in trajectory.poses:
+        for index, pose in enumerate(trajectory.poses):
+            yaw_delta = None if trajectory.yaw_deltas_deg is None else trajectory.yaw_deltas_deg[index]
             segments.append(MotionSegment(
                 start=previous,
                 end=pose,
                 profile=SMOOTH_PROFILE,
-                duration_s=duration_for(previous, pose, self.speed_mps, self.limits),
+                duration_s=duration_for(previous, pose, self.speed_mps, self.limits, yaw_delta_deg=yaw_delta),
                 target_speed_mps=self.speed_mps,
+                yaw_delta_deg=yaw_delta,
             ))
             previous = pose
         return MotionTrajectory(tuple(segments))

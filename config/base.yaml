@@ -41,6 +41,10 @@ recording:
   output_root: output/camera_api
   fps: 5.0
 
-navigation:
-  max_rounds: 10
+basic_motion:
+  free_space:
+    confirmed: false # 实验前人工确认整个静态区域；不是前视深度自动认证。
+    minimum_world_ned_m: null # 填写固定世界 NED 范围 [x, y, z]，米。
+    maximum_world_ned_m: null
+    clearance_radius_m: 1.0 # 机体包络 + 跟踪/位置误差余量；按机型核查。
 

@@ -68,7 +68,8 @@ class TrajectorySafetyChecker:
         offsets = [(0, 0, 0)] + list(itertools.product((-radius, 0, radius), repeat=3))
         return all(self._supported(np.asarray(center)+offset, obs, depth, free_balls) for offset in offsets)
 
-    def select(self, motion, observation, initial_pose, free_balls, target_point, lower_standoff):
+    def select(self, motion, observation, initial_pose, free_balls, target_point, lower_standoff, *,
+               additional_standoff_points: tuple[tuple[float, float, float], ...] = ()):
         depth = self.geometry.validate(observation)
         cloud_world = (self.geometry.point_cloud(observation) @
                        np.asarray(observation.rotation_camera_to_world).T + observation.camera_position_world)
@@ -94,7 +95,8 @@ class TrajectorySafetyChecker:
             centers = tuple(tuple(av+(bv-av)*fraction) for fraction in np.linspace(
                 0, 1, max(2, math.ceil(distance/self.limits.safety_sample_spacing_m)+1)
             ))
-            if any(math.dist(p, target_point) < lower_standoff for p in centers):
+            if any(math.dist(p, surface) < lower_standoff for p in centers
+                   for surface in (target_point, *additional_standoff_points)):
                 reason = "segment overshoots target standoff band"
                 break
             if not all(self._sphere_safe(p, observation, depth, free_balls, cloud_world) for p in centers):

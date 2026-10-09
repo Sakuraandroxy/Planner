@@ -9,6 +9,20 @@ def wrap_yaw_deg(value: float) -> float:
     return 0.0 if abs(wrapped) < 0.0005 else wrapped
 
 
+def resolve_yaw_delta_deg(start: float, end: float, signed_delta: float | None = None) -> float:
+    """Retain explicit turn direction; legacy endpoints use the shortest turn."""
+    if signed_delta is None:
+        return (end-start+180.0) % 360.0-180.0
+    if (isinstance(signed_delta, bool) or not isinstance(signed_delta, (int, float)) or
+            not math.isfinite(signed_delta)):
+        raise ValueError("signed yaw delta must be a finite number")
+    # Do not use wrap_yaw_deg here: its small-angle snapping hides mismatches.
+    mismatch = (start+signed_delta-end+180.0) % 360.0-180.0
+    if abs(mismatch) > 1e-6:
+        raise ValueError("signed yaw delta disagrees with endpoint yaw")
+    return float(signed_delta)
+
+
 @dataclass(frozen=True)
 class RelativePoseDelta:
     dx: float

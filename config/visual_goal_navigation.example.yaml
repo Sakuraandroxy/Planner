@@ -40,8 +40,12 @@ motion:
 recording:
   output_root: output/camera_api
   fps: 5.0
-navigation:
-  max_rounds: 10
+basic_motion:
+  free_space:
+    confirmed: false
+    minimum_world_ned_m: null # Independent of visual_goal initial free bubble.
+    maximum_world_ned_m: null
+    clearance_radius_m: 1.0
 visual_goal_navigation:
   enabled: false
   geometry_verified: false
@@ -49,6 +53,8 @@ visual_goal_navigation:
   depth_horizontal_fov_deg: 90.0 # Must match DepthPerspective CaptureSettings, not assumed Scene FOV.
   output_root: output/visual_goal
   limits:
+    maximum_surface_candidates: 5 # Upper bound, not a requirement to invent five points.
+    association_gate_m: 1.5 # Match the selected region, not arbitrary points on the same object.
     standoff_m: 4.0
     distance_tolerance_m: 1.0
     distance_uncertainty_margin_m: 0.3

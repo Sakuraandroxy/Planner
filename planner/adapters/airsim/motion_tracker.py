@@ -8,7 +8,7 @@ from typing import Callable
 
 from planner.domain.motion import MotionLimits
 from planner.domain.execution import ExecutionBudget
-from planner.domain.pose import WorldPose, wrap_yaw_deg
+from planner.domain.pose import WorldPose, wrap_yaw_deg, resolve_yaw_delta_deg
 from planner.domain.trajectory import MotionSegment
 from planner.errors import BudgetExceeded, ExecutionError
 from planner.services.motion.synchronized import duration_for, sample_segment
@@ -42,12 +42,19 @@ class AirSimMotionTracker:
         if speed is None:
             raise ExecutionError("smooth motion requires a speed limit")
         start = self.current_pose()
-        duration = max(segment.duration_s or 0, duration_for(start, segment.end, speed, limits))
+        goal_yaw = segment.start.yaw_deg + resolve_yaw_delta_deg(
+            segment.start.yaw_deg, segment.end.yaw_deg, segment.yaw_delta_deg,
+        )
+        measured_yaw = segment.start.yaw_deg + resolve_yaw_delta_deg(segment.start.yaw_deg, start.yaw_deg)
+        remaining_yaw = goal_yaw-measured_yaw
+        duration = max(segment.duration_s or 0, duration_for(
+            start, segment.end, speed, limits, yaw_delta_deg=remaining_yaw,
+        ))
         self._check_budget(budget, duration + limits.settle_time_s)
         if duration + limits.settle_time_s >= self.timeout_s:
             raise ExecutionError(f"smooth duration {duration:.2f}s exceeds available execution timeout")
         # Re-anchor interpolation to measured position, but keep the original world goal.
-        segment = replace(segment, start=start, duration_s=duration)
+        segment = replace(segment, start=start, duration_s=duration, yaw_delta_deg=remaining_yaw)
         logger.info("[Motion] synchronized flight/rotation: duration=%.2fs target=%s", duration, segment.end)
         period = 1 / limits.control_hz
         began = self.clock()
@@ -63,11 +70,15 @@ class AirSimMotionTracker:
                 generation = current_generation
                 if resumed:
                     start = self.current_pose()
-                    duration = duration_for(start, segment.end, speed, limits)
+                    # Unwrap measured increments, keeping the ORIGINAL signed
+                    # yaw goal across observation pauses (including 180-degree turns).
+                    measured_yaw += resolve_yaw_delta_deg(previous_pose.yaw_deg, start.yaw_deg)
+                    remaining_yaw = goal_yaw-measured_yaw
+                    duration = duration_for(start, segment.end, speed, limits, yaw_delta_deg=remaining_yaw)
                     self._check_budget(budget, duration + limits.settle_time_s)
                     if duration + limits.settle_time_s >= self.timeout_s:
                         raise ExecutionError("resumed motion exceeds execution timeout")
-                    segment = replace(segment, start=start, duration_s=duration)
+                    segment = replace(segment, start=start, duration_s=duration, yaw_delta_deg=remaining_yaw)
                     began = previous_time = self.clock()
                     previous_pose = start
                     last_velocity, last_yaw_rate = (0.0, 0.0, 0.0), 0.0
@@ -79,6 +90,7 @@ class AirSimMotionTracker:
                 if elapsed >= self.timeout_s:
                     raise ExecutionError("synchronized motion timed out before position/yaw settled")
                 actual = self.current_pose()
+                measured_yaw += resolve_yaw_delta_deg(previous_pose.yaw_deg, actual.yaw_deg)
                 if self.connection.call("simGetCollisionInfo").has_collided:
                     raise ExecutionError("AirSim reported a collision during synchronized motion")
                 dt = tick - previous_time
@@ -87,7 +99,7 @@ class AirSimMotionTracker:
                 measured_yaw_rate = abs(wrap_yaw_deg(actual.yaw_deg-previous_pose.yaw_deg))/dt if dt > 0 else 0.0
                 goal = segment.end
                 distance = math.dist((actual.x, actual.y, actual.z), (goal.x, goal.y, goal.z))
-                yaw_error = abs(wrap_yaw_deg(goal.yaw_deg-actual.yaw_deg))
+                yaw_error = abs(goal_yaw-measured_yaw)
                 settled = (elapsed >= duration and distance <= limits.position_tolerance_m
                            and yaw_error <= limits.yaw_tolerance_deg
                            and measured_speed <= limits.stopped_speed_mps
@@ -97,7 +109,7 @@ class AirSimMotionTracker:
                     self.connection.call_async_and_wait("hoverAsync")
                     final = self.current_pose()
                     final_distance = math.dist((final.x, final.y, final.z), (goal.x, goal.y, goal.z))
-                    final_yaw = abs(wrap_yaw_deg(goal.yaw_deg-final.yaw_deg))
+                    final_yaw = abs(goal_yaw-(measured_yaw+wrap_yaw_deg(final.yaw_deg-actual.yaw_deg)))
                     if final_distance > limits.position_tolerance_m or final_yaw > limits.yaw_tolerance_deg:
                         raise ExecutionError("position/yaw drifted outside tolerance while hovering")
                     logger.info("[Motion] reached: position_error=%.3fm yaw_error=%.2fdeg elapsed=%.2fs",

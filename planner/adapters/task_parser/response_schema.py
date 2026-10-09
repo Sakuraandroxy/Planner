@@ -29,3 +29,23 @@ def parse_json_object(text: str) -> dict[str, Any]:
         raise ProtocolError("task parser response must be a JSON object")
     return value
 
+
+def validate_mission_envelope(data: dict[str, Any]) -> None:
+    """Explicit rejection and executable plans are mutually exclusive."""
+    if not isinstance(data, dict):
+        raise ProtocolError("task parser response must be a JSON object")
+    if set(data)-{"protocol_version", "stages", "error"}:
+        raise ProtocolError("unknown mission response fields")
+    if data.get("protocol_version") != "mission_plan_v1":
+        raise ProtocolError("unsupported mission protocol")
+    stages = data.get("stages")
+    if not isinstance(stages, list):
+        raise ProtocolError("task parser response has no stages list")
+    if "error" in data:
+        error = data["error"]
+        if stages or not isinstance(error, str) or not error.strip():
+            raise ProtocolError("mission rejection requires empty stages and a non-empty error")
+        raise ProtocolError(f"mission rejected by task parser: {error.strip()}")
+    if not stages:
+        raise ProtocolError("mission contains no stages")
+

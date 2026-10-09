@@ -5,6 +5,7 @@ import math
 
 @dataclass(frozen=True)
 class VisualGoalLimits:
+    maximum_surface_candidates: int = 5
     standoff_m: float = 4.0
     distance_tolerance_m: float = 1.0
     minimum_standoff_m: float = 2.0

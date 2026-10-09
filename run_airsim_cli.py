@@ -7,6 +7,7 @@ from pathlib import Path
 from config import load_config
 from planner.bootstrap import build_recording_runtime, build_runtime
 from planner.domain.visual_goal import VisualGoalNavigationResult
+from planner.domain.basic_motion import BasicMotionResult
 
 
 def parse_args() -> argparse.Namespace:
@@ -71,6 +72,11 @@ def _run(runtime, instruction: str) -> int:
         print(f"Task rejected: {exc}")
         return 1
     visual = [stage.value for stage in result.stages if isinstance(stage.value, VisualGoalNavigationResult)]
+    basic = [stage.value for stage in result.stages if isinstance(stage.value, BasicMotionResult)]
+    for item in basic:
+        print(f"Basic motion: {item.status.value}; position_error={item.position_error_m}; "
+              f"yaw_error={item.yaw_error_deg}; elapsed={item.elapsed_s:.1f}s; "
+              f"stop_confirmed={item.stop.confirmed}; basis={item.completion_basis}; reason={item.reason}")
     for item in visual:
         print(f"Visual goal: {item.status.value}; distance={item.final_distance_m}; "
               f"elapsed={item.elapsed_s:.1f}s; calls={item.planning_calls}; "
@@ -78,10 +84,9 @@ def _run(runtime, instruction: str) -> int:
         if item.run_directory:
             print(f"Visual goal diagnostics: {item.run_directory}")
     if result.success:
-        reviewed = all(isinstance(stage.value, dict) and stage.value.get("completion") == "model_review" for stage in result.stages)
-        print(f"Visual goal arrival confirmed: {len(visual)} stage(s)" if len(visual) == len(result.stages)
-              else f"Task completion reported by model review: {len(result.stages)} stage(s)" if reviewed
-              else f"Trajectory execution finished: {len(result.stages)} stage(s); task completion not verified")
+        verified = len(basic)+len(visual) == len(result.stages)
+        print(f"Mission completion confirmed by task-specific evidence: {len(result.stages)} stage(s)" if verified
+              else f"Stages executed: {len(result.stages)}; task completion not verified")
         return 0
     print(f"Mission failed: {result.error}")
     return 1

@@ -2,7 +2,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from planner.adapters.trajectory_planner.prompts import NavigationTrajectoryPrompt, BASE_TRAJECTORY_SYSTEM_PROMPT
+from planner.adapters.trajectory_planner.prompts import BaseTrajectoryPrompt, BASE_TRAJECTORY_SYSTEM_PROMPT
 from planner.adapters.trajectory_planner.prompts.visual_goal_navigation import VisualGoalTrajectoryPrompt
 from planner.adapters.trajectory_planner.qwen_vl_planner import QwenVLPlanner
 from planner.domain.execution import ExecutionBudget
@@ -20,14 +20,21 @@ def context():
 def test_task_prompt_inherits_weather_and_coordinate_rules_and_adds_typed_evidence():
     builder = VisualGoalTrajectoryPrompt()
     assert builder.system_prompt().startswith(BASE_TRAJECTORY_SYSTEM_PROMPT)
+    system = " ".join(builder.system_prompt().split())
+    assert "If no pending queue is supplied, treat it as empty" in system
+    assert "forward motion is not mandatory" in system
+    assert "rather than preserving its initial bearing" in system
+    assert "not merely each segment separately" in system
     user = builder.build_user_prompt("approach red house", wall_observation(), 5, visual_goal_context=context())
     assert "Planning round: 1" in user and '"standoff_m":4' in user
     assert '"maximum_motion_s":8' in user and '"world_point":[6,0,-4]' in user
+    assert "Pending incremental pose waypoints: []" in user
+    assert "Output exactly 5 NEW" in user
 
 
 def test_legacy_prompt_rejects_new_context_instead_of_dropping_it():
     planner = QwenVLPlanner("http://invalid/v1", "fake", "no-key", 20,
-                            prompt_builder=NavigationTrajectoryPrompt())
+                            prompt_builder=BaseTrajectoryPrompt())
     with pytest.raises(ProtocolError, match="context"):
         planner.plan(wall_observation(), "approach", visual_goal_context=context())
 
@@ -40,6 +47,7 @@ def test_late_trajectory_reply_is_not_used_to_fly(monkeypatch):
     def post(*args, **kwargs):
         assert kwargs["timeout"] <= 1
         assert kwargs["json"]["messages"][0]["role"] == "system"
+        assert kwargs["json"]["messages"][0]["content"] == VisualGoalTrajectoryPrompt().system_prompt()
         assert len(kwargs["json"]["messages"][1]["content"]) == 3
         clock.sleep(2)
         return response
