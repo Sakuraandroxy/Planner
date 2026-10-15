@@ -1,4 +1,5 @@
-from planner.domain.pose import WorldPose
+from planner.domain.pose import WorldPose, resolve_yaw_delta_deg
+from planner.errors import MotionPaused
 
 
 class FakeVehicle:
@@ -12,11 +13,16 @@ class FakeVehicle:
     def current_pose(self):
         return self.pose
 
-    def execute_segment(self, segment, *, budget=None):
+    def execute_segment(self, segment, *, budget=None, pose_checkpoint=None):
         if self.fail:
             raise RuntimeError("execution failed")
         self.segments.append(segment)
         self.pose = segment.end
+        if pose_checkpoint is not None:
+            yaw = segment.start.yaw_deg + resolve_yaw_delta_deg(
+                segment.start.yaw_deg, segment.end.yaw_deg, segment.yaw_delta_deg)
+            if pose_checkpoint(self.pose, yaw):
+                raise MotionPaused(self.pose, yaw)
 
     def cancel(self):
         self.cancelled = True

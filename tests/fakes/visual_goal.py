@@ -9,7 +9,6 @@ from planner.domain.observation import Observation
 from planner.domain.pose import RelativePoseDelta, WorldPose
 from planner.domain.trajectory import RelativeTrajectory
 from planner.domain.visual_goal import GoalObservation, GoalVisibility
-from planner.domain.target_surface import GoalSurfaceObservation, SurfaceCandidate
 
 
 class Clock:
@@ -44,12 +43,8 @@ VISIBLE = GoalObservation(GoalVisibility.VISIBLE, (0.25, 0.25, 0.75, 0.75), (0.5
 INVISIBLE = GoalObservation(GoalVisibility.NOT_VISIBLE, None, None, "red house", "no target", True)
 
 
-def surface_observation(goal=VISIBLE, *, candidates=None, reference=False):
-    """Explicit fake v2 response; legacy single-region fixtures are geometry inputs only."""
-    points = () if goal.surface_point is None else (
-        SurfaceCandidate("center", goal.surface_point, "central facade", reference),)
-    return GoalSurfaceObservation(goal.status, goal.bbox, points if candidates is None else tuple(candidates),
-                                  goal.description, goal.evidence, goal.same_target)
+def goal_observation(goal=VISIBLE):
+    return goal
 
 
 class WallSource:
@@ -71,9 +66,7 @@ class StaticObserver:
 
     def observe(self, observation, description, reference=None, **kwargs):
         self.calls.append((observation, description, reference, kwargs))
-        if isinstance(self.goal, GoalSurfaceObservation):
-            return self.goal
-        return surface_observation(self.goal, reference=reference is not None)
+        return self.goal
 
 
 class ForwardPlanner:
@@ -84,3 +77,13 @@ class ForwardPlanner:
     def plan(self, observation, instruction, *, pending_trajectory=None, **kwargs):
         self.calls.append((observation, instruction, dict(kwargs, pending_trajectory=pending_trajectory)))
         return RelativeTrajectory(self.points)
+
+
+class CompletionChecker:
+    def __init__(self, answers=(True,)):
+        self.answers = iter(answers)
+        self.calls = []
+
+    def check(self, request, *, timeout_s):
+        self.calls.append(request)
+        return next(self.answers, True)

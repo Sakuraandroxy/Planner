@@ -1,20 +1,27 @@
 import pytest
 
 from planner.application.mission_runner import MissionRunner
-from planner.application.mission_validator import MissionValidator
+from tests.fakes.missions import mission_validator as MissionValidator
 from planner.application.workflow_router import WorkflowRouter
 from planner.domain.mission import MissionPlan, MissionStage, TaskKind
 from planner.domain.basic_motion import BasicMotionParameters
-from planner.domain.result import StageResult
+from planner.domain.result import StageResult, StageSummary, CompletionBasis
 
 
 class Workflow:
     def __init__(self):
         self.seen = []
 
+    def prepare(self):
+        pass
+
+    def close(self):
+        pass
+
     def run(self, stage):
         self.seen.append(stage.stage_id)
-        return StageResult(stage.stage_id, True)
+        return StageResult(stage.stage_id, True, summary=StageSummary("completed", "fake measured pose",
+            CompletionBasis.LOCAL_MEASUREMENT, True))
 
 
 def test_validator_and_runner_preserve_stage_order():

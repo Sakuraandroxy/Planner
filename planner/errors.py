@@ -29,3 +29,24 @@ class BudgetExceeded(ExecutionError):
 class ObservationError(PlannerError):
     """Capture/stop failure; motion must remain disabled."""
 
+
+class MotionPaused(Exception):
+    """Internal normal-control signal; no task policy belongs in the tracker."""
+
+    def __init__(self, pose, unwrapped_yaw_deg):
+        super().__init__("execution pause requested")
+        self.pose = pose
+        self.unwrapped_yaw_deg = unwrapped_yaw_deg
+
+
+class ModelCallTimeout(ExecutionError):
+    """Control-side model deadline expired; a detached worker may still be running."""
+
+
+
+class ResourceCleanupError(PlannerError):
+    """Every resource was attempted; original exceptions remain available for diagnostics."""
+    def __init__(self, failures: tuple[BaseException, ...]):
+        self.failures = failures
+        super().__init__(f"{len(failures)} resource cleanup(s) failed: " +
+                         ", ".join(type(exc).__name__ for exc in failures))

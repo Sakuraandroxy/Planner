@@ -24,3 +24,22 @@ class ExitDecision:
     @property
     def completed(self) -> bool:
         return self.status is ExitStatus.COMPLETED
+
+
+class ProgressStatus(str, Enum):
+    COMPLETE = "complete"
+    CONTINUE = "continue"
+    BLOCKED = "blocked"
+
+
+class ContinuationDisposition(str, Enum):
+    REPLAN = "replan"
+    RETAIN = "retain"
+
+
+@dataclass(frozen=True)
+class ProgressDecision:
+    status: ProgressStatus
+    reason: str
+    next_instruction: str = ""
+    continuation: ContinuationDisposition = ContinuationDisposition.REPLAN

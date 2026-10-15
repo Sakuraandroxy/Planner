@@ -7,7 +7,7 @@ import uuid
 
 import numpy as np
 from PIL import ImageDraw
-from planner.domain.target_surface import GoalSurfaceObservation, SurfaceSelection
+from planner.domain.visual_goal import GoalObservation, GoalGeometry
 from planner.domain.observation import Observation
 
 
@@ -29,7 +29,7 @@ class VisualGoalTrace:
                                     default=serialize, ensure_ascii=False,
                                     allow_nan=False)+"\n")
 
-    def observation(self, observation: Observation, goal: GoalSurfaceObservation):
+    def observation(self, observation: Observation, goal: GoalObservation):
         self.counter += 1
         stem = f"{self.counter:04d}"
         observation.rgb.save(self.path/f"{stem}_rgb.png")
@@ -41,10 +41,10 @@ class VisualGoalTrace:
             a, b, c, d = goal.bbox
             drawing = ImageDraw.Draw(overlay)
             drawing.rectangle((a*w, b*h, c*w, d*h), outline="red", width=2)
-            for candidate in goal.surface_candidates:
-                x, y = candidate.point[0]*w, candidate.point[1]*h
-                drawing.ellipse((x-3, y-3, x+3, y+3), outline="lime", width=2)
-                drawing.text((x+4, y), candidate.candidate_id, fill="yellow")
+            if goal.surface_point is not None:
+                x, y = goal.surface_point[0]*w, goal.surface_point[1]*h
+                drawing.ellipse((x-4, y-4, x+4, y+4), outline="lime", width=2)
+                drawing.text((x+5, y), "bbox-center", fill="yellow")
         overlay.save(self.path/f"{stem}_target.png")
         self.event("observation", capture_id=observation.capture_id, timestamp_ns=observation.timestamp_ns,
                    depth_timestamp_ns=observation.depth_timestamp_ns,
@@ -55,20 +55,18 @@ class VisualGoalTrace:
                    camera_position=observation.camera_position_world,
                    camera_rotation=observation.rotation_camera_to_world,
                    rgb_intrinsics=observation.intrinsics, depth_intrinsics=observation.depth_intrinsics,
+                   depth_mapping=observation.depth_mapping, depth_min_m=observation.depth_min_m,
+                   depth_max_m=observation.depth_max_m,
                    depth_kind=observation.depth_kind, pose=observation.vehicle_pose, goal=goal)
 
-    def surface_selection(self, observation: Observation, selection: SurfaceSelection) -> None:
+    def target_geometry(self, observation: Observation, goal: GoalObservation, geometry: GoalGeometry) -> None:
         overlay = observation.rgb.copy()
-        width, height = overlay.size
-        drawing = ImageDraw.Draw(overlay)
-        if selection.goal is not None:
-            a, b, c, d = selection.goal.bbox
-            drawing.rectangle((a*width, b*height, c*width, d*height), outline="red", width=2)
-        for item in selection.estimates:
-            chosen = item is selection.selected
-            color = "lime" if chosen else "yellow" if item.eligible else "orange" if item.geometry.reliable else "red"
-            x, y = item.candidate.point[0]*width, item.candidate.point[1]*height
-            radius = 6 if chosen else 3
-            drawing.ellipse((x-radius, y-radius, x+radius, y+radius), outline=color, width=2)
-            drawing.text((x+radius+1, y), item.candidate.candidate_id, fill=color)
-        overlay.save(self.path/f"{self.counter:04d}_surface_selection.png")
+        if goal.surface_point is not None:
+            width, height = overlay.size
+            x, y = goal.surface_point[0]*width, goal.surface_point[1]*height
+            drawing = ImageDraw.Draw(overlay)
+            color = "lime" if geometry.reliable else "red"
+            drawing.ellipse((x-5, y-5, x+5, y+5), outline=color, width=2)
+            label = f"bbox-center distance={geometry.distance_m:.3f}m" if geometry.distance_m is not None else "bbox-center invalid depth"
+            drawing.text((x+6, y), label, fill=color)
+        overlay.save(self.path/f"{self.counter:04d}_target_geometry.png")

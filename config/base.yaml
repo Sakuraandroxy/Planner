@@ -1,50 +1,189 @@
+# 主配置：各参数含义见中文注释；完成半径在对应工作流的任务规则文件中配置。
+# 世界坐标使用AirSim NED（x北、y东、z向下）；任务相对运动按阶段/航点机体朝向解释。
+
+# 任务解析模型：将自然语言拆成已注册类型的任务阶段；与其他模型角色独立配置。
 task_parser:
-  url: http://172.27.100.117:8000/v1
-  model: /data/sakura/models/Qwen2.5-7B-Instruct-AWQ
-  api_key: no-key
+  # HTTP请求格式：deepseek发送max_tokens和thinking开关；openai保留原max_completion_tokens格式。
+  request_format: deepseek
+  # 此角色的模型API基础地址；适配器会补齐chat/completions端点。
+  url: https://api.deepseek.com
+  # 发送给服务端的模型标识；可独立替换，不与其他角色共用模型选择。
+  model: deepseek-flash
+  # 此角色的本地密钥；对应环境变量非空时优先使用环境变量，不要提交真实密钥。
+  api_key: ""
+  # 保存此角色密钥的环境变量名称；非空环境变量覆盖上面的api_key。
   api_key_env: TASK_PARSER_API_KEY
+  # 该角色单次HTTP请求的配置超时，单位秒；实际调用还受工作流和阶段预算约束。
   timeout_s: 120
-
+  # 本地生成令牌数上限；deepseek请求发送为max_tokens，openai格式发送为max_completion_tokens。
+  max_completion_tokens: 2048
+  # none关闭思考：deepseek格式转换为thinking.type=disabled；openai格式发送reasoning_effort=none。
+  reasoning_effort: none
+# 轨迹规划模型：依据图像和任务输出5个新增增量航点，不负责目标检测或完成判断。
 trajectory_planner:
-  url: http://172.27.100.117:8004/v1
-  model: /roxy/zhusai/qwen_lora/models/3dg_vln_segment_v3_checkpoint_700
-  api_key: no-key
+  # 此角色的模型API基础地址；适配器会补齐chat/completions端点。
+  url: http://172.16.77.35:8004/v1
+  # 发送给服务端的模型标识；可独立替换，不与其他角色共用模型选择。
+  model: /data1/cug/qwen_uav_waypoint_regressor/outputs/stage2_4090/best
+  # 此角色的本地密钥；对应环境变量非空时优先使用环境变量，不要提交真实密钥。
+  api_key: ""
+  # 保存此角色密钥的环境变量名称；非空环境变量覆盖上面的api_key。
   api_key_env: TRAJECTORY_PLANNER_API_KEY
-  timeout_s: 120 # 超时时间
+  # 该角色单次HTTP请求的配置超时，单位秒；实际调用还受工作流和阶段预算约束。
+  timeout_s: 120
+# 可插拔目标检测模型：仅由使用此能力的工作流调用，返回归一化检测框。
+target_detection:
+  # HTTP请求格式：deepseek发送max_tokens和thinking开关；openai保留原max_completion_tokens格式。
+  request_format: deepseek
+  # 此角色的模型API基础地址；适配器会补齐chat/completions端点。
+  url: https://api.deepseek.com
+  # 发送给服务端的模型标识；可独立替换，不与其他角色共用模型选择。
+  model: deepseek-flash
+  # 此角色的本地密钥；对应环境变量非空时优先使用环境变量，不要提交真实密钥。
+  api_key: ""
+  # 保存此角色密钥的环境变量名称；非空环境变量覆盖上面的api_key。
+  api_key_env: TARGET_DETECTION_API_KEY
+  # 该角色单次HTTP请求的配置超时，单位秒；实际调用还受工作流和阶段预算约束。
+  timeout_s: 20
+  # none关闭思考：deepseek格式转换为thinking.type=disabled；openai格式发送reasoning_effort=none。
+  reasoning_effort: none
+  # 本地生成令牌数上限；deepseek请求发送为max_tokens，openai格式发送为max_completion_tokens。
+  max_completion_tokens: 64
+  # 目标检测请求中图像的最长边上限，单位像素，按比例缩小以降低传输和推理开销。
+  max_image_side: 512
+# 独立任务完成判断模型：当前视觉导航在本地条件满足后调用，只接受true或false。
+task_completion:
+  # HTTP请求格式：deepseek发送max_tokens和thinking开关；openai保留原max_completion_tokens格式。
+  request_format: deepseek
+  # 此角色的模型API基础地址；适配器会补齐chat/completions端点。
+  url: https://api.deepseek.com
+  # 发送给服务端的模型标识；可独立替换，不与其他角色共用模型选择。
+  model: deepseek-flash
+  # 此角色的本地密钥；对应环境变量非空时优先使用环境变量，不要提交真实密钥。
+  api_key: ""
+  # 保存此角色密钥的环境变量名称；非空环境变量覆盖上面的api_key。
+  api_key_env: TASK_COMPLETION_API_KEY
+  # 该角色单次HTTP请求的配置超时，单位秒；实际调用还受工作流和阶段预算约束。
+  timeout_s: 20.0
+  # 本地生成令牌数上限；deepseek请求发送为max_tokens，openai格式发送为max_completion_tokens。
+  max_completion_tokens: 2048
+  # none关闭思考：deepseek格式转换为thinking.type=disabled；openai格式发送reasoning_effort=none。
+  reasoning_effort: none
 
+# AirSim连接、观测与运动参数；距离单位为米，角度单位为度。
 airsim:
-  host: ""
+  # AirSim服务器地址；空字符串表示使用AirSim客户端的默认地址。
+  host: ''
+  # AirSim的RPC服务端口，须与仿真器配置一致。
   port: 41451
+  # 采集RGB和DepthPerspective深度图的相机名称；当前对应front_center。
   camera_id: front_center
+  # 创建AirSim RPC客户端时使用的超时，单位秒。
   connect_timeout_s: 5
+  # 运动执行与停稳等待使用的超时上限，单位秒，仍受任务总预算约束。
   move_timeout_s: 60
-  speed_mps: 2.0 # 在平滑控制中表示三维最高合速度上限
-
+  # 平滑运动规划使用的平移速度上限，单位米/秒；短航段可能达不到此速度。
+  speed_mps: 2.0
+  # 深度相机水平视场角，单位度；按提供的front_center配置填90，结合实际宽高计算内参。
+  depth_horizontal_fov_deg: 90.0
+  # 同次RGB与深度图允许的最大时间戳差，单位秒；超过则拒绝该观测。
+  maximum_pair_time_gap_s: 0.05
+# 深度图显示协议和几何计算允许的深度范围；不改变AirSim返回的原始米制深度。
 depth:
+  # 深度可视化编码协议，须与规划模型训练一致；当前为对数反向灰度，近亮远暗，无效为黑。
+  mapping: log_inverse_gray_v1
+  # 有效几何深度下限，单位米；当前显示协议也用它限定有效显示范围。
   min_m: 0.5
+  # 有效几何深度上限，单位米；当前显示协议也用它限定有效显示范围。
   max_m: 200.0
-
+# 共享航点协议与幅度检查；模型每次必须输出5个新增点，不含pending。
 trajectory:
+  # 模型每次新增航点数，当前协议固定为5；执行可使用通过检查的较短前缀。
   point_count: 5
+  # 单个增量航点的三维位移长度上限，单位米；也用于限制基础动作的单阶段位移。
   max_step_m: 30.0
+  # 单个增量航点的偏航变化绝对值上限，单位度，最多180；正值表示向右转。
   max_yaw_step_deg: 180.0
 
+# 通用平滑运动与跟踪参数，由基础动作和视觉导航共享。
 motion:
+  # 运动跟踪控制频率，单位赫兹，当前允许1至50。
   control_hz: 20.0
+  # 平移加速度上限，单位米/秒²。
   max_acceleration_mps2: 1.5
+  # 偏航角速度上限，单位度/秒。
   max_yaw_rate_deg_s: 30.0
+  # 偏航角加速度上限，单位度/秒²。
   max_yaw_acceleration_deg_s2: 30.0
+  # 运动到位等检查使用的位置误差容差，单位米；不是目标停靠距离容差。
   position_tolerance_m: 0.3
+  # 运动到位等检查使用的偏航角误差容差，单位度。
   yaw_tolerance_deg: 2.0
-
+# 滑窗续规划：已有队列执行时请求后续点；队列耗尽而新点未就绪时允许悬停等待。
+sliding_window:
+  # true启用支持滑窗的工作流续规划；false使用串行规划执行，不控制任务类型是否开放。
+  enabled: true
+  # 剩余航点数不超过此值时触发补点，范围1至5；剩余执行时间不足也会触发。
+  refill_pending_count: 3
+  # 提前补点的时间余量，单位秒；与动态估计的模型请求耗时相加作为时间触发阈值。
+  latency_margin_s: 1.5
+  # 单次滑窗阶段的总时长上限，单位秒；与工作流阶段预算共同约束。
+  max_task_duration_s: 600.0
+  # 连续规划失败达到此次数时终止滑窗续规划，避免无界重试。
+  max_consecutive_plan_failures: 2
+  # 滑窗规划观测的最大有效年龄，单位秒；实际还受工作流观测期限和请求期限限制。
+  max_observation_age_s: 120.0
+# 启用CLI的相机录制选项后使用的保存参数；配置此块本身不会启动录制。
 recording:
+  # 相机录制输出根目录；相对路径按启动进程的工作目录解释。
   output_root: output/camera_api
+  # 相机录制的目标采样频率，单位帧/秒，不是仿真器的渲染帧率。
   fps: 5.0
 
+# 基础数值动作工作流参数；该任务类型始终注册，执行前仍检查自由空间条件。
 basic_motion:
+  # 本工作流是否读取仿真器碰撞事件并中断；默认false不调用碰撞接口，不影响净空与轨迹校验。
+  collision_check_enabled: false
+  # 人工确认的静态无障碍世界坐标包围盒；不是由深度图自动建立的地图。
   free_space:
-    confirmed: false # 实验前人工确认整个静态区域；不是前视深度自动认证。
-    minimum_world_ned_m: null # 填写固定世界 NED 范围 [x, y, z]，米。
+    # true表示已确认此盒内净空且已填写有效边界；false阻止基础动作通过任务校验。
+    confirmed: false
+    # 自由空间各轴最小值[x,y,z]，单位米、世界NED坐标，z向下；null表示未填写。
+    minimum_world_ned_m: null
+    # 自由空间各轴最大值[x,y,z]，单位米、世界NED坐标，z向下；须逐轴大于最小值。
     maximum_world_ned_m: null
-    clearance_radius_m: 1.0 # 机体包络 + 跟踪/位置误差余量；按机型核查。
+    # 基础动作沿途检查使用的机体及误差包络半径，单位米；整条路径的包络须位于自由空间内。
+    clearance_radius_m: 1.0
+# 低空平视、寻找并接近静态视觉目标的工作流专用配置。
+visual_goal_navigation:
+  # 本工作流是否读取仿真器碰撞事件并中断；默认false不调用碰撞接口，不修改仿真器的物理碰撞设置。
+  collision_check_enabled: false
+  # true将此任务类型加入解析器和路由；false不注册此类型，相关能力仍按需构造。
+  enabled: true
+  # 确认RGB/深度配准、内参与深度语义已核实；false阻止视觉任务准备，true不自动校准或关闭运行时检查。
+  geometry_verified: true
+  # 视觉任务诊断日志和观测图像的输出根目录；相对路径按进程工作目录解释。
+  output_root: output/visual_goal
+  # 该工作流独立的完成判定规则文件；相对路径以本主配置所在目录为基准。
+  completion_rules_file: tasks/visual_goal_navigation.yaml
+  # 当前视觉任务的目标框中心测距、接近、确认与搜索策略参数。
+  limits:
+    # 距离测量的工程余量，单位米；仅用于确认半径上限。
+    distance_uncertainty_margin_m: 0.3
+    # 相对阶段起点允许的最大高度变化，单位米；null不额外限制完成高度；该参数不裁剪Qwen轨迹。
+    maximum_vertical_offset_m: null
+    # 本地到达条件需要的连续合格观测次数，至少2；不等于模型完成判断调用次数。
+    confirmation_count: 2
+    # 连续到达确认观测之间的最小时间间隔，单位秒。
+    confirmation_interval_s: 0.5
+    # 单个视觉任务阶段允许的最大规划轮数，超过后退出。
+    maximum_planning_rounds: 30
+    # 单个视觉任务阶段总时长上限，单位秒，覆盖观测、模型调用与执行等待。
+    maximum_task_duration_s: 600.0
+    # true允许目标不可见时按本地策略分步转向搜索；false禁止该搜索；搜索仍受角度、次数和阶段预算约束。
+    search_enabled: true
 
+# 预留进度复核接口，当前没有可执行的复核实现，也不调用额外模型。
+progress_review:
+  # 当前仅支持false，轨迹提示中的Current guidance为Not supplied；设置true会在加载时明确报错。
+  enabled: false

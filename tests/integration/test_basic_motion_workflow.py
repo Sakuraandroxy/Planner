@@ -5,7 +5,7 @@ import pytest
 
 from planner.application.application import PlannerApplication
 from planner.application.mission_runner import MissionRunner
-from planner.application.mission_validator import MissionValidator
+from tests.fakes.missions import mission_validator as MissionValidator
 from planner.application.workflow_router import WorkflowRouter
 from planner.capabilities.basic_motion_conversion import BasicMotionConverter
 from planner.capabilities.basic_motion_safety import BasicMotionSafety
@@ -13,8 +13,8 @@ from planner.capabilities.completion.basic_motion import BasicMotionCompletion
 from planner.domain.basic_motion import BasicMotionParameters, BasicMotionStatus, ConfirmedFreeSpace
 from planner.domain.mission import MissionPlan, MissionStage, TaskKind
 from planner.domain.motion import MotionLimits
-from planner.domain.pose import WorldPose
-from planner.errors import ExecutionError, ObservationError, ProtocolError
+from planner.domain.pose import WorldPose, resolve_yaw_delta_deg
+from planner.errors import ExecutionError, ObservationError, ProtocolError, MotionPaused
 from planner.services.execution import ExecutionService
 from planner.services.motion.synchronized import SynchronizedMotionPlanner
 from planner.services.trajectory_validation import TrajectoryValidator
@@ -33,13 +33,19 @@ class Vehicle:
     def current_pose(self):
         return self.pose
 
-    def execute_segment(self, segment, *, budget=None):
+    def execute_segment(self, segment, *, budget=None, pose_checkpoint=None):
         self.moves.append(segment)
         self.clock.sleep(segment.duration_s)
         if self.failure:
             raise self.failure
         if not self.stalled:
             self.pose = segment.end
+        if pose_checkpoint is not None:
+            yaw = segment.start.yaw_deg + resolve_yaw_delta_deg(
+                segment.start.yaw_deg, self.pose.yaw_deg,
+                segment.yaw_delta_deg if not self.stalled else None)
+            if pose_checkpoint(self.pose, yaw):
+                raise MotionPaused(self.pose, yaw)
 
     def collision_state(self):
         return self.collided
@@ -158,6 +164,7 @@ def test_collision_or_execution_error_is_failure_and_stops():
     for collision in (True, False):
         workflow, vehicle, source = build()
         vehicle.collided = collision
+        workflow.collision_check = vehicle.collision_state
         vehicle.failure = None if collision else ExecutionError("flight failed")
         result = workflow.run(stage(forward_m=2))
         assert not result.success and result.value.status is BasicMotionStatus.EXECUTION_ERROR

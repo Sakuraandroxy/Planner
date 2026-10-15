@@ -99,11 +99,8 @@ def test_planner_to_service_keeps_roles_and_generates_once(server, monkeypatch, 
     monkeypatch.setattr("planner.adapters.trajectory_planner.qwen_vl_planner.requests.post", post)
     builder = VisualGoalTrajectoryPrompt() if task_specific else BaseTrajectoryPrompt()
     planner = QwenVLPlanner("http://offline/v1", "offline-model", "no-key", 20, prompt_builder=builder)
-    goal_context = VisualGoalPlanningContext(
-        "red house", VISIBLE, GoalGeometry(True, "surface", 6, (6, 0, -4)),
-        VisualGoalState.APPROACHING, 4, 1, 6, 8, 1, 30, 1.8,
-    )
-    extra = {"visual_goal_context": goal_context} if task_specific else {}
+    goal_context = VisualGoalPlanningContext('red house', VISIBLE, GoalGeometry(True, 'surface', 6, (6, 0, -4)), VisualGoalState.APPROACHING, 4, 0.3, None)
+    extra = {"task_context": goal_context} if task_specific else {}
     result = planner.plan(wall_observation(), "approach the red house", **extra)
     assert len(result.points) == 5
     post.assert_called_once()

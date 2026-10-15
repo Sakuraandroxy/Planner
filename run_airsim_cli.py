@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 from pathlib import Path
 
 from config import load_config
 from planner.bootstrap import build_recording_runtime, build_runtime
-from planner.domain.visual_goal import VisualGoalNavigationResult
-from planner.domain.basic_motion import BasicMotionResult
+from planner.domain.result import MissionResult
 
 
 def parse_args() -> argparse.Namespace:
@@ -24,7 +24,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--camera-record-fps", type=float, help="capture rate; defaults to config recording.fps")
     parser.add_argument("--camera-record-output", help="output root; defaults to config recording.output_root")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.camera_record_fps is not None and (not math.isfinite(args.camera_record_fps) or args.camera_record_fps <= 0):
+        parser.error("--camera-record-fps must be finite and positive")
+    return args
 
 
 def main() -> int:
@@ -35,10 +38,15 @@ def main() -> int:
     runtime = build_runtime(config)
     recording = None
     try:
+        logging.info("Connecting to AirSim...")
         runtime.connection.connect()
         runtime.connection.prepare_vehicle()
         if not args.no_takeoff:
+            logging.info("Taking off and hovering before task input...")
             runtime.connection.takeoff()
+            logging.info("Takeoff and hover completed. Ready for a task.")
+        else:
+            logging.info("AirSim ready; automatic takeoff skipped.")
         if args.record_camera_api:
             recording = build_recording_runtime(
                 config,
@@ -58,11 +66,11 @@ def main() -> int:
     except KeyboardInterrupt:
         return 130
     finally:
-        if recording is not None:
-            recording.recorder.stop()
-            if recording.recorder.last_error:
-                print(f"Camera API recorder stopped after error: {recording.recorder.last_error}")
-        runtime.connection.shutdown()
+        try:
+            if recording is not None:
+                recording.close()
+        finally:
+            runtime.close()
 
 
 def _run(runtime, instruction: str) -> int:
@@ -71,20 +79,23 @@ def _run(runtime, instruction: str) -> int:
     except Exception as exc:
         print(f"Task rejected: {exc}")
         return 1
-    visual = [stage.value for stage in result.stages if isinstance(stage.value, VisualGoalNavigationResult)]
-    basic = [stage.value for stage in result.stages if isinstance(stage.value, BasicMotionResult)]
-    for item in basic:
-        print(f"Basic motion: {item.status.value}; position_error={item.position_error_m}; "
-              f"yaw_error={item.yaw_error_deg}; elapsed={item.elapsed_s:.1f}s; "
-              f"stop_confirmed={item.stop.confirmed}; basis={item.completion_basis}; reason={item.reason}")
-    for item in visual:
-        print(f"Visual goal: {item.status.value}; distance={item.final_distance_m}; "
-              f"elapsed={item.elapsed_s:.1f}s; calls={item.planning_calls}; "
-              f"stop_confirmed={item.stop.confirmed}; reason={item.reason}")
-        if item.run_directory:
-            print(f"Visual goal diagnostics: {item.run_directory}")
+    return _report(result)
+
+
+def _report(result: MissionResult) -> int:
+    for stage in result.stages:
+        summary = stage.summary
+        if summary is None:
+            print(f"Stage {stage.stage_id}: completion not verified; reason={stage.error or 'no summary'}")
+            continue
+        measurements = "; ".join(f"{item.name}={item.value}{item.unit}" for item in summary.measurements)
+        print(f"Stage {stage.stage_id}: {summary.status}; basis={summary.completion_basis.value}; "
+              f"reason={summary.reason}" + (f"; {measurements}" if measurements else ""))
+        if summary.diagnostics_path:
+            print(f"Stage diagnostics: {summary.diagnostics_path}")
     if result.success:
-        verified = len(basic)+len(visual) == len(result.stages)
+        verified = bool(result.stages) and all(stage.success and stage.summary is not None and
+            stage.summary.completion_confirmed for stage in result.stages)
         print(f"Mission completion confirmed by task-specific evidence: {len(result.stages)} stage(s)" if verified
               else f"Stages executed: {len(result.stages)}; task completion not verified")
         return 0

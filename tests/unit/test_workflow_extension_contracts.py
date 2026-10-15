@@ -2,6 +2,7 @@ from unittest.mock import Mock
 
 from planner.domain.progress import ExitDecision, ExitStatus
 from planner.workflows.termination import ExitPolicy
+from tests.fakes.visual_goal import wall_observation
 
 
 def test_common_exit_contract_remains_available_without_legacy_navigation():
@@ -26,7 +27,7 @@ def test_task_specific_prompt_builder_is_injected_into_planner(monkeypatch):
     builder.system_prompt.return_value = "trajectory-system-prompt"
     builder.build_user_prompt.return_value = "inspection-specific-prompt"
     planner = QwenVLPlanner("https://example.com", "model", "key", 10, prompt_builder=builder)
-    planner.plan(Mock(), "inspect tower")
+    planner.plan(wall_observation(), "inspect tower")
     builder.system_prompt.assert_called_once_with()
     call = builder.build_user_prompt.call_args
     assert call.args[0] == "inspect tower"

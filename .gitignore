@@ -43,3 +43,6 @@ graphify-out/
 .idea/
 .cph/
 .vscode/
+
+# Retired local configuration archive; may contain private credentials.
+/.local-config-archive/

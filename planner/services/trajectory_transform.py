@@ -39,3 +39,15 @@ def relative_to_world(trajectory: RelativeTrajectory, start: WorldPose) -> World
     return WorldTrajectory(start=start, poses=tuple(poses),
                            yaw_deltas_deg=tuple(point.dyaw_deg for point in trajectory.points))
 
+
+def world_to_relative(trajectory: WorldTrajectory) -> RelativeTrajectory:
+    """Invert the preceding-heading transform, retaining signed yaw metadata."""
+    previous = trajectory.start
+    points = []
+    for index, end in enumerate(trajectory.poses):
+        measured = world_pose_delta_in_reference_frame(previous, end)
+        yaw = measured.dyaw_deg if trajectory.yaw_deltas_deg is None else trajectory.yaw_deltas_deg[index]
+        points.append(RelativePoseDelta(measured.dx, measured.dy, measured.dz, yaw))
+        previous = end
+    return RelativeTrajectory(tuple(points))
+

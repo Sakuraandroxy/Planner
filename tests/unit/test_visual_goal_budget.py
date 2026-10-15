@@ -63,6 +63,6 @@ def test_observation_stabilization_obeys_task_budget():
 
 
 def test_search_prioritizes_explicit_right_hint_with_small_incremental_turns():
-    search = SearchPolicy(replace(VisualGoalLimits(), search_clearance_confirmed=True))
+    search = SearchPolicy(replace(VisualGoalLimits()))
     pose = WorldPose(0, 0, 0, 0)
     assert search.next_heading(pose, direction_hint="white car on the right") == 30

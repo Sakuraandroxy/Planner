@@ -1,5 +1,5 @@
+from tests.fakes.configuration import alternate_backend_config_data, write_config
 import json
-from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -9,6 +9,7 @@ from planner.adapters.trajectory_planner.qwen_vl_planner import QwenVLPlanner
 from planner.adapters.trajectory_planner.response_parser import parse_trajectory
 from planner.errors import ProtocolError
 from planner.services.trajectory_validation import TrajectoryValidator
+from tests.fakes.visual_goal import wall_observation
 
 
 @pytest.mark.parametrize("count", [1, 3, 4, 5])
@@ -35,7 +36,7 @@ def test_backend_request(monkeypatch, thinking):
     prompt_builder.build_user_prompt.return_value = "user"
     planner = QwenVLPlanner("https://example.com", "test", "test-key", 120,
                             thinking=thinking, prompt_builder=prompt_builder)
-    assert len(planner.plan(Mock(), "ascend 12m").points) == 5
+    assert len(planner.plan(wall_observation(), "ascend 12m").points) == 5
     payload = post.call_args.kwargs["json"]
     assert payload["messages"][0] == {"role": "system", "content": "system"}
     assert payload["messages"][1]["role"] == "user"
@@ -49,20 +50,21 @@ def test_backend_request(monkeypatch, thinking):
         assert "thinking" not in payload
 
 
-def test_deepseek_config(monkeypatch):
+def test_deepseek_config(tmp_path, monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
-    config = load_config("config/deepseek.example.yaml")
+    config = load_config(write_config(tmp_path / "backend.yaml", alternate_backend_config_data()))
     assert config.trajectory_planner.thinking == "disabled"
     assert config.trajectory_planner.model == "deepseek-flash"
-    assert "checkpoint_700" in load_config("config/base.yaml").trajectory_planner.model
+    from tests.fakes.configuration import main_config_data
+    assert load_config("config/base.yaml").trajectory_planner.model == main_config_data()["trajectory_planner"]["model"]
 
 
 @pytest.mark.parametrize("count", [1,3,6])
 def test_config_requires_five_model_points(tmp_path, monkeypatch, count):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
-    source = Path("config/deepseek.example.yaml").read_text(encoding="utf-8")
-    path = tmp_path / "invalid-point-count.yaml"
-    path.write_text(source.replace("point_count: 5", f"point_count: {count}"), encoding="utf-8")
+    raw = alternate_backend_config_data()
+    raw["trajectory"]["point_count"] = count
+    path = write_config(tmp_path / "invalid-point-count.yaml", raw)
 
     from planner.errors import ConfigurationError
 
@@ -80,18 +82,18 @@ def test_model_rejects_short_reply(monkeypatch, count):
     builder = Mock()
     planner = QwenVLPlanner("http://invalid/v1", "fake", "no-key", 20, prompt_builder=builder)
     with pytest.raises(ProtocolError, match="exactly 5"):
-        planner.plan(Mock(), "follow the road")
+        planner.plan(wall_observation(), "follow the road")
 
 
-def test_nonempty_pending_is_rejected_before_request(monkeypatch):
+def test_oversized_pending_is_rejected_before_request(monkeypatch):
     import planner.adapters.trajectory_planner.qwen_vl_planner as adapter
     from planner.domain.trajectory import RelativeTrajectory
     from planner.domain.pose import RelativePoseDelta
     post = Mock()
     monkeypatch.setattr(adapter.requests, "post", post)
     planner = QwenVLPlanner("http://invalid/v1", "fake", "no-key", 20)
-    pending = RelativeTrajectory((RelativePoseDelta(1,0,0,15),))
-    with pytest.raises(ProtocolError, match="not implemented yet"):
+    pending = RelativeTrajectory((RelativePoseDelta(1,0,0,15),)*6)
+    with pytest.raises(ProtocolError, match="0..5"):
         planner.plan(Mock(), "approach", pending_trajectory=pending)
     post.assert_not_called()
 

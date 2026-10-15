@@ -2,6 +2,6 @@ from .registry import ExtensionRegistry
 
 
 def build_extension_registry() -> ExtensionRegistry:
-    """Return the explicit extension registry; the base build has no plugins."""
+    """Return an empty allow-list for explicit assembly; never auto-discover code."""
     return ExtensionRegistry()
 

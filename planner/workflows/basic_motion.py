@@ -11,9 +11,10 @@ from planner.domain.execution import ExecutionBudget, StopResult
 from planner.domain.mission import MissionStage, TaskKind
 from planner.domain.motion import MotionLimits
 from planner.domain.pose import wrap_yaw_deg
-from planner.domain.result import StageResult
+from planner.domain.result import StageResult, StageSummary, CompletionBasis, ResultMeasurement
 from planner.errors import BudgetExceeded, ExecutionError, ObservationError, ProtocolError
 from planner.ports.observation_source import ObservationSource
+from planner.ports.collision_check import CollisionCheck
 from planner.services.execution import ExecutionService
 from planner.services.motion.base import MotionPlanner
 from planner.services.trajectory_transform import relative_to_world
@@ -27,13 +28,22 @@ class BasicMotionWorkflow:
                  safety: BasicMotionSafety, completion: BasicMotionCompletion,
                  validator: TrajectoryValidator, motion_planner: MotionPlanner,
                  execution: ExecutionService, limits: MotionLimits, timeout_s: float,
-                 clock=time.monotonic):
+                 clock=time.monotonic, *, collision_check: CollisionCheck | None = None):
         if not math.isfinite(timeout_s) or timeout_s <= 0:
             raise ValueError("basic motion timeout must be finite and positive")
         self.observation_source, self.converter = observation_source, converter
         self.safety, self.completion = safety, completion
         self.validator, self.motion_planner, self.execution = validator, motion_planner, execution
         self.limits, self.timeout_s, self.clock = limits, timeout_s, clock
+        self._closed = False
+        self.collision_check = collision_check
+
+    def prepare(self) -> None:
+        if self._closed:
+            raise ExecutionError("basic motion workflow is closed")
+
+    def close(self) -> None:
+        self._closed = True
 
     def run(self, stage: MissionStage) -> StageResult[object]:
         began = self.clock()
@@ -42,7 +52,14 @@ class BasicMotionWorkflow:
         decision = None
         stop = StopResult(False)
         status, reason = BasicMotionStatus.INVALID, "invalid basic motion"
+        leased = False
         try:
+            self.prepare()
+            self.execution.acquire_flight(self, collision_check=self.collision_check)
+            leased = True
+            self.execution.set_deadline(budget.deadline_monotonic)
+            logger.info("[BasicMotion %s] collision_check_enabled=%s", stage.stage_id,
+                        self.collision_check is not None)
             if stage.kind is not TaskKind.BASIC_MOTION or not isinstance(stage.parameters, BasicMotionParameters):
                 raise ProtocolError("basic motion stage has invalid parameters")
             relative = self.converter.create_trajectory(stage.parameters)
@@ -102,8 +119,11 @@ class BasicMotionWorkflow:
             receipt = getattr(exc, "receipt", None)
             if receipt is not None:
                 actual = receipt.final_pose
-            stop = self.execution.stop()
+            stop = self.execution.stop_if_owner(self)
             logger.error("[BasicMotion %s] %s: %s", stage.stage_id, status.value, reason)
+        finally:
+            if leased:
+                self.execution.release_flight(self)
         value = BasicMotionResult(
             status, reason, start, target, actual, self.clock()-began, stop,
             decision.position_error_m if decision else None,
@@ -111,7 +131,14 @@ class BasicMotionWorkflow:
             "measured_pose_and_stopped_observation" if status is BasicMotionStatus.COMPLETED else "not_verified",
         )
         success = status is BasicMotionStatus.COMPLETED
-        return StageResult(stage.stage_id, success, value, None if success else reason)
+        summary = StageSummary(status.value, reason,
+            CompletionBasis.LOCAL_MEASUREMENT if success else CompletionBasis.NOT_VERIFIED,
+            success, measurements=(ResultMeasurement("position_error", value.position_error_m, "m"),
+                ResultMeasurement("yaw_error", value.yaw_error_deg, "deg"),
+                ResultMeasurement("elapsed", value.elapsed_s, "s"),
+                ResultMeasurement("stop_confirmed", stop.confirmed),
+                ResultMeasurement("collision_check_enabled", self.collision_check is not None)))
+        return StageResult(stage.stage_id, success, value, None if success else reason, summary)
 
     def _check_budget(self, budget: ExecutionBudget) -> None:
         if budget.remaining(self.clock()) <= 0:

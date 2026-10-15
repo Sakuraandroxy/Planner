@@ -63,7 +63,7 @@ def test_capture_caches_fov_and_uses_image_response_camera_pose(monkeypatch):
 
 
 def test_verified_pair_rejects_different_camera_pose():
-    rgb = SimpleNamespace(camera_position=_vector(), camera_orientation=_quaternion())
-    depth = SimpleNamespace(camera_position=_vector(x=1), camera_orientation=_quaternion())
+    rgb = SimpleNamespace(camera_position=_vector(), camera_orientation=_quaternion(), time_stamp=1)
+    depth = SimpleNamespace(camera_position=_vector(x=1), camera_orientation=_quaternion(), time_stamp=1)
     with pytest.raises(ObservationError, match="registered"):
         AirSimObservationSource._validate_pair(rgb, depth)

@@ -36,4 +36,6 @@ class Observation:
     stopped: bool = False
     capture_started_monotonic: float = 0.0
     capture_finished_monotonic: float = 0.0
-
+    depth_mapping: str = "log_inverse_gray_v1"
+    depth_min_m: float = 0.5
+    depth_max_m: float = 200.0

@@ -24,7 +24,7 @@ class MotionLimits:
     def __post_init__(self):
         for field in fields(self):
             value = getattr(self, field.name)
-            if not math.isfinite(value) or value <= 0:
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
                 raise ValueError(f"motion.{field.name} must be finite and positive")
         if not 1 <= self.control_hz <= 50:
             raise ValueError("motion.control_hz must be between 1 and 50")

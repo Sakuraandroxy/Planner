@@ -1,17 +1,19 @@
+from planner.domain.depth import depth_display_description
 import json
-from typing import Protocol
+from typing import Protocol, TypeVar
 
 from planner.domain.observation import Observation
+from planner.domain.execution import ExecutionRecord
 from planner.domain.pose import WorldPose
-from planner.domain.trajectory import RelativeTrajectory
+from planner.domain.trajectory import RelativeTrajectory, WorldTrajectory
 from planner.services.trajectory_transform import world_pose_delta_in_reference_frame
 
 
 # In this prompt, "original instruction" means the instruction of the current
 # MissionStage, not the user's complete multi-stage mission. "Previous
-# trajectory" means the previous commanded trajectory within that MissionStage.
-# Pending clauses define the continuation protocol, not a runtime queue implementation.
-# Current adapters supply empty pending; nonempty queues are not executable yet.
+# trajectory" means confirmed executed actions within that MissionStage.
+# Pending describes the remaining queue at the frozen observation, not live
+# progress while the model request is in flight.
 BASE_TRAJECTORY_SYSTEM_PROMPT = """You are the trajectory planner for an autonomous UAV.
 
 Given the current front RGB image, aligned front depth visualization,
@@ -131,9 +133,11 @@ def build_base_user_prompt(
     max_points: int,
     *,
     current_guidance: str | None = None,
+    guidance_start: WorldPose | None = None,
     round_index: int = 1,
     initial_pose: WorldPose | None = None,
     previous_trajectory: RelativeTrajectory | None = None,
+    previous_trajectory_start: WorldPose | None = None,
     pending_trajectory: RelativeTrajectory | None = None,
 ) -> str:
     """Build the baseline dynamic user prompt shared by trajectory tasks."""
@@ -160,22 +164,31 @@ def build_base_user_prompt(
     state = "initial" if round_index == 1 else "continuing"
     if current_guidance and current_guidance.strip():
         guidance = current_guidance.strip()
-    elif round_index == 1:
-        guidance = "No additional guidance. Begin the original navigation instruction from the current observation."
     else:
-        guidance = (
-            "No additional guidance. Continue the original navigation instruction from the current "
-            "observation without restarting completed actions."
+        guidance = "Not supplied."
+    if current_guidance and guidance_start is not None:
+        guidance += "\nGuidance reference UAV pose [world x,y,z,yaw_deg]: " + json.dumps(
+            [guidance_start.x, guidance_start.y, guidance_start.z, guidance_start.yaw_deg],
+            separators=(",", ":"))
+        guidance += (
+            "\nThis remaining-action guidance was issued at that reference pose, not renewed at the "
+            "current observation. Account for motion executed since that pose and for pending "
+            "before generating NEW continuation actions."
         )
     history = (
-        "No previous trajectory has been executed."
+        ("No previous trajectory has been executed." if round_index == 1 else
+         "Execution history is not supplied; do not infer that no motion has occurred.")
         if previous_trajectory is None
-        else "Previous successfully executed trajectory from the preceding planning round "
+        else "Recent confirmed executed actions, not a complete previous planning batch "
         "(do not execute it again): " + json.dumps(
             [[point.dx, point.dy, point.dz, point.dyaw_deg] for point in previous_trajectory.points],
             separators=(",", ":"),
         )
     )
+    if previous_trajectory is not None and previous_trajectory_start is not None:
+        history += "\n  Execution-history reference start pose: " + json.dumps(
+            [previous_trajectory_start.x, previous_trajectory_start.y,
+             previous_trajectory_start.z, previous_trajectory_start.yaw_deg], separators=(",", ":"))
     pose = observation.vehicle_pose
     return "\n".join([
         "Visual inputs:",
@@ -183,7 +196,7 @@ def build_base_user_prompt(
         "- Image 2 is the aligned front depth visualization.",
         "- Brighter depth pixels mean nearer surfaces.",
         "- Darker gray pixels mean farther surfaces.",
-        "- Black pixels mean invalid depth.",
+        "- " + depth_display_description(observation.depth_mapping, observation.depth_min_m, observation.depth_max_m),
         "",
         "Original navigation instruction for the current mission stage:",
         instruction.strip(),
@@ -216,7 +229,10 @@ def build_base_user_prompt(
     ])
 
 
-class TrajectoryPromptBuilder(Protocol):
+ContextT = TypeVar("ContextT", contravariant=True)
+
+
+class TrajectoryPromptBuilder(Protocol[ContextT]):
     def system_prompt(self) -> str: ...
 
     def build_user_prompt(
@@ -226,10 +242,13 @@ class TrajectoryPromptBuilder(Protocol):
         max_points: int,
         *,
         current_guidance: str | None = None,
+        guidance_start: WorldPose | None = None,
         round_index: int = 1,
         initial_pose: WorldPose | None = None,
         previous_trajectory: RelativeTrajectory | None = None,
+        previous_trajectory_start: WorldPose | None = None,
         pending_trajectory: RelativeTrajectory | None = None,
+        task_context: ContextT | None = None,
     ) -> str: ...
 
 
@@ -240,13 +259,32 @@ class BaseTrajectoryPrompt:
 
     def build_user_prompt(
         self, instruction: str, observation: Observation, max_points: int, *,
-        current_guidance: str | None = None, round_index: int = 1,
+        current_guidance: str | None = None, guidance_start: WorldPose | None = None, round_index: int = 1,
         initial_pose: WorldPose | None = None,
         previous_trajectory: RelativeTrajectory | None = None,
+        previous_trajectory_start: WorldPose | None = None,
         pending_trajectory: RelativeTrajectory | None = None,
+        task_context: None = None,
     ) -> str:
+        if task_context is not None:
+            from planner.errors import ProtocolError
+            raise ProtocolError("base trajectory prompt does not support task context")
         return build_base_user_prompt(
             instruction, observation, max_points, current_guidance=current_guidance,
             round_index=round_index, initial_pose=initial_pose, previous_trajectory=previous_trajectory,
             pending_trajectory=pending_trajectory,
+            guidance_start=guidance_start,
+            previous_trajectory_start=previous_trajectory_start,
         )
+
+
+class ProgressPromptBuilder(Protocol):
+    def build(
+        self,
+        instruction: str,
+        initial: Observation,
+        current: Observation,
+        round_index: int,
+        *, candidate: WorldTrajectory | None = None,
+        execution_history: tuple[ExecutionRecord, ...] = (),
+    ) -> str: ...

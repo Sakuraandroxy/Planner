@@ -1,11 +1,11 @@
 """Immutable contracts for static visual-goal approach; no device/model calls."""
 from dataclasses import dataclass
 from enum import Enum
-import math
 from typing import Any
 
 from .pose import WorldPose
 from .execution import StopResult
+from .trajectory import MotionTrajectory
 
 
 class ArrivalRelation(str, Enum):
@@ -17,7 +17,6 @@ class VisualGoalNavigationParameters:
     instruction: str
     target_description: str
     arrival_relation: ArrivalRelation = ArrivalRelation.NEAR
-    standoff_m: float | None = None
     keep_target_in_view: bool = True
 
     def __post_init__(self):
@@ -27,10 +26,6 @@ class VisualGoalNavigationParameters:
             raise ValueError("target description must be non-empty text")
         if self.arrival_relation is not ArrivalRelation.NEAR:
             raise ValueError("only near arrival is supported")
-        if self.standoff_m is not None and (
-            isinstance(self.standoff_m, bool) or not math.isfinite(self.standoff_m) or self.standoff_m <= 0
-        ):
-            raise ValueError("standoff must be finite and positive")
         if not isinstance(self.keep_target_in_view, bool):
             raise ValueError("keep_target_in_view must be boolean")
 
@@ -43,34 +38,32 @@ class GoalVisibility(str, Enum):
 
 @dataclass(frozen=True)
 class GoalObservation:
-    """One locally selected region; not the raw goal_observation_v2 response."""
+    """One current bbox-center point; target identity is provided by the observer."""
     status: GoalVisibility
     bbox: tuple[float, float, float, float] | None
     surface_point: tuple[float, float] | None
     description: str
     evidence: str
     same_target: bool = True
+    association_source: str = "local_geometry"
 
 
 @dataclass(frozen=True)
 class GoalGeometry:
+    """Validity of one calibrated depth estimate, without scene/neighborhood audit."""
     reliable: bool
     reason: str
     distance_m: float | None = None
     world_point: tuple[float, float, float] | None = None
-    valid_ratio: float = 0.0
-    mad_m: float | None = None
 
 
 @dataclass(frozen=True)
 class GoalReference:
+    """Initial appearance reference plus the latest observed bbox-center position."""
     description: str
     crop: Any
     world_point: tuple[float, float, float]
     bbox: tuple[float, float, float, float]
-    region_crop: Any
-    region_description: str
-    region_point: tuple[float, float]  # Normalized within region_crop, not the current image.
 
 
 class VisualGoalState(str, Enum):
@@ -102,13 +95,10 @@ class VisualGoalPlanningContext:
     goal: GoalObservation
     geometry: GoalGeometry
     state: VisualGoalState
-    standoff_m: float
-    tolerance_m: float
-    maximum_distance_m: float
-    maximum_motion_s: float
-    maximum_vertical_offset_m: float
-    reobserve_heading_deg: float
-    minimum_clearance_m: float
+    arrival_radius_m: float
+    distance_uncertainty_margin_m: float
+    maximum_vertical_offset_m: float | None
+    goal_observation_is_current: bool = True
 
 
 @dataclass(frozen=True)
@@ -124,3 +114,6 @@ class VisualGoalNavigationResult:
     evidence_source: str = "VLM association + depth estimate + stopped observations"
     run_directory: str | None = None
     path_length_source: str = "sum_of_measured_segment_chords_not_continuous_path"
+    completion_checks: int = 0
+    completion_confirmed: bool = False
+    remaining_motion: MotionTrajectory = MotionTrajectory(())

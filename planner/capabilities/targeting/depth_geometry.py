@@ -8,8 +8,7 @@ import numpy as np
 
 from planner.domain.observation import Observation
 from planner.domain.visual_goal import GoalGeometry, GoalObservation
-from planner.domain.visual_goal_limits import VisualGoalLimits
-from planner.domain.target_surface import GoalSurfaceObservation, SurfaceEstimate
+from .depth_surface_sampling import sample_surface_depth
 
 
 class DepthGeometry:
@@ -39,9 +38,6 @@ class DepthGeometry:
             raise ValueError("invalid camera origin")
         return depth
 
-    def valid(self, values):
-        return np.isfinite(values) & (values >= self.minimum_m) & (values <= self.maximum_m)
-
     @staticmethod
     def ray(obs, point):
         k = obs.intrinsics
@@ -56,61 +52,21 @@ class DepthGeometry:
         return (k.fx*camera_point[1]/camera_point[0]+k.cx,
                 k.fy*camera_point[2]/camera_point[0]+k.cy)
 
-    def estimate(self, obs: Observation, goal: GoalObservation, limits: VisualGoalLimits):
+    def estimate(self, obs: Observation, goal: GoalObservation):
         try:
             depth = self.validate(obs)
             if goal.surface_point is None or goal.bbox is None:
                 return GoalGeometry(False, "target has no visible surface")
             ray = self.ray(obs, goal.surface_point)
             pixel = self.project_camera(obs, ray)
-            k = obs.depth_intrinsics
-            u, v = pixel
-            if not (0 <= u < k.width and 0 <= v < k.height):
-                return GoalGeometry(False, "target ray is outside depth coverage")
-            half_x = max(1, math.ceil(limits.depth_window_fraction*k.width/2))
-            half_y = max(1, math.ceil(limits.depth_window_fraction*k.height/2))
-            x0, x1 = max(0, int(u)-half_x), min(k.width, int(u)+half_x+1)
-            y0, y1 = max(0, int(v)-half_y), min(k.height, int(v)+half_y+1)
-            ys, xs = np.mgrid[y0:y1, x0:x1]
-            rgb_k = obs.intrinsics
-            rgb_u = ((xs-k.cx)/k.fx*rgb_k.fx+rgb_k.cx)/rgb_k.width
-            rgb_v = ((ys-k.cy)/k.fy*rgb_k.fy+rgb_k.cy)/rgb_k.height
-            box = goal.bbox
-            inside = (rgb_u >= box[0]) & (rgb_u <= box[2]) & (rgb_v >= box[1]) & (rgb_v <= box[3])
-            values = depth[y0:y1, x0:x1][inside]
-            if values.size < 9:
-                return GoalGeometry(False, "too few target-interior depth pixels")
-            mask = self.valid(values)
-            ratio = float(mask.mean())
-            if ratio < limits.minimum_valid_depth_ratio:
-                return GoalGeometry(False, "insufficient valid target depth", valid_ratio=ratio)
-            median = float(np.median(values[mask]))
-            mad = float(np.median(np.abs(values[mask]-median)))
-            # Reject mixed foreground/background rather than hiding it by dropping outliers.
-            if mad > limits.maximum_depth_mad_m or np.mean(
-                np.abs(values[mask]-median) <= max(0.05, limits.maximum_depth_mad_m*2)
-            ) < limits.minimum_valid_depth_ratio:
-                return GoalGeometry(False, "mixed or unstable target surface depth", valid_ratio=ratio, mad_m=mad)
-            world = np.asarray(obs.camera_position_world) + np.asarray(obs.rotation_camera_to_world) @ (ray*median)
+            sample = sample_surface_depth(depth, pixel, goal.bbox, obs.intrinsics,
+                obs.depth_intrinsics, self.minimum_m, self.maximum_m)
+            if not sample.valid:
+                return GoalGeometry(False, sample.reason)
+            world = np.asarray(obs.camera_position_world) + np.asarray(obs.rotation_camera_to_world) @ (ray*sample.depth_m)
             vehicle = obs.vehicle_pose
             distance = math.dist(world, (vehicle.x, vehicle.y, vehicle.z))
-            return GoalGeometry(True, "valid target surface depth", distance,
-                                tuple(float(v) for v in world), ratio, mad)
+            return GoalGeometry(True, sample.reason, distance,
+                                tuple(float(v) for v in world))
         except (ValueError, TypeError, IndexError) as exc:
             return GoalGeometry(False, str(exc))
-
-    def estimate_candidates(self, obs: Observation, goal: GoalSurfaceObservation,
-                            limits: VisualGoalLimits) -> tuple[SurfaceEstimate, ...]:
-        """Use the same calibrated raw-depth estimator for every candidate."""
-        return tuple(SurfaceEstimate(candidate, estimate, estimate.reliable, estimate.reason)
-                     for candidate in goal.surface_candidates
-                     for estimate in (self.estimate(obs, goal.at(candidate), limits),))
-
-    def point_cloud(self, obs):
-        depth = self.validate(obs)
-        k = obs.depth_intrinsics
-        ys, xs = np.mgrid[:k.height, :k.width]
-        rays = np.stack((np.ones(depth.shape), (xs-k.cx)/k.fx, (ys-k.cy)/k.fy), axis=-1)
-        rays /= np.linalg.norm(rays, axis=-1, keepdims=True)
-        valid = self.valid(depth)
-        return rays[valid]*depth[valid][:, None]

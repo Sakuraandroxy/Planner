@@ -11,12 +11,14 @@ class TaskKind(str, Enum):
     VISUAL_GOAL_NAVIGATION = "visual_goal_navigation"
 
 
+TaskParameters = BasicMotionParameters | VisualGoalNavigationParameters
+
 #长任务的一个任务阶段
 @dataclass(frozen=True)
 class MissionStage:
     stage_id: str
     kind: TaskKind
-    parameters: BasicMotionParameters | VisualGoalNavigationParameters
+    parameters: TaskParameters
 
 #完整的任务计划
 @dataclass(frozen=True)

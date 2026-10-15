@@ -67,6 +67,84 @@ def run_motion(start, end, moving=True, collision_after=None, timeout=40):
     return connection, segment, tracker
 
 
+@pytest.mark.parametrize("start_yaw", [0, 170, -170])
+@pytest.mark.parametrize("angle", [180, -180])
+def test_execution_receipt_preserves_measured_half_turn_without_pause_condition(start_yaw, angle):
+    from planner.services.execution import ExecutionService
+    start = WorldPose(0, 0, -5, start_yaw)
+    connection = SimulatedConnection(start)
+    world = relative_to_world(RelativeTrajectory((RelativePoseDelta(0, 0, 0, angle),)), start)
+    motion = SynchronizedMotionPlanner(2, MotionLimits()).create_motion(world)
+    tracker = AirSimMotionTracker(connection, lambda: connection.pose, MotionLimits(), 40,
+        clock=lambda: connection.time, sleep=connection.sleep)
+    vehicle = SimpleNamespace(
+        current_pose=lambda: connection.pose,
+        execute_segment=lambda segment, **kwargs: tracker.execute(segment, **kwargs),
+        collision_state=lambda: False, cancel=lambda: None,
+        hover=lambda: connection.call_async_and_wait("hoverAsync"))
+    receipt = ExecutionService(vehicle, clock=lambda: connection.time).execute_with_receipt(motion)
+    measured_turn = sum(command[2]*0.05 for command in connection.commands)
+    assert receipt.measured_actions[0].dyaw_deg == pytest.approx(measured_turn, abs=0.001)
+    assert receipt.measured_actions[0].dyaw_deg == pytest.approx(angle, abs=2)
+    assert not receipt.paused and receipt.completed_segments == 1
+
+
+def test_execution_receipt_uses_measured_start_branch_when_start_crosses_yaw_boundary():
+    from planner.services.execution import ExecutionService
+    planned_start = WorldPose(0, 0, -5, 179)
+    connection = SimulatedConnection(WorldPose(0, 0, -5, -179.9))
+    world = relative_to_world(RelativeTrajectory((RelativePoseDelta(0, 0, 0, 20),)), planned_start)
+    motion = SynchronizedMotionPlanner(2, MotionLimits()).create_motion(world)
+    tracker = AirSimMotionTracker(connection, lambda: connection.pose, MotionLimits(), 40,
+        clock=lambda: connection.time, sleep=connection.sleep)
+    vehicle = SimpleNamespace(current_pose=lambda: connection.pose,
+        execute_segment=lambda segment, **kwargs: tracker.execute(segment, **kwargs),
+        collision_state=lambda: False, cancel=lambda: None,
+        hover=lambda: connection.call_async_and_wait("hoverAsync"))
+    receipt = ExecutionService(vehicle, clock=lambda: connection.time).execute_with_receipt(motion)
+    assert receipt.measured_actions[0].dyaw_deg == pytest.approx(18.9, abs=2)
+    assert receipt.measured_actions[0].dyaw_deg == pytest.approx(
+        sum(command[2]*0.05 for command in connection.commands), abs=0.001)
+
+
+def test_task_pause_mid_segment_preserves_world_endpoints_and_signed_yaw_on_resume():
+    from planner.services.execution import ExecutionService
+    from planner.capabilities.completion.visual_goal_retained_motion import retained_world_trajectory
+    from planner.domain.trajectory import MotionTrajectory
+    start, end = WorldPose(0, 0, -5, 0), WorldPose(4, 0, -5, -180)
+    connection = SimulatedConnection(start)
+    motion = SynchronizedMotionPlanner(2, MotionLimits())
+    original = motion.create_motion(WorldTrajectory(start, (end,), (180,)))
+    tracker = AirSimMotionTracker(connection, lambda: connection.pose, MotionLimits(), 40,
+        clock=lambda: connection.time, sleep=connection.sleep)
+    vehicle = SimpleNamespace(
+        current_pose=lambda: connection.pose,
+        execute_segment=lambda segment, **kwargs: tracker.execute(segment, **kwargs),
+        collision_state=lambda: False,
+        cancel=lambda: None,
+        hover=lambda: connection.call_async_and_wait("hoverAsync"),
+    )
+    execution = ExecutionService(vehicle, clock=lambda: connection.time)
+    paused = execution.execute_with_receipt(original, pause_when=lambda pose: pose.x >= 1)
+    assert paused.paused and paused.completed_segments == 0
+    assert 1 <= paused.final_pose.x < 4 and connection.hovered
+    assert paused.remaining.segments[0].end == end
+    actual_yaw = paused.measured_actions[0].dyaw_deg
+    assert 0 < actual_yaw < 180
+    assert paused.remaining.segments[0].yaw_delta_deg == pytest.approx(180-actual_yaw)
+    commands_at_pause = len(connection.commands)
+    # No implicit replay happens while the decision is pending.
+    assert len(connection.commands) == commands_at_pause
+    resumed = motion.create_motion(retained_world_trajectory(paused.remaining, connection.pose))
+    receipt = execution.execute_with_receipt(resumed)
+    assert not receipt.paused and receipt.completed_segments == 1
+    assert abs(wrap_yaw_deg(connection.pose.yaw_deg-end.yaw_deg)) <= 2
+    assert abs(connection.pose.x-end.x) <= 0.3
+    measured_total = sum(command[2]*0.05 for command in connection.commands)
+    assert actual_yaw + receipt.measured_actions[0].dyaw_deg == pytest.approx(measured_total, abs=0.001)
+    assert measured_total == pytest.approx(180, abs=2)
+
+
 @pytest.mark.parametrize("start,end", [
     (WorldPose(0, 0, -5, 90), WorldPose(8, 5, -8, 180)),
     (WorldPose(1, 2, -5, 170), WorldPose(1, 2, -5, -170)),
@@ -108,9 +186,16 @@ def test_motion_rejects_budget_too_short_before_first_velocity_command():
 
 def test_collision_checked_during_segment():
     connection, segment, tracker = run_motion(WorldPose(0, 0, -5, 0), WorldPose(3, 0, -5, 45), collision_after=5)
+    from planner.services.execution import ExecutionService
+    execution = ExecutionService(SimpleNamespace(), clock=lambda: connection.time)
+    execution.acquire_flight(tracker, collision_check=lambda: bool(connection.call("simGetCollisionInfo").has_collided))
+    def checkpoint(pose, yaw):
+        execution.check_safety()
+        return False
     with pytest.raises(ExecutionError, match="collision"):
-        tracker.execute(segment)
+        tracker.execute(segment, pose_checkpoint=checkpoint)
     assert len(connection.commands) == 5
+    execution.release_flight(tracker)
 
 
 def test_duration_over_timeout_rejected_before_motion():
@@ -197,3 +282,17 @@ def test_signed_half_turn_direction_and_pause_do_not_replay_rotation(angle, paus
     assert all(math.hypot(*command[1]) == 0 for command in connection.commands)
     assert abs(wrap_yaw_deg(connection.pose.yaw_deg-world.poses[-1].yaw_deg)) <= 2
     assert len(captured) == int(pause)
+
+
+def test_nonfinite_yaw_is_rejected_before_clamping_or_command(monkeypatch):
+    import planner.adapters.airsim.motion_tracker as adapter
+    connection = SimulatedConnection(WorldPose(0,0,-4,0))
+    tracker = AirSimMotionTracker(connection, lambda: connection.pose, MotionLimits(), 60,
+                                 lambda: connection.time, connection.sleep)
+    motion = SynchronizedMotionPlanner(2, MotionLimits()).create_motion(
+        WorldTrajectory(connection.pose, (WorldPose(1,0,-4,0),)))
+    monkeypatch.setattr(adapter, "sample_segment", lambda *args: SimpleNamespace(
+        pose=connection.pose, velocity=(0,0,0), yaw_rate_deg_s=float("nan")))
+    with pytest.raises(ExecutionError, match="non-finite yaw"):
+        tracker.execute(motion.segments[0])
+    assert not connection.commands

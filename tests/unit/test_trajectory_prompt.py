@@ -5,7 +5,6 @@ from planner.adapters.trajectory_planner.prompts import (
     BASE_TRAJECTORY_SYSTEM_PROMPT,
     BaseTrajectoryPrompt,
 )
-from planner.adapters.trajectory_planner.prompt import build_prompt
 from planner.domain.observation import CameraIntrinsics, Observation
 from planner.domain.pose import RelativePoseDelta, WorldPose
 from planner.domain.trajectory import RelativeTrajectory
@@ -42,9 +41,6 @@ def test_base_system_prompt_and_initial_user_context():
     assert "Pending incremental pose waypoints: []" in prompt
     assert '"camera_id":"front_center"' in prompt
 
-    legacy_prompt = build_prompt("follow the road", current, 5)
-    assert legacy_prompt.startswith(BASE_TRAJECTORY_SYSTEM_PROMPT)
-    assert "Original navigation instruction for the current mission stage:\nfollow the road" in legacy_prompt
 
 
 def test_base_user_prompt_contains_continuing_guidance_and_history():
@@ -66,7 +62,7 @@ def test_base_user_prompt_contains_continuing_guidance_and_history():
     assert "Current guidance:\ncontinue toward the junction" in prompt
     assert "Planning round: 2" in prompt
     assert "Task state: continuing" in prompt
-    assert "Previous successfully executed trajectory from the preceding planning round" in prompt
+    assert "Recent confirmed executed actions, not a complete previous planning batch" in prompt
     assert "(do not execute it again): [[2,0,1,5]]" in prompt
     assert "Forward: 4.000 m" in prompt
     assert "Right: 1.000 m" in prompt
@@ -86,9 +82,8 @@ def test_continuing_prompt_without_guidance_does_not_restart_task():
         initial_pose=WorldPose(0, 0, -2, 0),
     )
 
-    assert "Continue the original navigation instruction" in prompt
-    assert "without restarting completed actions" in prompt
-    assert "Begin the original navigation instruction" not in prompt
+    assert "Current guidance:\nNot supplied." in prompt
+    assert "Execution history is not supplied; do not infer that no motion has occurred." in prompt
 
 
 def test_pending_system_rules_preserve_current_empty_queue_runtime():

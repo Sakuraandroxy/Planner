@@ -32,7 +32,7 @@ class RelativePoseDelta:
 
     def __post_init__(self) -> None:
         values = (self.dx, self.dy, self.dz, self.dyaw_deg)
-        if not all(math.isfinite(float(value)) for value in values):
+        if not all(_finite_number(value) for value in values):
             raise ValueError("relative pose contains a non-finite value")
 
 
@@ -44,6 +44,15 @@ class WorldPose:
     yaw_deg: float
 
     def __post_init__(self) -> None:
-        if not all(math.isfinite(float(value)) for value in (self.x, self.y, self.z, self.yaw_deg)):
+        if not all(_finite_number(value) for value in (self.x, self.y, self.z, self.yaw_deg)):
             raise ValueError("world pose contains a non-finite value")
+
+
+def _finite_number(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 

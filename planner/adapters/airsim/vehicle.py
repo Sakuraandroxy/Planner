@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from planner.adapters.airsim.connection import AirSimConnection
 from planner.domain.pose import WorldPose
-from planner.domain.execution import ExecutionBudget
+from planner.domain.execution import ExecutionBudget, PoseCheckpoint
 from planner.domain.trajectory import MotionSegment
 from planner.errors import ExecutionError
 from planner.domain.motion import MotionLimits
@@ -29,10 +29,13 @@ class AirSimVehicle:
         ))
         return WorldPose(pose.position.x_val, pose.position.y_val, pose.position.z_val, yaw)
 
-    def execute_segment(self, segment: MotionSegment, *, budget: ExecutionBudget | None = None) -> None:
+    def execute_segment(self, segment: MotionSegment, *, budget: ExecutionBudget | None = None,
+                        pose_checkpoint: PoseCheckpoint | None = None) -> None:
         if segment.profile != SMOOTH_PROFILE:
             raise ExecutionError(f"unsupported motion profile: {segment.profile}")
-        if budget is None:
+        if pose_checkpoint is not None:
+            self.motion_tracker.execute(segment, budget=budget, pose_checkpoint=pose_checkpoint)
+        elif budget is None:
             self.motion_tracker.execute(segment)
         else:
             self.motion_tracker.execute(segment, budget=budget)

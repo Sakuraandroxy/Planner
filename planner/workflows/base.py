@@ -1,12 +1,11 @@
+"""Explicit lifecycle for a stage workflow; preparation never commands the vehicle."""
 from typing import Protocol
 
 from planner.domain.mission import MissionStage
 from planner.domain.result import StageResult
 
-'''
-任何对象只要想作为 Workflow 使用，就必须提供一个 run() 方法。
-这个方法接收一个任务阶段 MissionStage，返回该阶段的执行结果 StageResult
-'''
-class Workflow(Protocol):
-    def run(self, stage: MissionStage) -> StageResult[object]: ...
 
+class Workflow(Protocol):
+    def prepare(self) -> None: ...
+    def run(self, stage: MissionStage) -> StageResult[object]: ...
+    def close(self) -> None: ...

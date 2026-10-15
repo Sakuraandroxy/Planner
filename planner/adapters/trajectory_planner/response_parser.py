@@ -22,9 +22,11 @@ def parse_trajectory(text: str, expected_points: int = 5) -> RelativeTrajectory:
     for index, raw in enumerate(value):
         if not isinstance(raw, list) or len(raw) != 4:
             raise ProtocolError(f"trajectory point {index} must be [dx, dy, dz, dyaw_deg]")
+        if any(isinstance(item, bool) or not isinstance(item, (int, float)) for item in raw):
+            raise ProtocolError(f"trajectory point {index} must contain JSON numbers, not strings/booleans")
         try:
             points.append(RelativePoseDelta(*(float(item) for item in raw)))
-        except (TypeError, ValueError) as exc:
+        except (TypeError, ValueError, OverflowError) as exc:
             raise ProtocolError(f"trajectory point {index} is invalid: {exc}") from exc
     return RelativeTrajectory(tuple(points))
 

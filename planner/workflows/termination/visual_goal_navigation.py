@@ -73,8 +73,8 @@ class SearchPolicy:
     active: bool = False
 
     def next_heading(self, pose, reference=None, direction_hint=""):
-        if not self.limits.search_enabled or not self.limits.search_clearance_confirmed:
-            raise VisualGoalFailure(VisualGoalStatus.BLOCKED, "search rotation clearance is not confirmed")
+        if not self.limits.search_enabled:
+            raise VisualGoalFailure(VisualGoalStatus.BLOCKED, "target search is disabled")
         if not self.headings:
             if self.active:
                 raise VisualGoalFailure(VisualGoalStatus.TARGET_LOST if reference else

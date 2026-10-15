@@ -1,22 +1,37 @@
-from __future__ import annotations
+"""Small explicit task allow-list, assembled at startup without import side effects."""
+from dataclasses import dataclass
 
-from typing import Any, Callable
+from planner.adapters.task_parser.tasks import TaskCodec
+from planner.application.mission_validator import StageValidator
+from planner.domain.mission import TaskKind
+from planner.workflows.base import Workflow
+
+
+@dataclass(frozen=True)
+class TaskRegistration:
+    kind: TaskKind
+    codec: TaskCodec
+    validator: StageValidator
+    workflow: Workflow
+
+    def __post_init__(self):
+        if not isinstance(self.kind, TaskKind) or not isinstance(self.codec, TaskCodec) or self.codec.kind is not self.kind:
+            raise ValueError("task registration requires matching finite task kind and codec")
+        if not callable(getattr(self.validator, "validate", None)):
+            raise ValueError("task registration requires a parameter validator")
+        if any(not callable(getattr(self.workflow, name, None)) for name in ("prepare", "run", "close")):
+            raise ValueError("task registration requires the complete workflow lifecycle")
 
 
 class ExtensionRegistry:
-    """Explicit allow-list registry for future workflows and capabilities."""
-
     def __init__(self):
-        self._factories: dict[str, Callable[..., Any]] = {}
+        self._tasks: dict[TaskKind, TaskRegistration] = {}
 
-    def register(self, name: str, factory: Callable[..., Any]) -> None:
-        key = str(name).strip()
-        if not key or key in self._factories:
-            raise ValueError(f"invalid or duplicate extension name: {key!r}")
-        self._factories[key] = factory
+    def register(self, task: TaskRegistration) -> None:
+        if task.kind in self._tasks:
+            raise ValueError(f"duplicate task registration: {task.kind.value}")
+        self._tasks[task.kind] = task
 
-    def create(self, name: str, **kwargs: Any) -> Any:
-        if name not in self._factories:
-            raise KeyError(f"extension is not allow-listed: {name}")
-        return self._factories[name](**kwargs)
-
+    @property
+    def tasks(self) -> tuple[TaskRegistration, ...]:
+        return tuple(self._tasks.values())

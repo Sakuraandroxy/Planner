@@ -13,6 +13,7 @@ from planner.adapters.airsim.connection import AirSimConnection
 from planner.domain.observation import Observation
 from planner.ports.vehicle import Vehicle
 from planner.errors import BudgetExceeded, ObservationError
+from .depth_visualization import render_depth
 
 
 class AirSimObservationSource:
@@ -26,6 +27,8 @@ class AirSimObservationSource:
         observation_gate=None,
         depth_horizontal_fov_deg: float | None = None,
         verify_image_pair: bool = False,
+        depth_mapping: str = "log_inverse_gray_v1",
+        maximum_pair_time_gap_s: float = 0.05,
     ):
         self.connection = connection
         self.vehicle = vehicle
@@ -36,6 +39,8 @@ class AirSimObservationSource:
         self.observation_gate = observation_gate
         self.depth_horizontal_fov_deg = depth_horizontal_fov_deg
         self.verify_image_pair = verify_image_pair
+        self.depth_mapping = depth_mapping
+        self.maximum_pair_time_gap_s = maximum_pair_time_gap_s
 
     def capture(self, *, budget=None) -> Observation:
         try:
@@ -52,6 +57,11 @@ class AirSimObservationSource:
         except Exception as exc:
             raise ObservationError(str(exc)) from exc
 
+    def request_capture(self, timeout_s=None):
+        if self.observation_gate is None:
+            raise ObservationError("formal observation requires a control-owned gate")
+        return self.observation_gate.request_capture(self._capture, timeout_s)
+
     def _capture(self) -> Observation:
         import airsim
 
@@ -65,7 +75,7 @@ class AirSimObservationSource:
         rgb_response, depth_response = responses
         captured = time.monotonic()
         if self.verify_image_pair:
-            self._validate_pair(rgb_response, depth_response)
+            self._validate_pair(rgb_response, depth_response, self.maximum_pair_time_gap_s)
         vehicle_pose = self.vehicle.current_pose()
         rgb = _decode_rgb(rgb_response.image_data_uint8)
         depth = np.asarray(depth_response.image_data_float, dtype=np.float32).reshape(
@@ -82,7 +92,8 @@ class AirSimObservationSource:
         return Observation(
             rgb=rgb,
             depth_meters=depth,
-            depth_image=_depth_visualization(depth, self.min_depth_m, self.max_depth_m),
+            depth_image=render_depth(depth, self.min_depth_m, self.max_depth_m, self.depth_mapping),
+            depth_mapping=self.depth_mapping, depth_min_m=self.min_depth_m, depth_max_m=self.max_depth_m,
             vehicle_pose=vehicle_pose,
             camera_id=self.camera_id,
             intrinsics=intrinsics,
@@ -103,7 +114,11 @@ class AirSimObservationSource:
         )
 
     @staticmethod
-    def _validate_pair(rgb_response, depth_response):
+    def _validate_pair(rgb_response, depth_response, maximum_pair_time_gap_s=0.05):
+        times = [getattr(r, "time_stamp", 0) for r in (rgb_response, depth_response)]
+        if (any(type(t) is not int or t <= 0 for t in times) or
+                abs(times[0]-times[1]) > maximum_pair_time_gap_s*1e9):
+            raise ObservationError("RGB/depth timestamps are missing or exceed the configured pair gap")
         # One camera registration is a precondition of the ray mapping. Image
         # response poses must agree; FOV/crop calibration is verified separately.
         positions, rotations = [], []
@@ -130,11 +145,5 @@ def _decode_rgb(data: bytes) -> Image.Image:
 
 
 def _depth_visualization(depth: np.ndarray, minimum: float, maximum: float) -> Image.Image:
-    valid = np.isfinite(depth) & (depth >= minimum) & (depth <= maximum)
-    output = np.zeros(depth.shape, dtype=np.uint8)
-    if np.any(valid):
-        denominator = math.log(maximum) - math.log(minimum)
-        values = (math.log(maximum) - np.log(np.clip(depth[valid], minimum, maximum))) / denominator
-        output[valid] = np.clip(values * 255.0, 1, 255).astype(np.uint8)
-    return Image.fromarray(output).convert("RGB")
-
+    """Compatibility entry point for the legacy renderer."""
+    return render_depth(depth, minimum, maximum)

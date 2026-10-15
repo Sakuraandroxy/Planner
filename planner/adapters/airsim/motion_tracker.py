@@ -7,17 +7,21 @@ from dataclasses import replace
 from typing import Callable
 
 from planner.domain.motion import MotionLimits
-from planner.domain.execution import ExecutionBudget
+from planner.domain.execution import ExecutionBudget, PoseCheckpoint
 from planner.domain.pose import WorldPose, wrap_yaw_deg, resolve_yaw_delta_deg
 from planner.domain.trajectory import MotionSegment
-from planner.errors import BudgetExceeded, ExecutionError
+from planner.errors import BudgetExceeded, ExecutionError, MotionPaused
 from planner.services.motion.synchronized import duration_for, sample_segment
 
 logger = logging.getLogger(__name__)
 
 
 def limit_vector(values, maximum):
-    norm = math.sqrt(sum(value*value for value in values))
+    if not math.isfinite(maximum) or maximum <= 0 or not all(math.isfinite(v) for v in values):
+        raise ExecutionError("non-finite motion vector or invalid limit")
+    norm = math.hypot(*values)
+    if not math.isfinite(norm):
+        raise ExecutionError("motion vector magnitude overflowed")
     scale = min(1.0, maximum / norm) if norm else 1.0
     return tuple(value*scale for value in values)
 
@@ -33,7 +37,8 @@ class AirSimMotionTracker:
         self.sleep = sleep
         self.observation_gate = None
 
-    def execute(self, segment: MotionSegment, *, budget: ExecutionBudget | None = None) -> None:
+    def execute(self, segment: MotionSegment, *, budget: ExecutionBudget | None = None,
+                pose_checkpoint: PoseCheckpoint | None = None) -> None:
         import airsim
 
         limits = self.limits
@@ -91,8 +96,8 @@ class AirSimMotionTracker:
                     raise ExecutionError("synchronized motion timed out before position/yaw settled")
                 actual = self.current_pose()
                 measured_yaw += resolve_yaw_delta_deg(previous_pose.yaw_deg, actual.yaw_deg)
-                if self.connection.call("simGetCollisionInfo").has_collided:
-                    raise ExecutionError("AirSim reported a collision during synchronized motion")
+                # Optional collision checks belong to the injected execution
+                # checkpoint, rather than an unconditional simulator RPC here.
                 dt = tick - previous_time
                 moved = math.dist((actual.x, actual.y, actual.z), (previous_pose.x, previous_pose.y, previous_pose.z))
                 measured_speed = moved/dt if dt > 0 else 0.0
@@ -115,6 +120,8 @@ class AirSimMotionTracker:
                     logger.info("[Motion] reached: position_error=%.3fm yaw_error=%.2fdeg elapsed=%.2fs",
                                 final_distance, final_yaw, self.clock()-began)
                     return
+                if pose_checkpoint is not None and pose_checkpoint(actual, measured_yaw):
+                    raise MotionPaused(actual, measured_yaw)
                 reference = sample_segment(segment, elapsed)
                 error = (reference.pose.x-actual.x, reference.pose.y-actual.y, reference.pose.z-actual.z)
                 desired = limit_vector(tuple(v+limits.position_gain*e for v, e in zip(reference.velocity, error)), speed)
@@ -122,11 +129,15 @@ class AirSimMotionTracker:
                                       limits.max_acceleration_mps2 * period)
                 velocity = tuple(p+d for p, d in zip(last_velocity, change))
                 yaw_rate = reference.yaw_rate_deg_s + limits.yaw_gain*wrap_yaw_deg(reference.pose.yaw_deg-actual.yaw_deg)
+                if not math.isfinite(yaw_rate):
+                    raise ExecutionError("non-finite yaw control command")
                 yaw_rate = max(-limits.max_yaw_rate_deg_s, min(limits.max_yaw_rate_deg_s, yaw_rate))
                 yaw_change = limits.max_yaw_acceleration_deg_s2 * period
                 yaw_rate = max(last_yaw_rate-yaw_change, min(last_yaw_rate+yaw_change, yaw_rate))
                 # World NED velocity + yaw RATE, not body-frame velocity or ForwardOnly.
                 # Serialize and drain each short RPC future; no cross-thread pending calls.
+                if not all(math.isfinite(v) for v in (*velocity, yaw_rate, period)):
+                    raise ExecutionError("non-finite control velocity or yaw rate")
                 self.connection.call_async_and_wait(
                     "moveByVelocityAsync", *velocity, period,
                     drivetrain=airsim.DrivetrainType.MaxDegreeOfFreedom,

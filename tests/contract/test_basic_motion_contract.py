@@ -1,3 +1,4 @@
+from tests.fakes.configuration import alternate_backend_config_data, write_config
 from copy import deepcopy
 from pathlib import Path
 from unittest.mock import Mock
@@ -10,7 +11,7 @@ from planner.adapters.task_parser.openai_task_parser import OpenAITaskParser
 from planner.adapters.task_parser.prompt import task_parser_system_prompt
 from planner.adapters.task_parser.response_schema import parse_json_object
 from planner.adapters.task_parser.task_factory import mission_from_dict
-from planner.application.mission_validator import MissionValidator
+from tests.fakes.missions import mission_validator as MissionValidator
 from planner.domain.mission import TaskKind
 from planner.errors import ConfigurationError, ProtocolError
 
@@ -106,6 +107,6 @@ def test_legacy_config_requires_explicit_migration_and_unused_model_needs_no_key
     with pytest.raises(ConfigurationError, match="legacy navigation"):
         load_config(path)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    config = load_config("config/deepseek.example.yaml")
+    config = load_config(write_config(tmp_path / "unused-backend.yaml", alternate_backend_config_data()))
     assert not config.visual_goal.enabled
     assert not config.basic_motion.free_space.confirmed
