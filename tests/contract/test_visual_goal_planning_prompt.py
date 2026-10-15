@@ -26,7 +26,8 @@ def test_task_prompt_inherits_weather_and_coordinate_rules_and_adds_typed_eviden
     assert "Local checks determine the executable prefix" not in system
     user = builder.build_user_prompt("approach red house", wall_observation(), 5, task_context=context())
     assert "Planning round: 1" in user and '"arrival_radius_m":4' in user
-    assert '"maximum_motion_s"' not in user and '"world_point":[6,0,-4]' in user
+    assert '"maximum_motion_s"' not in user and '"target_relative_to_observation_body_m":[6.0,0.0,0]' in user
+    assert '"world_point"' not in user and '"bbox"' not in user
     assert "Pending incremental pose waypoints: []" in user
     assert "Output exactly 5 NEW" in user
 

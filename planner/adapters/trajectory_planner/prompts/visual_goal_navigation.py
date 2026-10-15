@@ -1,7 +1,8 @@
 import json
-from dataclasses import asdict
 from planner.domain.visual_goal import VisualGoalPlanningContext
 from planner.errors import ProtocolError
+from planner.services.target_coordinates import point_in_horizontal_body
+from planner.services.trajectory_transform import relative_to_world
 
 from .base import BASE_TRAJECTORY_SYSTEM_PROMPT, build_base_user_prompt
 
@@ -12,8 +13,15 @@ Static visual goal approach rules:
 The objective is to enter arrival_radius_m around the target's estimated position and hover.
 Any position inside that radius is acceptable; do not aim for its exact boundary.
 Use distance_uncertainty_margin_m for the arrival estimate. Preserve the selected object's identity.
-The target point is the current RGB bbox center projected using raw depth, not its true 3D center
-or a persistent physical landmark. Its estimate is refreshed at each target observation.
+The target position is estimated locally from a detected bbox-center depth sample.
+It is a surface estimate, not the object's true 3D center or a persistent landmark.
+Use the supplied horizontal-body relative target positions; do not re-estimate target distance
+or transform world target coordinates yourself. RGB and depth still inform scene/path choices.
+target_relative_to_observation_body_m refers to the image-time vehicle pose.
+target_relative_to_pending_tail_body_m refers to the PREDICTED final pending pose.
+With pending, NEW actions start at that predicted pose. Without pending, they start at the image pose.
+Both target vectors are [forward,right,NED down] in meters, independent of camera pitch.
+If keep_target_in_view=true, coordinate position and yaw to keep the bound target in the front view.
 Initial directional descriptions identify the target at stage start; update its current
 bearing from the current observation and geometry, rather than preserving its initial bearing.
 Use measured target geometry as evidence, not as guaranteed ground truth. Plan useful
@@ -26,9 +34,8 @@ The executor follows valid trajectory points in order, with radius pauses for co
 Use the execution history and pending to determine what was actually flown.
 Previous executed command prefix is not an exact measured flight path; use actual pose updates.
 Do not output completion status: the independent completion checker evaluates it after local measurements.
-When goal_observation_is_current=false, the target context is a previously bound static
-reference, not a fresh detection or depth measurement; current-image bbox/point are omitted.
-Use the last target position and current RGB for continuation. Completion is judged separately.
+The target may come from an older observation; its source and age are supplied explicitly.
+An older target estimate is not proof of current image visibility. Completion is judged separately.
 """
 
 
@@ -41,6 +48,34 @@ class VisualGoalTrajectoryPrompt:
         if not isinstance(task_context, VisualGoalPlanningContext):
             raise ProtocolError("visual goal prompt requires typed target context")
         base = build_base_user_prompt(instruction, observation, max_points, **execution_context)
+        pending = execution_context.get("pending_trajectory")
+        tail = (relative_to_world(pending, observation.vehicle_pose).poses[-1]
+                if pending is not None and pending.points else observation.vehicle_pose)
+        point = task_context.geometry.world_point
+        if not task_context.geometry.reliable or point is None:
+            raise ProtocolError("visual goal prompt requires an estimated target position")
+        source_time = task_context.target_captured_monotonic
+        payload = {
+            "target_description": task_context.target_description,
+            "keep_target_in_view": task_context.keep_target_in_view,
+            "target_point_source": "bbox_center_depth",
+            "target_observation_id": task_context.target_capture_id or (
+                observation.capture_id if task_context.goal_observation_is_current else None),
+            "planning_observation_id": observation.capture_id,
+            "target_age_at_planning_observation_s": (None if source_time is None else
+                round(observation.captured_monotonic-source_time, 4)),
+            "coordinate_frame": "horizontal_body_forward_right_down",
+            "target_relative_to_observation_body_m": point_in_horizontal_body(point, observation.vehicle_pose),
+            "target_relative_to_pending_tail_body_m": point_in_horizontal_body(point, tail),
+            "new_actions_reference": "pending_tail" if pending is not None and pending.points else "observation",
+            "pending_tail_is_predicted": bool(pending is not None and pending.points),
+            "goal_observation_is_current": task_context.goal_observation_is_current,
+            "arrival_radius_m": task_context.arrival_radius_m,
+            "distance_uncertainty_margin_m": task_context.distance_uncertainty_margin_m,
+            "maximum_vertical_offset_m": task_context.maximum_vertical_offset_m,
+        }
+        if payload["target_age_at_planning_observation_s"] is not None and payload["target_age_at_planning_observation_s"] < 0:
+            raise ProtocolError("target estimate is newer than the planning observation")
         return base + "\nVisual goal context (estimated evidence, not target ground truth):\n" + json.dumps(
-            asdict(task_context), ensure_ascii=False, separators=(",", ":"),
+            payload, ensure_ascii=False, separators=(",", ":"),
         )

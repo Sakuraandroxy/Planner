@@ -29,6 +29,8 @@ class VisualGoalLimits:
     maximum_anchor_yaw_deg: float = 2.0
     maximum_anchor_refresh_failures: int = 2
     search_enabled: bool = True
+    target_refresh_interval_s: float = 5.0
+    maximum_target_position_jump_m: float = 6.0
 
     def __post_init__(self):
         for field in fields(self):

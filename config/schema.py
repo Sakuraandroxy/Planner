@@ -41,6 +41,8 @@ class AirSimConfig:
     speed_mps: float
     depth_horizontal_fov_deg: float | None = None
     maximum_pair_time_gap_s: float = 0.05
+    camera_mount_position_body_m: tuple[float, float, float] = (1.0, 0.0, 0.0)
+    camera_mount_rpy_deg: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
 
 @dataclass(frozen=True)

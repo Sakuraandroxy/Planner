@@ -29,7 +29,7 @@ from planner.domain.visual_goal import (
 from planner.errors import BudgetExceeded, ExecutionError, ObservationError, ProtocolError, ModelCallTimeout
 from planner.domain.mission import MissionStage
 from planner.domain.visual_goal_limits import VisualGoalLimits
-from planner.ports.observation_source import ObservationSource
+from planner.ports.observation_source import ObservationSource, MovingObservationSource
 from planner.ports.collision_check import CollisionCheck
 from planner.ports.goal_observer import GoalObserver
 from planner.ports.trajectory_planner import TrajectoryPlanner
@@ -64,7 +64,9 @@ class VisualGoalNavigationWorkflow:
                  trigger_rules: VisualGoalTriggerRules = VisualGoalTriggerRules(),
                  sliding_window: SlidingWindowSettings = SlidingWindowSettings(),
                  motion_limits: MotionLimits = MotionLimits(),
-                 collision_check: CollisionCheck | None = None):
+                 collision_check: CollisionCheck | None = None,
+                 moving_observation_source: MovingObservationSource | None = None, stream_speed_mps: float = 2.0,
+                 stream_waypoint_timeout_s: float = 60.0):
         self.source, self.goal_observer, self.planner = observation_source, goal_observer, trajectory_planner
         self.validator, self.motion, self.execution = validator, motion_planner, execution
         self.geometry, self.completion, self.limits = geometry, completion, limits
@@ -80,6 +82,14 @@ class VisualGoalNavigationWorkflow:
             trigger_rules, self.verification, clock, self._event)
         self.approach = VisualGoalApproachPhase(trajectory_planner, validator, motion_planner,
             execution, limits, self.flight, self._capture, clock, self._event)
+        self.continuous = None
+        if moving_observation_source is not None:
+            if self.window is None:
+                raise ProtocolError("continuous execution requires the enabled planning window")
+            from .visual_goal_continuous import VisualGoalContinuous
+            self.continuous = VisualGoalContinuous(execution, moving_observation_source, limits,
+                motion_limits, stream_speed_mps, goal_observer, geometry, completion, self.flight,
+                self._capture, self._search, clock, sleep, self._event, stream_waypoint_timeout_s)
 
     def prepare(self) -> None:
         if self._closed:
@@ -90,6 +100,8 @@ class VisualGoalNavigationWorkflow:
         self.verification.calls.require_available()
         if self.window is not None:
             self.window.worker.require_available()
+        if self.continuous is not None:
+            self.continuous.prepare()
 
     def run(self, stage: MissionStage) -> StageResult[object]:
         started = self.clock()
@@ -157,6 +169,8 @@ class VisualGoalNavigationWorkflow:
                                             completion_checks=session.completion_checks,
                                             completion_confirmed=session.completion_confirmed,
                                             remaining_motion=session.pending_motion)
+        if self.continuous is not None:
+            result = replace(result, path_length_source="sum_of_measured_control_sample_chords_not_continuous_path")
         self._event(trace, "result", result=result)
         logger.info("[VisualGoal] %s: %s distance=%s stop_confirmed=%s", status.value, reason, distance, stop.confirmed)
         success = status is VisualGoalStatus.REACHED and session.completion_confirmed
@@ -188,6 +202,8 @@ class VisualGoalNavigationWorkflow:
         return observation
 
     def _run(self, parameters, session, trace):
+        if self.continuous is not None:
+            return self.continuous.run(parameters, session, trace)
         while True:
             observation = self._capture(session)
             self._event(trace, "round_observation", capture_id=observation.capture_id,
@@ -227,6 +243,8 @@ class VisualGoalNavigationWorkflow:
                 session.policy.unreliable_observation()
                 continue
             session.policy.unreliable = 0
+            session.target_capture_id = observation.capture_id
+            session.target_captured_monotonic = observation.captured_monotonic
             session.search.found()
             if session.reference is None:
                 session.reference = make_reference(observation, goal, geometry)
@@ -274,7 +292,8 @@ class VisualGoalNavigationWorkflow:
                 continue
             context = VisualGoalPlanningContext(parameters.target_description, goal, geometry,
                 VisualGoalState.APPROACHING, self.trigger_rules.radius_m, self.limits.distance_uncertainty_margin_m,
-                self.limits.maximum_vertical_offset_m)
+                self.limits.maximum_vertical_offset_m, True, session.target_capture_id,
+                session.target_captured_monotonic, parameters.keep_target_in_view)
             self._event(trace, "state", state=VisualGoalState.APPROACHING)
             self.approach.run(observation, context, parameters, session, trace)
 
@@ -283,6 +302,8 @@ class VisualGoalNavigationWorkflow:
             return
         self._closed = True
         callbacks = [self.model_calls.close]
+        if self.continuous is not None:
+            callbacks.append(self.continuous.close)
         if self.window is not None:
             callbacks.append(self.window.close)
         if self.verification is not None:
@@ -291,6 +312,7 @@ class VisualGoalNavigationWorkflow:
 
     def has_pending_calls(self):
         return (self.model_calls.has_pending_call or
+                (self.continuous is not None and self.continuous.has_pending_calls()) or
                 (self.window is not None and self.window.worker.has_pending_call) or
                 (self.verification is not None and self.verification.calls.has_pending_call))
 

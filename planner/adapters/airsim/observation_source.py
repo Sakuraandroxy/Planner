@@ -20,7 +20,7 @@ class AirSimObservationSource:
     def __init__(
         self,
         connection: AirSimConnection,
-        vehicle: Vehicle,
+        vehicle: Vehicle | None,
         camera_id: str,
         min_depth_m: float,
         max_depth_m: float,
@@ -29,6 +29,8 @@ class AirSimObservationSource:
         verify_image_pair: bool = False,
         depth_mapping: str = "log_inverse_gray_v1",
         maximum_pair_time_gap_s: float = 0.05,
+        camera_mount_position_body_m=(1.0, 0.0, 0.0),
+        camera_mount_rpy_deg=(0.0, 0.0, 0.0),
     ):
         self.connection = connection
         self.vehicle = vehicle
@@ -41,9 +43,16 @@ class AirSimObservationSource:
         self.verify_image_pair = verify_image_pair
         self.depth_mapping = depth_mapping
         self.maximum_pair_time_gap_s = maximum_pair_time_gap_s
+        self.camera_mount_position_body_m = camera_mount_position_body_m
+        roll, pitch, yaw = (math.radians(v)/2 for v in camera_mount_rpy_deg)
+        cr, sr, cp, sp, cy, sy = math.cos(roll), math.sin(roll), math.cos(pitch), math.sin(pitch), math.cos(yaw), math.sin(yaw)
+        self.mount_rotation = np.asarray(quaternion_to_rotation(
+            sr*cp*cy-cr*sp*sy, cr*sp*cy+sr*cp*sy, cr*cp*sy-sr*sp*cy, cr*cp*cy+sr*sp*sy))
 
     def capture(self, *, budget=None) -> Observation:
         try:
+            if self.vehicle is None:
+                raise ObservationError("read-only moving source cannot take stopped observations")
             if budget is not None and budget.remaining(time.monotonic()) <= 0:
                 raise BudgetExceeded("deadline before observation")
             guard = (self.observation_gate.capture(budget=budget) if self.observation_gate else nullcontext())
@@ -62,7 +71,15 @@ class AirSimObservationSource:
             raise ObservationError("formal observation requires a control-owned gate")
         return self.observation_gate.request_capture(self._capture, timeout_s)
 
-    def _capture(self) -> Observation:
+    def capture_moving(self, *, budget=None) -> Observation:
+        if budget is not None and budget.remaining(time.monotonic()) <= 0:
+            raise BudgetExceeded("deadline before moving observation")
+        return self._capture(moving=True)
+
+    def close(self):
+        self.connection.close_transport()
+
+    def _capture(self, *, moving=False) -> Observation:
         import airsim
 
         capture_started = time.monotonic()
@@ -76,7 +93,7 @@ class AirSimObservationSource:
         captured = time.monotonic()
         if self.verify_image_pair:
             self._validate_pair(rgb_response, depth_response, self.maximum_pair_time_gap_s)
-        vehicle_pose = self.vehicle.current_pose()
+        vehicle_pose = None if moving else self.vehicle.current_pose()
         rgb = _decode_rgb(rgb_response.image_data_uint8)
         depth = np.asarray(depth_response.image_data_float, dtype=np.float32).reshape(
             depth_response.height, depth_response.width
@@ -85,6 +102,11 @@ class AirSimObservationSource:
         camera_orientation = rgb_response.camera_orientation
         q = camera_orientation
         rotation = quaternion_to_rotation(q.x_val, q.y_val, q.z_val, q.w_val)
+        if moving:
+            from planner.domain.pose import WorldPose
+            body_rotation = np.asarray(rotation) @ self.mount_rotation.T
+            body_position = np.array((camera_position.x_val, camera_position.y_val, camera_position.z_val))-body_rotation @ np.asarray(self.camera_mount_position_body_m)
+            vehicle_pose = WorldPose(*map(float, body_position), math.degrees(math.atan2(body_rotation[1, 0], body_rotation[0, 0])))
         intrinsics = intrinsics_from_horizontal_fov(
             rgb.width, rgb.height, self._get_horizontal_fov_deg()
         )
@@ -105,10 +127,10 @@ class AirSimObservationSource:
                 self.depth_horizontal_fov_deg or self._get_horizontal_fov_deg(),
             ),
             depth_kind="ray_range",
-            captured_monotonic=captured,
+            captured_monotonic=capture_started if moving else captured,
             capture_id=uuid.uuid4().hex,
             depth_timestamp_ns=int(getattr(depth_response, "time_stamp", 0) or 0),
-            stopped=self.observation_gate is not None,
+            stopped=not moving and self.observation_gate is not None,
             capture_started_monotonic=capture_started,
             capture_finished_monotonic=time.monotonic(),
         )

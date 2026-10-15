@@ -55,6 +55,8 @@ def load_config(path: str | Path) -> PlannerConfig:
                 move_timeout_s=number(sim["move_timeout_s"], "airsim.move_timeout_s"), speed_mps=number(sim["speed_mps"], "airsim.speed_mps"),
                 depth_horizontal_fov_deg=number(sim["depth_horizontal_fov_deg"], "airsim.depth_horizontal_fov_deg") if sim.get("depth_horizontal_fov_deg") is not None else None,
                 maximum_pair_time_gap_s=number(sim.get("maximum_pair_time_gap_s", .05), "airsim.maximum_pair_time_gap_s", positive=False),
+                camera_mount_position_body_m=_triple(sim.get("camera_mount_position_body_m", (1., 0., 0.)), "camera_mount_position_body_m"),
+                camera_mount_rpy_deg=_triple(sim.get("camera_mount_rpy_deg", (0., 0., 0.)), "camera_mount_rpy_deg"),
             ),
             depth=DepthConfig(number(depth["min_m"], "depth.min_m", positive=False), number(depth["max_m"], "depth.max_m"), depth.get("mapping", "log_inverse_gray_v1")),
             trajectory=TrajectoryConfig(
@@ -101,6 +103,14 @@ def load_config(path: str | Path) -> PlannerConfig:
     if result.basic_motion.free_space.clearance_radius_m <= result.motion.limits.position_tolerance_m:
         raise ConfigurationError("basic_motion clearance radius must include body size beyond position tolerance")
     return result
+
+
+def _triple(values, name):
+    if not isinstance(values, (list, tuple)) or len(values) != 3 or any(
+        isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in values
+    ):
+        raise ValueError(f"{name} must contain three finite numbers")
+    return tuple(float(v) for v in values)
 
 
 def _sliding_window_config(raw: dict) -> SlidingWindowSettings:

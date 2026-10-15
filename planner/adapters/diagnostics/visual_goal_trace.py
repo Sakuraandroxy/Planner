@@ -4,6 +4,7 @@ from datetime import datetime
 import json
 from pathlib import Path
 import uuid
+import threading
 
 import numpy as np
 from PIL import ImageDraw
@@ -16,6 +17,7 @@ class VisualGoalTrace:
         self.path = Path(output_root)/f"{datetime.now():%Y%m%d_%H%M%S}_{uuid.uuid4().hex[:8]}"
         self.path.mkdir(parents=True, exist_ok=False)
         self.counter = 0
+        self._event_lock = threading.Lock()
 
     def event(self, event, **data):
         def serialize(value):
@@ -24,10 +26,18 @@ class VisualGoalTrace:
             if hasattr(value, "value"):
                 return value.value
             raise TypeError(type(value).__name__)
-        with (self.path/"events.jsonl").open("a", encoding="utf-8") as stream:
+        with self._event_lock, (self.path/"events.jsonl").open("a", encoding="utf-8") as stream:
             stream.write(json.dumps({"event": event, "logged_wall_time": datetime.now().isoformat(), **data},
                                     default=serialize, ensure_ascii=False,
                                     allow_nan=False)+"\n")
+
+    def planning_observation(self, request_id, observation):
+        from planner.adapters.model_visual_inputs import aligned_depth_image
+        stem = f"plan_{request_id:04d}"
+        observation.rgb.convert("RGB").save(self.path/f"{stem}_rgb.jpg", quality=90)
+        aligned_depth_image(observation).save(self.path/f"{stem}_depth.png")
+        self.event("planning_images", request_id=request_id, capture_id=observation.capture_id,
+                   rgb_file=f"{stem}_rgb.jpg", depth_file=f"{stem}_depth.png")
 
     def observation(self, observation: Observation, goal: GoalObservation):
         self.counter += 1

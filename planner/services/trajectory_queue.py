@@ -7,6 +7,8 @@ from planner.domain.trajectory import RelativeTrajectory, WorldTrajectory
 from planner.errors import ExecutionError, ProtocolError
 from planner.services.trajectory_transform import world_to_relative
 from planner.services.trajectory_validation import require_execution_anchor
+from planner.domain.streaming import QueuePauseSnapshot
+from planner.services.motion.continuous import reached
 
 
 class WorldWaypointQueue:
@@ -94,3 +96,48 @@ class WorldWaypointQueue:
 
     def require_anchor(self, measured: WorldPose, expected: WorldPose) -> None:
         require_execution_anchor(measured, expected, self.position_tolerance_m, self.yaw_tolerance_deg)
+
+    def append_continuation(self, world, pending_ids, revision, measured, maximum_points=10):
+        """Owner-only append after frozen-pending reconciliation; no pose rebase."""
+        self.check_owner()
+        if revision != self.revision or len(world.poses) != 5:
+            raise ProtocolError("continuation belongs to an invalidated queue or batch")
+        ids = tuple(p.waypoint_id for p in self._items)
+        if ids and (len(ids) > len(pending_ids) or ids != pending_ids[-len(ids):]):
+            raise ProtocolError("live queue is not the frozen pending suffix")
+        if self._items:
+            if self._items[-1].end != world.start:
+                raise ProtocolError("continuation does not meet the authorized queue tail")
+        else:
+            self.require_anchor(measured, world.start)
+        if len(self._items)+5 > maximum_points:
+            raise ProtocolError("continuation exceeds local buffer capacity")
+        previous = world.start
+        for i, end in enumerate(world.poses):
+            explicit = None if world.yaw_deltas_deg is None else world.yaw_deltas_deg[i]
+            delta = resolve_yaw_delta_deg(previous.yaw_deg, end.yaw_deg, explicit)
+            self._next_id += 1
+            self._items.append(QueuedWaypoint(self._next_id, previous, end, delta))
+            previous = end
+        self._revision += 1
+
+    def consume_stream(self, measured, unwrapped_yaw, goal_yaw):
+        self.check_owner()
+        if not self._items or not reached(self._items[0], measured, unwrapped_yaw, goal_yaw,
+                                         self.position_tolerance_m, self.yaw_tolerance_deg):
+            return False
+        self._items.pop(0)
+        return True
+
+    def pause_stream(self, stage_token, state, yaw, first_goal, reason):
+        self.check_owner()
+        self._revision += 1  # invalidate speculative output; retain every authorized endpoint
+        return QueuePauseSnapshot(stage_token, self.revision, state, yaw, self.items, first_goal, reason)
+
+    def restore_stream(self, snapshot, stage_token):
+        self.check_owner()
+        if snapshot.stage_token != stage_token or snapshot.queue_revision != self.revision:
+            raise ProtocolError("pause snapshot belongs to another stage or queue")
+        if self.items != snapshot.remaining:
+            raise ProtocolError("authorized endpoints changed while paused")
+        return snapshot.first_goal_yaw_deg

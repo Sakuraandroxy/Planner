@@ -9,6 +9,8 @@ from planner.errors import ExecutionError
 from planner.domain.motion import MotionLimits
 from planner.adapters.airsim.motion_tracker import AirSimMotionTracker
 from planner.services.motion.synchronized import SMOOTH_PROFILE
+from planner.domain.streaming import TimedVehicleState
+import time
 
 class AirSimVehicle:
     def __init__(self, connection: AirSimConnection, speed_mps: float, timeout_s: float,
@@ -48,4 +50,22 @@ class AirSimVehicle:
 
     def collision_state(self) -> bool:
         return bool(self.connection.call("simGetCollisionInfo").has_collided)
+
+    def stream_state(self) -> TimedVehicleState:
+        state = self.connection.call("getMultirotorState")
+        k = state.kinematics_estimated
+        q, p, v = k.orientation, k.position, k.linear_velocity
+        yaw = math.degrees(math.atan2(2*(q.w_val*q.z_val+q.x_val*q.y_val),
+                                     1-2*(q.y_val*q.y_val+q.z_val*q.z_val)))
+        return TimedVehicleState(WorldPose(p.x_val, p.y_val, p.z_val, yaw),
+            int(state.timestamp), time.monotonic(), (v.x_val, v.y_val, v.z_val))
+
+    def stream_velocity(self, velocity_world, yaw_rate_deg_s, duration_s):
+        import airsim
+        if (len(velocity_world) != 3 or not all(math.isfinite(v) for v in
+                (*velocity_world, yaw_rate_deg_s, duration_s)) or duration_s <= 0):
+            raise ExecutionError("non-finite streaming velocity or invalid duration")
+        self.connection.call_async_and_wait("moveByVelocityAsync", *velocity_world, duration_s,
+            drivetrain=airsim.DrivetrainType.MaxDegreeOfFreedom,
+            yaw_mode=airsim.YawMode(is_rate=True, yaw_or_rate=yaw_rate_deg_s))
 

@@ -88,6 +88,10 @@ airsim:
   depth_horizontal_fov_deg: 90.0
   # 同次RGB与深度图允许的最大时间戳差，单位秒；超过则拒绝该观测。
   maximum_pair_time_gap_s: 0.05
+  # 刚性前视相机相对机体的位置，单位米；用于还原图像采集时刻的机体位姿。
+  camera_mount_position_body_m: [1.0, 0.0, 0.0]
+  # 相机安装的滚转、俯仰、偏航角，单位度。
+  camera_mount_rpy_deg: [0.0, 0.0, 0.0]
 # 深度图显示协议和几何计算允许的深度范围；不改变AirSim返回的原始米制深度。
 depth:
   # 深度可视化编码协议，须与规划模型训练一致；当前为对数反向灰度，近亮远暗，无效为黑。
@@ -121,11 +125,17 @@ motion:
   yaw_tolerance_deg: 2.0
 # 滑窗续规划：已有队列执行时请求后续点；队列耗尽而新点未就绪时允许悬停等待。
 sliding_window:
+  # 连续执行以时间触发续规划；首轮立即请求，正常两次提交至少间隔5秒。
+  planning_interval_s: 5.0
+  # 已授权世界航点的队列容量；每次新增仍为5点，模型pending最多5点。
+  max_buffer_points: 10
   # true启用支持滑窗的工作流续规划；false使用串行规划执行，不控制任务类型是否开放。
   enabled: true
   # 剩余航点数不超过此值时触发补点，范围1至5；剩余执行时间不足也会触发。
+  # 仅供原停稳分段模式使用；连续执行不以剩余点数触发正常规划。
   refill_pending_count: 3
   # 提前补点的时间余量，单位秒；与动态估计的模型请求耗时相加作为时间触发阈值。
+  # 仅供原停稳分段模式预估请求时机；连续执行使用planning_interval_s。
   latency_margin_s: 1.5
   # 单次滑窗阶段的总时长上限，单位秒；与工作流阶段预算共同约束。
   max_task_duration_s: 600.0
@@ -182,6 +192,10 @@ visual_goal_navigation:
     maximum_task_duration_s: 600.0
     # true允许目标不可见时按本地策略分步转向搜索；false禁止该搜索；搜索仍受角度、次数和阶段预算约束。
     search_enabled: true
+    # 飞行中目标检测的最小刷新间隔，单位秒；独立于 Qwen 的规划间隔。
+    target_refresh_interval_s: 5.0
+    # 静态目标框中心世界估计的单次跳变上限，单位米；超过时暂不覆盖绑定，需按目标尺度实验调整。
+    maximum_target_position_jump_m: 6.0
 
 # 预留进度复核接口，当前没有可执行的复核实现，也不调用额外模型。
 progress_review:

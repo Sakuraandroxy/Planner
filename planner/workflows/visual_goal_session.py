@@ -43,6 +43,8 @@ class VisualGoalSession:
     completion_confirmed: bool = False
     model_calls: ModelCallService | None = None
     checkpoint: Callable[[], None] | None = None
+    target_capture_id: str = ""
+    target_captured_monotonic: float | None = None
 
     def window_input(self) -> PlanningWindowInput:
         if self.initial is None:

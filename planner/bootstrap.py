@@ -91,7 +91,7 @@ def build_runtime(config: PlannerConfig) -> Runtime:
     if config.visual_goal.enabled:
         from planner.visual_goal_bootstrap import build_visual_goal_workflow
         visual_workflow = ConfiguredWorkflow(lambda: build_visual_goal_workflow(
-            config, observation, motion_planner, execution, validator))
+            config, observation, motion_planner, execution, validator, connection_factory=AirSimConnection))
         registry.register(TaskRegistration(TaskKind.VISUAL_GOAL_NAVIGATION,
             codecs[TaskKind.VISUAL_GOAL_NAVIGATION],
             VisualGoalStageValidator(config.visual_goal.limits, config.depth.max_m, config.visual_goal.completion_rules),

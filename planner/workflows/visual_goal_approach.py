@@ -44,7 +44,8 @@ class VisualGoalApproachPhase:
         radius = self.flight.trigger_rules.radius_m
         context = VisualGoalPlanningContext(parameters.target_description, goal, session.geometry,
             VisualGoalState.APPROACHING, radius, self.limits.distance_uncertainty_margin_m,
-            self.limits.maximum_vertical_offset_m)
+            self.limits.maximum_vertical_offset_m, True, session.target_capture_id,
+            session.target_captured_monotonic, parameters.keep_target_in_view)
         current_pose = self.execution.current_pose()
         if (session.window.record is not None or current_pose != observation.vehicle_pose or
                 self.clock()-observation.captured_monotonic > self.limits.maximum_observation_age_s):

@@ -15,6 +15,8 @@ class SlidingWindowSettings:
     max_task_duration_s: float = 600.0
     max_consecutive_plan_failures: int = 2
     max_observation_age_s: float = 120.0
+    planning_interval_s: float = 5.0
+    max_buffer_points: int = 10
 
     def __post_init__(self) -> None:
         if type(self.enabled) is not bool:
@@ -23,7 +25,9 @@ class SlidingWindowSettings:
             raise ValueError("refill_pending_count must be an integer between 1 and 5")
         if type(self.max_consecutive_plan_failures) is not int or not 1 <= self.max_consecutive_plan_failures <= 5:
             raise ValueError("max_consecutive_plan_failures must be an integer between 1 and 5")
-        for name in ("latency_margin_s", "max_task_duration_s", "max_observation_age_s"):
+        if type(self.max_buffer_points) is not int or not 5 <= self.max_buffer_points <= 10:
+            raise ValueError("max_buffer_points must be an integer between 5 and 10")
+        for name in ("latency_margin_s", "max_task_duration_s", "max_observation_age_s", "planning_interval_s"):
             value = getattr(self, name)
             if (isinstance(value, bool) or not isinstance(value, (int, float))
                     or not math.isfinite(value) or value <= 0):

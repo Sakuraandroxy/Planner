@@ -99,6 +99,9 @@ class VisualGoalPlanningContext:
     distance_uncertainty_margin_m: float
     maximum_vertical_offset_m: float | None
     goal_observation_is_current: bool = True
+    target_capture_id: str = ""
+    target_captured_monotonic: float | None = None
+    keep_target_in_view: bool = True
 
 
 @dataclass(frozen=True)
