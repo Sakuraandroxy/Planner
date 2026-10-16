@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 import uuid
 import threading
+import csv
+import math
 
 import numpy as np
 from PIL import ImageDraw
@@ -38,6 +40,26 @@ class VisualGoalTrace:
         aligned_depth_image(observation).save(self.path/f"{stem}_depth.png")
         self.event("planning_images", request_id=request_id, capture_id=observation.capture_id,
                    rgb_file=f"{stem}_rgb.jpg", depth_file=f"{stem}_depth.png")
+
+    def control_samples(self, samples, *, dropped=0):
+        """Flush the owner's bounded in-memory samples after the vehicle stops."""
+        rows = []
+        for sample in samples:
+            row = asdict(sample)
+            for name in ('commanded_velocity', 'measured_velocity', 'commanded_acceleration'):
+                vector = row.pop(name)
+                row.update({name+'_'+axis: value for axis, value in zip('xyz', vector)})
+                row[name+'_norm'] = math.hypot(*vector)
+            rows.append(row)
+        path = self.path/'control_samples.csv'
+        if rows:
+            existing = path.exists()
+            with path.open('a', encoding='utf-8', newline='') as stream:
+                writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+                if not existing:
+                    writer.writeheader()
+                writer.writerows(rows)
+        self.event('control_telemetry', file=path.name, samples=len(rows), dropped=dropped)
 
     def observation(self, observation: Observation, goal: GoalObservation):
         self.counter += 1

@@ -1,23 +1,27 @@
 """Single-owner queue follower. Model/capture workers never touch this service."""
 import math
 import time
+from collections import deque
 
 from planner.domain.execution import ExecutionRecord
 from planner.domain.pose import resolve_yaw_delta_deg
 from planner.domain.trajectory import RelativeTrajectory
+from planner.domain.motion import ContinuousTrackingSettings
+from planner.domain.streaming import ControlTelemetry
 from planner.errors import ExecutionError
 from planner.services.execution import ExecutionService
 from planner.services.motion.continuous import ContinuousFollower
+from planner.services.motion.continuous_reference import is_rotation
 from planner.services.stream_timeline import StreamTimeline
 from planner.ports.streaming_vehicle import StreamingVehicle
 
 
 class ContinuousExecution:
     def __init__(self, execution: ExecutionService, vehicle: StreamingVehicle, limits, speed_mps,
-                 clock=time.monotonic, waypoint_timeout_s=60.):
+                 clock=time.monotonic, waypoint_timeout_s=60., *, settings=ContinuousTrackingSettings()):
         self.execution, self.vehicle = execution, vehicle
         self.limits, self.clock = limits, clock
-        self.follower = ContinuousFollower(speed_mps, limits)
+        self.follower = ContinuousFollower(speed_mps, limits, settings)
         self.timeline = StreamTimeline()
         self.state = self.last_state = None
         self.yaw = self.goal_yaw = None
@@ -29,6 +33,9 @@ class ContinuousExecution:
         self.holding = True
         self.waypoint_timeout_s = waypoint_timeout_s
         self.head_started = clock()
+        self.telemetry = deque(maxlen=12000)
+        self.telemetry_dropped = 0
+        self.last_telemetry_ns = 0
 
     def begin(self, queue, stage_token):
         self.execution.check_deadline()
@@ -39,8 +46,10 @@ class ContinuousExecution:
         self.head_id, self.paused, self.record = None, None, None
         self.actions, self.path_length_m = [], 0.0
         self.holding = True
+        self.telemetry.clear()
+        self.telemetry_dropped, self.last_telemetry_ns = 0, 0
         self.sample()
-        self.follower.reset()
+        self.follower.reset(self.state.velocity_world)
 
     def sample(self):
         self.execution.checkpoint()
@@ -93,6 +102,10 @@ class ContinuousExecution:
         consumed = []
         while self.queue.items:
             self._head_goal()
+            items = self.queue.items
+            stop_boundary = len(items) == 1 or is_rotation(items[1])
+            if stop_boundary and math.hypot(*state.velocity_world) > self.limits.stopped_speed_mps:
+                break  # Stop smoothly at a true tail or before an in-place turn.
             if not self.queue.consume_stream(state.pose, self.yaw, self.goal_yaw):
                 break
             consumed.append(self.head_id)
@@ -104,14 +117,34 @@ class ContinuousExecution:
                 self.goal_yaw = self.head_id = None
                 self.follower.reset()
             return tuple(consumed)
-        dt = (state.timestamp_ns-self.last_state.timestamp_ns)/1e9 if self.last_state else 1/self.limits.control_hz
+        sample_dt = (state.timestamp_ns-self.last_state.timestamp_ns)/1e9 if self.last_state else 1/self.limits.control_hz
         if self.clock()-self.head_started >= self.waypoint_timeout_s:
             raise ExecutionError("continuous waypoint timed out before position/yaw progress")
-        dt = max(.001, min(.25, dt))
+        dt = max(.001, min(.25, sample_dt))
         velocity, rate = self.follower.sample(self.queue.items, state.pose, self.yaw, self.goal_yaw, dt)
         self.vehicle.stream_velocity(velocity, rate, 1/self.limits.control_hz)
+        self._record_control(sample_dt, velocity, rate)
         self.holding = False
         return tuple(consumed)
+
+    def _record_control(self, dt, velocity, rate):
+        state, follower = self.state, self.follower
+        if state.timestamp_ns-self.last_telemetry_ns < 100_000_000:
+            return
+        if len(self.telemetry) == self.telemetry.maxlen:
+            self.telemetry_dropped += 1
+        self.telemetry.append(ControlTelemetry(state.timestamp_ns, state.observed_monotonic,
+            dt, self.head_id, len(self.queue.items), velocity, state.velocity_world,
+            follower.translation.acceleration, rate, follower.rotation.acceleration[0],
+            self.goal_yaw-self.yaw, follower.reference.distance_m, follower.reference.aligning,
+            state.pitch_deg, state.roll_deg))
+        self.last_telemetry_ns = state.timestamp_ns
+
+    def drain_telemetry(self):
+        samples, dropped = tuple(self.telemetry), self.telemetry_dropped
+        self.telemetry.clear()
+        self.telemetry_dropped = 0
+        return samples, dropped
 
     def pause(self, reason):
         self.execution.check_deadline()
@@ -123,7 +156,7 @@ class ContinuousExecution:
         self.paused = self.queue.pause_stream(self.stage_token, self.state, self.yaw, self.goal_yaw, reason)
         self.timeline.record(self.state.timestamp_ns, self.stage_token, self.queue, self.record)
         self.holding = True
-        self.follower.reset()
+        self.follower.reset(self.state.velocity_world)
         return self.paused
 
     def resume(self):
@@ -134,5 +167,5 @@ class ContinuousExecution:
         self.head_id = self.queue.items[0].waypoint_id if self.queue.items else None
         self.paused = None
         self.head_started = self.clock()
-        self.follower.reset()
+        self.follower.reset(self.state.velocity_world)
 

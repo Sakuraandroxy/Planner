@@ -8,7 +8,7 @@ from dataclasses import fields
 import yaml
 
 from planner.errors import ConfigurationError
-from planner.domain.motion import MotionLimits
+from planner.domain.motion import MotionLimits, ContinuousTrackingSettings
 from planner.domain.sliding_window import SlidingWindowSettings
 from .schema import MotionConfig, ProgressReviewConfig
 from .validation import number, integer, mapping, string
@@ -157,9 +157,15 @@ def _motion_config(raw: dict) -> MotionConfig:
     if not isinstance(raw, dict):
         raise ConfigurationError("motion must be a mapping")
     names = {field.name for field in fields(MotionLimits)}
-    unknown = set(raw) - names
+    unknown = set(raw) - names - {"continuous"}
     if unknown:
         raise ConfigurationError(f"unknown motion settings: {sorted(unknown)}")
     limits = MotionLimits(**{name: number(raw[name], "motion."+name) for name in names if name in raw})
-    return MotionConfig(limits)
+    continuous = raw.get("continuous", {})
+    continuous_names = {field.name for field in fields(ContinuousTrackingSettings)}
+    if not isinstance(continuous, dict) or set(continuous) - continuous_names:
+        raise ConfigurationError("invalid motion.continuous settings")
+    settings = ContinuousTrackingSettings(**{
+        name: number(value, "motion.continuous."+name) for name, value in continuous.items()})
+    return MotionConfig(limits, settings)
 

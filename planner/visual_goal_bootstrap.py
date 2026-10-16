@@ -35,6 +35,7 @@ def build_visual_goal_workflow(config, observation, motion, execution, validator
                     waypoint_fields=("dx", "dy", "dz", "dyaw_deg"), goal_protocol="normalized_bbox_corners_v1",
                     target_point_source="first_anchor_bounded_target_memory", execution_policy="direct_model_trajectory",
                     motion_limits=config.motion.limits, speed_mps=config.airsim.speed_mps,
+                    continuous_tracking=config.motion.continuous,
                     depth_range=(config.depth.min_m, config.depth.max_m),
                     depth_horizontal_fov_deg=config.airsim.depth_horizontal_fov_deg,
                     execution_mode="continuous_world_queue" if config.sliding_window.enabled else "stopped_segments",
@@ -78,6 +79,7 @@ def build_visual_goal_workflow(config, observation, motion, execution, validator
             collision_check=execution.vehicle.collision_state if settings.collision_check_enabled else None,
             moving_observation_source=moving_source, stream_speed_mps=config.airsim.speed_mps,
             stream_waypoint_timeout_s=config.airsim.move_timeout_s,
+            continuous_tracking=config.motion.continuous,
         )
         resources.pop_all()  # workflow now owns the read-only transport
         return workflow

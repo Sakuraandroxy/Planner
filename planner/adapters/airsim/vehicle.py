@@ -82,7 +82,10 @@ class AirSimVehicle:
         yaw = math.degrees(math.atan2(2*(q.w_val*q.z_val+q.x_val*q.y_val),
                                      1-2*(q.y_val*q.y_val+q.z_val*q.z_val)))
         return TimedVehicleState(WorldPose(p.x_val, p.y_val, p.z_val, yaw),
-            int(state.timestamp), time.monotonic(), (v.x_val, v.y_val, v.z_val))
+            int(state.timestamp), time.monotonic(), (v.x_val, v.y_val, v.z_val),
+            math.degrees(math.asin(max(-1., min(1., 2*(q.w_val*q.y_val-q.z_val*q.x_val))))),
+            math.degrees(math.atan2(2*(q.w_val*q.x_val+q.y_val*q.z_val),
+                                   1-2*(q.x_val*q.x_val+q.y_val*q.y_val))))
 
     def stream_velocity(self, velocity_world, yaw_rate_deg_s, duration_s):
         import airsim

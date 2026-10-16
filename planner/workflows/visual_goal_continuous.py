@@ -5,6 +5,7 @@ import math
 from planner.capabilities.targeting.visual_goal_refresh import VisualGoalRefresh
 from planner.capabilities.targeting.association import remembered_geometry, remembered_goal
 from planner.domain.streaming import QueueObservationAnchor
+from planner.domain.motion import ContinuousTrackingSettings
 from planner.domain.trajectory import MotionSegment, MotionTrajectory
 from planner.domain.visual_goal import GoalVisibility, VisualGoalPlanningContext, VisualGoalState, VisualGoalStatus
 from planner.errors import ProtocolError, ExecutionError, ObservationError
@@ -19,11 +20,12 @@ from .termination.visual_goal_navigation import VisualGoalFailure
 class VisualGoalContinuous:
     def __init__(self, execution, moving_source, limits, motion_limits, speed_mps, observer, geometry,
                  completion, flight, capture_stopped, search, clock, sleep, event, waypoint_timeout_s=60., *,
-                 target_updates=None):
+                 target_updates=None, tracking_settings=ContinuousTrackingSettings()):
         self.execution, self.limits, self.completion = execution, limits, completion
         self.flight, self.capture_stopped, self.search = flight, capture_stopped, search
         self.clock, self.sleep, self.event = clock, sleep, event
-        self.stream = ContinuousExecution(execution, execution.vehicle, motion_limits, speed_mps, clock, waypoint_timeout_s)
+        self.stream = ContinuousExecution(execution, execution.vehicle, motion_limits, speed_mps, clock,
+                                          waypoint_timeout_s, settings=tracking_settings)
         self.frames = MovingObservations(moving_source, clock, limits.model_request_timeout_s,
                                          limits.maximum_anchor_refresh_failures+1)
         self.targets = target_updates if target_updates is not None else VisualGoalRefresh(observer, geometry, limits, clock, event)
@@ -43,6 +45,13 @@ class VisualGoalContinuous:
         self.frames.close()
         if self.owns_targets:
             self.targets.close()
+
+    def flush_telemetry(self, trace):
+        """Called by the workflow after stopping; no disk writes in tick()."""
+        samples, dropped = self.stream.drain_telemetry()
+        write = getattr(trace, 'control_samples', None)
+        if write is not None and (samples or dropped):
+            write(samples, dropped=dropped)
 
     def _observe_stopped(self, parameters, session, trace):
         observation = self.capture_stopped(session)

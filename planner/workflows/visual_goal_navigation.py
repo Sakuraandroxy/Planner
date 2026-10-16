@@ -13,7 +13,7 @@ from planner.capabilities.targeting.association import remembered_geometry, reme
 from planner.capabilities.targeting.visual_goal_refresh import VisualGoalRefresh
 from planner.domain.execution import ExecutionBudget, StopResult
 from planner.domain.sliding_window import SlidingWindowSettings
-from planner.domain.motion import MotionLimits
+from planner.domain.motion import MotionLimits, ContinuousTrackingSettings
 from planner.domain.pose import RelativePoseDelta, wrap_yaw_deg
 from planner.domain.result import StageResult, StageSummary, CompletionBasis, ResultMeasurement
 from planner.domain.trajectory import RelativeTrajectory
@@ -68,7 +68,8 @@ class VisualGoalNavigationWorkflow:
                  motion_limits: MotionLimits = MotionLimits(),
                  collision_check: CollisionCheck | None = None,
                  moving_observation_source: MovingObservationSource | None = None, stream_speed_mps: float = 2.0,
-                 stream_waypoint_timeout_s: float = 60.0):
+                 stream_waypoint_timeout_s: float = 60.0,
+                 continuous_tracking: ContinuousTrackingSettings = ContinuousTrackingSettings()):
         self.source, self.goal_observer, self.planner = observation_source, goal_observer, trajectory_planner
         self.validator, self.motion, self.execution = validator, motion_planner, execution
         self.geometry, self.completion, self.limits = geometry, completion, limits
@@ -93,7 +94,7 @@ class VisualGoalNavigationWorkflow:
             self.continuous = VisualGoalContinuous(execution, moving_observation_source, limits,
                 motion_limits, stream_speed_mps, goal_observer, geometry, completion, self.flight,
                 self._capture, self._search, clock, sleep, self._event, stream_waypoint_timeout_s,
-                target_updates=self.target_updates)
+                target_updates=self.target_updates, tracking_settings=continuous_tracking)
 
     def prepare(self) -> None:
         if self._closed:
@@ -167,6 +168,11 @@ class VisualGoalNavigationWorkflow:
                 self._event(trace, "partial_execution", receipt=exc.receipt)
         finally:
             if leased:
+                if self.continuous is not None:
+                    try:
+                        self.continuous.flush_telemetry(trace)
+                    except Exception:
+                        logger.exception("Control telemetry could not be saved after flight stop")
                 if session.window is not None:
                     session.window.end()
                 self.execution.release_flight(self, self.has_pending_calls)

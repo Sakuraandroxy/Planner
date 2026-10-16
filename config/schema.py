@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from planner.domain.motion import MotionLimits
+from planner.domain.motion import MotionLimits, ContinuousTrackingSettings
 from .visual_goal import VisualGoalConfig
 from planner.domain.sliding_window import SlidingWindowSettings
 from .task_completion import TaskCompletionConfig
@@ -11,6 +11,7 @@ from .target_detection import TargetDetectionConfig
 @dataclass(frozen=True)
 class MotionConfig:
     limits: MotionLimits = MotionLimits()
+    continuous: ContinuousTrackingSettings = ContinuousTrackingSettings()
 
 
 @dataclass(frozen=True)
