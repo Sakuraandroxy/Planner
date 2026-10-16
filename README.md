@@ -4,11 +4,15 @@
 
 这是一个面向 AirSim 的模块化无人机规划器。本分支只注册明确数值动作 `basic_motion`，以及可选的低空平视静态目标接近任务 `visual_goal_navigation`。旧示例 `navigation` 已删除；`base_planner` 分支不受影响。
 
-`basic_motion` 使用任务解析器提取动作参数，本地代码计算航点并以实际位姿和停稳观测确认完成，不调用轨迹模型。`visual_goal_navigation` 显式调用可插拔目标观察能力：当前使用 DeepSeek V4.1 Flash 返回角点，本地深度定位和关联后调用轨迹模型，并在目标附近悬停进行独立完成判断。两种已实现任务默认均可被解析和调度；执行前仍需通过各自的准备检查。
+`basic_motion` 使用任务解析器提取数值动作，按阶段起点实际位姿换算目标后直接调用 AirSim 运动 API，不采图或进行飞行条件与到位审核。`visual_goal_navigation` 显式调用可插拔目标观察能力：当前使用 DeepSeek V4.1 Flash 返回角点，本地深度定位和关联后调用轨迹模型，并在目标附近悬停进行独立完成判断。两种已实现任务默认均可被解析和调度；视觉任务保留其专属检查。
+
+目标检测独立提示词要求仅返回归一化角点 `[[x1,y1],[x2,y2]]` 或未识别时的 `[]`，并提供两种正确格式示例。首次定位和绑定后定位的 User Prompt 共用末尾格式要求与具体框示例；坐标始终相对当前整张图，原点在左上角，x向右、y向下，不相对参考裁剪图。示例仅说明格式；提示词不能保证模型每次遵守，原有解析与错误处理保持不变。
 
 视觉任务开启滑窗时使用连续速度跟踪：普通航点经过时不停稳，运动中独立采图并在线补点；进入任务半径时才暂停并采集停稳证据。队列耗尽允许悬停等待。当前不包含 GroundingDINO、全局地图、完整避障/绕行、持久记忆、动态目标跟随或候选轨迹评分。目标定位、关联及几何完成判断依赖观测质量和人工校准，不能保证所有天气或任意未知环境下成功。
 
-视觉导航的规划 System Prompt 明确要求仅输出一个含5个四维新增航点的完整 JSON 数组；User Prompt 最末尾再次强调格式，并附不带 Markdown 代码围栏的正确输出示例。示例仅说明格式，实际数值仍由模型依据当前任务与观测生成。这是提示词约束，不保证模型每次遵守；实际返回仍由现有解析器检查。本次不改变请求参数、坐标约定或其他任务提示词。
+视觉导航的规划 System Prompt 明确要求仅输出一个含5个四维新增航点的完整 JSON 数组；User Prompt 最末尾再次强调格式，并附不带 Markdown 代码围栏的正确输出示例。示例仅说明格式，实际数值仍由模型依据当前任务与观测生成。这是提示词约束，不保证模型每次遵守；实际返回仍由现有解析器检查。请求参数、坐标约定及其他任务提示词保持原样。
+
+视觉导航在输出要求之前集中给出“新增轨迹规划参考”：pending 非空时，使用其预测末端机体系中的目标向量；为空时使用当前观测机体系。目标水平偏角由本地 `atan2(right, forward)` 计算并转换为度，正值向右、负值向左；水平距离接近零时标为未定义。该角度仅描述新增轨迹起点的目标方向，不是强制转角，也不覆盖模型 yaw。提示词说明转角逐点累计，并要求随预测平移和转向更新目标方向；原始“左前方”等文字用于识别任务起点的目标。共享滑窗和飞行执行保持原样，不新增轨迹拒绝规则。
 
 ## 当前运行流程
 
@@ -18,7 +22,7 @@
   → TaskParser 解析为 MissionPlan
   → MissionValidator 校验并准备本次使用的Workflow（通过后才执行任务动作）
   → MissionRunner / WorkflowRouter 选择任务工作流
-  ├─ basic_motion：停稳观测 → 明确动作转为一个相对航点 → 安全检查
+  ├─ basic_motion：读取当前位姿 → 数值动作换算目标 → AirSim直接执行 → API执行结束
   └─ visual_goal_navigation：停稳观测 → 目标定位/深度几何 → 模型规划 → 协议校验 → 直接执行
        ↓ 共用坐标变换、轨迹校验、平滑运动和执行服务
   MotionPlanner → ExecutionService → AirSim Vehicle / MotionTracker
@@ -28,7 +32,7 @@
 
 每个航点的平移量和偏航量，都相对于前一个预测航点表示。AirSim 执行时将位置与偏航结合控制，因此无人机的移动方向可以与机头/相机朝向不同。相机适配器会读取图像返回的相机位姿，并获取相机 FOV；不会假设相机一定水平朝前。
 
-`basic_motion` 仅在实测位置、yaw、停稳状态及所启用的检查满足时返回 `completed`；单纯发完 API 不能算完成。`visual_goal_navigation` 首次定位后保存阶段目标记忆，只有通过记忆点半径、停稳观测确认和独立模型完成判定，才返回 `reached`；其依据是位置估计结合当前图像评估，不是仿真器目标位置真值。
+`basic_motion` 在运动 API 执行结束后返回 `completed`，完成依据为 `api_execution`，不声称实测到位或已核实停稳。`visual_goal_navigation` 首次定位后保存阶段目标记忆，只有通过记忆点半径、停稳观测确认和独立模型完成判定，才返回 `reached`；其依据是位置估计结合当前图像评估，不是仿真器目标位置真值。
 
 ## 配置和启动
 
@@ -95,7 +99,7 @@ config/                       配置 schema、加载器和 YAML 配置
   loader.py
   basic_motion.py             基础动作安全空间配置和校验
   base.yaml                   唯一主配置，含独立模型角色及任务配置节
-  tasks/visual_goal_navigation.yaml  当前任务的完成判定规则（4米半径上限）
+  tasks/visual_goal_navigation.yaml  当前任务的急停半径（6.5米）和完成距离上限（7米）
   visual_goal.py              视觉目标任务的类型配置和校验
 planner/
   domain/                     任务、观测、位姿、轨迹和结果等领域数据类型
@@ -137,7 +141,7 @@ output/                        本地运行输出，例如相机画面和日志
 - `planner/workflows/` 编排某类任务的观测、规划、执行、复核和退出流程。不同任务应有各自的工作流，不要不断扩展一个万能工作流。
 - `planner/workflows/termination/` 放置退出策略接口及具体任务策略。后续任务可以定义自己的停止/完成判定，不必把规则塞入导航工作流。
 - `planner/capabilities/` 放置多个工作流可以共享的任务能力，当前实现静态目标关联、深度估计和 near 完成条件；尚无持久记忆系统。
-- `planner/capabilities/basic_motion_conversion.py` 只将动作参数转为相对轨迹；`basic_motion_safety.py` 检查人工确认的空间范围；`completion/basic_motion.py` 进行实测完成判定。它们都不直接调用 AirSim。
+- `planner/capabilities/basic_motion_conversion.py` 将数值动作换算为世界目标；`ports/basic_motion_vehicle.py` 定义直接执行接口，AirSim适配器实现原生运动API调用。基础动作没有净空、轨迹审核或到位复核模块。
 - `planner/capabilities/targeting/` 实现目标关联及 RGB 射线到深度的几何映射；`completion/` 实现 near 到达条件。这里不发送模型 HTTP 请求。
 - `planner/adapters/target_detection/` 实现独立角点检测后端；本地定位和关联在 `capabilities/targeting/`，不需要启动 GroundingDINO。
 - `planner/workflows/visual_goal_navigation.py` 编排新任务；`visual_goal_session.py` 保存一次小任务的局部状态，`termination/visual_goal_navigation.py` 管理搜索、预算及退出策略。
@@ -223,7 +227,7 @@ python -m pytest -q
 
 ## 基础数值动作：basic_motion
 
-本分支使用独立的 `BasicMotionWorkflow`，不再保留示例 `navigation` 工作流。任务解析模型将明确的数值命令转换为动作参数，基础动作流程**不请求轨迹规划模型或目标定位模型**，直接生成相对轨迹，复用世界坐标转换、平滑运动和统一执行服务。
+本分支使用独立的 `BasicMotionWorkflow`，不再保留示例 `navigation` 工作流。任务解析模型将明确的数值命令转换为动作参数，基础动作流程**不请求轨迹规划模型、目标定位模型或完成判断模型**，经坐标换算后直接执行，共用飞行控制权的协调机制。
 
 例如“上升12米”的解析结果为：
 
@@ -248,36 +252,18 @@ python -m pytest -q
 
 - “左转90度，然后前进5米”拆为两个阶段；第二阶段以前一阶段执行后的实际朝向为基准。
 - “向前8米、向右5米，同时右转15度”是一个同步动作阶段。
-- 支持单步左右180°掉头，内部保留旋转方向；旧的仅起终点构造仍默认最短转向。外部航点仍为四维数组，不改变训练或服务器输出协议。
+- 支持有符号偏航动作及完整多圈转动；基础动作不套用视觉轨迹的步长和180°转角上限。视觉轨迹的四维数组及其协议保持原样。
 - 不猜测缺失距离/角度，不支持绝对高度或世界坐标命令。道路跟随、绕行、穿越、动态目标等未实现任务明确拒绝；若长任务含不支持部分，解析器应拒绝整条任务，不执行一个省略了剩余动作的计划。
 
-### 安全前置条件及配置迁移
+### 直接执行及配置迁移
 
-主配置中的 `basic_motion.free_space.confirmed` 默认为 `false`，此时任务校验会拒绝包含基础动作的整份计划。实验前需人工确认一个**固定世界 NED 坐标的静态无障碍盒**，在本地配置填写三个轴的最小/最大边界，并核实机体和跟踪误差余量后才允许设置 `confirmed: true`：
+基础动作仅要求任务解析提供完整、有限的数值参数；不进行净空确认、空间边界、动作距离/角度上限、轨迹审核、起点漂移、碰撞或实测到位检查。旧 `basic_motion:` 配置块及对应的净空/碰撞配置已删除；外部旧配置需移除此块，未知配置仍按通用加载规则报告错误。
 
-```yaml
-basic_motion:
-  free_space:
-    confirmed: false
-    minimum_world_ned_m: null  # 核实后填 [最小x, 最小y, 最小z]
-    maximum_world_ned_m: null  # 核实后填 [最大x, 最大y, 最大z]
-    clearance_radius_m: 1.0   # 初值；须包含机体尺寸及位置/跟踪误差余量
-```
+单纯平移直接调用 `moveToPositionAsync`；单纯转向调用 `rotateByYawRateAsync`；同步平移与转向使用世界坐标速度及有符号偏航速率的 `moveByVelocityAsync`，时长由距离、速度及转角计算。同步动作不做闭环位置补偿，实际位移和转角可能存在误差。API结束后发送悬停指令，但不等待本地停稳核验。速度使用 `airsim.speed_mps`，转动时间参考 `motion.max_yaw_rate_deg_s`；它们用于执行换算，不限制任务总距离或总转角。
 
-此空间不会随无人机移动，不是单张前视深度生成的全向避障地图。流程只允许完整直线航段的起终点及球形安全包络位于盒内；纯旋转也要满足净空。场景、障碍或边界有效性变化后，应撤销确认并重建运行时。基础动作使用自己的自由空间检查；视觉任务的相对高度边界可单独配置。
+API正常结束即作为本阶段完成依据，结果明确标为 `api_execution`，不冒充实测到位。最终位姿读取仅作诊断，读不到也不否定API执行结果。API异常或用户中断时取消/悬停，不自动重复相对动作。原有共享飞行控制权协调保持，防止与未结束的旧请求并发抢占。
 
-执行前会停稳观测、检查轨迹/空间、复核观测起点是否漂移；仅当本工作流开启碰撞检查时读取碰撞状态。执行后再次停稳观测，按 `motion.position_tolerance_m`、`motion.yaw_tolerance_deg` 校验实际终点。只有测量确认到达并停稳才为 `completed`。执行失败或未到达时取消/悬停，不自动重复原始相对动作；停止 API 成功本身不算停稳确认。
-
-旧本地配置如含 `navigation:` 块，需删除，并加入以上 `basic_motion:` 配置；否则加载器会明确报迁移错误。现有运行配置已合并到唯一主配置，旧本地后端参数及凭据保存在忽略的本地归档；其他外部旧配置仍需按此规则迁移。基础动作仍需要任务解析服务；关闭视觉目标任务时不会启动或调用轨迹规划、目标定位后端，也不要求未使用的轨迹后端 API key。
-
-**启动注意：**默认CLI启动后先连接、获取控制权、解锁、起飞并悬停，再等待输入任务；`--instruction`也在起飞完成后解析执行。各阶段仍在任务动作执行前完成校验与准备；任务被拒绝时不执行其动作，交互模式继续等待输入。起飞不受后续任务净空确认项阻止，启动前须确认起飞空间；`free_space.confirmed: false`仍阻止基础动作执行。已在空中且准备好任务起点时可用`--no-takeoff`跳过自动起飞。先只读检查配置，再在仿真器和起飞条件就绪后启动：
-
-```powershell
-python -c "from config import load_config; c=load_config('config/base.yaml'); print('basic_motion_space_confirmed:', c.basic_motion.free_space.confirmed)"
-python run_airsim_cli.py --config config/base.yaml --no-takeoff --record-camera-api --camera-record-mode frames --camera-record-fps 5
-```
-
-动作阶段总预算使用 `airsim.move_timeout_s`，包括观测、执行及完成复核；RPC 阻塞仍可能造成超时滞后，不承诺硬实时。此次验证使用离线替身，尚未验证真实任务解析服务或 AirSim 飞行。
+默认CLI启动后先连接、获取控制权、解锁、起飞并悬停，再接受任务；后续基础动作相对各阶段起点计算，例如起飞后“升高10米”使当前NED z减10。已在空中可用 `--no-takeoff`。基础动作不需要独立配置块；真实API及AirSim效果仍需实验验证。
 
 ## 低空平视视觉目标导航：当前实现
 
@@ -304,12 +290,12 @@ Qwen每次返回5个NEW四维点，基本协议/数值和锚点有效性校验�
 每次规划根据本次观测位姿和记忆世界坐标重算相对向量，不复用旧相对坐标。
 记忆坐标在当前静态目标阶段内有效，当前图像和规划锚点仍须满足新鲜度要求；记录真实来源与年龄，不声称当前目标可见。
 
-进入记忆目标点4米半径后暂停并保留队列。距离工程余量由`distance_uncertainty_margin_m`配置，当前主配置为0米，停稳后的记忆距离不超过4米即可通过距离准入，
+进入记忆目标点6.5米半径（`pause_radius_m`）后暂停并保留队列。距离工程余量由`distance_uncertainty_margin_m`配置，当前主配置为0米，停稳后的记忆距离不超过7米（`radius_m`）即可通过距离准入；规划接近提示使用6.5米，避免提前停在两条边界之间。旧配置省略`pause_radius_m`时继续与`radius_m`共用半径。当前距离计算仍为三维距离。
 连续两次新鲜观测后调用独立完成判断，无需先获取新的检测框或目标中心深度。
 完成器接收当前RGB/深度展示与首次参考图，必须确认原目标及任务要求；记忆距离不是当前实测目标表面距离。
 false保留并恢复原世界目标，true清空后进入下一阶段。
 连续与串行视觉导航均不再因短期目标距离改善不足而判失败，允许先横向调整或绕行后再接近；任务总时限、规划次数等现有退出条件仍生效。旧配置中的`progress_window_rounds`和`minimum_progress_m`已删除，需移除后再加载。
-碰撞检查按工作流默认关闭；基础动作free_space及BasicMotionSafety保持。
+视觉导航碰撞检查默认关闭；基础动作直接执行，不调用碰撞接口。
 
 主配置仅使用config/base.yaml，视觉完成条件在config/tasks/visual_goal_navigation.yaml。
 检测预算64，解析/检测/完成各自配置DeepSeek官方服务并关闭思考；全部URL/model/key彼此独立。

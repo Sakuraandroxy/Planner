@@ -76,7 +76,7 @@ class VisualGoalCompletionPrompt:
 本地触发规则：
 - 触发方式：目标半径触发暂停。
 - 距离计算方式：当前停稳位姿到上述目标估计点的三维距离，位置来源不可混淆。
-- 判定半径：{request.rules.radius_m}米。
+- 急停触发半径：{request.rules.effective_pause_radius_m}米；用于触发暂停，与停稳后的完成距离上限分开。
 - 完成距离上限：{request.rules.radius_m}米；圈内位置均可，不要求停在边界。
 - 测距不确定性余量：{request.uncertainty_margin_m}米；距离加余量不得超过半径。
 - 高度约束：{height_description}
@@ -85,7 +85,7 @@ class VisualGoalCompletionPrompt:
 - 当前无人机世界坐标：{encode([pose.x, pose.y, pose.z])}
 - 当前无人机偏航角：{pose.yaw_deg}度。
 - {distance_description}：{geometry.distance_m}米。
-- 判定半径条件满足：{str(radius_met).lower()}
+- 完成距离上限条件满足：{str(radius_met).lower()}
 - 高度约束满足：{str(height_met).lower()}
 - 本地检查：{local_checks}
 - 独立新鲜观测确认次数：{request.confirmation_count}/{request.required_confirmation_count}。

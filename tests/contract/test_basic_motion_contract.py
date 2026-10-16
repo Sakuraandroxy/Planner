@@ -27,7 +27,7 @@ def envelope():
 
 @pytest.mark.parametrize("field,value", [("up_m", True), ("forward_m", "1"), ("up_m", None),
     ("up_m", float("nan")), ("up_m", float("inf")), ("instruction", ""),
-    ("unknown", 1), ("yaw_right_deg", 181)])
+    ("unknown", 1)])
 def test_invalid_basic_numeric_protocol(field, value):
     data = envelope()
     data["stages"][0]["parameters"][field] = value
@@ -71,13 +71,14 @@ def test_explicit_rejection_is_not_a_partial_plan():
             mission_from_dict(data)
 
 
-def test_whole_plan_limits_and_capabilities_are_checked():
-    data = envelope()
-    data["stages"][0]["parameters"]["up_m"] = 31
-    with pytest.raises(ProtocolError, match="distance"):
-        MissionValidator({TaskKind.BASIC_MOTION}).validate(mission_from_dict(data))
-    with pytest.raises(ProtocolError, match="free_space"):
-        MissionValidator({TaskKind.BASIC_MOTION}, basic_motion_ready=False).validate(mission_from_dict(envelope()))
+def test_basic_actions_have_no_distance_or_rotation_admission_caps():
+    data=envelope()
+    data["stages"][0]["parameters"].update(up_m=100,yaw_right_deg=450)
+    plan=mission_from_dict(data)
+    MissionValidator({TaskKind.BASIC_MOTION}).validate(plan)
+    assert plan.stages[0].parameters.up_m==100
+    assert plan.stages[0].parameters.yaw_right_deg==450
+
 
 
 def test_prompt_and_client_use_registered_types_without_model_fallback(monkeypatch):
@@ -109,4 +110,4 @@ def test_legacy_config_requires_explicit_migration_and_unused_model_needs_no_key
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     config = load_config(write_config(tmp_path / "unused-backend.yaml", alternate_backend_config_data()))
     assert not config.visual_goal.enabled
-    assert not config.basic_motion.free_space.confirmed
+    assert not hasattr(config, "basic_motion")

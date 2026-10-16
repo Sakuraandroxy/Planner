@@ -73,6 +73,28 @@ def test_true_clears_retained_points_only_after_stopped_fresh_completion():
     assert source.captures > 2 and len(planner.calls) == 1
 
 
+def test_serial_starts_planning_between_radii_then_checks_after_stop_drift():
+    workflow, stage, source, planner, vehicle, checker, trace = partial_setup()
+    workflow.trigger_rules = replace(workflow.trigger_rules, radius_m=7, pause_radius_m=6.5)
+    workflow.flight.trigger_rules = workflow.trigger_rules
+    # Target starts at 6m: move the start back so initial distance is 6.8m.
+    vehicle.pose = replace(vehicle.pose, x=-.8)
+    capture = source.capture
+    drifted = False
+    def capture_after_stop(**kwargs):
+        nonlocal drifted
+        if vehicle.segments and not drifted:
+            vehicle.pose = replace(vehicle.pose, x=vehicle.pose.x-.15)
+            drifted = True
+        return capture(**kwargs)
+    source.capture = capture_after_stop
+    result = workflow.run(stage)
+    assert result.success, result.error
+    assert len(planner.calls) == 1  # 6.8m alone must not start completion.
+    assert 6.5 < checker.calls[0].geometry.distance_m <= 7
+    assert not result.value.remaining_motion.segments
+
+
 def test_false_resumes_original_world_goal_and_never_reexecutes_full_relative_delta():
     workflow, stage, source, planner, vehicle, checker, trace = partial_setup((False, True))
     owner = threading.get_ident()

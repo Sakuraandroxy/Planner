@@ -83,16 +83,32 @@ def test_removed_distance_progress_settings_are_not_silently_accepted(tmp_path,k
         load_config(write_config(tmp_path/"legacy_progress.yaml",raw))
 
 
-def test_workflow_configuration_has_one_radius_and_an_optional_height_boundary():
+def test_workflow_configuration_separates_pause_and_completion_radii():
     config=load_config("config/base.yaml")
-    assert config.visual_goal.completion_rules.radius_m==4
+    assert config.visual_goal.completion_rules.radius_m==7
+    assert config.visual_goal.completion_rules.effective_pause_radius_m==6.5
     limits=config.visual_goal.limits
     assert limits.maximum_vertical_offset_m is None
     settings=limits.approach_settings(config.visual_goal.completion_rules.radius_m)
-    assert settings.arrival_radius_m==4
+    assert settings.arrival_radius_m==7
     assert settings.uncertainty_margin_m==0
     with pytest.raises(ValueError):
         replace(limits,distance_uncertainty_margin_m=.3).validate_arrival_radius(.3,200)
+
+
+@pytest.mark.parametrize("distance,accepted", [(6.8,True),(7.0,True),(7.001,False)])
+def test_completion_accepts_stopped_distance_outside_pause_radius_up_to_seven(distance,accepted):
+    original=request()
+    evidence=replace(original, rules=replace(original.rules,radius_m=7,pause_radius_m=6.5),
+        uncertainty_margin_m=0,geometry=replace(original.geometry,distance_m=distance))
+    if accepted:
+        require_visual_completion_evidence(evidence)
+        prompt=VisualGoalCompletionPrompt.build_user_prompt(evidence)
+        assert "急停触发半径：6.5米" in prompt
+        assert "完成距离上限：7米" in prompt
+    else:
+        with pytest.raises(ProtocolError):
+            require_visual_completion_evidence(evidence)
 
 
 @pytest.mark.parametrize("distance,accepted", [(3.8,True),(4.0,True),(4.001,False)])

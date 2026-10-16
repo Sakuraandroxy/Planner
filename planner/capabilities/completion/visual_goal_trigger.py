@@ -30,7 +30,7 @@ class VisualGoalRadiusTrigger:
             self.last_reason = "target_reference_expired"
             return True
         distance = math.dist((pose.x, pose.y, pose.z), snapshot.position_world)
-        if distance > self.rules.radius_m:
+        if distance > self.rules.effective_pause_radius_m:
             self.armed = True
             return False
         previous = self.last_pause_pose

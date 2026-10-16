@@ -13,9 +13,6 @@ from planner.adapters.airsim import (
 )
 from planner.adapters.airsim.observation_gate import ObservationGate
 from planner.adapters.task_parser import OpenAITaskParser
-from planner.capabilities.basic_motion_conversion import BasicMotionConverter
-from planner.capabilities.basic_motion_safety import BasicMotionSafety
-from planner.capabilities.completion.basic_motion import BasicMotionCompletion
 from planner.application import PlannerApplication
 from planner.application.mission_runner import MissionRunner
 from planner.application.mission_validator import MissionValidator
@@ -77,17 +74,11 @@ def build_runtime(config: PlannerConfig) -> Runtime:
     )
     validator = TrajectoryValidator(config.trajectory.point_count, config.trajectory.max_step_m,
                                     config.trajectory.max_yaw_step_deg)
-    workflow = BasicMotionWorkflow(
-        observation, BasicMotionConverter(), BasicMotionSafety(config.basic_motion.free_space),
-        BasicMotionCompletion(config.motion.limits), validator, motion_planner, execution,
-        config.motion.limits, config.airsim.move_timeout_s,
-        collision_check=vehicle.collision_state if config.basic_motion.collision_check_enabled else None,
-    )
+    workflow = BasicMotionWorkflow(vehicle, execution)
     registry = ExtensionRegistry()
     codecs = {codec.kind: codec for codec in builtin_task_codecs()}
     registry.register(TaskRegistration(TaskKind.BASIC_MOTION, codecs[TaskKind.BASIC_MOTION],
-        BasicMotionStageValidator(config.trajectory.max_step_m, config.trajectory.max_yaw_step_deg,
-                                  config.basic_motion.free_space.confirmed), workflow))
+        BasicMotionStageValidator(), workflow))
     if config.visual_goal.enabled:
         from planner.visual_goal_bootstrap import build_visual_goal_workflow
         visual_workflow = ConfiguredWorkflow(lambda: build_visual_goal_workflow(

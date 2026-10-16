@@ -41,7 +41,7 @@ class VisualGoalApproachPhase:
         if session.policy.planning_calls >= self.limits.maximum_planning_rounds:
             # Exhausted refill budget must not interrupt already queued actions.
             return
-        radius = self.flight.trigger_rules.radius_m
+        radius = self.flight.trigger_rules.effective_pause_radius_m
         context = VisualGoalPlanningContext(parameters.target_description, goal, session.geometry,
             VisualGoalState.APPROACHING, radius, self.limits.distance_uncertainty_margin_m,
             self.limits.maximum_vertical_offset_m, observation.capture_id == session.target_capture_id, session.target_capture_id,

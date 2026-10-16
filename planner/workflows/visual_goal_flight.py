@@ -41,6 +41,7 @@ class VisualGoalFlightPhase:
             return None
         self._event(trace, "completion_check", completed=verdict, check_count=session.completion_checks,
                     retained_points=len(session.pending_motion.segments), radius_m=self.trigger_rules.radius_m,
+                    pause_radius_m=self.trigger_rules.effective_pause_radius_m,
                     measured_distance_m=session.geometry.distance_m,
                     distance_source='distance_to_stage_memory' if request.target_memory else 'current_depth')
         return verdict

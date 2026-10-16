@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from planner.domain.motion import MotionLimits
 from .visual_goal import VisualGoalConfig
-from .basic_motion import BasicMotionConfig
 from planner.domain.sliding_window import SlidingWindowSettings
 from .task_completion import TaskCompletionConfig
 from .target_detection import TargetDetectionConfig
@@ -78,7 +77,6 @@ class PlannerConfig:
     depth: DepthConfig
     trajectory: TrajectoryConfig
     recording: RecordingConfig
-    basic_motion: BasicMotionConfig = BasicMotionConfig()
     motion: MotionConfig = MotionConfig()
     visual_goal: VisualGoalConfig = VisualGoalConfig()
     task_completion: TaskCompletionConfig = TaskCompletionConfig()

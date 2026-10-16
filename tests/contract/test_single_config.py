@@ -22,7 +22,7 @@ def test_cli_default_and_shared_settings_follow_current_config(monkeypatch):
     assert config.airsim.depth_horizontal_fov_deg == 90.0
     assert config.airsim.maximum_pair_time_gap_s == .05
     assert config.visual_goal.enabled and config.visual_goal.geometry_verified
-    assert not config.basic_motion.free_space.confirmed and not config.progress_review.enabled
+    assert not hasattr(config, "basic_motion") and not config.progress_review.enabled
     assert config.visual_goal.completion_rules_file == VISUAL_RULES_REFERENCE
 
 
@@ -51,7 +51,8 @@ def test_explicit_visual_rule_is_relative_to_config_not_working_directory(tmp_pa
     other.mkdir()
     monkeypatch.chdir(other)
     config = load_config(path)
-    assert config.visual_goal.completion_rules.radius_m == 4
+    assert config.visual_goal.completion_rules.radius_m == 7
+    assert config.visual_goal.completion_rules.effective_pause_radius_m == 6.5
     assert len(config.visual_goal.completion_rules.required_conditions) == 3
 
 

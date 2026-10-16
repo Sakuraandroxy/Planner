@@ -15,7 +15,6 @@ from .validation import number, integer, mapping, string
 from planner.domain.depth import validate_depth_protocol
 from .target_detection import target_detection_config
 from .visual_goal import visual_goal_config
-from .basic_motion import basic_motion_config
 from .task_completion import completion_config
 from .visual_goal_completion import completion_rules
 from .schema import AirSimConfig, ApiConfig, DepthConfig, PlannerConfig, RecordingConfig, TrajectoryConfig, TaskParserConfig
@@ -26,9 +25,9 @@ def load_config(path: str | Path) -> PlannerConfig:
     try:
         raw = mapping(yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}, "config",
                       {"task_parser", "trajectory_planner", "airsim", "depth", "trajectory", "recording",
-                       "basic_motion", "motion", "visual_goal_navigation", "task_completion", "sliding_window", "navigation", "target_detection", "progress_review"})
+                       "motion", "visual_goal_navigation", "task_completion", "sliding_window", "navigation", "target_detection", "progress_review"})
         if "navigation" in raw:
-            raise ConfigurationError("legacy navigation workflow removed: remove navigation settings and configure basic_motion")
+            raise ConfigurationError("legacy navigation workflow removed: remove navigation settings; basic_motion needs no task-specific configuration")
         parser = raw["task_parser"]
         planning = raw["trajectory_planner"]
         sim = mapping(raw["airsim"], "airsim", {f.name for f in fields(AirSimConfig)})
@@ -67,7 +66,6 @@ def load_config(path: str | Path) -> PlannerConfig:
                 string(recording.get("output_root", "output/camera_api"), "recording.output_root"),
                 number(recording.get("fps", 5.0), "recording.fps"),
             ),
-            basic_motion=basic_motion_config(raw.get("basic_motion", {})),
             motion=_motion_config(raw.get("motion", {})),
             visual_goal=visual_goal,
             task_completion=completion_config(raw.get("task_completion", {})),
@@ -100,8 +98,6 @@ def load_config(path: str | Path) -> PlannerConfig:
         raise ConfigurationError("recording fps must be positive")
     if result.trajectory.max_yaw_step_deg > 180:
         raise ConfigurationError("trajectory.max_yaw_step_deg must not exceed 180")
-    if result.basic_motion.free_space.clearance_radius_m <= result.motion.limits.position_tolerance_m:
-        raise ConfigurationError("basic_motion clearance radius must include body size beyond position tolerance")
     return result
 
 

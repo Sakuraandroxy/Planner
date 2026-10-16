@@ -29,8 +29,17 @@ def test_expired_reference_forces_observation_and_stage_cannot_change():
         trigger.update(VisualGoalTargetSnapshot("other", (20, 0, 0), clock()))
 
 
+def test_pause_boundary_is_independent_of_completion_upper_limit():
+    clock = Clock()
+    trigger = VisualGoalRadiusTrigger(VisualGoalTriggerRules(radius_m=7, pause_radius_m=6.5), 45, clock)
+    trigger.update(VisualGoalTargetSnapshot("stage", (10, 0, 0), clock()))
+    assert not trigger.should_pause(WorldPose(3.4, 0, 0, 0))  # 6.6m is not a pause.
+    assert trigger.should_pause(WorldPose(3.5, 0, 0, 0))  # Includes the 6.5m boundary.
+
+
 @pytest.mark.parametrize("options", [{"radius_m": True}, {"radius_m": float("nan")},
-    {"rearm_translation_m": 0}, {"maximum_completion_checks": 1.5}, {"required_conditions": ()}])
+    {"rearm_translation_m": 0}, {"maximum_completion_checks": 1.5}, {"required_conditions": ()},
+    {"pause_radius_m": True}, {"pause_radius_m": 0}, {"pause_radius_m": float("nan")}])
 def test_invalid_rules_rejected(options):
     with pytest.raises(ValueError):
         VisualGoalTriggerRules(**options)

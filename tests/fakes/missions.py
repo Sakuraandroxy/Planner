@@ -7,12 +7,10 @@ from planner.domain.visual_goal_completion import VisualGoalTriggerRules
 
 
 def mission_validator(supported_kinds, visual_goal_limits=None, maximum_depth_m=200.0, *,
-                      maximum_step_m=30.0, maximum_yaw_step_deg=180.0, basic_motion_ready=True,
                       visual_goal_trigger_rules=None):
     validators = {}
     if TaskKind.BASIC_MOTION in supported_kinds:
-        validators[TaskKind.BASIC_MOTION] = BasicMotionStageValidator(
-            maximum_step_m, maximum_yaw_step_deg, basic_motion_ready)
+        validators[TaskKind.BASIC_MOTION] = BasicMotionStageValidator()
     if TaskKind.VISUAL_GOAL_NAVIGATION in supported_kinds and visual_goal_limits is not None:
         validators[TaskKind.VISUAL_GOAL_NAVIGATION] = VisualGoalStageValidator(
             visual_goal_limits, maximum_depth_m, visual_goal_trigger_rules or VisualGoalTriggerRules())

@@ -11,7 +11,7 @@ from planner.domain.pose import WorldPose
 
 
 def test_basic_motion_default_does_not_read_collision_source():
-    workflow, vehicle, _ = build()
+    workflow, vehicle = build()
     vehicle.collision_state = Mock(side_effect=AssertionError("collision read while disabled"))
     try:
         result = workflow.run(stage(forward_m=2))

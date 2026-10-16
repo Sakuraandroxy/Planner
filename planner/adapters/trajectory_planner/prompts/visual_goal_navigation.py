@@ -1,4 +1,5 @@
 import json
+import math
 from planner.domain.visual_goal import VisualGoalPlanningContext
 from planner.errors import ProtocolError
 from planner.services.target_coordinates import point_in_horizontal_body
@@ -13,22 +14,20 @@ Static visual goal approach rules:
 The objective is to enter arrival_radius_m around the target's estimated position and hover.
 Any position inside that radius is acceptable; do not aim for its exact boundary.
 Use distance_uncertainty_margin_m for the arrival estimate. Preserve the selected object's identity.
-The target position is estimated locally from a detected bbox-center depth sample.
-It is a surface estimate, not the object's true 3D center or a persistent landmark.
-The first accepted position anchors this static target for the mission stage.
-When later detection is missing or rejected, continue toward the last accepted position.
-Its source capture and age stay unchanged; do not infer current visibility from memory.
-Use the supplied horizontal-body relative target positions; do not re-estimate target distance
-or transform world target coordinates yourself. RGB and depth still inform scene/path choices.
-target_relative_to_observation_body_m refers to the image-time vehicle pose.
-target_relative_to_pending_tail_body_m refers to the PREDICTED final pending pose.
+The target is a locally estimated bbox-center surface point, not ground truth.
+Its first accepted position anchors the static target. Missing or rejected detection keeps
+the last accepted position; its source and age do not prove current visibility.
+Use the supplied target vectors [forward,right,NED down] in meters in the horizontal body frame.
+target_relative_to_observation_body_m describes the image-time pose;
+target_relative_to_pending_tail_body_m describes the predicted final pending pose.
 With pending, NEW actions start at that predicted pose. Without pending, they start at the image pose.
-Both target vectors are [forward,right,NED down] in meters, independent of camera pitch.
-If keep_target_in_view=true, coordinate position and yaw to keep the bound target in the front view.
-Initial directional descriptions identify the target at stage start; update its current
-bearing from the current observation and geometry, rather than preserving its initial bearing.
-Use measured target geometry as evidence, not as guaranteed ground truth. Plan useful
-progress toward the target and reduce motion near the arrival radius.
+The NEW trajectory planning reference below selects the starting target vector and bearing.
+Use these estimates rather than re-estimating target distance or transforming world coordinates.
+RGB, depth and camera geometry still inform scene/path choices and actual framing.
+Initial directional descriptions identify the target at stage start; choose the current direction
+from the planning reference rather than preserving its initial bearing.
+If keep_target_in_view=true, coordinate translation and yaw to keep the bound target in front view.
+Plan useful progress toward the target and reduce motion near the arrival radius.
 Upward and downward motion are allowed. If maximum_vertical_offset_m is not null, stay
 within that configured offset from stage-start height; null adds no such height restriction.
 Choose useful evidence-supported motion; forward motion is not mandatory.
@@ -37,8 +36,6 @@ The executor follows valid trajectory points in order, with radius pauses for co
 Use the execution history and pending to determine what was actually flown.
 Previous executed command prefix is not an exact measured flight path; use actual pose updates.
 Do not output completion status: the independent completion checker evaluates it after local measurements.
-The target may come from an older observation; its source and age are supplied explicitly.
-An older target estimate is not proof of current image visibility. Completion is judged separately.
 
 Mandatory trajectory output format:
 Return exactly one JSON array containing exactly 5 waypoint arrays.
@@ -60,25 +57,40 @@ VISUAL_GOAL_VIEW_GUIDANCE = """
 Visual goal viewing guidance:
 While approaching, actively adjust dyaw_deg to keep the bound target in the front camera view,
 preferably near the horizontal image center.
-For the first NEW action, use target_relative_to_pending_tail_body_m when pending exists;
-otherwise use target_relative_to_observation_body_m.
-For each NEW action, express its target vector and translation in the preceding pose's
-horizontal body frame. First account for translation: remaining_forward = forward - dx,
-remaining_right = right - dy. The target bearing at that translated position, before this
-action's yaw change, is atan2(remaining_right, remaining_forward) * 180 / pi degrees.
-Use this bearing to guide dyaw_deg: left is negative and right is positive. A partial
-correction is allowed; do not copy the initial bearing into every action's yaw increment.
-After applying the yaw increment, express the remaining target vector in the resulting
-body frame before planning the next action. This geometric update follows the waypoint
-convention; translation and yaw may occur together during execution.
-When a large heading correction is needed, reduce translation or use a pure-yaw action
-before continuing the approach. Little or no yaw change is appropriate if the target
-will remain aligned after the planned translation.
-If the remaining horizontal target distance is near zero, do not infer a required turn
-from atan2(0, 0). Yaw controls horizontal heading only; it cannot correct vertical framing
-or guarantee visibility. Use RGB and camera geometry for actual framing. The remembered
-direction does not prove current target visibility.
+For a large heading correction, reduce translation or use a pure-yaw action as appropriate.
+Little or no turn is appropriate when the target remains aligned after translation.
+Yaw controls horizontal heading only; it cannot correct vertical framing or prove visibility.
 """
+
+
+def _new_trajectory_reference(target_vector, has_pending):
+    # Bearing is relative to the same yaw-only body frame as the NEW action anchor.
+    forward, right, _ = target_vector
+    bearing = (f"{math.degrees(math.atan2(right, forward)):+.2f} degrees"
+               if math.hypot(forward, right) > 1e-6
+               else "undefined (target horizontal distance is near zero; do not infer a turn)")
+    start = (
+        "The existing pending actions are already scheduled and will execute first.\n"
+        "Start your NEW trajectory AFTER all pending actions, at their predicted final pose.\n"
+        "Do not return or replace the pending actions."
+        if has_pending else
+        "Pending is empty. Start your NEW trajectory at the current observation pose."
+    )
+    return (
+        "NEW trajectory planning reference:\n" + start + "\n"
+        "At this NEW trajectory start:\n"
+        "- Target relative position [forward,right,down], meters: "
+        + json.dumps([round(v, 4) for v in target_vector], separators=(",", ":")) + "\n"
+        "- Target horizontal bearing: " + bearing + ".\n"
+        "Positive bearing means right; negative bearing means left.\n"
+        "This bearing describes the starting geometry, not a required dyaw_deg command.\n"
+        "The original directional description, such as 'front-left', identifies the object at mission start.\n"
+        "It does not prescribe the direction of subsequent actions.\n"
+        "dyaw_deg is an incremental turn relative to the preceding pose. Turns accumulate across waypoints.\n"
+        "For example, five actions with -8 degrees each produce a total turn of -40 degrees.\n"
+        "Re-evaluate the target direction after each predicted translation and turn.\n"
+        "Do not repeat a turn merely because the previous action turned that way."
+    )
 
 
 VISUAL_GOAL_OUTPUT_GUIDANCE = """
@@ -140,4 +152,7 @@ class VisualGoalTrajectoryPrompt:
         )
         if task_context.keep_target_in_view:
             user += "\n" + VISUAL_GOAL_VIEW_GUIDANCE.strip()
+        has_pending = payload["pending_tail_is_predicted"]
+        target_vector = payload["target_relative_to_pending_tail_body_m"] if has_pending else payload["target_relative_to_observation_body_m"]
+        user += "\n\n" + _new_trajectory_reference(target_vector, has_pending)
         return user + "\n\n" + VISUAL_GOAL_OUTPUT_GUIDANCE.strip()

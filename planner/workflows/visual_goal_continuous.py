@@ -138,7 +138,7 @@ class VisualGoalContinuous:
                                             observation.timestamp_ns, ())
         geometry = remembered_geometry(memory, observation.vehicle_pose)
         context = VisualGoalPlanningContext(parameters.target_description, remembered_goal(parameters.target_description), geometry,
-            VisualGoalState.APPROACHING, self.flight.trigger_rules.radius_m,
+            VisualGoalState.APPROACHING, self.flight.trigger_rules.effective_pause_radius_m,
             self.limits.distance_uncertainty_margin_m, self.limits.maximum_vertical_offset_m,
             observation.capture_id == memory.capture_id,
             memory.capture_id, memory.captured_monotonic, parameters.keep_target_in_view)

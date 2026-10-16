@@ -11,6 +11,7 @@ T = TypeVar("T")
 class CompletionBasis(str, Enum):
     NOT_VERIFIED = "not_verified"
     LOCAL_MEASUREMENT = "local_measurement"
+    API_EXECUTION = "api_execution"
     MODEL_WITH_LOCAL_CHECKS = "model_assessment_with_local_checks"
 
 

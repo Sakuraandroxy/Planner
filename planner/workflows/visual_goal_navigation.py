@@ -138,7 +138,8 @@ class VisualGoalNavigationWorkflow:
             if self.trace_factory:
                 trace = self.trace_factory()
                 trace.event("task_start", stage_id=stage.stage_id, parameters=parameters, limits=self.limits,
-                            arrival_radius_m=self.trigger_rules.radius_m,
+                            arrival_radius_m=self.trigger_rules.effective_pause_radius_m,
+                            completion_radius_m=self.trigger_rules.radius_m,
                             collision_check_enabled=self.collision_check is not None)
             status, reason = self._run(parameters, session, trace)
             self._settle_completed_calls(session)
@@ -230,7 +231,9 @@ class VisualGoalNavigationWorkflow:
         if self.continuous is not None:
             return self.continuous.run(parameters, session, trace)
         while True:
+            paused_for_completion = session.paused_for_completion
             observation = self._capture(session)
+            session.paused_for_completion = False
             self._event(trace, "round_observation", capture_id=observation.capture_id,
                         pose=observation.vehicle_pose,
                         remaining_budget_s=session.budget.remaining(self.clock()))
@@ -255,7 +258,7 @@ class VisualGoalNavigationWorkflow:
                     continue
             else:
                 distance = remembered_geometry(session.target_memory, observation.vehicle_pose).distance_m
-                if distance > self.trigger_rules.radius_m and session.confirmations == 0:
+                if distance > self.trigger_rules.effective_pause_radius_m and session.confirmations == 0 and not paused_for_completion:
                     self.target_updates.observe_stopped(observation, parameters, session, trace,
                         lambda: self.approach.checkpoint(session), self.sleep)
             if not session.policy.anchor_valid(observation, self.execution.current_pose(), self.clock()):
@@ -268,9 +271,10 @@ class VisualGoalNavigationWorkflow:
                 position_capture_id=session.target_capture_id,
                 position_age_s=self.clock()-session.target_captured_monotonic)
             session.policy.unreliable = 0
-            if session.trigger.last_pause_pose is None and geometry.distance_m <= self.trigger_rules.radius_m:
+            inside_pause_radius = geometry.distance_m <= self.trigger_rules.effective_pause_radius_m
+            if session.trigger.last_pause_pose is None and inside_pause_radius:
                 session.trigger.checked_at(observation.vehicle_pose)
-            if (geometry.distance_m <= self.trigger_rules.radius_m and
+            if ((inside_pause_radius or paused_for_completion or session.confirmations > 0) and
                     self.completion.candidate(parameters, observation, goal, geometry, session.initial,
                                               radius_m=self.trigger_rules.radius_m, target_memory=session.target_memory)):
                 if session.window is not None:
@@ -302,7 +306,7 @@ class VisualGoalNavigationWorkflow:
                     prefetch=lambda: self.approach.prefetch(observation, goal, parameters, session))
                 continue
             context = VisualGoalPlanningContext(parameters.target_description, goal, geometry,
-                VisualGoalState.APPROACHING, self.trigger_rules.radius_m, self.limits.distance_uncertainty_margin_m,
+                VisualGoalState.APPROACHING, self.trigger_rules.effective_pause_radius_m, self.limits.distance_uncertainty_margin_m,
                 self.limits.maximum_vertical_offset_m, observation.capture_id == session.target_capture_id, session.target_capture_id,
                 session.target_captured_monotonic, parameters.keep_target_in_view)
             self._event(trace, "state", state=VisualGoalState.APPROACHING)

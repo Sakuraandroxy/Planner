@@ -24,6 +24,11 @@ class FakeVehicle:
             if pose_checkpoint(self.pose, yaw):
                 raise MotionPaused(self.pose, yaw)
 
+    def execute_basic_motion(self, start, target, yaw_delta_deg):
+        if self.fail:
+            raise RuntimeError("execution failed")
+        self.pose = target
+
     def cancel(self):
         self.cancelled = True
 

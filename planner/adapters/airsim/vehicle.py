@@ -45,6 +45,30 @@ class AirSimVehicle:
     def cancel(self) -> None:
         self.connection.call("cancelLastTask")
 
+    def execute_basic_motion(self, start: WorldPose, target: WorldPose, yaw_delta_deg: float) -> None:
+        """Send native commands; do not run trajectory, collision or arrival checks."""
+        import airsim
+
+        delta = (target.x-start.x, target.y-start.y, target.z-start.z)
+        distance = math.hypot(*delta)
+        if yaw_delta_deg:
+            duration = max(distance/self.speed_mps,
+                           abs(yaw_delta_deg)/self.motion_tracker.limits.max_yaw_rate_deg_s)
+            rate = yaw_delta_deg/duration
+            if distance:
+                self.connection.call_async_and_wait(
+                    "moveByVelocityAsync", *(v/duration for v in delta), duration,
+                    drivetrain=airsim.DrivetrainType.MaxDegreeOfFreedom,
+                    yaw_mode=airsim.YawMode(is_rate=True, yaw_or_rate=rate))
+            else:
+                self.connection.call_async_and_wait("rotateByYawRateAsync", rate, duration)
+        else:
+            self.connection.call_async_and_wait(
+                "moveToPositionAsync", target.x, target.y, target.z, self.speed_mps,
+                timeout_sec=self.timeout_s, drivetrain=airsim.DrivetrainType.MaxDegreeOfFreedom,
+                yaw_mode=airsim.YawMode(is_rate=True, yaw_or_rate=0))
+        self.hover()
+
     def hover(self) -> None:
         self.connection.call_async_and_wait("hoverAsync")
 

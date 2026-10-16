@@ -127,6 +127,26 @@ def test_false_completion_resumes_retained_world_points_and_true_clears_them():
         w.close()
 
 
+def test_continuous_pause_uses_six_point_five_and_completion_allows_stop_drift():
+    w, stage, vehicle, planner, trace, clock = continuous_setup(target_x=14)
+    w.trigger_rules = replace(w.trigger_rules, radius_m=7, pause_radius_m=6.5)
+    w.flight.trigger_rules = w.trigger_rules
+    hover = vehicle.hover
+    def drifting_hover():
+        hover()
+        vehicle.pose = replace(vehicle.pose, x=vehicle.pose.x-.2)
+    vehicle.hover = drifting_hover
+    try:
+        result = w.run(stage)
+        assert result.success, result.error
+        assert 7.5 <= vehicle.hover_positions[0].x < 7.7
+        checks = [d for n,d in trace.events if n=='completion_check']
+        assert len(checks) == 1 and 6.5 < checks[0]['measured_distance_m'] <= 7
+        assert not w.window.queue.items
+    finally:
+        w.close()
+
+
 @pytest.mark.parametrize('turn',[180.,-180.])
 def test_continuous_pure_rotation_preserves_signed_half_turn(turn):
     from tests.fakes.visual_goal import Clock

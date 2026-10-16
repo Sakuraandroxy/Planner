@@ -166,20 +166,6 @@ recording:
   # 相机录制的目标采样频率，单位帧/秒，不是仿真器的渲染帧率。
   fps: 5.0
 
-# 基础数值动作工作流参数；该任务类型始终注册，执行前仍检查自由空间条件。
-basic_motion:
-  # 本工作流是否读取仿真器碰撞事件并中断；默认false不调用碰撞接口，不影响净空与轨迹校验。
-  collision_check_enabled: false
-  # 人工确认的静态无障碍世界坐标包围盒；不是由深度图自动建立的地图。
-  free_space:
-    # true表示已确认此盒内净空且已填写有效边界；false阻止基础动作通过任务校验。
-    confirmed: false
-    # 自由空间各轴最小值[x,y,z]，单位米、世界NED坐标，z向下；null表示未填写。
-    minimum_world_ned_m: null
-    # 自由空间各轴最大值[x,y,z]，单位米、世界NED坐标，z向下；须逐轴大于最小值。
-    maximum_world_ned_m: null
-    # 基础动作沿途检查使用的机体及误差包络半径，单位米；整条路径的包络须位于自由空间内。
-    clearance_radius_m: 1.0
 # 低空平视、寻找并接近静态视觉目标的工作流专用配置。
 visual_goal_navigation:
   # 本工作流是否读取仿真器碰撞事件并中断；默认false不调用碰撞接口，不修改仿真器的物理碰撞设置。

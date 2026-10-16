@@ -9,7 +9,7 @@ from planner.adapters.trajectory_planner.prompts import BaseTrajectoryPrompt, BA
 from planner.adapters.trajectory_planner.prompts.visual_goal_navigation import VisualGoalTrajectoryPrompt
 from planner.adapters.trajectory_planner.qwen_vl_planner import QwenVLPlanner
 from planner.domain.execution import ExecutionBudget
-from planner.domain.pose import RelativePoseDelta
+from planner.domain.pose import RelativePoseDelta, WorldPose
 from planner.domain.trajectory import RelativeTrajectory
 from planner.domain.visual_goal import GoalGeometry, VisualGoalPlanningContext, VisualGoalState
 from planner.errors import BudgetExceeded, ProtocolError
@@ -70,6 +70,11 @@ def test_request_ends_with_complete_format_example_after_all_task_context(
     assert ("Visual goal viewing guidance:" in user) is keep_in_view
     if keep_in_view:
         assert user.index("Visual goal viewing guidance:") < user.index("Final response:")
+    reference = user.split("NEW trajectory planning reference:\n", 1)[1].split("Final response:", 1)[0]
+    assert "Turns accumulate across waypoints" in reference
+    assert "not a required dyaw_deg command" in reference
+    assert ("Start your NEW trajectory AFTER all pending actions" in reference) is has_pending
+    assert ("Pending is empty. Start your NEW trajectory at the current observation pose" in reference) is not has_pending
     assert '"new_actions_reference":"' + ("pending_tail" if has_pending else "observation") + '"' in user
     footer = user.split("Final response:", 1)[1]
     assert "Do not include pending waypoints" in footer
@@ -82,6 +87,46 @@ def test_request_ends_with_complete_format_example_after_all_task_context(
     assert all(len(row) == 4 and all(type(v) in (int, float) and math.isfinite(v) for v in row)
                for row in parsed_example)
     assert result.points[0] == RelativePoseDelta(*parsed_example[0])
+
+
+@pytest.mark.parametrize("pending,expected_vector,expected_bearing", [
+    (None, [21.6608, -5.0534, 0.6961], "-13.13 degrees"),
+    (RelativeTrajectory(tuple(RelativePoseDelta(3, -.7, 0, -8) for _ in range(5))),
+     [5.0079, 7.2048, 0.6961], "+55.20 degrees"),
+])
+def test_experiment_reference_selects_right_turn_geometry_after_left_turning_pending(
+        pending, expected_vector, expected_bearing):
+    # Replay the first batch geometry from the 09:23 experiment without external files/services.
+    obs = wall_observation(pose=WorldPose(0, 0, -1.6766924858093262, 0))
+    goal_context = replace(context(), geometry=GoalGeometry(
+        True, "remembered surface", 22.253387944224453,
+        (21.660836716827106, -5.053397758249108, -.9805611619688884)))
+    user = VisualGoalTrajectoryPrompt().build_user_prompt(
+        "Approach the first car to the front-left.", obs, 5,
+        task_context=goal_context, pending_trajectory=pending)
+    reference = user.split("NEW trajectory planning reference:\n", 1)[1]
+    vector = reference.split("- Target relative position [forward,right,down], meters: ", 1)[1].splitlines()[0]
+    assert json.loads(vector) == pytest.approx(expected_vector)
+    assert "- Target horizontal bearing: " + expected_bearing in reference
+    assert "Positive bearing means right; negative bearing means left" in reference
+    assert "five actions with -8 degrees each produce a total turn of -40 degrees" in reference
+
+
+@pytest.mark.parametrize("point,expected_bearing", [
+    ((0, 4, -4), "+0.00 degrees"),  # Body-forward at yaw=90, not world-forward.
+    ((4, 0, -4), "-90.00 degrees"),
+    ((-4, 0, -4), "+90.00 degrees"),
+    ((0, 0, -1), "undefined"),  # Vertical separation does not define a yaw correction.
+    ((1e-8, -1e-8, -4), "undefined"),
+])
+def test_reference_bearing_respects_body_yaw_and_undefined_horizontal_direction(point, expected_bearing):
+    obs = wall_observation(pose=WorldPose(0, 0, -4, 90))
+    goal_context = replace(context(), geometry=GoalGeometry(True, "surface", 4, point))
+    user = VisualGoalTrajectoryPrompt().build_user_prompt(
+        "approach", obs, 5, task_context=goal_context)
+    reference = user.split("NEW trajectory planning reference:\n", 1)[1]
+    assert "- Target horizontal bearing: " + expected_bearing in reference
+    assert "atan2(" not in user
 
 
 def test_legacy_prompt_rejects_new_context_instead_of_dropping_it():

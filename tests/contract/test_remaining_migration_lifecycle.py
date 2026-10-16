@@ -34,8 +34,7 @@ def test_model_timeout_quarantines_goal_result_and_blocks_basic_stage():
         result = workflow.run(stage)
         assert entered.is_set() and result.value.status is VisualGoalStatus.TIMEOUT
         assert workflow.model_calls.has_pending_call
-        basic = BasicMotionWorkflow(None, None, None, None, None, None,
-            workflow.execution, MotionLimits(), 60, clock)
+        basic = BasicMotionWorkflow(vehicle, workflow.execution, clock)
         next_stage = MissionStage("basic", TaskKind.BASIC_MOTION,
             BasicMotionParameters("turn", 0, 0, 0, 30))
         blocked = basic.run(next_stage)

@@ -5,7 +5,6 @@ from unittest.mock import Mock
 import pytest
 
 from config import load_config
-from config.basic_motion import basic_motion_config
 from config.visual_goal import visual_goal_config
 from planner.adapters.airsim.observation_gate import ObservationGate
 from planner.bootstrap import build_runtime
@@ -19,24 +18,21 @@ from tests.fakes.visual_goal import Clock
 
 
 def test_collision_checks_default_off_in_types_and_main_config():
-    assert not basic_motion_config({}).collision_check_enabled
     assert not visual_goal_config({}).collision_check_enabled
     settings = load_config(MAIN_CONFIG)
-    assert not settings.basic_motion.collision_check_enabled
+    assert not hasattr(settings, "basic_motion")
     assert not settings.visual_goal.collision_check_enabled
 
 
-@pytest.mark.parametrize("decoder", [basic_motion_config, visual_goal_config])
 @pytest.mark.parametrize("value", ["false", 0, None, {}])
-def test_collision_flag_requires_yaml_boolean(decoder, value):
+def test_collision_flag_requires_yaml_boolean(value):
     with pytest.raises(ValueError, match="boolean"):
-        decoder({"collision_check_enabled": value})
+        visual_goal_config({"collision_check_enabled": value})
 
 
-@pytest.mark.parametrize("basic_on,visual_on", [(False, False), (True, False), (False, True), (True, True)])
-def test_runtime_injects_collision_source_per_workflow_without_reading_it(tmp_path, monkeypatch, basic_on, visual_on):
+@pytest.mark.parametrize("visual_on", [False, True])
+def test_only_visual_workflow_injects_optional_collision_source(tmp_path, monkeypatch, visual_on):
     raw = visual_config_data()
-    raw["basic_motion"]["collision_check_enabled"] = basic_on
     raw['visual_goal_navigation'].update(collision_check_enabled=visual_on, geometry_verified=True)
     for role in ("task_parser", "target_detection", "task_completion"):
         monkeypatch.setenv(raw[role]["api_key_env"], "offline-" + role)
@@ -51,11 +47,10 @@ def test_runtime_injects_collision_source_per_workflow_without_reading_it(tmp_pa
         deferred = workflows[TaskKind.VISUAL_GOAL_NAVIGATION]
         deferred.prepare()
         visual = deferred.instance
-        assert (basic.collision_check is not None) is basic_on
+        assert not hasattr(basic, "collision_check")
         assert (visual.collision_check is not None) is visual_on
-        for workflow in (basic, visual):
-            if workflow.collision_check is not None:
-                assert workflow.collision_check.__self__ is basic.execution.vehicle
+        if visual.collision_check is not None:
+            assert visual.collision_check.__self__ is basic.execution.vehicle
         connection.call.assert_not_called()
         post.assert_not_called()
     finally:

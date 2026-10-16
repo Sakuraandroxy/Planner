@@ -20,12 +20,22 @@ class VisualGoalTriggerRules:
         "到本阶段记忆目标估计点的距离满足半径上限、已配置高度边界及稳定观测条件；当前图像仍需确认原目标及任务要求。",
         "原始任务明确要求的其他观察条件已经满足；不得自行添加要求。",
     )
+    pause_radius_m: float | None = None
+
+    @property
+    def effective_pause_radius_m(self) -> float:
+        """Omitted pause radius preserves the previous single-radius behavior."""
+        return self.radius_m if self.pause_radius_m is None else self.pause_radius_m
 
     def __post_init__(self):
         for name in ("radius_m", "rearm_translation_m", "rearm_yaw_deg"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
                 raise ValueError(f"{name} must be finite and positive")
+        if self.pause_radius_m is not None:
+            value = self.pause_radius_m
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+                raise ValueError("pause_radius_m must be finite and positive")
         if (isinstance(self.maximum_completion_checks, bool) or
                 not isinstance(self.maximum_completion_checks, int) or self.maximum_completion_checks < 1):
             raise ValueError("maximum_completion_checks must be a positive integer")

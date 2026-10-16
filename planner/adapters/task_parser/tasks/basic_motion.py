@@ -13,7 +13,7 @@ Positive yaw_right_deg = right turn, negative = left turn; meters/degrees only.
 Unrequested components must be 0. Extract requested values; never guess a missing magnitude.
 Relative translation uses the horizontal UAV heading at the beginning of that stage, not camera pitch.
 Do not convert 'ascend TO 12m altitude' into 'ascend BY 12m'; absolute position/altitude is unsupported.
-Rotation magnitude must be at most 180 degrees. Reject multi-turn rotations and vague moves.
+Preserve the requested numeric rotation, including full turns. Reject vague moves.
 Road following, orbit, moving-target following, and passage traversal are not basic_motion.
 Use another allowed kind only if its rules explicitly support the action; otherwise reject the whole mission.
 Sequential actions ('move then turn') require separate stages. Explicit simultaneous actions may share
@@ -29,8 +29,6 @@ def decode_basic_motion(raw: dict[str, object]) -> BasicMotionParameters:
     if set(raw) != allowed:
         raise ProtocolError("basic motion requires instruction and all four numeric components")
     try:
-        parsed = BasicMotionParameters(**raw)
-        parsed.validate_limits(float("inf"), 180.0)
-        return parsed
+        return BasicMotionParameters(**raw)
     except (ValueError, TypeError) as exc:
         raise ProtocolError(f"invalid basic motion parameters: {exc}") from exc
