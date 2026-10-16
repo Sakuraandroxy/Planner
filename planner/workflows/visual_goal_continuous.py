@@ -3,10 +3,11 @@ from functools import partial
 import math
 
 from planner.capabilities.targeting.visual_goal_refresh import VisualGoalRefresh
+from planner.capabilities.targeting.association import remembered_geometry, remembered_goal
 from planner.domain.streaming import QueueObservationAnchor
 from planner.domain.trajectory import MotionSegment, MotionTrajectory
 from planner.domain.visual_goal import GoalVisibility, VisualGoalPlanningContext, VisualGoalState, VisualGoalStatus
-from planner.errors import ProtocolError, ExecutionError, ModelCallTimeout
+from planner.errors import ProtocolError, ExecutionError, ObservationError
 from planner.services.continuous_execution import ContinuousExecution
 from planner.services.moving_observations import MovingObservations
 from planner.services.observation_snapshot import freeze_observation, freeze_reference
@@ -17,14 +18,16 @@ from .termination.visual_goal_navigation import VisualGoalFailure
 
 class VisualGoalContinuous:
     def __init__(self, execution, moving_source, limits, motion_limits, speed_mps, observer, geometry,
-                 completion, flight, capture_stopped, search, clock, sleep, event, waypoint_timeout_s=60.):
+                 completion, flight, capture_stopped, search, clock, sleep, event, waypoint_timeout_s=60., *,
+                 target_updates=None):
         self.execution, self.limits, self.completion = execution, limits, completion
         self.flight, self.capture_stopped, self.search = flight, capture_stopped, search
         self.clock, self.sleep, self.event = clock, sleep, event
         self.stream = ContinuousExecution(execution, execution.vehicle, motion_limits, speed_mps, clock, waypoint_timeout_s)
         self.frames = MovingObservations(moving_source, clock, limits.model_request_timeout_s,
                                          limits.maximum_anchor_refresh_failures+1)
-        self.targets = VisualGoalRefresh(observer, geometry, limits, clock, event)
+        self.targets = target_updates if target_updates is not None else VisualGoalRefresh(observer, geometry, limits, clock, event)
+        self.owns_targets = target_updates is None
 
     def prepare(self):
         if not all(callable(getattr(self.execution.vehicle, name, None))
@@ -38,7 +41,8 @@ class VisualGoalContinuous:
 
     def close(self):
         self.frames.close()
-        self.targets.close()
+        if self.owns_targets:
+            self.targets.close()
 
     def _observe_stopped(self, parameters, session, trace):
         observation = self.capture_stopped(session)
@@ -72,45 +76,29 @@ class VisualGoalContinuous:
         session.path_length_m = self.stream.path_length_m
 
     def _pause_reason(self, session, pose):
-        if self.targets.failures >= self.limits.maximum_unreliable_observations:
-            return 'target_identity_uncertain'
         if session.trigger.should_pause(pose):
             return session.trigger.last_reason
         return None
-
-    def _settle_completed_calls(self, session):
-        # Success must be ready for Mission's immediate next stage. Discarded
-        # HTTP/read work cannot be killed, so drain it while already hovering,
-        # within both the stage and model budget. No late result is collected.
-        deadline = min(session.budget.deadline_monotonic, self.clock()+self.limits.model_request_timeout_s)
-        while self.has_pending_calls() or session.window.worker.has_pending_call:
-            self.execution.checkpoint()
-            session.require_time(self.clock)
-            if self.clock() >= deadline:
-                raise ModelCallTimeout('completed stage still has quarantined I/O; handover timed out')
-            self.sleep(.01)
 
     def _check_pause(self, parameters, session, trace):
         window = session.window
         window.background.discard()
         self.frames.discard()
-        # Drain target I/O while hovering before using the same detector for
-        # fresh stopped evidence. It has no right to replace the paused queue.
-        while self.targets.job.busy or self.targets.job.future is not None:
-            session.require_time(self.clock)
-            self.execution.checkpoint()
-            self.targets.poll(session, trace)
-            self.sleep(.01)
+        self.targets.job.discard()
+        memory = session.target_memory  # one immutable estimate for this entire check
         session.confirmations = 0
         while True:
-            observation = self._observe_stopped(parameters, session, trace)
-            if observation is None:
+            observation = self.capture_stopped(session)
+            if not session.fresh(observation):
+                session.policy.unreliable_observation()
                 continue
             self.stream.sample()
             self._sync_remaining(session)
-            goal, geometry = self.targets.goal, session.geometry
+            goal = remembered_goal(parameters.target_description)
+            geometry = remembered_geometry(memory, observation.vehicle_pose)
+            session.geometry = geometry
             if not self.completion.candidate(parameters, observation, goal, geometry, session.initial,
-                                             radius_m=self.flight.trigger_rules.radius_m):
+                                             radius_m=self.flight.trigger_rules.radius_m, target_memory=memory):
                 session.trigger.checked_at(observation.vehicle_pose)
                 self.stream.resume()
                 return observation, False
@@ -119,7 +107,7 @@ class VisualGoalContinuous:
             if session.confirmations < self.limits.confirmation_count:
                 self.sleep(self.limits.confirmation_interval_s)
                 continue
-            verdict = self.flight.verify(parameters, observation, goal, session, trace)
+            verdict = self.flight.verify(parameters, observation, goal, session, trace, target_memory=memory)
             if verdict is None:
                 session.confirmations = 0
                 continue
@@ -129,14 +117,14 @@ class VisualGoalContinuous:
                 session.completion_confirmed = True
                 session.pending_motion = MotionTrajectory(())
                 window.complete()
-                self._settle_completed_calls(session)
                 return observation, True
             self.stream.resume()
             return observation, False
 
     def _submit(self, observation, parameters, session, trace):
         window = session.window
-        if self.targets.latest.captured_monotonic > observation.captured_monotonic:
+        memory = session.target_memory
+        if memory.captured_monotonic > observation.captured_monotonic:
             return False
         try:
             anchor = self.stream.timeline.at(observation.timestamp_ns, window.background.stage_token)
@@ -148,11 +136,12 @@ class VisualGoalContinuous:
             window.queue.require_anchor(self.stream.state.pose, observation.vehicle_pose)
             anchor = QueueObservationAnchor(window.background.stage_token, window.queue.revision,
                                             observation.timestamp_ns, ())
-        context = VisualGoalPlanningContext(parameters.target_description, self.targets.goal, session.geometry,
+        geometry = remembered_geometry(memory, observation.vehicle_pose)
+        context = VisualGoalPlanningContext(parameters.target_description, remembered_goal(parameters.target_description), geometry,
             VisualGoalState.APPROACHING, self.flight.trigger_rules.radius_m,
             self.limits.distance_uncertainty_margin_m, self.limits.maximum_vertical_offset_m,
-            observation.capture_id == self.targets.latest.capture_id,
-            self.targets.latest.capture_id, self.targets.latest.captured_monotonic, parameters.keep_target_in_view)
+            observation.capture_id == memory.capture_id,
+            memory.capture_id, memory.captured_monotonic, parameters.keep_target_in_view)
         previous_submit = window.last_stream_submit
         try:
             submitted = window.submit_stream(observation, context, parameters.instruction, session.window_input(),
@@ -189,7 +178,6 @@ class VisualGoalContinuous:
         self.stream.begin(session.window.queue, session.window.background.stage_token)
         used_capture = None
         queue_was_empty = True
-        progress_capture, progress_length = observation.capture_id, 0.0
         try:
             while True:
                 tick_started = self.clock()
@@ -199,13 +187,14 @@ class VisualGoalContinuous:
                 window.record = self.stream.record
                 frame = self.frames.poll()
                 if frame is not None:
+                    try:
+                        self.targets.geometry.validate(frame)
+                    except (ValueError, TypeError) as exc:
+                        raise ObservationError('moving RGB/depth geometry is invalid') from exc
                     observation = frame
                     self.event(trace, 'capture_finished', capture_id=frame.capture_id, timestamp_ns=frame.timestamp_ns)
                     self.targets.submit(frame, parameters, session, trace)
                 self.targets.poll(session, trace)
-                if self.targets.latest.capture_id != progress_capture and self.stream.path_length_m-progress_length >= .2:
-                    session.policy.record_progress(session.geometry.distance_m)
-                    progress_capture, progress_length = self.targets.latest.capture_id, self.stream.path_length_m
                 result = window.poll_stream(self.stream.state.pose, lambda: self.execution.checkpoint())
                 if result is not None:
                     self.event(trace, result[0], request_id=result[1], detail=result[2],
@@ -221,7 +210,7 @@ class VisualGoalContinuous:
                     observation, completed = self._check_pause(parameters, session, trace)
                     used_capture = None
                     if completed:
-                        return VisualGoalStatus.REACHED, 'semantic completion confirmed after stopped bbox-center measurements'
+                        return VisualGoalStatus.REACHED, 'semantic completion confirmed with remembered target and stopped observations'
                 empty = not window.queue.items
                 if empty and not queue_was_empty:
                     self.event(trace, 'queue_exhausted', request_inflight=window.background.job is not None)

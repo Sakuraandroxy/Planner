@@ -72,7 +72,8 @@ def test_relative_target_rotates_into_predicted_pending_tail_frame_and_omits_bbo
     pending = RelativeTrajectory((RelativePoseDelta(2, 0, 0, 90),))
     text = VisualGoalTrajectoryPrompt().build_user_prompt('approach', obs, 5,
         task_context=context(), pending_trajectory=pending)
-    payload = json.loads(text.split('Visual goal context (estimated evidence, not target ground truth):\n')[1])
+    context_text = text.split('Visual goal context (estimated evidence, not target ground truth):\n', 1)[1]
+    payload = json.loads(context_text.splitlines()[0])
     assert payload['target_relative_to_observation_body_m'] == [6., 0., 0.]
     assert payload['target_relative_to_pending_tail_body_m'] == pytest.approx([0, -4, 0])
     assert payload['new_actions_reference'] == 'pending_tail'

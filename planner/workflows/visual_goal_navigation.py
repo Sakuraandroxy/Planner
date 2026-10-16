@@ -2,13 +2,15 @@
 import logging
 import math
 import time
+import threading
 from typing import Callable
 from functools import partial
 from dataclasses import replace
 
 import numpy as np
 
-from planner.capabilities.targeting.association import make_reference
+from planner.capabilities.targeting.association import remembered_geometry, remembered_goal
+from planner.capabilities.targeting.visual_goal_refresh import VisualGoalRefresh
 from planner.domain.execution import ExecutionBudget, StopResult
 from planner.domain.sliding_window import SlidingWindowSettings
 from planner.domain.motion import MotionLimits
@@ -17,7 +19,7 @@ from planner.domain.result import StageResult, StageSummary, CompletionBasis, Re
 from planner.domain.trajectory import RelativeTrajectory
 from planner.domain.trajectory import MotionTrajectory
 from planner.domain.visual_goal_completion import (
-    VisualGoalTriggerRules, VisualGoalTargetSnapshot, VisualGoalCompletionInput,
+    VisualGoalTriggerRules, VisualGoalCompletionInput,
 )
 from planner.capabilities.completion.visual_goal_trigger import VisualGoalRadiusTrigger
 from planner.capabilities.completion.visual_goal_verification import VisualGoalVerification
@@ -42,7 +44,7 @@ from planner.ports.task_trace import TaskTrace
 from planner.services.trajectory_transform import relative_to_world
 from planner.services.model_calls import ModelCallService
 from planner.services.resource_cleanup import close_resources
-from planner.services.observation_snapshot import freeze_observation, freeze_reference
+from planner.services.observation_snapshot import freeze_observation
 from .termination.visual_goal_navigation import SearchPolicy, VisualGoalExitPolicy, VisualGoalFailure
 from .visual_goal_session import VisualGoalSession, model_call
 from .visual_goal_flight import VisualGoalFlightPhase
@@ -74,6 +76,7 @@ class VisualGoalNavigationWorkflow:
         self.trace_factory, self.clock, self.sleep = trace_factory, clock, sleep
         self.trigger_rules = trigger_rules
         self.model_calls = ModelCallService(clock)
+        self.target_updates = VisualGoalRefresh(goal_observer, geometry, limits, clock, self._event)
         self._closed = False
         self.window = (PlanningWindow(trajectory_planner, validator, sliding_window, motion_limits, clock)
                        if sliding_window.enabled else None)
@@ -89,12 +92,15 @@ class VisualGoalNavigationWorkflow:
             from .visual_goal_continuous import VisualGoalContinuous
             self.continuous = VisualGoalContinuous(execution, moving_observation_source, limits,
                 motion_limits, stream_speed_mps, goal_observer, geometry, completion, self.flight,
-                self._capture, self._search, clock, sleep, self._event, stream_waypoint_timeout_s)
+                self._capture, self._search, clock, sleep, self._event, stream_waypoint_timeout_s,
+                target_updates=self.target_updates)
 
     def prepare(self) -> None:
         if self._closed:
             raise ExecutionError("visual goal workflow is closed")
         self.model_calls.require_available()
+        if self.target_updates.job.busy:
+            raise ExecutionError('previous target request is still quarantined')
         if self.verification is None:
             raise ProtocolError("visual-goal navigation requires an independent completion checker")
         self.verification.calls.require_available()
@@ -122,6 +128,8 @@ class VisualGoalNavigationWorkflow:
                 self.window.begin(deadline_monotonic=session.budget.deadline_monotonic,
                                   maximum_planning_rounds=session.policy.limits.maximum_planning_rounds)
             session.stage_id = stage.stage_id
+            if self.continuous is None:
+                self.target_updates.begin()
             session.trigger = VisualGoalRadiusTrigger(self.trigger_rules, self.limits.maximum_observation_age_s, self.clock)
             parameters = stage.parameters
             if not isinstance(parameters, VisualGoalNavigationParameters):
@@ -133,6 +141,7 @@ class VisualGoalNavigationWorkflow:
                             arrival_radius_m=self.trigger_rules.radius_m,
                             collision_check_enabled=self.collision_check is not None)
             status, reason = self._run(parameters, session, trace)
+            self._settle_completed_calls(session)
             stop = StopResult(True)  # Last observation verified stopped, with no intervening motion.
         except (Exception, KeyboardInterrupt) as exc:
             if isinstance(exc, VisualGoalFailure):
@@ -160,12 +169,18 @@ class VisualGoalNavigationWorkflow:
                 if session.window is not None:
                     session.window.end()
                 self.execution.release_flight(self, self.has_pending_calls)
-        distance = session.geometry.distance_m if session.geometry else None
+        distance = None
+        if session.target_memory is not None:
+            try:
+                session.geometry = remembered_geometry(session.target_memory, self.execution.current_pose())
+                distance = session.geometry.distance_m
+            except Exception:
+                self._event(trace, 'final_distance_unavailable', reason='final pose could not be sampled')
         result = VisualGoalNavigationResult(status, reason, distance, session.policy.planning_calls,
                                             self.clock()-started, session.path_length_m,
                                             session.confirmations, stop,
                                             run_directory=str(trace.path) if trace else None,
-                                            evidence_source="model assessment with local depth/association/stopped checks",
+                                            evidence_source="model assessment with stage target memory and stopped pose checks",
                                             completion_checks=session.completion_checks,
                                             completion_confirmed=session.completion_confirmed,
                                             remaining_motion=session.pending_motion)
@@ -201,6 +216,16 @@ class VisualGoalNavigationWorkflow:
                 raise VisualGoalFailure(VisualGoalStatus.BLOCKED, "camera is outside level-view pitch envelope")
         return observation
 
+    def _settle_completed_calls(self, session):
+        deadline = min(session.budget.deadline_monotonic, self.clock()+self.limits.model_request_timeout_s)
+        while self.has_pending_calls():
+            self.execution.checkpoint()
+            session.require_time(self.clock)
+            if self.clock() >= deadline:
+                raise ModelCallTimeout('completed stage still has quarantined I/O; handover timed out')
+            self.sleep(.01)
+            threading.Event().wait(.001)
+
     def _run(self, parameters, session, trace):
         if self.continuous is not None:
             return self.continuous.run(parameters, session, trace)
@@ -214,50 +239,40 @@ class VisualGoalNavigationWorkflow:
                 session.policy.unreliable_observation()
                 self._wait(self.limits.confirmation_interval_s, session)
                 continue
-            operation = partial(self.goal_observer.observe, freeze_observation(observation),
-                parameters.target_description, freeze_reference(session.reference),
-                initial_pose=session.initial, budget=session.budget, instruction=parameters.instruction)
-            observed_goal = model_call(operation, session, self.limits, clock=self.clock)
-            if trace:
-                trace.observation(observation, observed_goal)
+            if session.target_memory is None:
+                operation = partial(self.goal_observer.observe, freeze_observation(observation),
+                    parameters.target_description, None, initial_pose=session.initial,
+                    budget=session.budget, instruction=parameters.instruction)
+                observed_goal = model_call(operation, session, self.limits, clock=self.clock)
+                if not session.policy.anchor_valid(observation, self.execution.current_pose(), self.clock()):
+                    continue
+                if observed_goal.status is GoalVisibility.NOT_VISIBLE:
+                    self._event(trace, 'state', state=VisualGoalState.SEARCHING)
+                    self._search(observation, parameters, session, trace)
+                    continue
+                if not self.target_updates.accept(observation, observed_goal, session, trace):
+                    session.policy.unreliable_observation(ambiguous=observed_goal.status is GoalVisibility.AMBIGUOUS)
+                    continue
+            else:
+                distance = remembered_geometry(session.target_memory, observation.vehicle_pose).distance_m
+                if distance > self.trigger_rules.radius_m and session.confirmations == 0:
+                    self.target_updates.observe_stopped(observation, parameters, session, trace,
+                        lambda: self.approach.checkpoint(session), self.sleep)
             if not session.policy.anchor_valid(observation, self.execution.current_pose(), self.clock()):
                 session.confirmations = 0
                 continue
-            if observed_goal.status is GoalVisibility.NOT_VISIBLE:
-                self._event(trace, "state", state=VisualGoalState.SEARCHING)
-                session.confirmations = 0
-                self._search(observation, parameters, session, trace)
-                continue
-            if observed_goal.status is GoalVisibility.AMBIGUOUS:
-                session.confirmations = 0
-                session.policy.unreliable_observation(ambiguous=True)
-                continue
-            goal = observed_goal
-            geometry = self.geometry.estimate(observation, goal)
+            goal = remembered_goal(parameters.target_description)
+            geometry = remembered_geometry(session.target_memory, observation.vehicle_pose)
             session.geometry = geometry
-            self._event(trace, "target_geometry", geometry=geometry, point_source="current_bbox_center")
-            if trace:
-                trace.target_geometry(observation, goal, geometry)
-            if not geometry.reliable or not goal.same_target:
-                session.confirmations = 0
-                session.policy.unreliable_observation()
-                continue
+            self._event(trace, 'target_memory_used', geometry=geometry,
+                position_capture_id=session.target_capture_id,
+                position_age_s=self.clock()-session.target_captured_monotonic)
             session.policy.unreliable = 0
-            session.target_capture_id = observation.capture_id
-            session.target_captured_monotonic = observation.captured_monotonic
-            session.search.found()
-            if session.reference is None:
-                session.reference = make_reference(observation, goal, geometry)
-            else:
-                # Preserve initial appearance; refresh only the latest position estimate.
-                session.reference = replace(session.reference, world_point=geometry.world_point)
-            session.trigger.update(VisualGoalTargetSnapshot(session.stage_id, geometry.world_point,
-                                                           observation.captured_monotonic))
             if session.trigger.last_pause_pose is None and geometry.distance_m <= self.trigger_rules.radius_m:
                 session.trigger.checked_at(observation.vehicle_pose)
             if (geometry.distance_m <= self.trigger_rules.radius_m and
                     self.completion.candidate(parameters, observation, goal, geometry, session.initial,
-                                              radius_m=self.trigger_rules.radius_m)):
+                                              radius_m=self.trigger_rules.radius_m, target_memory=session.target_memory)):
                 if session.window is not None:
                     session.window.pause_for_completion(lambda: self.approach.checkpoint(session))
                 if self.clock()-session.last_confirmation >= self.limits.confirmation_interval_s:
@@ -276,23 +291,19 @@ class VisualGoalNavigationWorkflow:
                         if session.window is not None:
                             session.window.complete()
                         session.completion_confirmed = True
-                        return VisualGoalStatus.REACHED, "semantic completion confirmed after stopped bbox-center measurements"
+                        return VisualGoalStatus.REACHED, "semantic completion confirmed with remembered target and stopped observations"
                     session.trigger.checked_at(observation.vehicle_pose)
                 else:
                     self._wait(self.limits.confirmation_interval_s, session)
                     continue
             session.confirmations = 0
-            # Only post-execution approach rounds count toward distance progress.
-            if session.translation_pending_progress:
-                session.policy.record_progress(geometry.distance_m)
-                session.translation_pending_progress = False
             if session.pending_motion.segments:
                 self.flight.resume(observation, parameters, session, trace,
                     prefetch=lambda: self.approach.prefetch(observation, goal, parameters, session))
                 continue
             context = VisualGoalPlanningContext(parameters.target_description, goal, geometry,
                 VisualGoalState.APPROACHING, self.trigger_rules.radius_m, self.limits.distance_uncertainty_margin_m,
-                self.limits.maximum_vertical_offset_m, True, session.target_capture_id,
+                self.limits.maximum_vertical_offset_m, observation.capture_id == session.target_capture_id, session.target_capture_id,
                 session.target_captured_monotonic, parameters.keep_target_in_view)
             self._event(trace, "state", state=VisualGoalState.APPROACHING)
             self.approach.run(observation, context, parameters, session, trace)
@@ -301,7 +312,7 @@ class VisualGoalNavigationWorkflow:
         if self._closed:
             return
         self._closed = True
-        callbacks = [self.model_calls.close]
+        callbacks = [self.model_calls.close, self.target_updates.close]
         if self.continuous is not None:
             callbacks.append(self.continuous.close)
         if self.window is not None:
@@ -312,6 +323,7 @@ class VisualGoalNavigationWorkflow:
 
     def has_pending_calls(self):
         return (self.model_calls.has_pending_call or
+                self.target_updates.job.busy or
                 (self.continuous is not None and self.continuous.has_pending_calls()) or
                 (self.window is not None and self.window.worker.has_pending_call) or
                 (self.verification is not None and self.verification.calls.has_pending_call))

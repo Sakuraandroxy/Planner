@@ -6,6 +6,7 @@ import math
 from .observation import Observation
 from .pose import WorldPose
 from .visual_goal import GoalGeometry, GoalObservation, VisualGoalNavigationParameters
+from .target_memory import TargetPositionMemory
 
 
 @dataclass(frozen=True)
@@ -16,7 +17,7 @@ class VisualGoalTriggerRules:
     maximum_completion_checks: int = 10
     required_conditions: tuple[str, ...] = (
         "目标身份与原始任务一致，通过当前图像与参考图确认同一目标。",
-        "本地框中心测距满足半径上限、已配置高度边界及稳定观测确认条件。",
+        "到本阶段记忆目标估计点的距离满足半径上限、已配置高度边界及稳定观测条件；当前图像仍需确认原目标及任务要求。",
         "原始任务明确要求的其他观察条件已经满足；不得自行添加要求。",
     )
 
@@ -38,8 +39,11 @@ class VisualGoalTargetSnapshot:
     stage_id: str
     position_world: tuple[float, float, float]
     captured_monotonic: float
+    stage_memory: bool = False
 
     def __post_init__(self):
+        if type(self.stage_memory) is not bool:
+            raise ValueError('stage_memory must be boolean')
         if not self.stage_id or len(self.position_world) != 3 or not all(math.isfinite(x) for x in self.position_world):
             raise ValueError("invalid visual goal target snapshot")
         if not math.isfinite(self.captured_monotonic) or self.captured_monotonic <= 0:
@@ -61,4 +65,5 @@ class VisualGoalCompletionInput:
     required_confirmation_count: int
     reference_description: str
     reference_rgb: Any = None
+    target_memory: TargetPositionMemory | None = None
 

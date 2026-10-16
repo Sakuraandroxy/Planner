@@ -50,7 +50,7 @@ class GoalObservation:
 
 @dataclass(frozen=True)
 class GoalGeometry:
-    """Validity of one calibrated depth estimate, without scene/neighborhood audit."""
+    """Accepted coordinate evidence; the reason distinguishes memory from fresh depth."""
     reliable: bool
     reason: str
     distance_m: float | None = None
@@ -59,7 +59,7 @@ class GoalGeometry:
 
 @dataclass(frozen=True)
 class GoalReference:
-    """Initial appearance reference plus the latest observed bbox-center position."""
+    """Immutable initial appearance and position anchor, never the latest estimate."""
     description: str
     crop: Any
     world_point: tuple[float, float, float]

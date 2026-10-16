@@ -77,9 +77,12 @@ def continuous_setup(target_x=30, answers=(True,)):
     workflow.verification = VisualGoalVerification(CompletionChecker(answers), clock)
     workflow.flight.verification = workflow.verification
     workflow.window = PlanningWindow(planner, workflow.validator, SlidingWindowSettings(enabled=True), MotionLimits(), clock)
+    def sleep(seconds):
+        clock.sleep(seconds)
+        time.sleep(.0001)  # Let data-only workers run even while the queue is empty.
     workflow.continuous = VisualGoalContinuous(workflow.execution, source, workflow.limits, MotionLimits(), 2.,
         observer, workflow.geometry, workflow.completion, workflow.flight, workflow._capture,
-        workflow._search, clock, clock.sleep, workflow._event)
+        workflow._search, clock, sleep, workflow._event)
     trace = Trace()
     workflow.trace_factory = lambda: trace
     return workflow, stage, vehicle, planner, trace, clock

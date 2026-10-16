@@ -14,6 +14,7 @@ from planner.domain.planning_window import PlanningWindowInput
 from planner.domain.visual_goal import VisualGoalPlanningContext
 from planner.services.model_calls import ModelCallService
 from typing import Callable
+from planner.domain.target_memory import TargetPositionMemory
 
 
 @dataclass
@@ -30,7 +31,6 @@ class VisualGoalSession:
     window: PlanningWindow[VisualGoalPlanningContext] | None = None
     paused_for_completion: bool = False
     path_length_m: float = 0.0
-    translation_pending_progress: bool = False
     confirmations: int = 0
     last_confirmation: float = -float("inf")
     last_timestamp_ns: int = 0
@@ -43,8 +43,15 @@ class VisualGoalSession:
     completion_confirmed: bool = False
     model_calls: ModelCallService | None = None
     checkpoint: Callable[[], None] | None = None
-    target_capture_id: str = ""
-    target_captured_monotonic: float | None = None
+    target_memory: TargetPositionMemory | None = None
+
+    @property
+    def target_capture_id(self):
+        return self.target_memory.capture_id if self.target_memory else ''
+
+    @property
+    def target_captured_monotonic(self):
+        return self.target_memory.captured_monotonic if self.target_memory else None
 
     def window_input(self) -> PlanningWindowInput:
         if self.initial is None:

@@ -19,7 +19,8 @@ from tests.integration.test_visual_goal_radius_pause import Trace
 
 @pytest.mark.parametrize("sliding",[False,True])
 def test_all_five_points_execute_beyond_old_distance_time_and_view_limits(sliding):
-    workflow,stage,source,_,planner,_,clock=setup(target_x=7.5)
+    workflow,stage,source,_,planner,_,clock=setup(target_x=7.5,
+        limits=replace(VisualGoalLimits(),maximum_planning_rounds=1))
     class TimedVehicle(FakeVehicle):
         def execute_segment(self,segment,**kwargs):
             clock.sleep(segment.duration_s)
@@ -32,12 +33,12 @@ def test_all_five_points_execute_beyond_old_distance_time_and_view_limits(slidin
     if sliding: enable_window(workflow)
     try:
         result=workflow.run(stage)
-        assert result.success,result.error
+        assert result.value.status is VisualGoalStatus.TIMEOUT  # It executes the route, which misses the locked target.
         assert len(vehicle.segments)==5
         assert vehicle.pose.x==pytest.approx(3) and vehicle.pose.y==pytest.approx(15)
         assert sum(segment.duration_s for segment in vehicle.segments)>8
         assert result.value.path_length_m>6
-        assert result.value.completion_confirmed and not result.value.remaining_motion.segments
+        assert not result.value.completion_confirmed and not result.value.remaining_motion.segments
         plans=[data for name,data in trace.events if name=="plan"]
         assert len(plans)==1 and len(plans[0]["motion"].segments)==5
         assert plans[0]["execution_policy"]=="direct_model_trajectory"
@@ -62,13 +63,12 @@ def test_large_heading_changes_do_not_discard_later_valid_points(sliding):
         workflow.close()
 
 
-def test_each_observation_refreshes_center_position_while_preserving_initial_appearance():
+def test_changed_depth_after_binding_does_not_replace_memory_for_completion():
     workflow,stage,source,_,planner,vehicle,clock=setup(target_x=6)
     detector=Mock()
     detector.detect.return_value=parse_target_detection(detection_json())
     workflow.goal_observer=BBoxGoalObserver(detector,20,clock)
-    # First stop is close enough to trigger checks; the current center then moves
-    # by > the former association gate. This must not reject the same model target.
+    # Later center depth changes by 2m; memory stays at the first static point.
     capture=source.capture
     def current_capture(**kwargs):
         if source.captures>=1: source.target_x=4
@@ -82,7 +82,8 @@ def test_each_observation_refreshes_center_position_while_preserving_initial_app
         assert requests[0].reference_rgb is None
         assert all(request.reference_rgb is not None for request in requests[1:])
         completion=workflow.verification.checker.calls[-1]
-        assert completion.geometry.world_point[0]==pytest.approx(4,abs=.01)
-        assert result.value.final_distance_m==pytest.approx(2,abs=.01)
+        assert completion.geometry.world_point[0]==pytest.approx(6,abs=.01)
+        assert completion.target_memory.anchor_world_point[0]==pytest.approx(6,abs=.01)
+        assert result.value.final_distance_m==pytest.approx(4,abs=.01)
     finally:
         workflow.close()

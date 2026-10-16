@@ -21,6 +21,13 @@ def visual_goal_config(raw, *, completion_rules=None):
     names = {f.name for f in fields(VisualGoalConfig)} - {"completion_rules"}
     if set(raw) - names:
         raise ValueError(f"unknown visual-goal configuration: {sorted(set(raw)-names)}")
+    limits = raw.get('limits', {})
+    if not isinstance(limits, dict):
+        raise ValueError('visual-goal limits must be a mapping')
+    if 'maximum_target_position_jump_m' in limits:
+        raise ValueError('replace maximum_target_position_jump_m with target_position_update_radius_m (relative to first target anchor)')
+    if 'target_center_margin' in limits:
+        raise ValueError('remove target_center_margin: current target visibility is evaluated by completion model')
     options = {k: v for k, v in raw.items() if k != "limits"}
     for key in ("enabled", "geometry_verified", "collision_check_enabled"):
         if key in options and not isinstance(options[key], bool):

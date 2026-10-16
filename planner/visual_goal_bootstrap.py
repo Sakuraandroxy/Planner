@@ -33,7 +33,7 @@ def build_visual_goal_workflow(config, observation, motion, execution, validator
         trace = VisualGoalTrace(settings.output_root)
         trace.event("runtime_configuration", goal_model=observer.model, trajectory_model=backend.model,
                     waypoint_fields=("dx", "dy", "dz", "dyaw_deg"), goal_protocol="normalized_bbox_corners_v1",
-                    target_point_source="current_bbox_center", execution_policy="direct_model_trajectory",
+                    target_point_source="first_anchor_bounded_target_memory", execution_policy="direct_model_trajectory",
                     motion_limits=config.motion.limits, speed_mps=config.airsim.speed_mps,
                     depth_range=(config.depth.min_m, config.depth.max_m),
                     depth_horizontal_fov_deg=config.airsim.depth_horizontal_fov_deg,
@@ -41,6 +41,7 @@ def build_visual_goal_workflow(config, observation, motion, execution, validator
                     planning_interval_s=config.sliding_window.planning_interval_s,
                     max_buffer_points=config.sliding_window.max_buffer_points,
                     target_refresh_interval_s=limits.target_refresh_interval_s,
+                    target_position_update_radius_m=limits.target_position_update_radius_m,
                     camera_mount_position_body_m=config.airsim.camera_mount_position_body_m,
                     camera_mount_rpy_deg=config.airsim.camera_mount_rpy_deg,
                     target_depth_sampling_mode="direct_pixel")

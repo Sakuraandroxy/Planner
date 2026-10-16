@@ -53,8 +53,10 @@ def test_direct_depth_keeps_pending_after_false_and_clears_only_on_true(sliding)
 
 
 @pytest.mark.parametrize("sliding", [False, True])
-def test_invalid_depth_after_pause_never_completes_or_deletes_pending(sliding):
+def test_false_completion_with_missing_current_target_depth_preserves_pending(sliding):
     workflow, stage, source, _, vehicle, checker, _ = workflow_with_direct_depth(sliding)
+    rules = replace(workflow.trigger_rules, maximum_completion_checks=1)
+    workflow.trigger_rules = workflow.flight.trigger_rules = rules
     capture = source.capture
 
     def invalid_after_first(*args, **kwargs):
@@ -68,7 +70,8 @@ def test_invalid_depth_after_pause_never_completes_or_deletes_pending(sliding):
         result = workflow.run(stage)
         assert not result.success and not result.value.completion_confirmed
         assert result.value.remaining_motion.segments
-        assert vehicle.hovered and not checker.calls
+        assert vehicle.hovered and len(checker.calls) == 1
+        assert checker.calls[0].target_memory is not None and checker.calls[0].goal.bbox is None
         if sliding:
             assert workflow.window.queue.items
     finally:

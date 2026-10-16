@@ -61,5 +61,7 @@ def test_wrong_car_position_does_not_replace_bound_target_or_its_refresh_time():
         assert session.reference is reference
         assert session.trigger.snapshot.captured_monotonic==timestamp
         assert tracker.failures==1
-        assert any(n=='target_identity_uncertain' for n,d in trace.events)
+        assert any(n=='target_update_rejected' and d['reason']=='outside_initial_target_update_radius'
+                   for n,d in trace.events)
+        assert session.target_memory.world_point == reference.world_point
     finally:tracker.close();w.close()

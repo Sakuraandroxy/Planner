@@ -105,7 +105,7 @@ def test_invalid_completion_preserves_remaining_points_and_fails_stopped():
     assert not any(name == "completion_confirmed" for name, _ in trace.events)
 
 
-def test_target_loss_after_pause_keeps_pending_suspended():
+def test_completion_uses_current_images_and_memory_without_another_detection():
     from tests.fakes.visual_goal import INVISIBLE, goal_observation
     workflow, stage, source, planner, vehicle, checker, trace = partial_setup()
     observe = workflow.goal_observer.observe
@@ -113,9 +113,11 @@ def test_target_loss_after_pause_keeps_pending_suspended():
         return goal_observation(INVISIBLE) if source.captures > 1 else observe(*args, **kwargs)
     workflow.goal_observer.observe = lost
     result = workflow.run(stage)
-    assert result.value.status is VisualGoalStatus.TARGET_LOST
-    assert result.value.remaining_motion.segments
-    assert len(vehicle.segments) == 1 and not checker.calls
+    assert result.success
+    assert not result.value.remaining_motion.segments
+    assert len(vehicle.segments) >= 1 and len(checker.calls) == 1
+    assert checker.calls[0].target_memory is not None
+    assert checker.calls[0].goal.bbox is None
 
 
 

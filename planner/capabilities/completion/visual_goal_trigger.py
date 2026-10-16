@@ -26,7 +26,7 @@ class VisualGoalRadiusTrigger:
     def should_pause(self, pose):
         snapshot = self.snapshot
         age = self.clock()-snapshot.captured_monotonic if snapshot else math.inf
-        if snapshot is None or not 0 <= age <= self.maximum_age_s:
+        if snapshot is None or age < 0 or (not snapshot.stage_memory and age > self.maximum_age_s):
             self.last_reason = "target_reference_expired"
             return True
         distance = math.dist((pose.x, pose.y, pose.z), snapshot.position_world)

@@ -88,9 +88,10 @@ def test_current_goal_workflow_uses_box_capability_and_clears_on_completion(slid
     try:
         result = workflow.run(stage)
         assert result.success, result.error
-        assert not old_observer.calls and detector.detect.call_count >= 2
+        assert not old_observer.calls and detector.detect.call_count == 1
         assert result.value.completion_confirmed and not result.value.remaining_motion.segments
         assert workflow.verification.checker.calls[-1].reference_rgb is not None
+        assert workflow.verification.checker.calls[-1].target_memory is not None
     finally:
         workflow.close()
 

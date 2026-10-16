@@ -20,16 +20,14 @@ class VisualGoalExitPolicy:
     planning_calls: int = 0
     unreliable: int = 0
     anchor_failures: int = 0
-    progress_distances: list[float] = field(default_factory=list)
     stalled_moves: int = 0
 
-    def record_motion(self, previous, current):
+    def record_motion(self, previous, current) -> None:
         translated = math.dist((previous.x, previous.y, previous.z), (current.x, current.y, current.z))
         yaw = abs(wrap_yaw_deg(current.yaw_deg-previous.yaw_deg))
         self.stalled_moves = self.stalled_moves+1 if translated < 0.2 and yaw < 2.0 else 0
         if self.stalled_moves >= 2:
             raise VisualGoalFailure(VisualGoalStatus.STUCK, "two executions produced no measured movement")
-        return translated
 
     def planning_call(self):
         if self.planning_calls >= self.limits.maximum_planning_rounds:
@@ -41,12 +39,6 @@ class VisualGoalExitPolicy:
         if self.unreliable >= self.limits.maximum_unreliable_observations:
             raise VisualGoalFailure(VisualGoalStatus.TARGET_AMBIGUOUS if ambiguous else
                                     VisualGoalStatus.PERCEPTION_UNRELIABLE, "target/depth evidence remains unreliable")
-
-    def record_progress(self, distance):
-        self.progress_distances.append(distance)
-        window = self.progress_distances[-self.limits.progress_window_rounds:]
-        if len(window) == self.limits.progress_window_rounds and window[0]-min(window[1:]) < self.limits.minimum_progress_m:
-            raise VisualGoalFailure(VisualGoalStatus.STUCK, "approach produced no reliable distance progress")
 
     def anchor_valid(self, observation, actual, now):
         original = observation.vehicle_pose

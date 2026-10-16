@@ -52,7 +52,8 @@ def test_approach_pauses_at_radius_then_confirms_arrival():
     assert planner.calls[0][2]["round_index"] == 1
     assert vehicle.pose.x == 2
     assert result.value.final_distance_m == pytest.approx(4, abs=0.01)
-    assert observer.calls[1][2] is not None
+    assert len(observer.calls) == 1  # Stopped completion uses the first reference, not another bbox.
+    assert workflow.verification.checker.calls[0].target_memory.world_point[0] == 6
 
 
 def test_replayed_timestamp_never_confirms_success():
@@ -75,8 +76,8 @@ def test_unknown_target_finite_search_without_translation():
 
 
 
-def test_search_after_target_loss_inside_radius_completes_scan_without_radius_pause():
-    limits = replace(VisualGoalLimits())
+def test_bound_memory_does_not_reselect_and_non_approaching_plans_exhaust_budget():
+    limits = replace(VisualGoalLimits(), maximum_planning_rounds=2)
     workflow, stage, source, observer, planner, vehicle, clock = setup(target_x=4.9, limits=limits)
     planner.points = (RelativePoseDelta(0, 0, 0, 5),) + (RelativePoseDelta(0, 0, 0, 0),)*4
     observe = observer.observe
@@ -85,12 +86,12 @@ def test_search_after_target_loss_inside_radius_completes_scan_without_radius_pa
     events = []
     workflow.flight._event = lambda trace, name, **data: events.append((name, data))
     result = workflow.run(stage)
-    assert result.value.status is VisualGoalStatus.TARGET_LOST
-    assert result.value.reason == "current search scan exhausted"
-    assert len(vehicle.segments) == 5 + limits.maximum_moves_per_search
-    assert not any(name == "radius_pause" for name, _ in events)
+    assert result.value.status is VisualGoalStatus.TIMEOUT
+    assert 10 <= len(vehicle.segments) <= 12  # A radius pause may split a retained turn.
+    assert all(abs(s.yaw_delta_deg)<=5 and s.end.x==s.end.y==0 for s in vehicle.segments)
     assert not result.value.remaining_motion.segments
-    assert result.value.completion_checks == 0 and len(planner.calls) == 1
+    assert result.value.completion_checks == 0 and len(planner.calls) == 2
+    assert len(observer.calls) == 1
 
 
 def test_ambiguous_and_identity_change_do_not_switch_target():

@@ -7,7 +7,6 @@ from .approach import ApproachSettings
 @dataclass(frozen=True)
 class VisualGoalLimits:
     distance_uncertainty_margin_m: float = 0.3
-    target_center_margin: float = 0.1
     confirmation_count: int = 2
     confirmation_interval_s: float = 0.5
     maximum_pitch_abs_deg: float = 5.0
@@ -22,15 +21,13 @@ class VisualGoalLimits:
     maximum_task_duration_s: float = 600.0
     model_request_timeout_s: float = 20.0
     model_retry_count: int = 1
-    progress_window_rounds: int = 4
-    minimum_progress_m: float = 0.5
     maximum_observation_age_s: float = 45.0
     maximum_anchor_translation_m: float = 0.3
     maximum_anchor_yaw_deg: float = 2.0
     maximum_anchor_refresh_failures: int = 2
     search_enabled: bool = True
     target_refresh_interval_s: float = 5.0
-    maximum_target_position_jump_m: float = 6.0
+    target_position_update_radius_m: float = 0.5
 
     def __post_init__(self):
         for field in fields(self):
@@ -50,12 +47,10 @@ class VisualGoalLimits:
                 raise ValueError(f"{field.name} must be finite numeric")
             if isinstance(field.default, int) and not isinstance(value, int):
                 raise ValueError(f"{field.name} must be an integer")
-            if value < 0 or (value == 0 and field.name not in {"model_retry_count"}):
+            if value < 0 or (value == 0 and field.name not in {"model_retry_count", "distance_uncertainty_margin_m"}):
                 raise ValueError(f"{field.name} must be positive")
-        if not 0 < self.target_center_margin < 0.5:
-            raise ValueError("target center margin must be between 0 and 0.5")
-        if self.confirmation_count < 2 or self.progress_window_rounds < 2:
-            raise ValueError("confirmation/progress require at least two observations")
+        if self.confirmation_count < 2:
+            raise ValueError("confirmation requires at least two observations")
         if not 0 < self.search_step_deg <= self.search_half_span_deg <= 90:
             raise ValueError("search range must be within +/-90 degrees")
         if self.search_half_span_deg / self.search_step_deg > 12:

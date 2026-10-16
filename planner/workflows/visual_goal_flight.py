@@ -1,5 +1,4 @@
 """Task-owned pause, semantic verification and retained-flight recovery phase."""
-import math
 from dataclasses import replace
 
 from planner.domain.execution import ExecutionReceipt
@@ -18,7 +17,7 @@ class VisualGoalFlightPhase:
         self.limits, self.trigger_rules, self.verification = limits, trigger_rules, verification
         self.clock, self._event = clock, event
 
-    def verify(self, parameters, observation, goal, session, trace):
+    def verify(self, parameters, observation, goal, session, trace, *, target_memory=None):
         if session.completion_checks >= self.trigger_rules.maximum_completion_checks:
             raise VisualGoalFailure(VisualGoalStatus.TIMEOUT, "completion check budget exhausted")
         session.completion_checks += 1
@@ -26,7 +25,8 @@ class VisualGoalFlightPhase:
             session.geometry, self.trigger_rules,
             self.limits.distance_uncertainty_margin_m, self.limits.maximum_vertical_offset_m,
             session.confirmations, self.limits.confirmation_count, session.reference.description,
-            reference_rgb=session.reference.crop)
+            reference_rgb=session.reference.crop,
+            target_memory=target_memory if target_memory is not None else session.target_memory)
 
         def checkpoint():
             session.require_time(self.clock)
@@ -41,7 +41,8 @@ class VisualGoalFlightPhase:
             return None
         self._event(trace, "completion_check", completed=verdict, check_count=session.completion_checks,
                     retained_points=len(session.pending_motion.segments), radius_m=self.trigger_rules.radius_m,
-                    measured_distance_m=session.geometry.distance_m)
+                    measured_distance_m=session.geometry.distance_m,
+                    distance_source='distance_to_stage_memory' if request.target_memory else 'current_depth')
         return verdict
 
     def resume(self, observation, parameters, session, trace, *, prefetch=None):
@@ -75,11 +76,9 @@ class VisualGoalFlightPhase:
             session.previous = RelativeTrajectory(receipt.measured_actions)
             session.previous_start = before
         session.policy.anchor_failures = 0
-        measured = (math.dist((before.x, before.y, before.z),
-                              (receipt.final_pose.x, receipt.final_pose.y, receipt.final_pose.z))
-                    if receipt.paused else session.policy.record_motion(before, receipt.final_pose))
+        if not receipt.paused:
+            session.policy.record_motion(before, receipt.final_pose)
         session.path_length_m += receipt.measured_chord_length_m
-        session.translation_pending_progress = measured >= 0.2
         self._event(trace, "executed", receipt=receipt, motion=motion)
         if receipt.paused:
             session.paused_for_completion = True

@@ -8,6 +8,7 @@ from planner.adapters.task_parser.prompt import task_parser_system_prompt
 from planner.adapters.task_parser.tasks.visual_goal_navigation import decode_visual_goal
 from planner.adapters.task_completion.prompts import VisualGoalCompletionPrompt
 from planner.capabilities.completion.visual_goal_request import require_visual_completion_evidence
+from planner.capabilities.completion.visual_goal import VisualGoalCompletion
 from planner.domain.mission import TaskKind
 from planner.domain.visual_goal import VisualGoalNavigationParameters
 from planner.domain.visual_goal_limits import VisualGoalLimits
@@ -74,6 +75,14 @@ def test_legacy_config_does_not_silently_reactivate_distance_band(tmp_path,legac
         load_config(write_config(tmp_path/"legacy.yaml",raw))
 
 
+@pytest.mark.parametrize("key,value", [("progress_window_rounds",4),("minimum_progress_m",.5)])
+def test_removed_distance_progress_settings_are_not_silently_accepted(tmp_path,key,value):
+    raw=main_config_data()
+    raw["visual_goal_navigation"]["limits"][key]=value
+    with pytest.raises(ConfigurationError,match=key):
+        load_config(write_config(tmp_path/"legacy_progress.yaml",raw))
+
+
 def test_workflow_configuration_has_one_radius_and_an_optional_height_boundary():
     config=load_config("config/base.yaml")
     assert config.visual_goal.completion_rules.radius_m==4
@@ -81,6 +90,28 @@ def test_workflow_configuration_has_one_radius_and_an_optional_height_boundary()
     assert limits.maximum_vertical_offset_m is None
     settings=limits.approach_settings(config.visual_goal.completion_rules.radius_m)
     assert settings.arrival_radius_m==4
-    assert settings.uncertainty_margin_m==pytest.approx(.3)
+    assert settings.uncertainty_margin_m==0
     with pytest.raises(ValueError):
-        limits.validate_arrival_radius(.3,200)
+        replace(limits,distance_uncertainty_margin_m=.3).validate_arrival_radius(.3,200)
+
+
+@pytest.mark.parametrize("distance,accepted", [(3.8,True),(4.0,True),(4.001,False)])
+def test_zero_margin_uses_same_distance_boundary_for_candidate_and_completion_request(distance,accepted):
+    limits=VisualGoalLimits(distance_uncertainty_margin_m=0)
+    original=request()
+    evidence=replace(original,uncertainty_margin_m=0,
+        geometry=replace(original.geometry,distance_m=distance))
+    candidate=VisualGoalCompletion(limits).candidate(evidence.parameters,evidence.observation,
+        evidence.goal,evidence.geometry,evidence.initial_pose,radius_m=4)
+    assert candidate is accepted
+    if accepted:
+        require_visual_completion_evidence(evidence)
+    else:
+        with pytest.raises(ProtocolError):
+            require_visual_completion_evidence(evidence)
+
+
+@pytest.mark.parametrize("margin", [-.1,True,float("nan"),float("inf")])
+def test_distance_margin_still_rejects_negative_or_non_numeric_values(margin):
+    with pytest.raises(ValueError):
+        VisualGoalLimits(distance_uncertainty_margin_m=margin)

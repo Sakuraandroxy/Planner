@@ -10,7 +10,7 @@ task_parser:
   # 发送给服务端的模型标识；可独立替换，不与其他角色共用模型选择。
   model: deepseek-flash
   # 此角色的本地密钥；对应环境变量非空时优先使用环境变量，不要提交真实密钥。
-  api_key: ""
+  api_key: no-key
   # 保存此角色密钥的环境变量名称；非空环境变量覆盖上面的api_key。
   api_key_env: TASK_PARSER_API_KEY
   # 该角色单次HTTP请求的配置超时，单位秒；实际调用还受工作流和阶段预算约束。
@@ -20,17 +20,33 @@ task_parser:
   # none关闭思考：deepseek格式转换为thinking.type=disabled；openai格式发送reasoning_effort=none。
   reasoning_effort: none
 # 轨迹规划模型：依据图像和任务输出5个新增增量航点，不负责目标检测或完成判断。
+# 原Qwen规划配置保留如下；恢复时取消此块注释，并注释下方DeepSeek配置。
+# trajectory_planner:
+#   # 此角色的模型API基础地址；适配器会补齐chat/completions端点。
+#   url: http://172.16.77.35:8004/v1
+#   # 发送给服务端的模型标识；可独立替换，不与其他角色共用模型选择。
+#   model: /data1/cug/qwen_uav_waypoint_regressor/outputs/stage2_4090/best
+#   # 此角色的本地密钥；对应环境变量非空时优先使用环境变量，不要提交真实密钥。
+#   api_key: no-key
+#   # 保存此角色密钥的环境变量名称；非空环境变量覆盖上面的api_key。
+#   api_key_env: TRAJECTORY_PLANNER_API_KEY
+#   # 该角色单次HTTP请求的配置超时，单位秒；实际调用还受工作流和阶段预算约束。
+#   timeout_s: 120
+
+# 临时对照实验：使用DeepSeek V4.1 Flash规划，仍要求输出5个新增增量航点。
 trajectory_planner:
-  # 此角色的模型API基础地址；适配器会补齐chat/completions端点。
-  url: http://172.16.77.35:8004/v1
-  # 发送给服务端的模型标识；可独立替换，不与其他角色共用模型选择。
-  model: /data1/cug/qwen_uav_waypoint_regressor/outputs/stage2_4090/best
-  # 此角色的本地密钥；对应环境变量非空时优先使用环境变量，不要提交真实密钥。
-  api_key: ""
-  # 保存此角色密钥的环境变量名称；非空环境变量覆盖上面的api_key。
+  # 官方API基础地址；现有适配器自动补齐/chat/completions。
+  url: https://api.deepseek.com
+  # 官方V4.1 Flash的API模型标识。
+  model: deepseek-flash
+  # 此角色独立保存的本地密钥；环境变量非空时优先使用环境变量，不要提交真实密钥。
+  api_key: no-key
+  # 仅覆盖轨迹规划角色的密钥，与其他模型角色的配置独立。
   api_key_env: TRAJECTORY_PLANNER_API_KEY
-  # 该角色单次HTTP请求的配置超时，单位秒；实际调用还受工作流和阶段预算约束。
+  # HTTP超时上限，单位秒；实际请求仍受现有工作流和阶段预算约束。
   timeout_s: 120
+  # 关闭思考模式，发送thinking.type=disabled。
+  thinking: disabled
 # 可插拔目标检测模型：仅由使用此能力的工作流调用，返回归一化检测框。
 target_detection:
   # HTTP请求格式：deepseek发送max_tokens和thinking开关；openai保留原max_completion_tokens格式。
@@ -40,7 +56,7 @@ target_detection:
   # 发送给服务端的模型标识；可独立替换，不与其他角色共用模型选择。
   model: deepseek-flash
   # 此角色的本地密钥；对应环境变量非空时优先使用环境变量，不要提交真实密钥。
-  api_key: ""
+  api_key: no-key
   # 保存此角色密钥的环境变量名称；非空环境变量覆盖上面的api_key。
   api_key_env: TARGET_DETECTION_API_KEY
   # 该角色单次HTTP请求的配置超时，单位秒；实际调用还受工作流和阶段预算约束。
@@ -60,7 +76,7 @@ task_completion:
   # 发送给服务端的模型标识；可独立替换，不与其他角色共用模型选择。
   model: deepseek-flash
   # 此角色的本地密钥；对应环境变量非空时优先使用环境变量，不要提交真实密钥。
-  api_key: ""
+  api_key: no-key
   # 保存此角色密钥的环境变量名称；非空环境变量覆盖上面的api_key。
   api_key_env: TASK_COMPLETION_API_KEY
   # 该角色单次HTTP请求的配置超时，单位秒；实际调用还受工作流和阶段预算约束。
@@ -178,8 +194,8 @@ visual_goal_navigation:
   completion_rules_file: tasks/visual_goal_navigation.yaml
   # 当前视觉任务的目标框中心测距、接近、确认与搜索策略参数。
   limits:
-    # 距离测量的工程余量，单位米；仅用于确认半径上限。
-    distance_uncertainty_margin_m: 0.3
+    # 距离测量的工程余量，单位米；0表示不额外收紧完成判定半径上限。
+    distance_uncertainty_margin_m: 0.0
     # 相对阶段起点允许的最大高度变化，单位米；null不额外限制完成高度；该参数不裁剪Qwen轨迹。
     maximum_vertical_offset_m: null
     # 本地到达条件需要的连续合格观测次数，至少2；不等于模型完成判断调用次数。
@@ -194,8 +210,8 @@ visual_goal_navigation:
     search_enabled: true
     # 飞行中目标检测的最小刷新间隔，单位秒；独立于 Qwen 的规划间隔。
     target_refresh_interval_s: 5.0
-    # 静态目标框中心世界估计的单次跳变上限，单位米；超过时暂不覆盖绑定，需按目标尺度实验调整。
-    maximum_target_position_jump_m: 6.0
+    # 后续候选位置相对首次锁定点允许的最大三维偏差，单位米；超出或检测失败时继续使用上次接受的坐标。
+    target_position_update_radius_m: 0.5
 
 # 预留进度复核接口，当前没有可执行的复核实现，也不调用额外模型。
 progress_review:
