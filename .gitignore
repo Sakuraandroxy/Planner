@@ -1,5 +1,7 @@
 # Planning / internal (not part of the release)
 _planning/
+/方案.md
+/tests/
 
 # OS / editor cruft
 .DS_Store
