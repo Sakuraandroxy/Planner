@@ -10,7 +10,7 @@ import yaml
 from planner.errors import ConfigurationError
 from planner.domain.motion import MotionLimits, ContinuousTrackingSettings
 from planner.domain.sliding_window import SlidingWindowSettings
-from .schema import MotionConfig, ProgressReviewConfig
+from .schema import MotionConfig
 from .validation import number, integer, mapping, string
 from planner.domain.depth import validate_depth_protocol
 from .target_detection import target_detection_config
@@ -25,7 +25,7 @@ def load_config(path: str | Path) -> PlannerConfig:
     try:
         raw = mapping(yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}, "config",
                       {"task_parser", "trajectory_planner", "airsim", "depth", "trajectory", "recording",
-                       "motion", "visual_goal_navigation", "task_completion", "sliding_window", "navigation", "target_detection", "progress_review"})
+                       "motion", "visual_goal_navigation", "task_completion", "sliding_window", "navigation", "target_detection"})
         if "navigation" in raw:
             raise ConfigurationError("legacy navigation workflow removed: remove navigation settings; basic_motion needs no task-specific configuration")
         parser = raw["task_parser"]
@@ -39,11 +39,6 @@ def load_config(path: str | Path) -> PlannerConfig:
         if visual_goal.enabled:
             visual_goal = visual_goal_config(visual_raw, completion_rules=completion_rules(
                 config_path, visual_goal.completion_rules_file))
-        review = mapping(raw.get("progress_review", {}), "progress_review", {"enabled"})
-        if type(review.get("enabled", False)) is not bool:
-            raise ConfigurationError("progress_review.enabled must be boolean")
-        if review.get("enabled", False):
-            raise ConfigurationError("progress_review is reserved; no workflow review strategy has been implemented")
         result = PlannerConfig(
             task_parser=_task_parser_config(parser),
             trajectory_planner=_api_config(planning, require_credentials=False),

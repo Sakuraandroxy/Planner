@@ -36,6 +36,8 @@
 
 ## 配置和启动
 
+未实现的进度复核接口及 `progress_review` 配置已删除；旧自定义配置需要移除该配置节。目标完成判断继续使用现有独立模块，各任务保留自己的结束逻辑。
+
 先检查并按本机环境修改 `config/base.yaml`，再安装依赖：
 
 任务解析、目标检测、完成判断默认分别配置为DeepSeek官方 `https://api.deepseek.com`、`deepseek-flash`（V4.1 Flash）。
@@ -108,7 +110,7 @@ planner/
   workflows/                  面向具体任务的编排流程
     basic_motion.py           明确数值动作工作流
     visual_goal_navigation.py 静态目标接近工作流
-    termination/              通用退出接口及视觉目标任务预算/搜索策略
+    termination/              视觉目标任务预算、搜索及退出策略
   capabilities/               可复用任务能力：目标关联、深度估计与完成条件
   services/                   共享的轨迹变换、校验和执行协调逻辑
     motion/                   从世界轨迹生成运动段与运动曲线
@@ -139,7 +141,7 @@ output/                        本地运行输出，例如相机画面和日志
 - `planner/ports/` 声明调用方需要的接口，例如 `TaskParser`、`ObservationSource`、`TrajectoryPlanner` 和 `Vehicle`。接口描述“要做什么”，具体方式由适配器实现。
 - `planner/application/` 校验解析结果、按顺序运行阶段，并通过 `TaskKind` 路由到工作流；不负责图像处理或 AirSim 细节。
 - `planner/workflows/` 编排某类任务的观测、规划、执行、复核和退出流程。不同任务应有各自的工作流，不要不断扩展一个万能工作流。
-- `planner/workflows/termination/` 放置退出策略接口及具体任务策略。后续任务可以定义自己的停止/完成判定，不必把规则塞入导航工作流。
+- `planner/workflows/termination/` 放置当前视觉目标任务的具体退出策略。后续任务定义自己的停止和完成逻辑，不要求实现统一的公共退出接口。
 - `planner/capabilities/` 放置多个工作流可以共享的任务能力，当前实现静态目标关联、深度估计和 near 完成条件；尚无持久记忆系统。
 - `planner/capabilities/basic_motion_conversion.py` 将数值动作换算为世界目标；`ports/basic_motion_vehicle.py` 定义直接执行接口，AirSim适配器实现原生运动API调用。基础动作没有净空、轨迹审核或到位复核模块。
 - `planner/capabilities/targeting/` 实现目标关联及 RGB 射线到深度的几何映射；`completion/` 实现 near 到达条件。这里不发送模型 HTTP 请求。
@@ -167,7 +169,7 @@ output/                        本地运行输出，例如相机画面和日志
 5. 在 `planner/bootstrap.py` 装配该工作流，并注册 `TaskKind → Workflow`。由 `WorkflowRouter` 做路由，不要把任务判断分支堆入 `MissionRunner`。
 6. 补充输入合法性、错误处理、路由、成功/失败传递及与其他阶段交互的单元、契约和集成测试。
 
-不同任务也可以使用不同的提示词与退出策略：提示词放在对应 adapter 的 `prompts/` 中，由任务工作流/规划器选择；退出策略放在 `workflows/termination/`，通过接口注入相应工作流。避免在一个 prompt 或退出逻辑中混入所有任务的特殊情况。
+不同任务可以使用不同的提示词与退出策略：提示词放在对应 adapter 的 `prompts/` 中，由任务工作流/规划器选择；结束和退出逻辑由各工作流自行组织。当前视觉任务继续使用 `workflows/termination/visual_goal_navigation.py`，不再保留未接入执行路径的公共退出接口。
 
 ## 如何添加新模块或外部集成
 

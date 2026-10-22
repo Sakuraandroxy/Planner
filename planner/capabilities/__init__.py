@@ -1,4 +1,2 @@
-from .base import Capability
-
-__all__ = ["Capability"]
+"""Reusable task capabilities, composed through their specific interfaces."""
 

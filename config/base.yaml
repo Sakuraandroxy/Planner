@@ -210,8 +210,3 @@ visual_goal_navigation:
     target_refresh_interval_s: 5.0
     # 后续候选位置相对首次锁定点允许的最大三维偏差，单位米；超出或检测失败时继续使用上次接受的坐标。
     target_position_update_radius_m: 0.5
-
-# 预留进度复核接口，当前没有可执行的复核实现，也不调用额外模型。
-progress_review:
-  # 当前仅支持false，轨迹提示中的Current guidance为Not supplied；设置true会在加载时明确报错。
-  enabled: false

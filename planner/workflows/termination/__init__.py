@@ -1,3 +1,1 @@
-from .base import ExitPolicy
-
-__all__ = ["ExitPolicy"]
+"""Task-specific search, budget and termination strategies."""

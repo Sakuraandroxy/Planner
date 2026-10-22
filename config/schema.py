@@ -66,11 +66,6 @@ class RecordingConfig:
 
 
 @dataclass(frozen=True)
-class ProgressReviewConfig:
-    enabled: bool = False
-
-
-@dataclass(frozen=True)
 class PlannerConfig:
     task_parser: TaskParserConfig
     trajectory_planner: ApiConfig
@@ -83,5 +78,4 @@ class PlannerConfig:
     task_completion: TaskCompletionConfig = TaskCompletionConfig()
     sliding_window: SlidingWindowSettings = SlidingWindowSettings()
     target_detection: TargetDetectionConfig | None = None
-    progress_review: ProgressReviewConfig = ProgressReviewConfig()
 

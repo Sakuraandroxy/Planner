@@ -3,9 +3,8 @@ import json
 from typing import Protocol, TypeVar
 
 from planner.domain.observation import Observation
-from planner.domain.execution import ExecutionRecord
 from planner.domain.pose import WorldPose
-from planner.domain.trajectory import RelativeTrajectory, WorldTrajectory
+from planner.domain.trajectory import RelativeTrajectory
 from planner.services.trajectory_transform import world_pose_delta_in_reference_frame
 
 
@@ -276,15 +275,3 @@ class BaseTrajectoryPrompt:
             guidance_start=guidance_start,
             previous_trajectory_start=previous_trajectory_start,
         )
-
-
-class ProgressPromptBuilder(Protocol):
-    def build(
-        self,
-        instruction: str,
-        initial: Observation,
-        current: Observation,
-        round_index: int,
-        *, candidate: WorldTrajectory | None = None,
-        execution_history: tuple[ExecutionRecord, ...] = (),
-    ) -> str: ...
