@@ -83,8 +83,8 @@ def check_python() -> None:
 def check_packages() -> None:
     for label, packages, required in (
         ("core", CORE_PACKAGES, True),
-        ("ue4", UE4_PACKAGES, True),
-        ("ue5", UE5_PACKAGES, False),
+        ("airsim", UE4_PACKAGES, True),
+        ("projectairsim", UE5_PACKAGES, False),
     ):
         missing = [name for name in packages if not have(name)]
         if missing:
@@ -111,14 +111,19 @@ def load_yaml(path: Path):
 
 
 def check_repo_layout() -> None:
-    for rel in ("config/base.yaml", "config/maps.yaml", "config/simulators.yaml"):
+    for rel in ("config/base.yaml", "config/maps.yaml", "config/simulators.yaml",
+                "config/tasks/visual_goal_above.yaml"):
         path = ROOT / rel
         ok(rel) if path.is_file() else fail(rel, "file is missing")
-    ue4 = ROOT / "planner/ue4"
-    if ue4.is_dir() and (ue4 / "server_worker.py").is_file():
-        ok("planner/ue4", "copied UE4 stack present")
-    else:
-        fail("planner/ue4", "the copied UE4 stack is missing from this checkout")
+    for simulator in ("airsim", "projectairsim"):
+        package = ROOT / f"planner/simulators/{simulator}"
+        runtime = package / "runtime.py"
+        if package.is_dir() and runtime.is_file():
+            ok(f"simulators/{simulator}", "package and port declaration present")
+        else:
+            fail(f"simulators/{simulator}", f"missing {package}")
+    if (ROOT / "planner/ue4").exists():
+        fail("planner/ue4", "the duplicated tree came back; it must not exist")
     console = ROOT / "console/index.html"
     ok("console/index.html") if console.is_file() else fail(
         "console/index.html", "the console is missing; / will 404"
@@ -135,20 +140,23 @@ def check_families_and_maps() -> tuple[dict, list[dict]]:
     }
     maps = [entry for entry in (maps_raw.get("maps") or []) if isinstance(entry, dict)]
     known = set(families)
-    orphans = sorted({str(m.get("family")) for m in maps} - known - {"None"})
+    named = [str(m.get("simulator") or "") for m in maps]
+    if "" in named:
+        fail("map simulators", "a maps.yaml entry has no simulator field")
+    orphans = sorted(set(named) - known - {""})
     if orphans:
-        fail("map families", f"maps reference unconfigured families {orphans}")
-    else:
-        ok("map families", ", ".join(sorted(known)))
+        fail("map simulators", f"maps reference unconfigured simulators {orphans}")
+    if not orphans and "" not in named:
+        ok("map simulators", ", ".join(sorted(known)))
     return families, maps
 
 
 def check_ue4_binaries(maps: list[dict]) -> None:
-    ue4_maps = [entry for entry in maps if entry.get("family") == "ue4"]
-    if not ue4_maps:
-        warn("ue4 maps", "config/maps.yaml lists no family ue4 maps")
+    airsim_maps = [entry for entry in maps if entry.get("simulator") == "airsim"]
+    if not airsim_maps:
+        fail("airsim maps", "config/maps.yaml lists no simulator: airsim entries")
         return
-    for entry in ue4_maps:
+    for entry in airsim_maps:
         binary = str(entry.get("binary", ""))
         name = str(entry.get("id", binary))
         if not binary:
@@ -165,21 +173,21 @@ def check_ue4_binaries(maps: list[dict]) -> None:
 
 
 def check_settings(families: dict) -> None:
-    ue4 = families.get("ue4", {}) or {}
+    ue4 = families.get("airsim", {}) or {}
     raw = str(ue4.get("settings_file", ""))
     settings = Path(raw)
     if not raw:
-        fail("ue4 settings_file", "not configured")
+        fail("airsim settings_file", "not configured")
         return
     if not settings.is_file():
-        fail("ue4 settings_file", f"missing: {raw}")
+        fail("airsim settings_file", f"missing: {raw}")
         return
     import json
 
     try:
         data = json.loads(settings.read_text(encoding="utf-8"))
     except ValueError as error:
-        fail("ue4 settings_file", f"not valid JSON: {error}")
+        fail("airsim settings_file", f"not valid JSON: {error}")
         return
     port = data.get("ApiServerPort")
     declared = (ue4.get("ports") or {}).get("rpc")
@@ -188,7 +196,7 @@ def check_settings(families: dict) -> None:
     elif declared is not None and int(port) != int(declared):
         fail(
             "ApiServerPort",
-            f"settings says {port} but simulators.yaml ue4 says {declared}; "
+            f"settings says {port} but simulators.yaml airsim says {declared}; "
             "the planner would dial the wrong port",
         )
     else:
@@ -218,9 +226,9 @@ def check_settings(families: dict) -> None:
 
 def check_ports(families: dict) -> None:
     wanted: dict[str, int] = {}
-    for family_id, item in families.items():
+    for simulator_id, item in families.items():
         for label, port in ((item.get("ports") or {})).items():
-            wanted[f"{family_id}.{label}"] = int(port)
+            wanted[f"{simulator_id}.{label}"] = int(port)
     if not wanted:
         warn("ports", "no ports declared in simulators.yaml")
         return
