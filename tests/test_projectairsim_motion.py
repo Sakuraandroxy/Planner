@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from planner.adapters.projectairsim.motion import SteppedMotionTracker, limit_vector
+from planner.simulators.projectairsim.motion import SteppedMotionTracker, limit_vector
 from planner.domain.execution import ExecutionBudget
 from planner.domain.motion import MotionLimits
 from planner.domain.pose import WorldPose

@@ -25,11 +25,11 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from planner.adapters.projectairsim.connection import (  # noqa: E402
+from planner.simulators.projectairsim.connection import (  # noqa: E402
     ProjectAirSimConnection,
     ProjectAirSimConnectionConfig,
 )
-from planner.adapters.projectairsim.rover import ProjectAirSimRover  # noqa: E402
+from planner.simulators.projectairsim.rover import ProjectAirSimRover  # noqa: E402
 from planner.application.factories import (  # noqa: E402
     build_free_navigation_planner,
 )

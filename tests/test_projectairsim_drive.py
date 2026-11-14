@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from planner.adapters.projectairsim.drive import (
+from planner.simulators.projectairsim.drive import (
     RoverDriveModel,
     SpeedPid,
     controls_from_reference,

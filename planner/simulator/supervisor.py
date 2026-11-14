@@ -20,8 +20,8 @@ import subprocess
 import time
 from typing import Callable
 
-from ...config import MapCatalog, MapEntry, SimulatorSettings
-from ...errors import SimulatorNotOwned, SimulatorRestartError
+from ..config import MapCatalog, MapEntry, SimulatorSettings
+from ..errors import SimulatorNotOwned, SimulatorRestartError
 
 LogFn = Callable[[str, str], None]
 

@@ -11,8 +11,8 @@ import queue
 import threading
 from typing import Callable
 
-from ...application.reporting import mission_report
-from ...domain.server import TaskSubmission, WorkerEvent, WorkerEventKind
+from ..application.reporting import mission_report
+from ..domain.server import TaskSubmission, WorkerEvent, WorkerEventKind
 
 
 class ThreadedMissionWorker:

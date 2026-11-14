@@ -14,7 +14,7 @@ The four streaming cameras are:
 
 ``VIEW_MODES`` is the *fallback* order only. The server's real cycle order and
 its starting position are not stable across builds, maps or scene loads, so
-``planner/adapters/projectairsim/streaming_views.py`` measures them at session
+``planner/simulators/projectairsim/streaming_views.py`` measures them at session
 startup by matching xpra screenshots against camera frames and the session
 uses that measured order. ``INITIAL_STREAM_INDEX`` applies only when that
 calibration fails.

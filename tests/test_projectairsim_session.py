@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from planner.adapters.runtime.projectairsim_session import (
+from planner.simulators.projectairsim.session import (
     DEFAULT_CONTROL_PERIOD_S,
     HIDE_ALTITUDE_GAIN_M,
     HIDE_PIN_PERIOD_S,
@@ -802,7 +802,7 @@ def test_set_view_mode_uses_the_calibrated_cycle_order():
 
 
 def test_calibrate_views_stores_the_measured_order(monkeypatch):
-    from planner.adapters.runtime import projectairsim_session as module
+    from planner.simulators.projectairsim import session as module
 
     session = make_session()
     session._connection.world = SimpleNamespace(
@@ -854,7 +854,7 @@ def test_calibrate_views_stores_the_measured_order(monkeypatch):
 def test_calibrate_views_keeps_the_builtin_order_when_measurement_fails(
     monkeypatch,
 ):
-    from planner.adapters.runtime import projectairsim_session as module
+    from planner.simulators.projectairsim import session as module
 
     session = make_session()
     session._connection.world = SimpleNamespace(
@@ -883,7 +883,7 @@ def test_calibrate_views_keeps_the_builtin_order_when_measurement_fails(
 def test_calibrate_views_reuses_a_cached_order_after_the_anchor_check(
     monkeypatch,
 ):
-    from planner.adapters.runtime import projectairsim_session as module
+    from planner.simulators.projectairsim import session as module
 
     session = make_session()
     session._connection.world = SimpleNamespace(
@@ -935,7 +935,7 @@ def test_calibrate_views_reuses_a_cached_order_after_the_anchor_check(
 
 
 def test_calibrate_views_caches_a_fresh_measurement(monkeypatch):
-    from planner.adapters.runtime import projectairsim_session as module
+    from planner.simulators.projectairsim import session as module
 
     session = make_session()
     session._connection.world = SimpleNamespace(
@@ -964,7 +964,7 @@ def test_calibrate_views_caches_a_fresh_measurement(monkeypatch):
 def test_calibrate_views_recalibrates_when_the_cache_does_not_verify(
     monkeypatch,
 ):
-    from planner.adapters.runtime import projectairsim_session as module
+    from planner.simulators.projectairsim import session as module
 
     session = make_session()
     session._connection.world = SimpleNamespace(

@@ -83,14 +83,14 @@ from ...services.trajectory_validation import TrajectoryValidator
 from ...workflows.basic_motion import BasicMotionWorkflow
 from ...workflows.free_navigation import FreeNavigationWorkflow
 from ...workflows.visual_goal_navigation import VisualGoalNavigationWorkflow
-from ..projectairsim.connection import (
+from .connection import (
     ProjectAirSimConnection,
     ProjectAirSimConnectionConfig,
 )
-from ..projectairsim.drone import ProjectAirSimDrone
-from ..projectairsim.moving_source import BorrowedMovingSource
-from ..projectairsim.rover import ProjectAirSimRover
-from ..projectairsim.streaming_views import (
+from .drone import ProjectAirSimDrone
+from .moving_source import BorrowedMovingSource
+from .rover import ProjectAirSimRover
+from .streaming_views import (
     calibrate_streaming_views,
     service_frame_fetcher,
     verify_streaming_views,

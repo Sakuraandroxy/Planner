@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from planner.adapters.runtime.simulator_supervisor import (
+from planner.simulator.supervisor import (
     SimulatorSupervisor,
     read_map_marker,
 )

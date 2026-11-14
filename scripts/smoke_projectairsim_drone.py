@@ -34,14 +34,14 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from planner.adapters.projectairsim.connection import (  # noqa: E402
+from planner.simulators.projectairsim.connection import (  # noqa: E402
     ProjectAirSimConnection,
     ProjectAirSimConnectionConfig,
 )
-from planner.adapters.projectairsim.drone import (  # noqa: E402
+from planner.simulators.projectairsim.drone import (  # noqa: E402
     ProjectAirSimDrone,
 )
-from planner.adapters.projectairsim.moving_source import (  # noqa: E402
+from planner.simulators.projectairsim.moving_source import (  # noqa: E402
     BorrowedMovingSource,
 )
 from planner.application.factories import (  # noqa: E402

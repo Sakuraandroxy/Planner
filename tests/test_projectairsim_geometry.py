@@ -3,13 +3,13 @@ import math
 import numpy as np
 import pytest
 
-from planner.adapters.projectairsim.camera import (
+from planner.simulators.projectairsim.camera import (
     assert_camera_matches_scene,
     capture_settings,
     mount_from_sensor,
     sensor_configuration,
 )
-from planner.adapters.projectairsim.coordinates import (
+from planner.simulators.projectairsim.coordinates import (
     body_pose_from_camera,
     camera_matrix,
     camera_position_from_message,

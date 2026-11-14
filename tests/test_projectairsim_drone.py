@@ -6,8 +6,8 @@ import pytest
 from projectairsim.drone import YawControlMode
 from projectairsim.types import LandedState
 
-from planner.adapters.projectairsim.drone import ProjectAirSimDrone
-from planner.adapters.projectairsim.moving_source import BorrowedMovingSource
+from planner.simulators.projectairsim.drone import ProjectAirSimDrone
+from planner.simulators.projectairsim.moving_source import BorrowedMovingSource
 from planner.config import CameraSettings, DepthSettings
 from planner.domain.pose import WorldPose
 from planner.errors import ExecutionError
@@ -330,7 +330,7 @@ def test_prepare_tolerates_a_false_native_takeoff_with_measured_climb(caplog):
     drone, _, robot, _ = make_drone()
     drone.start()
     with caplog.at_level(
-        logging.WARNING, logger="planner.adapters.projectairsim.drone"
+        logging.WARNING, logger="planner.simulators.projectairsim.drone"
     ):
         drone.prepare(takeoff_if_landed=True)
     assert robot.landed == int(LandedState.FLYING)

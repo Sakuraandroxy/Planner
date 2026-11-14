@@ -2,7 +2,7 @@
 
 import threading
 
-from planner.adapters.projectairsim.connection import ProjectAirSimConnection
+from planner.simulators.projectairsim.connection import ProjectAirSimConnection
 
 
 class FakeWorld:

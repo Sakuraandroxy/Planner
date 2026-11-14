@@ -2,7 +2,7 @@ import time
 
 import pytest
 
-from planner.adapters.runtime.worker import ThreadedMissionWorker
+from planner.simulator.worker import ThreadedMissionWorker
 from planner.domain.server import TaskSubmission, WorkerEventKind
 from planner.domain.weather import WEATHER_CATALOG
 from planner.domain.result import (

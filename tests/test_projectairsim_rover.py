@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from planner.adapters.projectairsim.rover import (
+from planner.simulators.projectairsim.rover import (
     SETTLE_DURATION_S,
     ProjectAirSimRover,
 )

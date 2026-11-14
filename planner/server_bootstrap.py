@@ -6,12 +6,12 @@ from dataclasses import replace
 from pathlib import Path
 
 from .adapters.http.server_api import create_api
-from .adapters.runtime.projectairsim_session import ProjectAirSimMissionSession
-from .adapters.runtime.simulator_supervisor import (
+from .simulators.projectairsim.session import ProjectAirSimMissionSession
+from .simulator.supervisor import (
     SimulatorSupervisor,
     read_map_marker,
 )
-from .adapters.runtime.worker import ThreadedMissionWorker
+from .simulator.worker import ThreadedMissionWorker
 from .application.factories import build_detector, build_geometry, build_planner
 from .application.server_controller import ServerController
 from .config import AppConfig

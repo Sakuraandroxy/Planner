@@ -252,7 +252,7 @@ print('world:', [m for m in dir(World) if 'camera' in m.lower() or 'pose' in m.l
 三条路径都不改控制逻辑，差别只在"俯视图从哪来"。旧版的感知下游（`top_geometry`、`above_target_association`、`visual_goal_above` 的完成判定）与 `point_at_world` 那套向量计算都能直接用。
 
 1. 跑 `dir()` 命令，确认走路径 A（`World.spawn_object` 加 `set_object_pose`）还是路径 B（预置云台载具）。
-2. 在 `planner/adapters/projectairsim/` 里实现一个俯视观测源，输出旧 `AboveCamera` 同构的接口：一个能存还原位姿、能把视线指向世界点的方法，加一路图像与深度。
+2. 在 `planner/simulators/projectairsim/` 里实现一个俯视观测源，输出旧 `AboveCamera` 同构的接口：一个能存还原位姿、能把视线指向世界点的方法，加一路图像与深度。
 3. 注册表里给 UE5 的 `task_kinds` 加上 `visual_goal_above`。到这一步为止前端与 HTTP 层零改动。
 
 ### 7.2 UE5 换图会退化

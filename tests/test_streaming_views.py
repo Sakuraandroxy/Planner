@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from planner.adapters.projectairsim.streaming_views import (
+from planner.simulators.projectairsim.streaming_views import (
     MAX_UNMATCHED_SCORE,
     MIN_MATCH_SCORE,
     _solve_assignment,

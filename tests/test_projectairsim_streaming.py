@@ -5,9 +5,9 @@ import time
 import numpy as np
 import pytest
 
-from planner.adapters.projectairsim.collision import CollisionMonitor
-from planner.adapters.projectairsim.frames import CameraTopicStream
-from planner.adapters.projectairsim.observation import ProjectAirSimObservationSource
+from planner.simulators.projectairsim.collision import CollisionMonitor
+from planner.simulators.projectairsim.frames import CameraTopicStream
+from planner.simulators.projectairsim.observation import ProjectAirSimObservationSource
 from planner.config import CameraSettings, DepthSettings
 from planner.domain.execution import ExecutionBudget
 from planner.errors import BudgetExceeded, ObservationError

@@ -94,7 +94,7 @@ XV3DGS-airsim-vln/
 
 关键差异：
 
-- `planner/adapters/carla/` → `planner/adapters/projectairsim/`。
+- `planner/adapters/carla/` → `planner/simulators/projectairsim/`。
 - ProjectAirSim 使用 `projectairsim` Python 客户端（topic/service 双端口、
   异步任务返回 `Task` 对象），与 Planner 使用的 `airsim` RPC 客户端 API 不同；
   无人机部分按接口语义移植，而不是复制调用代码。
@@ -471,7 +471,7 @@ ProjectAirSim 的实际能力重新实现。
 
 修复：
 
-- **新模块 `planner/adapters/projectairsim/streaming_views.py`。**
+- **新模块 `planner/simulators/projectairsim/streaming_views.py`。**
   `calibrate_streaming_views` 走一整圈：每个位置取 xpra 截图，与各相机
   `GetImages` 参考帧做 160×90 零均值灰度特征的相关性匹配。实测正确机位
   0.92 左右，其余 ≤0.28，阈值 0.55 + 最小间隔 0.10。无人车 Chase 相机
@@ -834,7 +834,7 @@ ProjectAirSim 的实际能力重新实现。
    `-1.99`。修复：暖机取帧后 `ProjectAirSimRover.settle()` 按住刹车推进
    `SETTLE_DURATION_S = 2.0` 秒仿真时间，再取一帧实测沉降后的姿态调用
    `set_home_pose()`。涉及
-   `planner/adapters/projectairsim/rover.py`（`settle` / `SETTLE_DURATION_S`）、
+   `planner/simulators/projectairsim/rover.py`（`settle` / `SETTLE_DURATION_S`）、
    `planner/adapters/runtime/projectairsim_session.py`（暖机帧 → 沉降帧 →
    归位目标、日志）。探针还确认：`SetPose` 后渲染 actor 会在下一次时钟
    推进时同步，`SetPose + SetObjectPose` 到与当前几乎相同的位姿时服务端
