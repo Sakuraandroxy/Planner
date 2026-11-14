@@ -24,6 +24,7 @@ that claim.
 from __future__ import annotations
 
 import threading
+import time
 from typing import Callable
 
 from planner.application.mission_assembly import (
@@ -34,7 +35,7 @@ from planner.application.mission_assembly import (
 from planner.domain.result import MissionResult
 from planner.domain.server import TaskSubmission
 from planner.domain.weather import WEATHER_CATALOG, validate_weather_values
-from planner.errors import ExecutionError, ProtocolError
+from planner.errors import ProtocolError
 from planner.services.execution import ExecutionService
 
 from .above_camera import AirSimCameraView
@@ -48,6 +49,12 @@ from .weather import AirSimWeather
 
 class AirSimMissionSession:
     """The UE4 side of the worker protocol: run, close, and the idle heartbeat."""
+
+    #: How close to the recorded ground height counts as touchdown (metres).
+    #: AirSim's own ``landed_state`` is not usable here: measured on Blocks it stays
+    #: at 1 (Flying) after a land that returned True and the vehicle is back on its
+    #: spawn height.
+    TOUCHDOWN_TOLERANCE_M = 0.25
 
     def __init__(
         self,
@@ -64,6 +71,9 @@ class AirSimMissionSession:
         self._log = log
         self._trajectory = trajectory
         self._closed = False
+        #: Height the vehicle stood on before the first takeoff, in UE coordinates.
+        #: ``close`` lands back onto it; None means this session never flew.
+        self._ground_z: float | None = None
         self.connection = AirSimConnection(
             family.host,
             family.ports["rpc"],
@@ -193,6 +203,8 @@ class AirSimMissionSession:
             # Airborne before anything executes: the UE4 flight paths assume hover
             # authority from the first segment, and readiness is measured rather
             # than assumed -- the same rule the old branch's ServerVehicle encodes.
+            if self._ground_z is None:
+                self._ground_z = self.server.control.current_pose().z
             self.server.prepare(takeoff_if_landed=True)
             event_sink("Drone airborne; position hold confirmed.")
             return application.execute_plan(plan)
@@ -216,22 +228,36 @@ class AirSimMissionSession:
         return dict(applied)
 
     def close(self, *, skip_landing: bool = False) -> None:
-        """Land unless the world is being destroyed, then release every transport.
+        """Land, confirm the touchdown, then release every transport.
 
         ``skip_landing`` is what a map switch passes: a scene about to be reloaded
         has no use for a landing animation, and waiting for one would hold the
         switch open.
+
+        The landing itself cannot be left to :meth:`AirSimConnection.shutdown`: that
+        method deliberately refuses to disarm without positive landed evidence, and a
+        task that ends on a hover leaves the aircraft airborne with
+        ``landed_state == 1`` -- measured here, the first UE4 task ended at z=-0.83 m.
+        So this lands it and waits for the height to come back to the ground record.
         """
         if self._closed:
             return
         self._closed = True
         try:
-            if not skip_landing:
+            settled = False
+            if not skip_landing and self._ground_z is not None:
                 try:
-                    self.connection.shutdown()
-                    return
-                except ExecutionError as error:
-                    self._log(f"vehicle shutdown was incomplete: {error}", "WARNING")
+                    settled = self._land_and_confirm()
+                except Exception as error:
+                    self._log(f"landing before close failed: {error}", "WARNING")
+                else:
+                    # The measurement above is the evidence; landed_state on this
+                    # build stays at 1 even after a confirmed touchdown, so without
+                    # it the shutdown would leave every landed drone armed.
+                    try:
+                        self.connection.shutdown(landed_on_ground=settled)
+                    except Exception as error:
+                        self._log(f"vehicle shutdown was incomplete: {error}", "WARNING")
         finally:
             for read in self._capture_connections:
                 try:
@@ -242,3 +268,27 @@ class AirSimMissionSession:
                     )
             self._capture_connections.clear()
             self.connection.close_transport()
+
+    def _land_and_confirm(self, timeout_s: float = 60.0) -> bool:
+        """Descend onto the recorded ground height; return whether it was reached."""
+        self.connection.call_async_and_wait("landAsync")
+        deadline = time.monotonic() + timeout_s
+        z = self.server.control.current_pose().z
+        settled = z >= self._ground_z - self.TOUCHDOWN_TOLERANCE_M
+        while not settled and time.monotonic() < deadline:
+            time.sleep(0.5)
+            z = self.server.control.current_pose().z
+            settled = z >= self._ground_z - self.TOUCHDOWN_TOLERANCE_M
+        if settled:
+            self._log(
+                f"Vehicle on the ground: z={z:.2f} against the ground record "
+                f"{self._ground_z:.2f}."
+            )
+        else:
+            self._log(
+                f"touchdown not confirmed in {timeout_s:g}s: z={z:.2f} against a "
+                f"ground record of {self._ground_z:.2f}; leaving the decision to the "
+                "safe shutdown",
+                "WARNING",
+            )
+        return settled

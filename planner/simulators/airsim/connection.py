@@ -198,18 +198,24 @@ class AirSimConnection:
     def _ground_z(self) -> float:
         return self.call("getMultirotorState").kinematics_estimated.position.z_val
 
-    def shutdown(self) -> None:
-        """Hold airborne vehicles; disarm/release only after positive landed evidence."""
+    def shutdown(self, *, landed_on_ground: bool = False) -> None:
+        """Hold airborne vehicles; disarm/release only after positive landed evidence.
+
+        ``landed_on_ground`` is for a caller that measured the touchdown itself.
+        This build leaves ``landed_state`` at 1 (Flying) even with the vehicle back on
+        its spawn height, so refusing on that flag alone would keep every landed drone
+        armed -- and refusing is only right when nothing else proves the landing.
+        """
         with self._lock:
             if self._closed:
                 return
             try:
                 if self._controls_vehicle:
-                    self._safe_vehicle_shutdown()
+                    self._safe_vehicle_shutdown(landed_on_ground=landed_on_ground)
             finally:
                 self.close_transport()
 
-    def _safe_vehicle_shutdown(self) -> None:
+    def _safe_vehicle_shutdown(self, *, landed_on_ground: bool = False) -> None:
         import airsim
 
         for name in ("cancelLastTask", "rotateByYawRateAsync"):
@@ -223,8 +229,10 @@ class AirSimConnection:
         try:
             state = self.call("getMultirotorState")
             status = state.landed_state
-            landed = (isinstance(status, int) and not isinstance(status, bool)
-                      and status == airsim.LandedState.Landed)
+            landed = landed_on_ground or (
+                isinstance(status, int) and not isinstance(status, bool)
+                and status == airsim.LandedState.Landed
+            )
         except Exception:
             logger.exception("Cannot confirm landed state; keeping motors/API control unchanged")
             return
@@ -232,8 +240,8 @@ class AirSimConnection:
             logger.warning(
                 "Landing was not confirmed by landed_state (%r) at z=%.2f: requesting "
                 "hover and leaving motors/API control enabled. This build keeps "
-                "landed_state at 1 (Flying) even after a land that returned True, so "
-                "this is the conservative branch, not proof the vehicle is airborne.",
+                "landed_state at 1 (Flying) even after a land that returned True; pass "
+                "landed_on_ground with a measured touchdown to disarm safely.",
                 status, state.kinematics_estimated.position.z_val,
             )
             return

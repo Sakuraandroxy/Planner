@@ -123,7 +123,52 @@ def test_weather_reaches_air_sim_in_the_engine_spelling():
     assert applied["road_wetness"] == 0.2, "the caller keeps the canonical name it sent"
 
 
+def test_a_session_that_never_flew_releases_transports_without_landing():
+    """A session that never left the ground has nothing to land.
+
+    The ground record is taken when a task prepares the vehicle, so ``close`` before
+    any flight must not issue a descent nobody asked for -- it only releases the
+    transports.
+    """
+    session = _session()
+    closed: list[str] = []
+    calls: list[str] = []
+    session.connection.close_transport = lambda: closed.append("control")
+    session.connection.call_async_and_wait = lambda name, *a, **k: calls.append(name)
+    session.connection.shutdown = lambda **kwargs: calls.append("shutdown")
+
+    session.close()
+    assert calls == [], calls
+    assert closed == ["control"]
+
+
+def test_close_lands_before_it_releases_the_transport():
+    """The gap the first real UE4 task exposed.
+
+    ``AirSimConnection.shutdown`` refuses to disarm without positive landed evidence
+    and never lands by itself, so a task ending on a hover left the motors enabled
+    while the stack was killed (measured: the drone was still at z=-0.83 when the
+    engine died). The session owns the landing now: descend, confirm by height,
+    then shut down, then release.
+    """
+    from planner.domain.pose import WorldPose
+
+    session = _session()
+    session._ground_z = 0.68
+    order: list[str] = []
+    session.connection.call_async_and_wait = lambda name, *a, **k: (
+        order.append("landAsync") if name == "landAsync" else None
+    )
+    session.connection.shutdown = lambda **kwargs: order.append("shutdown")
+    session.connection.close_transport = lambda: order.append("close_transport")
+    session.server.control.current_pose = lambda: WorldPose(0.0, 0.0, 0.68, 0.0)
+
+    session.close()
+    assert order == ["landAsync", "shutdown", "close_transport"], order
+
+
 def test_close_without_landing_releases_every_transport():
+    """``skip_landing`` is a map switch: the scene is about to be destroyed."""
     session = _session()
     closed = []
     session.connection.close_transport = lambda: closed.append("control")
