@@ -8,6 +8,8 @@ from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 from datetime import datetime
 from pathlib import Path
 
+from PIL import Image
+
 from planner.domain.observation import Observation
 from planner.ports.observation_source import ObservationSource
 
@@ -156,8 +158,8 @@ class CameraApiRecorder:
         if self.run_dir is None:
             raise RuntimeError("recorder has no output directory")
         stem = f"{index:06d}"
-        observation.rgb.save(self.run_dir / "rgb" / f"{stem}.jpg", format="JPEG", quality=92)
-        observation.depth_image.save(self.run_dir / "depth" / f"{stem}.png", format="PNG")
+        Image.fromarray(observation.rgb).save(self.run_dir / "rgb" / f"{stem}.jpg", format="JPEG", quality=92)
+        Image.fromarray(observation.depth_image).save(self.run_dir / "depth" / f"{stem}.png", format="PNG")
         metadata = _metadata(observation, index)
         (self.run_dir / "metadata" / f"{stem}.json").write_text(
             json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -165,7 +167,7 @@ class CameraApiRecorder:
 
 
 def _metadata(observation: Observation, index: int) -> dict:
-    pose = observation.vehicle_pose
+    pose = observation.pose
     intrinsics = observation.intrinsics
     return {
         "frame_index": index,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import numpy as np
 from numbers import Integral
 
 from planner.domain.observation import CameraIntrinsics
@@ -19,6 +20,25 @@ def intrinsics_from_horizontal_fov(width: int, height: int, horizontal_fov_deg: 
     return CameraIntrinsics(width, height, focal, focal, width / 2.0, height / 2.0, fov)
 
 #把四元数姿态转换成 3×3 旋转矩阵
+def camera_matrix(
+    camera_position: tuple[float, float, float], camera_rotation
+) -> "np.ndarray":
+    """4x4 NED camera-to-world transform (rotation + translation).
+
+    ``Observation.__post_init__`` fills ``camera_position_world`` and
+    ``rotation_camera_to_world`` from this matrix, so the layout is part of the
+    shared contract rather than a local choice. It is built here because the UE4
+    runtime cannot import the sibling simulator package to borrow a copy.
+    """
+    rotation = np.asarray(camera_rotation, dtype=np.float64)
+    if rotation.shape != (3, 3):
+        raise ValueError("camera rotation must be 3x3")
+    matrix = np.eye(4, dtype=np.float64)
+    matrix[:3, :3] = rotation
+    matrix[:3, 3] = np.asarray(camera_position, dtype=np.float64)
+    return matrix
+
+
 def quaternion_to_rotation(x: float, y: float, z: float, w: float) -> tuple[tuple[float, float, float], ...]:
     try:
         finite = all(not isinstance(value, bool) and math.isfinite(value) for value in (x, y, z, w))

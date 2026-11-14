@@ -16,7 +16,7 @@ class AboveObservationSource:
         after = self.connection.call("getMultirotorState")
         position, rotation = interpolate_body(before,after,frame.timestamp_ns)
         yaw = math.degrees(math.atan2(rotation[1,0],rotation[0,0]))
-        return replace(frame,vehicle_pose=WorldPose(*map(float,position),yaw))
+        return replace(frame,pose=WorldPose(*map(float,position),yaw))
 
     def close(self):
         self.source.close()
