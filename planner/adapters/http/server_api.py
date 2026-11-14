@@ -31,6 +31,11 @@ from .video import BOUNDARY, mjpeg_chunks
 
 CONSOLE_DIR = Path(__file__).resolve().parents[3] / "console"
 
+#: Process drivers ``planner/simulator`` can actually run in this build.
+#: ``xpra_start`` is declared in config/simulators.yaml for the AirSim UE4
+#: family; until its driver lands, switching to such a map must be refused.
+IMPLEMENTED_DRIVERS = frozenset({"script"})
+
 ViewMode = Literal["rover_front", "rover_chase", "drone_front", "drone_chase"]
 
 
@@ -318,6 +323,26 @@ def create_api(controller, settings, frames=None, trajectory_hub=None, families=
 
     @app.post("/api/world")
     def switch_world(request: WorldRequest):
+        # Fail loudly on a family whose process driver this build cannot run
+        # yet, instead of handing a UE4 map to the UE5 launch script.
+        if families is not None:
+            catalog = getattr(controller, "maps", None)
+            entry = catalog.entry(request.map) if catalog is not None else None
+            if entry is not None:
+                driver = families.require(entry.family).driver
+                if driver not in IMPLEMENTED_DRIVERS:
+                    raise HTTPException(
+                        501,
+                        detail={
+                            "unsupported": f"driver:{driver}",
+                            "family": entry.family,
+                            "message": (
+                                f"simulator family '{entry.family}' needs the "
+                                f"'{driver}' process driver, which is not "
+                                "implemented in this build yet"
+                            ),
+                        },
+                    )
         try:
             state = controller.request_world(request.map)
         except BackendUnavailable as exc:

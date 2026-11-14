@@ -126,3 +126,20 @@ def test_api_without_a_catalog_keeps_the_old_shape():
         assert "capabilities" not in live.get("/api/status").json()
         assert "map_families" not in live.get("/api/world/options").json()
         assert live.post("/api/home").status_code == 202
+
+
+def test_ue4_map_is_refused_until_its_process_driver_exists(client):
+    """The xpra_start driver is not implemented yet.
+
+    Handing a UE4 map to the UE5 launch script would start the wrong binary on
+    the wrong ports, so the API refuses the switch and names the missing piece.
+    """
+    live, controller = client
+    response = live.post("/api/world", json={"map": UE4_MAP})
+    assert response.status_code == 501, response.text
+    detail = response.json()["detail"]
+    assert detail["family"] == "ue4"
+    assert detail["unsupported"] == "driver:xpra_start"
+    assert controller.world_calls == []
+    # The UE5 maps still switch normally.
+    assert live.post("/api/world", json={"map": "neighborhood"}).status_code == 202
