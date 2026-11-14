@@ -18,6 +18,7 @@ kinds. The two must behave the same, because ``ServerController`` cannot tell th
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 import dataclasses
 import json
 import logging
@@ -121,6 +122,24 @@ class _LogBridge(logging.Handler):
             pass
 
 
+def _where(error: BaseException) -> str:
+    """The deepest frame of a traceback, as ``file.py:line``.
+
+    The child has no terminal and no log file: its stderr is forwarded as text, but an
+    exception that is caught and reported as a one-line message leaves the operator
+    with a type name and nothing to open. Measured here, that turned
+    "'NoneType' object has no attribute 'run'" into a hunt through the whole session.
+    """
+    frame = None
+    tb = error.__traceback__
+    while tb is not None:
+        frame = tb
+        tb = tb.tb_next
+    if frame is None:
+        return ""
+    return f" [at {Path(frame.tb_frame.f_code.co_filename).name}:{frame.tb_lineno}]"
+
+
 class MissionChild:
     """Reads commands, owns the session, writes events."""
 
@@ -130,8 +149,26 @@ class MissionChild:
         self.emitter = Emitter()
         self._commands: queue.Queue = queue.Queue()
         self._stop_event = threading.Event()
+        self._stop_requested = False
+        self._lock = threading.Lock()
+        self._task_running: str | None = None
+        self._task_pending: str | None = None
         self._session = None
         self._closing = False
+
+    def _clear_running(self, task_id: str) -> None:
+        """A finished task owns no stop flag and no running id.
+
+        The threaded worker clears the flag after every task for the same reason: the
+        stop that cancelled this task refers to this task. Left set, the next
+        instruction started already cancelled -- measured on Blocks, where the flight
+        after an abort was refused the moment it began.
+        """
+        with self._lock:
+            if self._task_running == task_id:
+                self._task_running = None
+            self._task_pending = None
+            self._stop_requested = False
 
     # -- plumbing ----------------------------------------------------------
     def log(self, message: str, level: str = "INFO") -> None:
@@ -143,9 +180,42 @@ class MissionChild:
             if not line:
                 continue
             try:
-                self._commands.put(json.loads(line))
+                command = json.loads(line)
             except ValueError as error:
                 self.log(f"ignoring an unparseable command: {error}", "ERROR")
+                continue
+            if command.get("cmd") == "stop":
+                # Out of band, on this thread. Tasks run on the command loop, so a
+                # queued stop would only be reached after the flight it was meant to
+                # cancel -- measured on Blocks, where /api/stop six seconds into an
+                # eight-metre leg reported the stage completed. The threaded worker
+                # sets its event directly, which is the behaviour the console is
+                # written against.
+                #
+                # A stop names the work in front of the vehicle, never the next
+                # instruction: applied to a task that already ended, or deferred to a
+                # task not yet submitted, it refuses flights nobody asked to cancel.
+                with self._lock:
+                    if self._task_running is not None:
+                        self._stop_event.set()
+                        target = self._task_running
+                    elif self._task_pending is not None:
+                        self._stop_requested = True
+                        target = f"{self._task_pending} (queued)"
+                    else:
+                        target = None
+                self.log(
+                    f"stop requested for {target}" if target
+                    else "stop requested with nothing flying; ignored",
+                    "WARNING",
+                )
+                continue
+            if command.get("cmd") == "task":
+                # Claim it before it reaches the queue: a stop can arrive from the pipe
+                # at any moment, and "queued" is already a task the operator can cancel.
+                with self._lock:
+                    self._task_pending = str(command.get("task_id", ""))
+            self._commands.put(command)
         self._commands.put({"cmd": "terminate"})   # parent closed the pipe
 
     def _build_session(self):
@@ -184,16 +254,24 @@ class MissionChild:
             instruction=str(command.get("instruction", "")),
             vehicle=str(command.get("vehicle", "") or ""),
         )
-        self._stop_event = threading.Event()
+        with self._lock:
+            self._stop_event = threading.Event()
+            if self._stop_requested:
+                self._stop_event.set()      # a stop that arrived while the task queued
+            self._stop_requested = False
+            self._task_pending = None
+            stop_event = self._stop_event
+            self._task_running = task.task_id
         self.log(f"Task {task.task_id} started: {task.instruction}")
         try:
-            result = self._session.run(task, stop_event=self._stop_event, log=self.log)
+            result = self._session.run(task, stop_event=stop_event, log=self.log)
         except Exception as error:            # keep the child alive for the next task
-            message = f"Task rejected: {type(error).__name__}: {error}"
+            message = f"Task rejected: {type(error).__name__}: {error}{_where(error)}"
             self.log(message, "ERROR")
             self.emitter.event(
                 WorkerEventKind.FINISHED, task_id=task.task_id, message=message, success=False
             )
+            self._clear_running(task.task_id)
             return
         lines, event = task_finish_events(result, task.task_id)
         for line in lines:
@@ -201,6 +279,7 @@ class MissionChild:
         self.emitter.event(event.kind, **{
             key: value for key, value in dataclasses.asdict(event).items() if key != "kind"
         })
+        self._clear_running(task.task_id)
 
     def _handle(self, command: dict) -> bool:
         """Apply one command; return False when the child should exit."""
@@ -208,11 +287,13 @@ class MissionChild:
         if cmd == "task":
             self._run_task(command)
         elif cmd == "stop":
-            self._stop_event.set()
+            with self._lock:
+                self._stop_event.set()
         elif cmd == "weather":
             try:
-                applied = self._session.set_weather(command.get("fields") or {})
-                self.log(f"Weather applied: {applied}")
+                self._session.set_weather(command.get("fields") or {})
+                # The session already logs what it applied; a second copy here made
+                # every weather change read as two identical lines.
             except Exception as error:
                 self.log(f"weather failed: {type(error).__name__}: {error}", "ERROR")
         elif cmd in ("shutdown", "terminate"):
