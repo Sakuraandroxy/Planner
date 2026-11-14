@@ -13,8 +13,12 @@
 #   ports   确认 ports 里列出的端口全部监听
 #   rpc     向 AirSim RPC 发一次探测调用
 #
-# argv 占位符：{binary} {map.map_name} {map.launch_map} {display} {xpra_port}
-#   {runtime_dir} {abslog} {settings_file} {res_x} {res_y}
+# argv 占位符（由 planner/simulator/argv.py 的 argv_values 提供）：
+#   {display} {display_number} {runtime_dir} {settings_file} {res_x} {res_y} {abslog}
+#   {map.id} {map.binary} {map.map_name} {map.launch_map} {map.scene_file}
+#   {map.sim_config_path} {launch_script} {stop_script}
+#   {ports.<名字>}，名字就是本段 ports 里的键；xpra_start 驱动额外提供 {start_child}
+#   （已拼好的子进程命令行）。写错名字是报错，不是原样透传给 xpra。
 # 缺文件时 planner.config 会用 base.yaml 的 simulator 段合成 ue5，
 # 所以删掉本文件等于回到今天的行为。
 
@@ -39,11 +43,16 @@ airsim:
   res_y: 720
   abslog_dir: output/logs
   ports: {xpra: 10010, rpc: 41451}
+  # 三个探针都跑得到（实现照抄 ../airsim-flight-console/scene_processes.py）。
+  # window 不是只看窗口存在：seamless xpra 在客户端接上之前不会 map 窗口，
+  # UE4 对未 map 的窗口暂停渲染，subGetImages 永不返回。就绪 = xpra info 找到
+  # windows.<id>.pid、校验归属、再 xpra control map + focus。
+  # 不要用 -RenderOffscreen 绕它：那个参数只是抹掉了症状，而它会连桌面画面一起去掉。
   probes: [window, ports, rpc]
-  # 命令逐字来自 airsim-flight-console/scene_launcher.py:33-75。
+  # argv 逐字来自 airsim-flight-console/scene_launcher.py:33-75，不要随手加参数。
   # {start_child} 由驱动用下面的 child_argv 拼成带引号的单个参数。
   child_argv:
-    - "{binary}"
+    - "{map.binary}"
     - "{map.map_name}"
     - "-settings={settings_file}"
     - "-abslog={abslog}"
@@ -62,7 +71,7 @@ airsim:
     - --exit-with-children=yes
     - --terminate-children=yes
     - --sharing=yes
-    - "--bind-tcp=0.0.0.0:{xpra_port}"
+    - "--bind-tcp=0.0.0.0:{ports.xpra}"
     - --html=on
     - --dbus=no
     - --dbus-launch=

@@ -47,15 +47,20 @@ python scripts/probe_ue4_env.py
 
 # 3) 两套客户端能否共存一个解释器
 python -m venv /tmp/coexist && /tmp/coexist/bin/pip install "airsim>=1.8.1" "msgpack-rpc-python>=0.4.1" pynng msgpack
-/tmp/coexist/bin/python -c "import msgpackrpc, pynng, msgpack; print('coexist ok')"
+# 不要只拿 import 判共存，它会给假绿灯；要跑到真正发包那一步：
+/tmp/coexist/bin/python -c "import airsim; airsim.MultirotorClient().ping()"
 ```
 
 判读：
 
 - 第 1 条出现相机位姿写入 → UE5 可以做俯视，回来告诉我，这会把 `PORT_SLOTS` 加一项。
-  没有 → 维持现状，UE5 不做俯视。
+  没有 → 维持现状，UE5 不做俯视。（实测：`Drone.set_camera_pose` 存在，结论已进第 7 节；
+  用户 2026-11-15 定了本轮不做俯视，先把整体程序跑起来，不要自行开工）
 - 第 2 条的 FAIL 逐条列出，每条给修复命令。
-- 第 3 条冲突 → UE4 必须跑独立环境，`docs/UE4_BRINGUP.md` 第 1 节的两个环境就是为此。
+- 第 3 条：`import` 全部成功不代表能共存。实测不能——`msgpackrpc` 用
+  `msgpack.Packer(encoding=...)`，该参数在 msgpack 1.0 已删；混装下 `ping()` 报
+  `TypeError`，隔离环境报 `TransportError`（序列化链路是通的，只是没起仿真器）。
+  所以 UE4 必须跑独立环境，详见 `docs/ENVIRONMENT.md` 第 1 节。
 
 结论写进 `docs/UE4_REMAINING_WORK.md` 第 7 节，替换掉"无法本地验证"里对应条目。
 **文档是这个任务的共享记忆，改代码不改文档等于把结论丢掉。**

@@ -79,8 +79,8 @@ git show origin/low-altitude-level-view-visual-goal-navigation:planner/workflows
 
 | 块 | 位置 | 要点 |
 |---|---|---|
-| `xpra_start` 进程驱动 | `planner/simulator/` | argv 模板已在 `config/simulators.yaml` 的 `airsim` 段就位。要实现：渲染并起进程、按 `probes: [window, ports, rpc]` 等就绪、写 pidfile、用 `/proc/<pid>/exe` 加 argv 地图名判所有权、拒绝停非自己拉起的进程。抄 `airsim-flight-console` 的 `scene_launcher.py:33-75`、`scene_processes.py:180-200`、`environment_service.py` 的 phase 状态机 |
-| AirSim 会话装配 | `planner/simulators/airsim/runtime.py` | 现在只有 `describe()` 与 `PORT_SLOTS` 供能力推导。`build_ports` 曾因无调用方被删。接上驱动时一并补回：`AirSimVehicle`、`AirSimObservationSource`、`AirSimCameraView`、`AirSimWeather`（天气从 `airsim-flight-console/weather_service.py` 移植，走 msgpack RPC） |
+| `xpra_start` 进程驱动 | **已落地：`planner/simulator/xpra_start.py` + `router.py`** | 渲染 argv、起进程、三个探针逐个等就绪、按 `/proc` 里的 exe 真路径 + `-settings=` 判归属、只停自己拉起过的栈。生命周期那套（`identity` 快照、`descendants`、`terminate_verified_tree`、`reclaim_stale_display`、`window_ready`、先校验后动作的 stop 阶梯）逐字参照 `airsim-flight-console/scene_processes.py` 与 `environment_service.py`。真机实测见第 7.1 节 |
+| AirSim 会话装配 | `planner/simulators/airsim/runtime.py` | 现在只有 `describe()` 与 `PORT_SLOTS` 供能力推导。`build_ports` 曾因无调用方被删。补回时必须同一个提交里带上调用方：`AirSimVehicle`、`AirSimObservationSource`、`AirSimCameraView`、`AirSimWeather`（天气从 `airsim-flight-console/weather_service.py` 移植，走 msgpack RPC） |
 
 心跳重连（旧 `ConnectionMonitor`、`heartbeat_interval_s`、`readiness_stable_s`）与停止接管（旧 `README.md:428` 描述的 `rotateByYawRateAsync` 交接）都在旧 `ServerController` 里，不在 worker 协议中。旧 worker 的 IPC 只认 `task` 与 `shutdown` 两条命令。装配时只看 worker 接口会漏掉这两块。
 
@@ -147,14 +147,43 @@ Drone.camera_look_at_object(camera_id: str, object_name: str, ...) -> bool
 `BRINGUP` 第 3 节的 `847 passed` 过时。另：`projectairsim` 已在 PyPI 上（`0.2.0/0.3.0/1.0.1/1.0.2/1.1.0`），
 `AGENT_PROMPT.md` 第 0 步要求的"wheel 路径"可以直接换成 `pip install --no-deps projectairsim==1.0.2`。
 
+**`landed_state` 在现场构建里的实际取值已测到。** 字段名就是 `landed_state`（不是 `land_state`），
+枚举类是 `airsim.LandedState`，取值 `Landed=0` / `Flying=1`；Blocks 与 Campus 冷启动后稳定报
+`Landed`，`z` 分别为 0.67 / 3.56。`connection.py:149` 与 `server_vehicle.py` 里的
+`state.landed_state == airsim.LandedState.Landed` 写法与构建一致，不用改。
+
+**UE4 打包应用在本机能渲染、能取图、能切图（驱动真机实测）。**
+
+用线上配置经 `FamilyRouter` 跑完整周期，`vln-ue4` 取帧：
+
+| 动作 | 结果 |
+|---|---|
+| `restart(blocks)` | 就绪 5s；取图 0.1s、1920x1080、非零率 98.8%；`z=0.67`、`landed_state=0` |
+| `restart(campus)` | 就绪 8s；取图 0.2s、1920x1080、非零率 93.1%；`z=3.56`、`landed_state=0` |
+| `stop()` | 1.4s，端口释放，**`/tmp/.X104-lock` 无残留** |
+
+两个坑都是 `airsim-flight-console` 已经踩过并写在注释里的，我这版实现照它做才避开：
+
+1. **未 map 的窗口。** seamless xpra 在客户端接上之前不 map 窗口，UE4 就不渲染：RPC 应答正常，
+   `simGetImages` 永不返回。解法是 `xpra info` 找到 `windows.<id>.pid`、校验归属、
+   再 `xpra control map` + `focus`。我先前误判成"窗口模式不可用"，改用 `-RenderOffscreen`
+   把症状盖掉了——那个参数连桌面画面一起去掉，已从 `config/simulators.yaml` 撤掉。
+2. **stale 显示锁。** Xvfb 只在正常退出时删 `/tmp/.X<n>-lock`；被强杀后锁留着，下一次同 display
+   启动直接失败，而且引擎日志一个字节都不会写（子进程根本没起来）。表现是"切图超时 180 秒、
+   没有任何日志"，真因是一个锁文件。启动前必须走 `reclaim_stale_display`：锁里的 PID 已死才删，
+   还活着就报错并给出可执行建议，绝不删别人的显示号。
+
+顺带一条：campus 从来不是"图太大启动慢"，8 秒就好。之前那次失败只是撞上了上面第 2 条。
+
 ### 7.2 仍然未知
 
-- `landed_state` 在现场 AirSim 构建里的实际取值。旧 `adapters/airsim/connection.py:126-155` 用连续两次相同读数判落地。
-- 深度图的实际内参。`settings.json` 里 `front_center` 的深度通道是 256x256 / FOV 90，与 planner 期望是否一致要取一次真帧才能判。
-- UE4 应用在本机能否真的渲染出图（无桌面会话 + `DISPLAY` 为空）。xpra / Xvfb / `libGL.so.1` 已确认存在，
-  但还没起过 UE4 进程。另：可见 3 张 RTX 3080 Ti，另有一张 `0000:68:00.0` 报 `Unknown Error`，要避用。
+- 深度图的实际内参。`settings.json` 里 `front_center` 的深度通道是 256x256 / FOV 90，
+  真帧已能取到（读数 0.3m–16.3km，中位 22m），但与 planner `camera_model` 的期望是否一致还没逐项核。
 - **UE5 启动脚本在本仓库路径下起不来**（只读了脚本，未实跑）：`scripts/launch_projectairsim_xpra.sh:47,52,57`
   把二进制路径写死为 `$PROJECT_DIR/sim/...`，`PROJECT_DIR` 由脚本自身位置推得 = 仓库根，而本仓库没有 `sim/`；
-  打包好的 UE5 在 `/roxy/sakura/XV3DGS-airsim-vln/sim/`。要建软链还是改脚本支持环境变量，**待定**。
+  打包好的 UE5 在 `/roxy/sakura/XV3DGS-airsim-vln/sim/`。用户已定方向：不走脚本，直接驱动二进制。
+  UE5 那族要不要一并换成 `xpra_start` 驱动，**待定**。
+- GPU：可见 3 张 RTX 3080 Ti 正常，另有一张 `0000:68:00.0` 报 `Unknown Error`，要避用。
+  UE4 目前没显式指定适配器也能跑。
 - 旧分支自述实机未联调：旧 `README.md:435`。旧分支没有 `tests/`，UE4 保真来自代码照抄，不来自测试通过。
 

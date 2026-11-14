@@ -1,0 +1,593 @@
+"""Tests for the ``xpra_start`` process driver.
+
+Nothing is launched here. The runner, the port checks, the PID lookup and the
+``/proc`` reader are faked, so these assert the argv that would reach xpra, and
+every condition under which the driver refuses to act or escalates.
+
+The ownership rules are the point of this file. They are copied from
+``../airsim-flight-console/scene_processes.py``, where they are what stands between
+a map switch and ``SIGKILL``ing somebody else's process.
+"""
+
+import os
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+import yaml
+
+from planner.config import MapCatalog, MapEntry, SimulatorSettings
+from planner.domain.runtime import SimulatorFamily, parse_family_catalog
+from planner.errors import SimulatorNotOwned, SimulatorRestartError
+from planner.simulator.xpra_start import (
+    SUPPORTED_PROBES,
+    UnattributedListener,
+    XpraStartSupervisor,
+    display_files,
+    supervisor_for,
+)
+
+DISPLAY = ":199"
+RPC_PORT = 41451
+XPRA_PORT = 20010
+SETTINGS = "/data/airsim/settings.json"
+BLOCKS = "/data/airsim/Blocks/LinuxNoEditor/Blocks/Binaries/Linux/Blocks"
+REPO = Path(__file__).resolve().parents[1]
+
+
+def _family(**overrides):
+    values = dict(
+        id="airsim",
+        label="AirSim (UE4)",
+        driver="xpra_start",
+        runtime="planner.simulators.airsim",
+        settings_file=SETTINGS,
+        ports={"xpra": XPRA_PORT, "rpc": RPC_PORT},
+        probes=("ports", "rpc", "window"),
+        child_argv=(
+            "{map.binary}",
+            "{map.map_name}",
+            "-settings={settings_file}",
+            "-abslog={abslog}",
+            "-windowed",
+            "-ResX={res_x}",
+            "-ResY={res_y}",
+        ),
+        argv=(
+            "/usr/bin/xpra",
+            "start",
+            "{display}",
+            "--start-child={start_child}",
+            "--bind-tcp=0.0.0.0:{ports.xpra}",
+            "--log-dir={runtime_dir}/logs",
+            "--pidfile={runtime_dir}/xpra.pid",
+            "--xvfb=Xvfb -screen 0 {res_x}x{res_y}x24",
+            "--socket-dir={runtime_dir}/sockets",
+        ),
+        stop_argv=("/usr/bin/xpra", "stop", "socket://{runtime_dir}/sessions/{display_number}/socket"),
+    )
+    values.update(overrides)
+    return SimulatorFamily(**values)
+
+
+def _maps():
+    return MapCatalog(
+        default_map="blocks",
+        maps=(
+            MapEntry(id="blocks", label="Blocks", simulator="airsim",
+                     binary=BLOCKS, map_name="Blocks"),
+            MapEntry(id="campus", label="Campus", simulator="airsim",
+                     binary="/data/airsim/Campus/LinuxNoEditor/Campus/Binaries/Linux/Campus",
+                     map_name="Campus"),
+            MapEntry(id="cityenviron", label="City", simulator="projectairsim",
+                     launch_map="cityenviron", scene_file="scene_city_dual.jsonc",
+                     sim_config_path="config/scenes/city"),
+        ),
+    )
+
+
+def _entry(map_id="blocks"):
+    return _maps().entry(map_id)
+
+
+def _settings(tmp_path, **overrides):
+    values = dict(
+        display=DISPLAY,
+        xpra_port=XPRA_PORT,
+        topics_port=20991,
+        services_port=20992,
+        runtime_dir=str(tmp_path / "output/xpra"),
+        map_marker_file=str(tmp_path / "output/xpra/current_map"),
+        launch_timeout_s=5.0,
+        stop_timeout_s=5.0,
+        port_release_timeout_s=0.5,
+    )
+    values.update(overrides)
+    return SimulatorSettings(**values)
+
+
+def _identity(pid, exe, argv, uid=None):
+    """(ppid, uid, exe, argv) in the shape ``identity()`` returns."""
+    return (1, os.getuid() if uid is None else uid, exe, list(argv))
+
+
+class Harness:
+    """Driver wired to fakes: which ports answer, which PIDs exist, what they run."""
+
+    def __init__(self, tmp_path, family=None, *, alive=(), holders=None, windows=None,
+                 uid=None, strict_pids=False):
+        self.family = family or _family()
+        self.now = 0.0
+        self.alive = set(alive)                 # ports accepting a connection
+        # port -> {pid: (map_id, exe, argv)}
+        self.bindings = {int(port): dict(value) for port, value in (holders or {}).items()}
+        self.uid = os.getuid() if uid is None else uid
+        self.windows = dict(windows or {})      # window id -> pid
+        self.spawned = []
+        self.calls = []                         # every xpra/subprocess invocation
+        self.exit_code = None                   # what the spawned process returns
+
+        def spawn(argv, **kwargs):
+            self.spawned.append((argv, kwargs))
+            harness_listening = self
+
+            class Fake:
+                pid = 4242
+
+                @property
+                def returncode(self):
+                    return harness_listening.exit_code
+
+                def poll(self):
+                    return harness_listening.exit_code
+
+                def wait(self, timeout=None):
+                    return self.returncode
+
+            return Fake()
+
+        def run(argv, **kwargs):
+            """Answers ``xpra stop``, ``xpra info`` and ``xpra control``."""
+            self.calls.append(list(argv))
+            verb = argv[1] if len(argv) > 1 else ""
+            if verb == "info":
+                body = "".join(
+                    f"windows.{wid}.pid={pid}\n" for wid, pid in self.windows.items()
+                )
+                return SimpleNamespace(returncode=0, stdout=body, stderr="")
+            if self.stop_frees_ports and verb == "stop":
+                self.alive.clear()
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        self.stop_frees_ports = True
+        self.strict_pids = strict_pids
+
+        def pid_finder(port):
+            owners = self.bindings.get(int(port), {})
+            if not owners:
+                if int(port) in self.alive and self.strict_pids:
+                    raise UnattributedListener(f"port {port} unreadable owner")
+                return set()
+            return set(owners)
+
+        def identity_reader(pid):
+            for owners in self.bindings.values():
+                if pid in owners:
+                    map_id, exe, argv = owners[pid]
+                    return _identity(pid, exe, self.expand(argv), uid=self.uid)
+            return None
+
+        self.driver = XpraStartSupervisor(
+            self.family,
+            _settings(tmp_path),
+            tmp_path,
+            _maps(),
+            spawn=spawn,
+            runner=run,
+            port_checker=lambda port: int(port) in self.alive,
+            pid_finder=pid_finder,
+            identity_reader=identity_reader,
+            clock=self.clock,
+            sleep=self.sleep,
+        )
+        self.harness = self
+
+    def expand(self, argv):
+        """Fill the placeholders a real engine cmdline would carry."""
+        return [
+            part.replace("@SETTINGS@", SETTINGS).replace("@BLOCKS@", BLOCKS)
+            .replace("@RUNTIME@", str(self.driver._runtime_dir))
+            .replace("@DISPLAY@", DISPLAY)
+            for part in argv
+        ]
+
+    def bring_up(self, map_id="blocks"):
+        """Put the fakes into the state a running stack leaves behind."""
+        owners = {77: (map_id, os.path.realpath(BLOCKS if map_id == "blocks" else
+                                               _entry(map_id).binary),
+                       [_entry(map_id).binary, _entry(map_id).map_name,
+                        f"-settings={SETTINGS}"])}
+        self.bindings[XPRA_PORT] = dict(owners)
+        self.bindings[RPC_PORT] = dict(owners)
+        self.alive.update({XPRA_PORT, RPC_PORT})
+        self.windows = {"9": 77}
+
+    def clock(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+def ours_engine(pid=77):
+    """A holder table with the engine child attributed to ``blocks`` on both ports."""
+    exe = os.path.realpath(BLOCKS)
+    argv = [BLOCKS, "Blocks", f"-settings={SETTINGS}", "-windowed"]
+    return {pid: ("blocks", exe, argv)}
+
+
+# -- argv rendering --------------------------------------------------------
+def test_child_argv_fills_every_placeholder(tmp_path):
+    driver = Harness(tmp_path).driver
+    assert driver.child_argv(_entry()) == [
+        BLOCKS,
+        "Blocks",
+        f"-settings={SETTINGS}",
+        f"-abslog={driver._runtime_dir / 'logs' / 'blocks.log'}",
+        "-windowed",
+        "-ResX=1280",
+        "-ResY=720",
+    ]
+
+
+def test_start_child_survives_quoting_as_one_argument(tmp_path):
+    argv = Harness(tmp_path).driver.launch_argv(_entry())
+    child = [part for part in argv if part.startswith("--start-child=")]
+    assert len(child) == 1, "xpra takes --start-child as a single argument"
+    assert BLOCKS in child[0] and f"-settings={SETTINGS}" in child[0]
+
+
+def test_xvfb_geometry_follows_resolution(tmp_path):
+    argv = Harness(tmp_path).driver.launch_argv(_entry())
+    assert "1280x720x24" in [p for p in argv if p.startswith("--xvfb=")][0]
+
+
+def test_unresolved_placeholder_is_an_error_not_a_literal(tmp_path):
+    """A stray ``{binary}`` would reach xpra and surface as a session with no child."""
+    broken = _family(child_argv=("{binary}", "{map.map_name}"))
+    with pytest.raises(ValueError, match=r"binary"):
+        Harness(tmp_path, family=broken).driver.child_argv(_entry())
+
+
+def test_empty_value_is_rejected(tmp_path):
+    loose = _family(settings_file="")
+    with pytest.raises(ValueError, match="resolved to nothing"):
+        Harness(tmp_path, family=loose).driver.child_argv(_entry())
+
+
+def test_half_a_binary_pair_is_refused_by_the_catalog():
+    with pytest.raises(ValueError, match="binary and map_name"):
+        MapEntry(id="x", label="X", simulator="airsim", binary="", map_name="Blocks")
+
+
+def test_stop_argv_needs_no_map(tmp_path):
+    argv = Harness(tmp_path).driver.stop_argv()
+    assert argv[:2] == ["/usr/bin/xpra", "stop"]
+    assert argv[2].endswith("/sessions/199/socket")
+    assert "{" not in "".join(argv)
+
+
+def test_shipped_template_renders(tmp_path):
+    """The real config/simulators.yaml must render; it once referenced {binary}."""
+    catalog = parse_family_catalog(
+        yaml.safe_load((REPO / "config/simulators.yaml").read_text(encoding="utf-8"))
+    )
+    family = catalog.require("airsim")
+    driver = XpraStartSupervisor(
+        family, _settings(tmp_path), tmp_path, load_maps(),
+        spawn=lambda argv, **k: SimpleNamespace(pid=1, poll=lambda: None, wait=lambda **_: 0),
+        runner=lambda argv, **k: SimpleNamespace(returncode=0, stdout="", stderr=""),
+        port_checker=lambda port: True,
+    )
+    argv = driver.launch_argv(_entry())
+    assert not [part for part in argv if "{" in part], argv
+    assert family.probes == ("window", "ports", "rpc")
+    assert "-RenderOffscreen" not in driver.child_argv(_entry())
+
+
+def load_maps():
+    from planner.config import load_map_catalog
+
+    return load_map_catalog(REPO / "config/maps.yaml")
+
+
+# -- ownership -------------------------------------------------------------
+def test_engine_child_is_ours_by_exe_and_settings_marker(tmp_path):
+    harness = Harness(tmp_path, holders={RPC_PORT: ours_engine()}, alive={RPC_PORT})
+    assert harness.driver.owned_map(77) == "blocks"
+
+
+def test_xpra_parent_is_ours_by_display_and_socket_dir(tmp_path):
+    runtime = Harness(tmp_path).driver._runtime_dir
+    argv = ["/usr/bin/xpra", "start", DISPLAY, f"--socket-dir={runtime / 'sockets'}",
+            f"--start-child={BLOCKS} Blocks"]
+    harness = Harness(
+        tmp_path,
+        holders={XPRA_PORT: {88: ("blocks", os.path.realpath("/usr/bin/python3"), argv)}},
+        alive={XPRA_PORT},
+    )
+    assert harness.driver.owned_map(88) == "blocks"
+
+
+def test_setproctitle_collapsed_argv_is_still_read(tmp_path):
+    """xpra replaces its argv with one string; shlex has to put it back."""
+    runtime = Harness(tmp_path).driver._runtime_dir
+    line = (f"/usr/bin/xpra start {DISPLAY} --socket-dir={runtime / 'sockets'} "
+            f"--start-child='{BLOCKS} Blocks'")
+    harness = Harness(
+        tmp_path,
+        holders={XPRA_PORT: {89: ("blocks", os.path.realpath("/usr/bin/python3"), [line])}},
+        alive={XPRA_PORT},
+    )
+    assert harness.driver.owned_map(89) == "blocks"
+
+
+def test_foreign_listener_blocks_a_stop(tmp_path):
+    foreign = {99: ("?", "/usr/bin/something_else", ["--port", str(RPC_PORT)])}
+    harness = Harness(tmp_path, holders={RPC_PORT: foreign}, alive={RPC_PORT})
+    with pytest.raises(SimulatorNotOwned, match="unmanaged PID 99"):
+        harness.driver.stop()
+    assert harness.calls == [], "no command may run against a stack we do not own"
+
+
+def test_unattributable_listener_blocks_a_stop(tmp_path):
+    harness = Harness(tmp_path, alive={RPC_PORT}, strict_pids=True)  # no readable owner
+    with pytest.raises(SimulatorNotOwned, match="unreadable owner"):
+        harness.driver.stop()
+
+
+def test_process_owned_by_another_user_is_not_ours(tmp_path):
+    other = {91: ("blocks", os.path.realpath(BLOCKS),
+                  [BLOCKS, "Blocks", f"-settings={SETTINGS}"])}
+    harness = Harness(tmp_path, holders={RPC_PORT: other}, alive={RPC_PORT}, uid=os.getuid() + 1)
+    with pytest.raises(SimulatorNotOwned):
+        harness.driver.stop()
+
+
+def test_a_different_display_is_not_ours(tmp_path):
+    """Same binary and settings, started by hand on another display."""
+    harness = Harness(tmp_path, alive={XPRA_PORT})
+    argv = ["/usr/bin/xpra", "start", ":250",
+            f"--socket-dir={harness.driver._runtime_dir / 'sockets'}",
+            f"--start-child={BLOCKS} Blocks"]
+    harness.bindings[XPRA_PORT] = {
+        95: ("blocks", os.path.realpath("/usr/bin/python3"), argv)
+    }
+    with pytest.raises(SimulatorNotOwned):
+        harness.driver.stop()
+
+
+# -- readiness -------------------------------------------------------------
+def test_window_probe_maps_and_focuses(tmp_path):
+    """The window must be mapped, or UE4 pauses rendering and capture never returns."""
+    harness = Harness(
+        tmp_path,
+        holders={RPC_PORT: ours_engine()},
+        alive={RPC_PORT},
+        windows={"4194356": 77},
+    )
+    assert harness.driver.window_ready(_entry())
+    mapped = [c for c in harness.calls if c[1] == "control" and c[3] == "map"]
+    focused = [c for c in harness.calls if c[1] == "control" and c[3] == "focus"]
+    assert [c[4] for c in mapped] == ["4194356"]
+    assert [c[4] for c in focused] == ["4194356"]
+
+
+def test_window_probe_ignores_a_window_that_is_not_ours(tmp_path):
+    harness = Harness(tmp_path, windows={"1": 77})  # no holder table, so PID 77 is unknown
+    assert not harness.driver.window_ready(_entry())
+
+
+def test_launch_waits_for_ports_rpc_and_window(tmp_path):
+    harness = Harness(tmp_path)
+
+    def spawn(argv, **kwargs):
+        harness.spawned.append((argv, kwargs))
+        harness.bring_up()
+        return _ok_process()
+
+    harness.driver._spawn = spawn
+    harness.driver.launch(_entry())
+    assert harness.driver.running()
+
+
+def test_launch_does_not_report_ready_on_an_unmapped_window(tmp_path):
+    harness = Harness(tmp_path)
+
+    def spawn(argv, **kwargs):
+        harness.bring_up()
+        harness.windows = {}          # xpra has the session but no mapped window yet
+        return _ok_process()
+
+    harness.driver._spawn = spawn
+    with pytest.raises(SimulatorRestartError, match="window"):
+        harness.driver.launch(_entry())
+
+
+def test_launch_fails_when_the_rpc_holder_is_another_map(tmp_path):
+    harness = Harness(tmp_path)
+
+    def spawn(argv, **kwargs):
+        harness.bring_up("campus")
+        return _ok_process()
+
+    harness.driver._spawn = spawn
+    with pytest.raises(SimulatorRestartError, match="rpc"):
+        harness.driver.launch(_entry())
+
+
+def test_launch_reports_the_exit_code_and_log_when_the_launcher_dies(tmp_path):
+    harness = Harness(tmp_path)
+
+    def spawn(argv, **kwargs):
+        harness.exit_code = 18
+        return _ok_process(exit_code=18)
+
+    harness.driver._spawn = spawn
+    with pytest.raises(SimulatorRestartError, match="exited with 18"):
+        harness.driver.launch(_entry())
+
+
+def test_missing_binary_is_refused_before_anything_starts(tmp_path):
+    harness = Harness(tmp_path)
+    entry = MapEntry(id="ghost", label="Ghost", simulator="airsim",
+                     binary=str(tmp_path / "nope"), map_name="Ghost")
+    with pytest.raises(SimulatorRestartError, match="missing or not executable"):
+        harness.driver.start(entry)
+    assert harness.spawned == []
+
+
+def _ok_process(exit_code=None):
+    class Fake:
+        pid = 4242
+        returncode = exit_code
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+    return Fake()
+
+
+# -- display reclaim -------------------------------------------------------
+def test_stale_display_lock_is_reclaimed(tmp_path, monkeypatch):
+    """The exact failure that made a map switch hang: a lock from a killed Xvfb."""
+    lock, sock = display_files(":199", lock_dir=tmp_path, socket_dir=tmp_path)
+    lock.write_text("999999999\n", encoding="utf-8")   # no such PID
+    sock.write_text("", encoding="utf-8")
+    removed = _reclaim(tmp_path, monkeypatch)
+    assert removed
+    assert not lock.exists() and not sock.exists()
+
+
+def _reclaim(tmp_path, monkeypatch):
+    import planner.simulator.xpra_start as module
+
+    monkeypatch.setattr(module, "display_files",
+                        lambda display, lock_dir=Path("/tmp"), socket_dir=Path("/tmp/.X11-unix"):
+                        (tmp_path / f".X{display[1:]}-lock", tmp_path / f"X{display[1:]}"))
+    return module.reclaim_stale_display(":199")
+
+
+def test_live_display_is_not_touched(tmp_path, monkeypatch):
+    lock = tmp_path / ".X199-lock"
+    lock.write_text(str(os.getpid()), encoding="utf-8")   # very much alive
+    import planner.simulator.xpra_start as module
+
+    monkeypatch.setattr(module, "display_files",
+                        lambda display, **kw: (lock, tmp_path / "X199"))
+    with pytest.raises(SimulatorRestartError, match="still held by PID"):
+        module.reclaim_stale_display(":199")
+    assert lock.exists()
+
+
+# -- stop ladder -----------------------------------------------------------
+def test_stop_uses_xpra_stop_when_we_own_the_stack(tmp_path):
+    harness = Harness(tmp_path, holders={RPC_PORT: ours_engine()}, alive={RPC_PORT})
+    harness.driver.stop()
+    assert harness.calls[0][:2] == ["/usr/bin/xpra", "stop"]
+    assert not harness.driver.running()
+
+
+def test_stop_escalates_and_reports_when_ports_stay_held(tmp_path):
+    harness = Harness(tmp_path, holders={RPC_PORT: ours_engine()}, alive={RPC_PORT})
+    harness.stop_frees_ports = False
+    # The escalation path runs a verified tree kill on a PID that does not exist,
+    # which lands in ProcessLookupError and is swallowed by design.
+    with pytest.raises(SimulatorRestartError, match="still holds ports"):
+        harness.driver.stop()
+    assert harness.calls[0][:2] == ["/usr/bin/xpra", "stop"]
+
+
+def test_stop_is_a_noop_when_nothing_is_listening(tmp_path):
+    harness = Harness(tmp_path)
+    harness.driver.stop()
+    assert harness.calls == []
+
+
+def test_restart_stops_then_launches(tmp_path):
+    harness = Harness(tmp_path)
+    harness.bring_up()
+
+    def spawn(argv, **kwargs):
+        harness.spawned.append((argv, kwargs))
+        harness.bring_up("campus")
+        return _ok_process()
+
+    harness.driver._spawn = spawn
+    harness.driver.restart(_entry("campus"))
+    assert len(harness.spawned) == 1
+    assert harness.calls[0][:2] == ["/usr/bin/xpra", "stop"]
+    assert harness.driver.running()
+
+
+def test_start_on_the_live_map_is_not_an_error(tmp_path):
+    harness = Harness(tmp_path)
+    harness.bring_up()
+    harness.driver.start(_entry("blocks"))
+    assert harness.spawned == []
+
+
+def test_start_over_another_live_map_is_refused(tmp_path):
+    harness = Harness(tmp_path)
+    harness.bring_up("campus")
+    with pytest.raises(SimulatorRestartError, match="another map is live"):
+        harness.driver.start(_entry("blocks"))
+
+
+def test_launch_writes_the_map_marker(tmp_path):
+    harness = Harness(tmp_path)
+
+    def spawn(argv, **kwargs):
+        harness.bring_up("campus")
+        return _ok_process()
+
+    harness.driver._spawn = spawn
+    harness.driver.launch(_entry("campus"))
+    marker = Path(str(harness.driver._marker_file))
+    assert marker.read_text(encoding="utf-8").strip() == "campus"
+
+
+# -- probes and wiring -----------------------------------------------------
+def test_unknown_probe_is_refused_at_construction(tmp_path):
+    with pytest.raises(ValueError, match="probe"):
+        Harness(tmp_path, family=_family(probes=("ports", "telepathy"))).driver
+
+
+def test_rpc_probe_needs_a_port_named_rpc(tmp_path):
+    with pytest.raises(ValueError, match="no port named rpc"):
+        Harness(tmp_path, family=_family(probes=("rpc",), ports={"xpra": XPRA_PORT})).driver
+
+
+def test_window_probe_is_supported():
+    assert "window" in SUPPORTED_PROBES
+
+
+def test_supervisor_for_picks_the_driver(tmp_path):
+    settings = _settings(tmp_path)
+    script = _family(id="projectairsim", driver="script", launch_script="scripts/a.sh",
+                     stop_script="scripts/b.sh", argv=(), child_argv=(), stop_argv=(),
+                     probes=("ports",), ports={"xpra": XPRA_PORT})
+    from planner.simulator.supervisor import SimulatorSupervisor
+
+    assert isinstance(supervisor_for(script, settings, tmp_path, _maps()), SimulatorSupervisor)
+    assert isinstance(supervisor_for(_family(), settings, tmp_path, _maps()), XpraStartSupervisor)
+    assert isinstance(supervisor_for(None, settings, tmp_path, _maps()), SimulatorSupervisor)
+
+
+def test_unknown_driver_is_rejected(tmp_path):
+    bogus = SimpleNamespace(**{**vars(_family()), "driver": "carrier_pigeon"})
+    with pytest.raises(ValueError, match="carrier_pigeon"):
+        supervisor_for(bogus, _settings(tmp_path), tmp_path, _maps())

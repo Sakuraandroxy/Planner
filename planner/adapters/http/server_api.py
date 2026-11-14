@@ -32,10 +32,10 @@ from .video import BOUNDARY, mjpeg_chunks
 
 CONSOLE_DIR = Path(__file__).resolve().parents[3] / "console"
 
-#: Process drivers ``planner/simulator`` can actually run in this build.
-#: ``xpra_start`` is declared in config/simulators.yaml for the AirSim UE4
-#: family; until its driver lands, switching to such a map must be refused.
-IMPLEMENTED_DRIVERS = frozenset({"script"})
+#: Process drivers live in planner/simulator: ``script`` runs the ProjectAirSim
+#: launch script, ``xpra_start`` renders the family's argv. ``supervisor_for``
+#: is what knows which ones exist, and ``SimulatorFamily`` rejects any other
+#: driver when the config is parsed, so the HTTP layer does not guess again.
 
 ViewMode = Literal["rover_front", "rover_chase", "drone_front", "drone_chase"]
 
@@ -136,13 +136,13 @@ class ModelsRequest(BaseModel):
         return cleaned
 
 
-def create_api(controller, settings, frames=None, trajectory_hub=None, families=None) -> FastAPI:
+def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAPI:
     """Build the console API.
 
-    ``families`` is the simulator family catalog. When present, every optional
-    control is gated on the active map's ``capabilities`` instead of a family
-    name: an action the map's simulator does not offer returns 501 with
-    ``detail.unsupported``. Without it the API behaves exactly as before.
+    Every optional control is gated on the active map's ``capabilities``: an
+    action the map's simulator does not offer returns 501 with
+    ``detail.unsupported``. Those flags come from the simulator registry, not
+    from a config file, so a simulator cannot advertise a port it lacks.
     """
 
     def capabilities():
@@ -314,26 +314,8 @@ def create_api(controller, settings, frames=None, trajectory_hub=None, families=
 
     @app.post("/api/world")
     def switch_world(request: WorldRequest):
-        # Fail loudly on a family whose process driver this build cannot run
-        # yet, instead of handing a UE4 map to the UE5 launch script.
-        if families is not None:
-            catalog = getattr(controller, "maps", None)
-            entry = catalog.entry(request.map) if catalog is not None else None
-            if entry is not None:
-                driver = families.require(entry.simulator).driver
-                if driver not in IMPLEMENTED_DRIVERS:
-                    raise HTTPException(
-                        501,
-                        detail={
-                            "unsupported": f"driver:{driver}",
-                            "simulator": entry.simulator,
-                            "message": (
-                                f"simulator '{entry.simulator}' needs the "
-                                f"'{driver}' process driver, which is not "
-                                "implemented in this build yet"
-                            ),
-                        },
-                    )
+        # The router picks the driver from the map's family, so a UE4 map can no
+        # longer reach the ProjectAirSim launch script.
         try:
             state = controller.request_world(request.map)
         except BackendUnavailable as exc:

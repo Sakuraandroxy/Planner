@@ -441,6 +441,7 @@ def test_repository_catalog_lists_the_supported_maps():
     # AirSim UE4 binaries come from airsim-flight-console's scene table.
     assert air == (
         "airsimnh", "abandonedpark", "msbuild2018", "trapcam", "blocks", "shanghai",
+        "campus",
     )
     assert config.maps.default_map == "cityenviron"
     assert all(e.scene_file for e in config.maps.maps if e.simulator == "projectairsim")

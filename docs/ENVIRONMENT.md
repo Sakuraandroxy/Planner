@@ -153,11 +153,12 @@ airsim 1.8.1 requires opencv-contrib-python, which is not installed.
 conda activate vln
 cd /roxy/kedior/Planner
 python -m compileall -q planner scripts tests   # 期望：退出码 0
-python -m pytest -q                             # 期望：851 passed
+python -m pytest -q                             # 当前：887 passed
 python scripts/probe_ue4_env.py
 ```
 
-**`851 passed` 才是这个分支的全量结果**，与 `docs/AGENT_PROMPT.md` 第 0 步的基线一致。
+**结构改造完成时的全量结果是 `851 passed`**，接入 `xpra_start` 驱动及其 36 个用例后是 **887**。
+以后每进一步这个数字都会涨，所以不要把具体条数当唯一基线：以 `0 failed` 为准。
 `docs/UE4_BRINGUP.md:102` 还写着 `847 passed`，那个数字过时了。
 
 缺包时的失败长这样，可以用来判断自己漏了哪一步：
@@ -198,8 +199,8 @@ python scripts/probe_ue4_env.py
 **坑 6.2：`scripts/launch_projectairsim_xpra.sh` 把 UE5 路径写死成 `$PROJECT_DIR/sim/`。**
 `PROJECT_DIR` 由脚本自身位置推导，即 `/roxy/kedior/Planner`，而本仓库没有 `sim/` 目录。
 直接跑会报 `simulator binary not found`，且没有任何环境变量能覆盖它。
-两个选择：建软链 `Planner/sim -> /roxy/sakura/XV3DGS-airsim-vln/sim`，或改脚本支持环境变量。
-**未处理**，需要先定方向。
+**已定方向（用户 2026-11-15）：不用包脚本，直接驱动打包好的二进制。** UE5 那族要不要一并换成
+`xpra_start` 驱动负没定，目前它仍走 `driver: script`。
 
 ## 7 图形与 GPU
 

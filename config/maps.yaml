@@ -62,3 +62,9 @@ maps:
     label: AirSim 上海
     binary: /data/airsim/Shanghai/LinuxNoEditor/Shanghai/Binaries/Linux/Shanghai
     map_name: Shanghai
+  # 本机从 ue4/urbanScene 自己打包的那张，已验二进制存在且可执行。
+  - id: campus
+    simulator: airsim
+    label: AirSim 校园
+    binary: /data/airsim/Campus/LinuxNoEditor/Campus/Binaries/Linux/Campus
+    map_name: Campus

@@ -7,12 +7,10 @@ also prove the derivation is wired into the API rather than bolted on beside it.
 from pathlib import Path
 
 import pytest
-import yaml
 from fastapi.testclient import TestClient
 
 from planner.adapters.http.server_api import create_api
-from planner.config import ServerSettings, SimulatorSettings, load_map_catalog, projectairsim_family
-from planner.domain.runtime import parse_family_catalog
+from planner.config import ServerSettings, load_map_catalog
 from planner.domain.server import ServerState
 from planner.services.frame_hub import FrameHub
 from planner.services.trajectory_hub import TrajectoryHub
@@ -25,13 +23,6 @@ AIRSIM_MAP = "airsimnh"
 PAS_MAP = "cityenviron"
 
 
-def _families():
-    return parse_family_catalog(
-        yaml.safe_load((ROOT / "config/simulators.yaml").read_text(encoding="utf-8")),
-        fallback=projectairsim_family(SimulatorSettings()),
-    )
-
-
 @pytest.fixture()
 def client():
     """A controller whose active map can be flipped between simulators."""
@@ -42,7 +33,6 @@ def client():
         ServerSettings(),
         frames=FrameHub(max_fps=5.0),
         trajectory_hub=TrajectoryHub(),
-        families=_families(),
     )
     with TestClient(app) as live:
         yield live, controller
@@ -130,18 +120,13 @@ def test_task_submission_needs_no_optional_port(client):
     assert live.post("/api/tasks", json={"instruction": "前进一米"}).status_code == 202
 
 
-def test_airsim_map_is_refused_until_its_process_driver_exists(client):
-    """The xpra_start driver is not implemented yet.
+def test_airsim_map_switch_reaches_the_controller(client):
+    """The xpra_start driver exists, so an AirSim map must not be refused.
 
-    Handing an AirSim map to the ProjectAirSim launch script would start the
-    wrong binary on the wrong ports, so the API refuses the switch and names the
-    missing piece instead.
+    Routing goes through the family router, so handing a UE4 map to the
+    ProjectAirSim launch script is no longer a failure mode this layer guards.
     """
     live, controller = client
     response = live.post("/api/world", json={"map": AIRSIM_MAP})
-    assert response.status_code == 501, response.text
-    detail = response.json()["detail"]
-    assert detail["simulator"] == "airsim"
-    assert detail["unsupported"] == "driver:xpra_start"
-    assert controller.world_calls == []
-    assert live.post("/api/world", json={"map": "neighborhood"}).status_code == 202
+    assert response.status_code == 202, response.text
+    assert controller.world_calls == [AIRSIM_MAP]

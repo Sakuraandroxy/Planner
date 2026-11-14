@@ -7,8 +7,8 @@ from pathlib import Path
 
 from .adapters.http.server_api import create_api
 from .simulators.projectairsim.session import ProjectAirSimMissionSession
+from .simulator.router import FamilyRouter
 from .simulator.supervisor import (
-    SimulatorSupervisor,
     read_map_marker,
 )
 from .simulator.worker import ThreadedMissionWorker
@@ -65,15 +65,9 @@ def build_server(config: AppConfig):
 
         return ThreadedMissionWorker(session_factory)
 
-    # One code path launches both simulators; only the argv template differs,
-    # and that template lives in config/simulators.yaml.
-    declared = config.families.entry("projectairsim")
-    supervisor = SimulatorSupervisor(
-        config.simulator,
-        PROJECT_DIR,
-        simulator=declared,
-        argv_template=declared.argv if declared is not None else None,
-    )
+    # One facade for both families. Which driver runs a map follows from the
+    # map's family, and both argv templates live in config/simulators.yaml.
+    supervisor = FamilyRouter(config.families, config.simulator, PROJECT_DIR, config.maps)
     marker = Path(config.simulator.map_marker_file)
     if not marker.is_absolute():
         marker = PROJECT_DIR / marker
@@ -95,5 +89,4 @@ def build_server(config: AppConfig):
         config.server,
         frames=frames,
         trajectory_hub=trajectory,
-        families=config.families,
     )
