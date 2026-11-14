@@ -170,6 +170,7 @@ ProjectAirSim 的 CityEnviron 与 AirSimNH 构建**不写任何日志文件**，
 |---|---|
 | 标定降级 | `streaming-view` 四机位标定在本机四帧打分完全相同，于是回落内置顺序（见 5.2）。不阻断任务，但循环顺序在这台机器上没被实测标定过 |
 | 俯视与目标导航 | UE4 的 `visual_goal_navigation` 需要检测端点，UE5 俯视被用户明确推迟；见第 6 节与 `docs/UE4_REMAINING_WORK.md` 第 4 节 |
+| 旧分支心跳重连 | 不必原样搬。实测任务中途 SIGKILL 子进程后服务自己重启了 worker；真需要验的是长时间 RPC 卡住这种它原本负贡的场景 |
 
 会话装配、天气、进程驱动、控制面三处冲突、子进程入口、跨族切换都已落地并真机验证。
 实测数字与控制面冲突的证据在 `docs/UE4_REMAINING_WORK.md` 7.3 末尾的表里，跨族切换在 5.3。
@@ -234,8 +235,14 @@ UE5 就绪慢是引擎自己起图的时间；UE4 约 8s。这条路径上撞出
 这几条是读代码和量出来的，文档此前没写清：
 
 - `POST /api/stop` 只中止任务（`worker.stop()`）。会话与仿真栈按设计留着，控制台上一次
-  场景仍然可看。
+  场景仍然可看。任务飞行中按下它：实测 UE4 在 **2s** 内回到 `idle`，阶段报
+  `cancelled: task was cancelled`，无人机保持最后一个设定点。
+- 停止只命名当下这份活：在飞的任务立即置取消事件；已提交还没出队的任务也会被取消；
+  没有东西在飞时它被丢弃并记一行 `stop requested with nothing flying; ignored`，
+  **不会顺延给下一条指令**（顺延过一次，后果是中止后的第一个任务开局就被取消）。
 - 服务进程退出会关掉会话：子进程 worker 在约 1s 内退出。仿真栈仍留着。
+- 任务进行中把子进程 `SIGKILL`：服务自己重启 worker 并回到 `idle`，之后切图与再飞都正常。
+  旧分支那套 `ConnectionMonitor` 不必搬回——至少这条崩溃路径已被现有的重启逻辑盖住。
 - 残留的仿真栈由**下一次启动**负责收：控制器启动时 preflight，认得出的就停掉
   （"Leftover simulator stopped; the console starts blank"），认不出的只告警不动。
 - 子进程 `shutdown()` 现在会等到 CLOSED 为止（上限 `land_timeout_s + 10`）。之前它写完
