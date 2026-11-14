@@ -118,6 +118,19 @@ fed3373 chore: 复制旧分支规划器到 planner/ue4      ← 被 cf2309d 删�
 
 如果这些判断在你手上被推翻，更新 `docs/UE4_REMAINING_WORK.md` 第 6 节，别只改代码。
 
+## 7b 这个分支怎么到新机器上
+
+开发者没有 GitHub 推送权限，所以上面的 `git push` 不适用。改用迁移包：
+
+```bash
+git clone /path/to/planner-ue4.bundle Planner
+cd Planner && git checkout feat/ue4-dual-runtime
+```
+
+包是单个文件，装着完整 git 历史，不需要网络也不需要推送权限。里面带三个分支：
+`feat/ue4-dual-runtime`（接手用）、`main`、
+`low-altitude-level-view-visual-goal-navigation`（取旧文件用）。
+
 ## 8 已知的仓库外事实
 
 - 远端只有 `origin`，即 `git@github.com:Sakuraandroxy/Planner.git`。旧分支在远端存在（`f93bbb4`），取旧文件不需要本地分支。
