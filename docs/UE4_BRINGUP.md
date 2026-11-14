@@ -1,146 +1,179 @@
-# UE4 上机清单
+# 上机清单 · 两个引擎一套服务
 
-分支：`feat/ue4-dual-runtime`。目标机：装了 UE4 AirSim 与 UE5 ProjectAirSim 的那台 Linux。
+分支 `feat/ue4-dual-runtime`。目标机：装了 UE4 AirSim 与 UE5 ProjectAirSim 打包产物的
+那台 Linux。本文只写**在这台机器上跑通过**的步骤；与任何旧文档冲突时以本文为准。
 
 ## 0 现在能做到哪一步
 
 | 能力 | 状态 |
 |---|---|
-| UE5 全套（现有功能） | ok 完好，847 个测试通过 |
+| UE5 全套（现有任务、双载具、机位、模型、天气） | ok 完好，并且已在这台机器上实测（见 3.4） |
 | 两族注册表、能力位、配置校验 | ok 已实现并测试 |
-| 前端地图列表出现 6 张 AirSim 图 | ok 已实现 |
-| 前端按端口推导的能力位隐藏控件 | ok 已实现 |
-| AirSim 适配层接上共享端口 | ok 14 个模块，Vehicle 等四协议零缺失 |
-| 俯视的支持层进入共享层 | ok 13 个文件，不再属于任何仿真器目录 |
-| 两族共用一套 xpra argv 渲染 | ok 模板在 config/simulators.yaml |
-| 切到 AirSim 地图 | no 返回 501，xpra_start 进程驱动未实现 |
-| UE4 上飞行 | no 还缺会话装配与任务类型接线 |
+| 前端地图列表 | ok 9 张：2 张 UE5 加 7 张 UE4 |
+| 两族共用一个进程驱动 | ok `planner/simulator/xpra_start.py`，shell 启动脚本已删除 |
+| UE4 起图 / 切图 / 停止 | ok 真机实测：blocks 5s、campus 8s、stop 1.4s 无 X 锁残留 |
+| UE4 取帧与位姿 | ok 真机实测，观测已对齐主干 `Observation` 契约 |
+| UE4 上飞任务 | no 卡在控制面三处冲突，见 `docs/UE4_REMAINING_WORK.md` 7.3 |
+| UE4 俯视任务端到端 | no 本轮不做（用户 2026-11-15 定的顺序：先把整体程序跑起来） |
 
-也就是说：这份代码不会破坏你现在的 UE5 用法，UE4 部分停在"配置与前端就绪、执行链路未接"的位置。第 6 节列出剩余要写的东西。
+缺的每一处都会显式报错，没有静默降级的路径。
 
-## 1 建环境
+## 1 环境
 
-> 本节两条 `pip install` 照抄都会失败，`msgpack-python` 那套的版本预期也过时了。
-> 实测可用的命令与原因见 `docs/ENVIRONMENT.md` 第 2、3 节。
+装什么、装到哪、踩过哪些坑，全部写在 `docs/ENVIRONMENT.md`。要点是三个事实：
 
-两个环境，不要合成一个。UE4 的 `msgpack-rpc-python` 会拉一个老 `tornado`，UE5 的 `projectairsim` 依赖 `pynng` 与新 `msgpack`。旧分支专门写了 `planner/ue4/adapters/airsim/rpc_loop.py` 绕开 msgpack-rpc 0.4.1 与 Tornado 4.5 的循环重启问题，说明这条依赖链本来就脆。
-
-主进程只加载契约与注册表，永不 import 两族客户端，所以两个环境可以共存于同一台机器。这条约束由 `tests/test_import_boundary.py` 守着。
+- 两个 conda 环境：`vln`（HTTP 主进程 + UE5）与 `vln-ue4`（UE4 客户端）。
+  这不是谨慎，是 `msgpack` 模块名撞车逼出来的，见 `ENVIRONMENT.md` 第 1 节。
+- `projectairsim` 在 PyPI 上，`pip install --no-deps projectairsim==1.0.2` 再补基础依赖。
+- 装 `airsim` 必须先装 numpy，并且用 `--no-deps --no-build-isolation`。
 
 ```bash
-# UE5 侧，也是 HTTP 主进程
-conda create -n vln python=3.11 -y
 conda activate vln
-pip install numpy pyyaml httpx fastapi "uvicorn[standard]" pydantic \
-  opencv-python-headless pytest
-pip install /path/to/projectairsim-1.0.2-py3-none-any.whl
-
-# UE4 侧，只给 UE4 运行时子进程用
-conda create -n vln-ue4 python=3.11 -y
-conda activate vln-ue4
-pip install "airsim>=1.8.1" "msgpack-rpc-python>=0.4.1" "Pillow>=10.0.0" \
-  "requests>=2.31.0" "numpy>=1.24.0" "PyYAML>=6.0"
+cd /roxy/kedior/Planner
+python -m pytest -q                      # 期望 0 failed（当前 883 passed）
+python -m pytest -q tests/test_architecture.py
+test ! -e planner/ue4 && echo "复制树未复活"
 ```
 
-`projectairsim` 不在 PyPI 上，必须用 wheel。版本号看 `pyproject.toml` 的注释，是 1.0.2。
+`python scripts/probe_ue4_env.py` 在 `vln` 里必然报 1 个 FAIL（`airsim` 装在另一个环境），
+这是设计使然，不要为了跑绿把 airsim 装进 `vln`。
 
-## 2 改配置
+## 2 配置
 
-### 2.1 `config/maps.yaml`
+三处，各有归属，别在第四处重复。
 
-6 张 UE4 图的二进制路径按 flight-console 的原表写好：
+### 2.1 `config/maps.yaml`——每张图是什么、在哪
 
 ```yaml
-binary: /data/airsim/AirSimNH/LinuxNoEditor/AirSimNH/Binaries/Linux/AirSimNH
+- id: blocks
+  simulator: airsim                 # 驱动这张图的适配层包
+  label: AirSim Blocks
+  binary: /data/airsim/Blocks/LinuxNoEditor/Blocks/Binaries/Linux/Blocks
+  map_name: Blocks                  # 交给二进制的 argv[1]，窗口标题与它同字
 ```
 
-改这一处：如果你的二进制不装在 `/data/airsim/` 下，改每张图的 `binary`。`map_name` 是传给二进制的 argv[1]，保持与目录名一致。
+UE5 的两张图除 `binary`/`map_name` 外还带 `scene_file` 与 `sim_config_path`（World 加载
+场景用的 JSONC 与目录）。换机器时只需要改 `binary` 一处。
 
-### 2.2 `config/simulators.yaml`
+`map_name` 不总是等于目录名：neighborhood 的目录是 `Neighborhood`，交给引擎的地图名却是
+`AirSimNH`，窗口标题也是 `AirSimNH`。这是 ProjectAirSim 自己的命名，不是笔误。
 
-| 字段 | 现在写的值 | 要确认什么 |
+### 2.2 `config/simulators.yaml`——怎么连、怎么起停
+
+每个家族一段，两族的 `driver` 都是 `xpra_start`。字段：
+
+| 字段 | 含义 | 要确认什么 |
 |---|---|---|
-| `ue4.settings_file` | `/data/airsim/settings.json` | AirSim 那份带大量启动参数的配置，用 `-settings=` 原样传入 |
-| `ue4.ports.rpc` | `41451` | 必须等于 settings.json 的 `ApiServerPort` |
-| `ue4.ports.xpra` | `10010` | 与 `ue5.ports.xpra` 相同，两族共用一套显示与画面端口 |
-| `ue5.ports.topics/services` | `8991` / `8992` | 保持现有代码的默认值，与 `config/base.yaml` 的 `projectairsim.port_*` 一致 |
-| `ue4.argv` | `/usr/bin/xpra` 开头 | xpra 不在这个路径就改 argv |
-| `ue4.res_x/res_y` | `1280` / `720` | 与 UE5 画面尺寸一致，改这里会同时改 Xvfb 分辨率 |
+| `ports` | 家族监听的端口，键名同时是 `{ports.<键>}` 占位符 | `airsim.ports.rpc` 必须等于 settings.json 的 `ApiServerPort`（本机没有该字段，即默认 41451） |
+| `probes` | 就绪判据：`window` / `ports` / `rpc` | UE4 三个都要；UE5 用 `window` 与 `ports`，它没有 RPC |
+| `child_argv` | 引擎命令行的 argv 模板 | 端口与分辨率走占位符，不要写死 |
+| `argv` / `stop_argv` | xpra 会话参数 | 两族用 YAML 锚点共用**同一份**，由测试断言两处相等 |
+| `settings_file` | 引擎 settings（AirSim 专用） | UE5 没有这个字段，驱动据此不生成所有权指纹 |
+| `res_x` / `res_y` | 画面尺寸 | 同时决定 Xvfb 分辨率与 `-ResX/-ResY` |
 
-两族端口不统一：UE4 单 RPC 41451，UE5 双 socket 8991 与 8992。这是你的决定。同一时刻只跑一个仿真器，所以 xpra 端口共用不冲突。
+能力位不在这里：写了 `capabilities` 会被配置校验拒绝，能力由
+`planner/simulators/<name>/runtime.py` 的 `PORT_SLOTS` 推导。
 
-### 2.3 `config/base.yaml`
+这个文件缺失时配置加载直接报错。以前它会合成一个走 shell 脚本的家族，那等于在 Python
+里再抄一份命令行；两族现在都从这个文件读命令。
 
-UE5 侧不用改。要让别的机器的浏览器访问，启动时传 `--host 0.0.0.0`，不必改默认值 `127.0.0.1`。
+### 2.3 `config/base.yaml`——`simulator` 段
 
-### 2.4 `planner/ue4/config/base.yaml`（容易漏）
+只剩与进程无关的东西：`display`、`runtime_dir`、`map_catalog_file`、`map_marker_file`、
+三个超时与 `restart_attempts`。**端口不在这个文件里**（以前这里是第二份真相，
+和家族段互相校验），UE4 运行时的模型端点与密钥见 `ENVIRONMENT.md` 第 2 节。
 
-UE4 运行时读的是这份旧分支配置，它与主配置有三处不同，务必核对：
+要让别的机器的浏览器访问，启动时传 `--host 0.0.0.0`，不必改默认值。
 
-| 项 | UE5 主配置 | UE4 配置 |
-|---|---|---|
-| `request_format` | `anthropic` | `deepseek` |
-| 任务解析 `url` | `https://api.deepseek.com/anthropic` | `https://api.deepseek.com` |
-| 密钥环境变量 | 全部读 `VLN_API_KEY` | 按角色分：`TASK_PARSER_API_KEY`、`TRAJECTORY_PLANNER_API_KEY`、`TARGET_DETECTION_API_KEY`、`TASK_COMPLETION_API_KEY` |
+## 3 手动拉起与停止仿真栈
 
-所以 UE4 任务要单独导出这几个变量，只给 `VLN_API_KEY` 会认证失败。
-
-同一份文件里的 `airsim.host` 留空表示用客户端默认地址，`airsim.port` 必须是 41451 或与 settings.json 一致。`airsim.camera_id` 是 `front_center`，必须与 settings.json 里无人机实际相机名一致——自检脚本会两边都读并比对。
-
-## 3 上机顺序
+这是全仓库唯一一份命令。冒烟脚本与 README 都指到这里。
+两族同一条：驱动读 `config/simulators.yaml` 渲染 argv。
 
 ```bash
-git checkout feat/ue4-dual-runtime
+cd /roxy/kedior/Planner && conda activate vln
+PYTHONPATH=. python -c "
+from pathlib import Path
+from planner.config import load_config
+from planner.simulator.router import FamilyRouter
+cfg = load_config('config/base.yaml')
+router = FamilyRouter(cfg.families, cfg.simulator, Path('.').resolve(), cfg.maps)
+router.restart(cfg.maps.entry('cityenviron'))     # 或 blocks / campus / airsimnh …
+print('running:', router.running())
+"
+```
+
+停止：
+
+```bash
+PYTHONPATH=. python -c "
+from pathlib import Path
+from planner.config import load_config
+from planner.simulator.router import FamilyRouter
+cfg = load_config('config/base.yaml')
+FamilyRouter(cfg.families, cfg.simulator, Path('.').resolve(), cfg.maps).stop()
+"
+```
+
+要点：
+
+- 换图用 `restart`，已有图在跑时 `start` 会拒绝——那是有意的，别改成静默切换。
+- UE4 的取图与飞行要放在 `vln-ue4` 里跑，主进程按架构规则不许加载 AirSim 客户端。
+- 画面：`http://<host>:10010/`。seamless xpra 在客户端接上之前不 map 窗口，UE 对未 map
+  的窗口暂停渲染；`window` 探针会 `xpra control map` + `focus` 处理这件事。
+  **不要**用 `-RenderOffscreen` 绕它：它把桌面画面一起去掉了。
+
+## 4 上机顺序
+
+```bash
 conda activate vln
-pip install -e .          # 或按第 1 节手工装
-python scripts/probe_ue4_env.py
-```
-
-期望：`0 failed`。有 FAIL 就按提示补，不要继续。
-
-```bash
-PYTHONPATH=. python -m pytest -q          # 期望 847 passed
+python -m pytest -q
 python scripts/serve_planner.py --host 0.0.0.0
 ```
 
 浏览器开 `http://<机器IP>:8000/`，逐项确认：
 
-1. 地图下拉里出现 8 项：2 张 ProjectAirSim 加 6 张 AirSim。
-2. 选 `cityenviron` 启动，UE5 全流程与今天一致。
+1. 地图下拉里出现 9 项：2 张 ProjectAirSim 加 7 张 AirSim（`/data/airsim` 下的
+   七张都已配好路径，含本机自己打包的 campus）。
+2. 选 `cityenviron` 启动，UE5 全流程与改造前一致。
 3. `GET /api/status` 的响应里出现 `simulator` 与 `capabilities`。
-4. 选一张 AirSim 图点启动，界面显示 501 与 `driver:xpra_start`。这是预期行为。
-5. UE5 地图下机位、模型、回起点、轨迹卡片都在。能力位由端口推导，改 YAML 无效；
-   要验证门控真的在跑，从 `planner/simulators/projectairsim/runtime.py` 的
-   `PORT_SLOTS` 里删掉 `models` 再重启，那张卡片应消失。
+4. 选一张 AirSim 图（`blocks` 最快）启动：能起、能取帧、能停。UE4 任务还飞不起来，
+   原因见 `docs/UE4_REMAINING_WORK.md` 7.3，不是进程驱动的问题。
+5. UE5 地图下机位、模型、回起点、轨迹卡片都在。要验证门控真的在跑，从
+   `planner/simulators/projectairsim/runtime.py` 的 `PORT_SLOTS` 里删掉 `models`
+   再重启，那张卡片应消失。
 
-## 4 剩下的实现工作
+### 4.1 UE5 实测记录
 
-按依赖顺序，每条都能独立提交：
+发布配置经 `FamilyRouter` 跑完整周期（`vln`，同一条 `GetBuildCommitHash` 请求）：
 
-| 步 | 内容 | 现有依据 | 可本地验证 |
-|---|---|---|---|
-| 1 | `planner/simulator/` 的 `xpra_start` 驱动：渲染 argv 模板、起进程、跑探针、写 pidfile | `airsim-flight-console/scene_launcher.py:33-75`、`scene_processes.py:180-200`、`environment_service.py` 状态机 | 可以，用假 runner 与假端口检查器 |
-| 2 | UE4 运行时子进程入口与父侧 `BackendWorker` 包装 | 旧分支 `SubprocessPlannerWorker` 与 `server_worker.py` 已在 `planner/ue4/` | 部分可以，真连不行 |
-| 3 | 旧版停止与接管链路一并搬进运行时 | 旧分支的这套逻辑在它自己的 `ServerController` 里（`README.md:428` 描述 `rotateByYawRateAsync` 交接），不在 worker 协议内 | 不行 |
-| 4 | UE4 天气：移植 `weather_service.py`，字段名从注册表读 | `airsim-flight-console/weather_service.py` | 可以，假 RPC 服务 |
-| 5 | 俯视任务在 UE5 上的启用判断 | 见第 5 节 | 需要上机 |
+| 动作 | 结果 |
+|---|---|
+| `restart(cityenviron)` | 7.8s 就绪 |
+| `restart(neighborhood)` | 7.0s 就绪（切图走通） |
+| 客户端握手 | 两图都应答，commit `deff6aa1` |
+| `stop()` | 1.8s，端口释放，无 X 锁残留 |
 
-第 3 条是新发现，改变了工作量估计：旧分支的"停止任务"不是 worker 收到一条命令，而是控制器发起模式切换与接管。UE4 桥接层必须把旧 `ServerController` 的这部分一起带上，不能只包 worker。
+ProjectAirSim 的 topic socket 是单消费者：一个进程里要连第二张图，必须先
+`connection.close()`，直接调 `client.disconnect()` 会留下活动连接、下一张图报
+`another ProjectAirSim connection is active`。
 
-## 5 确认 UE5 是否有相机位姿 API
+ProjectAirSim 的 CityEnviron 与 AirSimNH 构建**不写任何日志文件**，加了 `-log`
+也不往 stdout 打，退出时同样不刷（引擎的 fd/1 就指着 `output/xpra/logs/xpra-start.<map>.log`，
+里面只有 xpra 自己的话）。所以 UE5 的 `child_argv` 里没有 `-abslog`/`-Stdout`，就绪判断
+只能靠 `window` 与 `ports`；驱动的超时提示按实际 argv 生成，不会指一个不存在的路径。
 
-UE5 俯视任务（`visual_goal_above`）当前被关掉，因为 `simSetCameraPose` 在 ProjectAirSim 里没有对应物。装了 `projectairsim` 的机器上跑一行确认：
+## 5 剩下要写的东西
 
-```bash
-python -c "from projectairsim import Drone, World; \
-print('drone:', [m for m in dir(Drone) if 'camera' in m.lower() or 'sensor' in m.lower()]); \
-print('world:', [m for m in dir(World) if 'camera' in m.lower() or 'pose' in m.lower() or 'object' in m.lower()])"
-```
+| 项 | 位置 |
+|---|---|
+| UE4 控制面三处冲突（载具名、动作完成判据、深度分辨率） | `docs/UE4_REMAINING_WORK.md` 7.3，修法顺序 2 → 3 → 1 |
+| AirSim 会话装配 | `planner/simulators/airsim/runtime.py`，补回时同一提交内必须带调用方 |
+| 心跳重连与停止接管 | 在旧分支的 `ServerController` 里，不在 worker 协议中；装配时只看 worker 接口会漏掉 |
 
-判读：
+## 6 UE5 俯视
 
-- `drone` 里出现相机位姿写入 → 按 UE4 同样方式实现 UE5 俯视，注册表 `ue5.capabilities.task_kinds` 加 `visual_goal_above`。
-- 只有 `world` 侧的 `spawn_object` 与 `set_object_pose` → 走场景相机方案。
-- 都没有 → UE5 继续不做俯视。
-
-注意 `switch_streaming_view` 在官方 API 文档里没有列出但代码可用，说明文档不是全集，以 `dir()` 为准。
+实测 `projectairsim` 有 `Drone.set_camera_pose`，所以"UE5 缺相机位姿写入"这个前提不成立。
+但用户 2026-11-15 明确"先不做俯视"，`PORT_SLOTS` 保持现状。要开工时先改的是
+`planner/simulators/projectairsim/runtime.py` 与提示词的能力过滤顺序，见
+`docs/UE4_REMAINING_WORK.md` 第 4 节。

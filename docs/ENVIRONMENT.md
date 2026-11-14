@@ -157,9 +157,9 @@ python -m pytest -q                             # 当前：887 passed
 python scripts/probe_ue4_env.py
 ```
 
-**结构改造完成时的全量结果是 `851 passed`**，接入 `xpra_start` 驱动及其 36 个用例后是 **887**。
+**结构改造完成时的全量结果是 `851 passed`**，接入 `xpra_start` 驱动及其用例后是 **883**。
 以后每进一步这个数字都会涨，所以不要把具体条数当唯一基线：以 `0 failed` 为准。
-`docs/UE4_BRINGUP.md:102` 还写着 `847 passed`，那个数字过时了。
+`docs/UE4_BRINGUP.md` 已经改成这个口径。
 
 缺包时的失败长这样，可以用来判断自己漏了哪一步：
 
@@ -196,11 +196,19 @@ python scripts/probe_ue4_env.py
 **坑 6.1：`config/maps.yaml` 少了 `campus`。** 6 张图配好了路径，`/data/airsim/Campus` 的二进制存在但没进目录。
 `Campus` 正是本机自己从 `urbanScene` 打包出来的那张。
 
-**坑 6.2：`scripts/launch_projectairsim_xpra.sh` 把 UE5 路径写死成 `$PROJECT_DIR/sim/`。**
-`PROJECT_DIR` 由脚本自身位置推导，即 `/roxy/kedior/Planner`，而本仓库没有 `sim/` 目录。
+**坑 6.2（已解决）：`scripts/launch_projectairsim_xpra.sh` 把 UE5 路径写死成 `$PROJECT_DIR/sim/`。**
+`PROJECT_DIR` 由脚本自身位置推导，即 `/roxy/kedior/Planner`，而本仓库没有 `sim/` 目录；
 直接跑会报 `simulator binary not found`，且没有任何环境变量能覆盖它。
-**已定方向（用户 2026-11-15）：不用包脚本，直接驱动打包好的二进制。** UE5 那族要不要一并换成
-`xpra_start` 驱动负没定，目前它仍走 `driver: script`。
+用户定下的方向是不包脚本、直接驱动打包好的二进制，2026-11-15 已执行：两个 shell 脚本、
+`driver: script` 与 `SimulatorSupervisor` 整列删除，两族现在都走 `xpra_start` 驱动，
+UE5 二进制路径从 `config/maps.yaml` 的 `binary` 读。实测记录见 `UE4_BRINGUP.md` 4.1。
+
+顺带测到的两条 UE5 事实，写进驱动行为里而不是注释里：
+
+- CityEnviron 与 AirSimNH 两个构建**不写任何日志文件**，`-log` 也不往 stdout 打，
+  退出时不刷。所以 UE5 模板里没有 `-abslog`/`-Stdout`，就绪判断只靠 `window` 与 `ports`。
+- 它的 `World`/`ProjectAirSimClient` 是单消费者链接：同一个进程里连下一张图必须先
+  `connection.close()`，只调 `client.disconnect()` 会报 `another ProjectAirSim connection is active`。
 
 ## 7 图形与 GPU
 

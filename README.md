@@ -26,21 +26,21 @@ XV3DGS-airsim-vln/
 ├── console/                      # 控制台（双载具、剩余轨迹、xpra 画面）
 ├── planner/
 │   ├── adapters/
-│   │   ├── projectairsim/        # 连接、异步桥、坐标、观测、相机、碰撞、天气/视角
 │   │   ├── http/                 # FastAPI 路由、MJPEG 帧流
-│   │   ├── runtime/              # 任务线程、双载具会话与仿真器进程托管
 │   │   └── ...                   # 任务解析 / 目标检测 / 轨迹规划端点
+│   ├── simulator/                # 两族共用：进程驱动、argv 渲染、端口装配
+│   ├── simulators/
+│   │   ├── projectairsim/        # UE5：连接、异步桥、坐标、观测、相机、碰撞、天气/视角
+│   │   └── airsim/               # UE4：AirSim RPC 适配层
 │   ├── application/              # 任务解析、阶段分发、完成校验
 │   ├── capabilities/             # 滑窗规划、目标检测、完成判定
 │   ├── domain/ ports/ services/ workflows/
 │   └── server_bootstrap.py
 ├── scripts/
-│   ├── launch_projectairsim_xpra.sh   # Xvfb + UE + xpra shadow
-│   ├── stop_projectairsim_xpra.sh
 │   ├── serve_planner.py               # 规划服务 + 控制台
 │   ├── calibrate_streaming_views.py   # 4 机位循环顺序实机标定
+│   ├── probe_ue4_env.py               # UE4 上机环境自检
 │   └── smoke_*.py                     # M1–M4 实机验收脚本
-├── sim/                          # CityEnviron / Neighborhood / Blocks 预编译环境
 ├── tests/
 └── docs/PLAN.md                  # 实施方案与 M1–M7 记录
 ```
@@ -54,21 +54,21 @@ conda activate carla-vln        # 环境名沿用参考项目，Python >= 3.10
 Python 依赖见 `pyproject.toml`。`projectairsim` 客户端来自 ProjectAirSim
 v1.0.1 的 wheel（不在 PyPI），已安装在 `carla-vln` 环境中。
 
-仿真器二进制（均可执行）：
+仿真器不在仓库里。两个引擎都只用已经打包好的产物，不编译、不开编辑器；
+每张图的路径写在 `config/maps.yaml` 的 `binary` 字段，那里就是唯一出处：
 
-| 地图 | 二进制 |
-|---|---|
-| CityEnviron | `sim/CityEnviron/Binaries/Linux/CityEnviron-Linux-Shipping` |
-| Neighborhood | `sim/Neighborhood/AirSimNH/Binaries/Linux/AirSimNH-Linux-Shipping` |
-| Blocks | `sim/Blocks-Linux-1.0.1/Blocks/Binaries/Linux/Blocks-Linux-Shipping` |
+| 地图 | 引擎 | 二进制 |
+|---|---|---|
+| cityenviron | ProjectAirSim (UE5) | `/roxy/sakura/XV3DGS-airsim-vln/sim/CityEnviron/Binaries/Linux/CityEnviron-Linux-Shipping` |
+| neighborhood | ProjectAirSim (UE5) | `/roxy/sakura/XV3DGS-airsim-vln/sim/Neighborhood/AirSimNH/Binaries/Linux/AirSimNH-Linux-Shipping` |
+| blocks / campus / … | AirSim (UE4) | `/data/airsim/<图>/LinuxNoEditor/<图>/Binaries/Linux/<图>` |
 
 ## 快速开始
 
 启动后端与控制台只需要一条命令；**服务启动时不会连接仿真器**，也不加载任何
-场景（状态 `disconnected`，画面空白）。如果上一轮由启动脚本拉起的仿真栈还在
-跑，服务启动时会先把它停掉（只停 pidfile 与命令行都校验属于本项目的进程；
-手工启动的外部进程不会被误杀）。在控制台「世界设置」里选择地图，点「启动
-场景」后，后台才会拉起仿真栈并连接。
+场景（状态 `disconnected`，画面空白）。如果上一轮拉起的仿真栈还在跑，服务启动
+时会先把它停掉（只停归属能对上本项目配置的进程；手工启动的外部进程不会被误杀）。
+在控制台「世界设置」里选择地图，点「启动场景」后，后台才会拉起仿真栈并连接。
 
 ```bash
 conda activate carla-vln
@@ -79,30 +79,22 @@ python scripts/serve_planner.py --host 0.0.0.0
 - 初始状态是 `disconnected`（未连接场景），任务、载具、天气、模型控件都不可用。
 - 选择地图 →「启动场景」→ 状态变 `connecting`（后台停/启仿真栈，显示号与
   端口保持不变）→ 就绪后自动变 `idle`，交互画面自动重试。
-- 如果此时有一台**非脚本托管**的仿真器在监听端口：选同一张地图会直接连接，
-  不重启它；选另一张地图会拒绝（不能替你杀掉外部进程）。
-- 脚本托管的仿真栈正常都已被启动清理停掉，所以「启动场景」通常是全新拉起；
-  规划服务运行中换图只重启 UE 进程（Xvfb/xpra 保留、画面不断流；两者不在
-  时才整套重启）。一个 UE 进程只能加载一张 cooked 地图。
+- 如果此时有一台**本驱动没拉起过**的仿真器在监听端口：选同一张地图且归属能
+  对上时直接连，不重启它；对不上（手工启动、或跑的是另一张图）则拒绝换图并给出
+  可直接执行的建议——后台不会替你杀掉不属于本项目的进程。
+- 换图是停整套再起整套（xpra 会话、引擎、Xvfb 一起）：一个 UE 进程只能加载一张
+  cooked 地图，而画面端口与会话绑在一起，所以浏览器里的画面会断开一次再自动重连。
+  实测 `restart(cityenviron)` 7.8s、`restart(neighborhood)` 7.0s。
 - 启动失败会回到 `disconnected`，`/api/status` 的 `sim_error` 写明原因；
   操作员修好仿真器后再点一次「启动场景」即可重试。
 
-**（可选）手动启动仿真器 + xpra 交互画面**
+**（可选）手动拉起仿真器 + xpra 交互画面**
 
-```bash
-scripts/launch_projectairsim_xpra.sh cityenviron :104 10010 8991 8992
-```
+启动与停止的命令在 `docs/UE4_BRINGUP.md` 第 3 节，两族同一条。启动前请先确认
+规划服务没在跑：仿真器起来后它会把这个栈认作上一轮残留并在启动时停掉（前提是
+归属对得上本项目的配置）。
 
-参数：`[MAP] [DISPLAY] [XPRA_PORT] [TOPICS_PORT] [SERVICES_PORT]`。
-
-脚本在空闲显示号上依次启动 `Xvfb` → 窗口化 UE → `xpra shadow`；如果该
-显示号已有同名仿真窗口（例如手动启动的 CityEnviron），则只启动 xpra 并
-复用现有窗口。pidfile 与服务日志在 `output/xpra/`、`output/logs/`。
-交互画面：`http://<host>:10010/`。
-
-这适合只想直接看 xpra 画面、或调试启动脚本的场合。注意：这样拉起的仿真栈
-同样带 pidfile，**之后启动规划服务时会把它当作上一轮残留停掉**。想在控制台里
-用这张图，请先启动规划服务，再在「世界设置」里点「启动场景」。
+想在控制台里用某张图，仍然是先启动规划服务、再在「世界设置」里点「启动场景」。
 
 控制台默认嵌入 `http://<host>:10010/` 的 xpra 画面；换端口时用
 `http://127.0.0.1:8000/?xpra=<host>:<port>` 覆盖。点击画面后可操作
@@ -126,42 +118,37 @@ python scripts/smoke_projectairsim_drone.py      # M4 无人机工作流
 单消费者链路）。规划服务只在控制台点「启动场景」时才拉起仿真器，所以
 先停掉规划服务（或让它保持在 `disconnected`），冒烟结束后再在控制台启动场景。
 
-关闭：
-
-```bash
-scripts/stop_projectairsim_xpra.sh :104            # 停 shadow + 本脚本启动的 UE/Xvfb
-scripts/stop_projectairsim_xpra.sh :104 --view-only  # 只停交互画面
-```
-
-脚本只会停止自己 pidfile 记录的进程；手动启动的仿真不会被误杀。
+关闭：停掉整套仿真栈的命令同样在 `docs/UE4_BRINGUP.md` 第 3 节。后台只停
+本项目拉起过的进程，归属靠引擎二进制真路径与 xpra 会话目录判定。
 
 ## 地图与配置
 
-可切换地图定义在 `config/maps.yaml`（`id / label / launch_map / scene_file /
-sim_config_path`），当前开放两张：
+可切换地图定义在 `config/maps.yaml`，当前开放八张。每张图先声明它属于哪个引擎
+（`simulator`），再带自己那组字段：
 
-- **cityenviron（默认）**：城市道路场景，`scene_city_dual.jsonc`。
-- **neighborhood**：郊区场景，`scene_neighborhood_dual.jsonc`。
-- **Blocks**：只用于启动链路与回归冒烟，没有对应的双载具任务场景配置，
-  不在目录中。
+```yaml
+- id: cityenviron
+  simulator: projectairsim        # 驱动这张图的适配层包
+  binary: /roxy/sakura/.../CityEnviron-Linux-Shipping   # 引擎二进制（也是归属判据）
+  map_name: CityEnviron           # 交给二进制的 argv[1]，窗口标题与它同字
+  scene_file: scene_city_dual.jsonc
+  sim_config_path: config/scenes/city
+```
 
-ProjectAirSim 一个进程只加载一张 cooked UE 地图，**不能运行中换图**。
-因此控制台/API 的换图 = 后台重启仿真：停 worker（topic socket 是单消费者
-链路；场景马上被销毁，无人机不再等落地）→ 停止自己启动的 UE 进程 → 用
-`scripts/launch_projectairsim_xpra.sh` 在同一显示上拉起目标地图 → 重连并
-重建双载具会话。Xvfb 与 xpra 通常保持
-运行（脚本带 `--sim-only`），所以控制台画面不断流、iframe 无需重载；只有
-Xvfb 或 xpra 已不在运行时才整套重启。显示号、端口与 topic/service 端口在
-切换前后保持不变（默认 `:104 / 10010 / 8991 / 8992`），天气与视角状态会在
-新会话 READY 后重放。
+两个引擎都是一个进程只加载一张 cooked UE 地图，**不能运行中换图**。因此
+控制台/API 的换图 = 后台重启仿真：停 worker（topic socket 是单消费者链路；
+场景马上被销毁，无人机不再等落地）→ 停掉本项目拉起的整套栈（xpra + 引擎 +
+Xvfb）→ 按新图的 `binary`/`map_name` 重新拉起 → 重连并重建会话。显示号与
+端口在切换前后保持不变（默认 `:104 / 10010`，UE5 另加 `8991 / 8992`），
+天气与视角状态会在新会话 READY 后重放。
 
-安全边界：后台只停止 `output/xpra/` 下 pidfile 记录且命令行属于本项目的
-进程。若仿真器是手工启动的（没有 pidfile 或进程不属于本项目），后台会拒绝
-换图并给出重新启动命令，**不会误杀外部进程**。
+安全边界：后台只停止本项目拉起过的进程，判据是引擎二进制的真路径在
+`config/maps.yaml` 里、且 xpra 会话目录在配置的 `runtime_dir` 下。若仿真器是
+手工启动的，后台会拒绝换图并给出重新启动命令，**不会误杀外部进程**。
 
-当前地图记录在 `output/xpra/current_map`（只在换图成功后写入）。规划服务
-重启时读取该 marker；内容不在目录里才回退到 `maps.yaml` 的 `default_map`，
-避免把城市场景加载进郊区仿真器。
+当前地图记录在 `output/xpra/current_map`（只在拉起成功后写入）。规划服务重启时
+读取该 marker；内容不在目录里才回退到 `maps.yaml` 的 `default_map`，避免把
+城市场景的配置加载进郊区仿真器。
 
 ### 载具外观模型
 

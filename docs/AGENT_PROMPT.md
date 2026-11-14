@@ -18,7 +18,8 @@ pip install [projectairsim-1.0.2 wheel 路径]
 python -m pytest -q
 ```
 
-期望 `851 passed`。达不到就先修，别继续往下走。然后把这条命令的**原始输出**贴出来。
+期望 **0 failed**。达不到就先修，别继续往下走。然后把这条命令的**原始输出**贴出来。
+具体条数会随功能涨跌（本轮从 851 到 883），不要把某个条数当基线。
 基线不绿的时候做的任何改动都无法归因，这是硬门槛。
 
 接着读四份文档，只读这些，按顺序：
@@ -65,9 +66,11 @@ python -m venv /tmp/coexist && /tmp/coexist/bin/pip install "airsim>=1.8.1" "msg
 结论写进 `docs/UE4_REMAINING_WORK.md` 第 7 节，替换掉"无法本地验证"里对应条目。
 **文档是这个任务的共享记忆，改代码不改文档等于把结论丢掉。**
 
-## 第 2 步：写 `xpra_start` 进程驱动
+## 第 2 步：写 `xpra_start` 进程驱动（**已完成**，两族现在都走它）
 
-清单第 5 节第一条。要求：
+UE4 的 shell 启动脚本与 `driver: script` 已经整列删除。这一节的验收标准已经满足，
+留在文档里是为了下一个改动知道边界在哪：生命周期那套必须继续照
+`airsim-flight-console` 写，不要自己发明。
 
 - 落点 `planner/simulator/`。argv 模板与探针已经在 `config/simulators.yaml` 的 `airsim` 段，
   不要新写脚本文件，也不要在代码里硬编码命令。
@@ -83,7 +86,7 @@ python -m venv /tmp/coexist && /tmp/coexist/bin/pip install "airsim>=1.8.1" "msg
 ```bash
 python -m pytest -q                       # 全绿，含你新增的用例
 python -m pytest -q tests/test_architecture.py
-python -m pytest -q tests/test_simulator_supervisor.py
+python -m pytest -q tests/test_xpra_start_driver.py
 ```
 
 新增用例必须覆盖：模板渲染、未解析占位符报错、所有权拒绝、探针超时。用假 runner 与假

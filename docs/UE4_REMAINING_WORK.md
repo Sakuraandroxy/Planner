@@ -94,7 +94,8 @@ git show origin/low-altitude-level-view-visual-goal-navigation:planner/workflows
 | UE5 不做 | `visual_goal_above`，因为缺 `camera_view` 端口，由推导自动成立 |
 | 俯视属于谁 | 任务逻辑属共享层，只有 `CameraView` 端口属 AirSim |
 | UE5 进程 | 留在服务进程内，不搬进子进程。因此 `projectairsim` 会被主进程加载，`tests/test_architecture.py` 只禁 AirSim 栈进主进程 |
-| xpra | 两族共用一套 argv 渲染，模板在 YAML |
+| xpra | 两族共用**一个**进程驱动 `planner/simulator/xpra_start.py`，argv 模板在 YAML，
+xpra 会话参数用锤点共用一份。`driver: script` 与两个 shell 脚本已删除 |
 | 环境 | UE4 运行时独立 conda 环境，靠子进程隔离依赖冲突 |
 | 桩 | 不写无人调用的桩与开关。未实现的路径一律显式报错 |
 
@@ -179,10 +180,10 @@ Drone.camera_look_at_object(camera_id: str, object_name: str, ...) -> bool
 
 - 深度图的实际内参。`settings.json` 里 `front_center` 的深度通道是 256x256 / FOV 90，
   真帧已能取到（读数 0.3m–16.3km，中位 22m），但与 planner `camera_model` 的期望是否一致还没逐项核。
-- **UE5 启动脚本在本仓库路径下起不来**（只读了脚本，未实跑）：`scripts/launch_projectairsim_xpra.sh:47,52,57`
-  把二进制路径写死为 `$PROJECT_DIR/sim/...`，`PROJECT_DIR` 由脚本自身位置推得 = 仓库根，而本仓库没有 `sim/`；
-  打包好的 UE5 在 `/roxy/sakura/XV3DGS-airsim-vln/sim/`。用户已定方向：不走脚本，直接驱动二进制。
-  UE5 那族要不要一并换成 `xpra_start` 驱动，**待定**。
+- **UE5 启动脚本在本仓库路径下起不来**（已解决，2026-11-15）：`scripts/launch_projectairsim_xpra.sh`
+  把二进制路径写死为 `$PROJECT_DIR/sim/...`，而本仓库没有 `sim/`。用户定的方向是不包脚本、
+  直接驱动二进制；现在两个脚本、`driver: script` 与 `SimulatorSupervisor` 已整列删除，
+  UE5 与 UE4 同走 `xpra_start`。UE5 真机实测记录在 `docs/UE4_BRINGUP.md` 4.1。
 - GPU：可见 3 张 RTX 3080 Ti 正常，另有一张 `0000:68:00.0` 报 `Unknown Error`，要避用。
   UE4 目前没显式指定适配器也能跑。
 - 旧分支自述实机未联调：旧 `README.md:435`。旧分支没有 `tests/`，UE4 保真来自代码照抄，不来自测试通过。
@@ -220,4 +221,12 @@ motion did not complete`。真正的完成信号得改成读回状态（位置�
 
 这三条都在飞行控制路径上，彼此有依赖（先把载具名接通、再把完成判据改成状态驱动，
 最后才能量测真实闭环延时），所以要按 2 → 3 → 1 的顺序修。
+
+决策已拍（用户 2026-11-15，“都用你倾向的决定”）：
+
+- 第 1 条走 **C 方案**：放宽共享契约，允许深度保留自己的分辨率（`depth_intrinsics`
+  本就是为此留的字段），不动 RGB 尺寸。改的是 `planner/domain/observation.py`，
+  两族共用，改完两侧都要实机跑。
+- 第 2 条的 `vehicle_name` 放 **`config/simulators.yaml` 家族段**：名字来自
+  `settings.json`，与具体地图无关，所以属于家族不属于图。
 
