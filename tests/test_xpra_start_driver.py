@@ -346,6 +346,22 @@ def test_shipped_templates_render_for_every_family(tmp_path):
                                           else f"-settings={driver._settings_path}")
 
 
+def test_timeout_hint_names_the_log_the_family_actually_writes(tmp_path):
+    """A hint to a file that can never appear is worse than no hint at all.
+
+    AirSim honours -abslog; the ProjectAirSim builds were measured to write no log
+    file. Both statements have to come out of the same function that builds the
+    argv, or the message drifts away from the flags the process really got.
+    """
+    driver = Harness(tmp_path).driver
+    assert driver._engine_log_hint(_entry()).endswith("logs/blocks.log")
+
+    ue5 = Harness(tmp_path, family=_ue5_family(), maps=_ue5_maps())
+    hint = ue5.driver._engine_log_hint(_ue5_maps().entry("cityenviron"))
+    assert "no -abslog" in hint, hint
+    assert ".log" not in hint, hint
+
+
 # -- ownership -------------------------------------------------------------
 def test_engine_child_is_ours_by_exe_and_settings_marker(tmp_path):
     harness = Harness(tmp_path, holders={RPC_PORT: ours_engine()}, alive={RPC_PORT})
@@ -590,6 +606,58 @@ def test_live_display_is_not_touched(tmp_path, monkeypatch):
     with pytest.raises(SimulatorRestartError, match="still held by PID"):
         module.reclaim_stale_display(":199")
     assert lock.exists()
+
+
+def test_stop_waits_for_the_xvfb_to_drop_the_display(tmp_path, monkeypatch):
+    """A restart that launches immediately used to hit a half-finished teardown.
+
+    ``xpra stop`` frees its TCP ports while the Xvfb it started still holds the X
+    lock, so the next launch saw a live holder and refused with "display is still
+    held by PID". Real machines show this as an intermittent map switch; the ports
+    going quiet is not the end of the teardown. The wait is bounded and silent: a
+    display somebody else owns on purpose still fails in launch's reclaim.
+    """
+    import planner.simulator.xpra_start as module
+
+    lock = tmp_path / ".X199-lock"
+    sock = tmp_path / "X199"
+    monkeypatch.setattr(module, "display_files", lambda display, **kw: (lock, sock))
+    harness = Harness(tmp_path, holders={RPC_PORT: ours_engine()}, alive={RPC_PORT})
+    driver = harness.driver
+    driver._process = SimpleNamespace(pid=4242, wait=lambda timeout: 0, poll=lambda: 0)
+    lock.write_text(str(os.getpid()), encoding="utf-8")   # an Xvfb still winding down
+
+    checks: list[bool] = []
+    real_released = module.display_released
+
+    def spy(display, **kwargs):
+        result = real_released(display, **kwargs)
+        checks.append(result)
+        if len(checks) == 3:
+            lock.unlink(missing_ok=True)                  # the Xvfb finally exits
+        return result
+
+    monkeypatch.setattr(module, "display_released", spy)
+    driver.stop()
+
+    assert checks[0] is False, checks
+    assert checks[-1] is True, checks
+    assert len(checks) >= 2, "stop() returned before the display was free"
+
+
+def test_no_wait_when_the_display_is_already_free(tmp_path, monkeypatch):
+    """Nothing holds the display here, so the reaper must not spin or sleep."""
+    import planner.simulator.xpra_start as module
+
+    monkeypatch.setattr(module, "display_files",
+                        lambda display, **kw: (tmp_path / ".X199-lock", tmp_path / "X199"))
+    harness = Harness(tmp_path, holders={RPC_PORT: ours_engine()}, alive={RPC_PORT})
+    driver = harness.driver
+    driver._process = SimpleNamespace(pid=4242, wait=lambda timeout: 0, poll=lambda: 0)
+    slept: list[float] = []
+    driver._sleep = slept.append
+    driver.stop()
+    assert slept == [], "a free display must not cost a poll"
 
 
 # -- stop ladder -----------------------------------------------------------

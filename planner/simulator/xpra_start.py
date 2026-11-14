@@ -232,6 +232,28 @@ def reclaim_stale_display(display: str) -> str | None:
     return str(lock)
 
 
+def display_released(
+    display: str,
+    *,
+    lock_dir: Path = Path("/tmp"),
+    socket_dir: Path = Path("/tmp/.X11-unix"),
+) -> bool:
+    """True once no live process holds the X lock for this display.
+
+    ``xpra stop`` closes its TCP ports before its Xvfb lets go of the display, so
+    the ports going quiet is not the end of the teardown. Callers wait on this
+    instead of guessing with a sleep.
+    """
+    lock, _ = display_files(display, lock_dir=lock_dir, socket_dir=socket_dir)
+    if not lock.exists():
+        return True
+    try:
+        pid = int(lock.read_text().strip() or "0")
+    except (OSError, ValueError):
+        return False
+    return pid <= 0 or not pid_alive(pid)
+
+
 def default_spawn(argv: list[str], **kwargs) -> subprocess.Popen:
     """Start ``argv`` detached and do not wait.
 
@@ -496,6 +518,7 @@ class XpraStartSupervisor:
             )
 
     def _wait_ready(self, entry: MapEntry, launcher_log: Path) -> None:
+        hint = self._engine_log_hint(entry)
         if "ports" in self._family.probes:
             self._wait(
                 lambda: all(self._port(p) for p in self.ports),
@@ -503,6 +526,7 @@ class XpraStartSupervisor:
                 launcher_log,
                 description=f"map '{entry.id}' ports "
                 + ", ".join(f"{n}={p}" for n, p in self._family.ports.items()),
+                log_hint=hint,
             )
         if "rpc" in self._family.probes:
             self._wait(
@@ -510,6 +534,7 @@ class XpraStartSupervisor:
                 "rpc",
                 launcher_log,
                 description=f"the rpc port answering as map '{entry.id}'",
+                log_hint=hint,
             )
         if "window" in self._family.probes:
             self._wait(
@@ -517,9 +542,23 @@ class XpraStartSupervisor:
                 "window",
                 launcher_log,
                 description=f"the '{entry.id}' window mapped and focused",
+                log_hint=hint,
             )
 
-    def _wait(self, condition, probe, launcher_log: Path, description: str) -> None:
+    def _engine_log_hint(self, entry: MapEntry) -> str:
+        """Where the engine's own log will be, or an honest note that it has none.
+
+        AirSim honours ``-abslog``. The ProjectAirSim builds were measured to write no
+        log file and to print nothing on stdout, not even when they exit, so naming a
+        path that can never appear throws away the one clue a timeout message carries.
+        """
+        for part in self.child_argv(entry):
+            if part.startswith("-abslog="):
+                return f"the engine's own log is {part.split('=', 1)[1]}"
+        return "this family gives the engine no -abslog, so the xpra log is all there is"
+
+    def _wait(self, condition, probe, launcher_log: Path, description: str,
+              log_hint: str = "") -> None:
         """Poll until ready, giving up the moment the launcher itself is gone."""
         deadline = self._clock() + self._settings.launch_timeout_s
         while self._clock() < deadline:
@@ -536,8 +575,7 @@ class XpraStartSupervisor:
             self._sleep(POLL_INTERVAL_S)
         raise SimulatorRestartError(
             f"timed out after {self._settings.launch_timeout_s:g}s waiting for "
-            f"{description}; the engine's own log is named by -abslog in the launch "
-            f"argv, xpra said its piece in {launcher_log}"
+            f"{description}; {log_hint}; xpra said its piece in {launcher_log}"
         )
 
     def _rpc_is_this_map(self, entry: MapEntry) -> bool:
@@ -655,8 +693,23 @@ class XpraStartSupervisor:
             self._process.wait(timeout=3)
         except (subprocess.TimeoutExpired, AttributeError):
             pass
+        # The launch is reaped, but xpra's Xvfb still holds the display for a
+        # moment. Returning now lets the next launch meet a live holder and refuse
+        # with "display :104 is still held by PID", which reads like a stuck stack
+        # rather than the few hundred milliseconds it actually is. A display that
+        # somebody else really owns still fails in launch's reclaim_stale_display,
+        # with that caller's message, so waiting here stays silent and bounded.
+        self._wait_display_released(self._settings.port_release_timeout_s)
         self._process = None
         self._process_identity = None
+
+    def _wait_display_released(self, seconds: float) -> bool:
+        deadline = self._clock() + seconds
+        while self._clock() < deadline:
+            if display_released(self._settings.display):
+                return True
+            self._sleep(POLL_INTERVAL_S)
+        return display_released(self._settings.display)
 
     def restart(self, entry: MapEntry) -> None:
         if self.running():
