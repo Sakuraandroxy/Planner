@@ -210,6 +210,15 @@ worker 并在**同一个仿真器进程**里重新加载场景（不重启 UE / 
   但所有任务都会被明确拒绝，没有确定性回退；解析失败整单拒绝，不会执行
   部分阶段。
 
+两族能跑的任务类型不一样，这是能力推导的结果而不是开关：
+
+| 类型 | UE5 cityenviron / neighborhood | UE4 blocks / campus |
+|---|---|---|
+| `basic_motion` | ok 实测 39s 两阶段 | ok 实测 16s 单阶段 |
+| `visual_goal_navigation` | ok （M3 起就跑这个） | ok 实测 60s、9 次 grounding、`basis=model_assessment_with_local_checks` |
+| `free_navigation` | ok | no 旧分支没有，仍不提供 |
+| `visual_goal_above` | no（缺 `camera_view`） | 被用户明确推迟 |
+
 把 `sliding_window.enabled` 设为 `false` 会回退为停车分批执行
 （视觉目标与自由导航都适用），用于对比和排障。
 

@@ -171,11 +171,12 @@ ProjectAirSim 的 CityEnviron 与 AirSimNH 构建**不写任何日志文件**，
 | 项 | 位置 |
 |---|---|
 | 标定降级 | `streaming-view` 四机位标定在本机四帧打分完全相同，于是回落内置顺序（见 5.2）。不阻断任务，但循环顺序在这台机器上没被实测标定过 |
-| 俯视与目标导航 | UE4 的 `visual_goal_navigation` 需要检测端点，UE5 俯视被用户明确推迟；见第 6 节与 `docs/UE4_REMAINING_WORK.md` 第 4 节 |
+| 俯视与目标导航 | UE4 的目标导航已真机跑通（见 5.5）；UE5 俯视被用户明确推迟，见第 6 节与 `docs/UE4_REMAINING_WORK.md` 第 4 节 |
 | 旧分支心跳重连 | 不必原样搬。实测任务中途 SIGKILL 子进程后服务自己重启了 worker；真需要验的是长时间 RPC 卡住这种它原本负贡的场景 |
 
-会话装配、天气、进程驱动、控制面三处冲突、子进程入口、跨族切换都已落地并真机验证。
-实测数字与控制面冲突的证据在 `docs/UE4_REMAINING_WORK.md` 7.3 末尾的表里，跨族切换在 5.3。
+会话装配、天气、进程驱动、控制面四处冲突、子进程入口、跨族切换、UE4 目标导航都已落地并真机验证。
+实测数字与控制面冲突的证据在 `docs/UE4_REMAINING_WORK.md` 7.3 末尾的表里，跨族切换在 5.3，
+目标导航在 5.5。
 
 ## 5.1 脚本化验 HTTP 服务时会假卡死的一个坑
 
@@ -250,6 +251,25 @@ UE5 就绪慢是引擎自己起图的时间；UE4 约 8s。这条路径上撞出
 - 子进程 `shutdown()` 现在会等到 CLOSED 为止（上限 `land_timeout_s + 10`）。之前它写完
   命令就返回，而 `ServerController._drain()` 只翻队列里已有的事件，于是每次关闭都记一条
   "Worker did not confirm shutdown within the timeout"，其实子进程收得干干净净。
+
+## 5.5 UE4 目标导航（本轮）
+
+「向前飞到那个红色集装箱前面」在 blocks 上 60s 完成：
+`Stage stage_1: reached; basis=model_assessment_with_local_checks`，9 次 grounding 调用
+（每次 1155–1402 输入 token），诊断帧落在 `output/visual_goal/<run_id>/`。
+`api.deepseek.com/anthropic` 能收图像输入——此前担心这台机器没有可用视觉模型，事实不是。
+
+接通常撞了三个 AttributeError，病因是同一个：**抄旧分支的属性名，没对着装配好的机器核**。
+
+| 现象 | 真因 | 处理 |
+|---|---|---|
+| `'AirSimVehicle' object has no attribute 'capture'` | 装配把 vehicle 当 observation_source 传给视觉工作流；UE5 载具自己会取图，所以这个约定从没露馅 | `build_vehicle_arm` 新增 `observation_source`，默认仍为 vehicle（UE5 一字未改），UE4 传 `AirSimObservationSource`（它既有 `capture` 也有 `capture_moving`，因此 moving 源也传它） |
+| `'PositionHold' object has no attribute 'wait_for_observation'` | 共享服务里这个方法叫 `wait`，语义一致（tick 到整个窗口可观测） | 只改调用名，不另拄一套稳定判据 |
+| `'PositionHold' object has no attribute 'observation_ready'` | 旧分支叫这个，现在叫 `observable` | 同上 |
+
+这类错不该靠整机启动去发现。`tests/test_airsim_port_names.py` 用 ast 扫 UE4 适配层里对
+`holding` 与 `observation_gate` 的属性访问，逐项比对两个服务的真实成员（含 `__init__` 赋值的
+实例属性）。33 条，0.19 秒跑完。本轮三处都是真机跑一遍才看见的，下一轮不必再跑。
 
 ## 6 UE5 俯视
 

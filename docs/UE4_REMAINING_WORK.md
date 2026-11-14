@@ -91,7 +91,7 @@ git show origin/low-altitude-level-view-visual-goal-navigation:planner/workflows
 |---|---|
 | 命名 | 用软件名 `airsim` / `projectairsim`，不用引擎版本号。地图字段叫 `simulator`，无默认偏向 |
 | 能力位 | 只能由端口推导。`config/simulators.yaml` 写 `capabilities` 会被配置校验拒绝 |
-| UE4 不提供 | `free_navigation`（旧分支没有）、回起点、机位切换、外观模型、`/api/video`、轨迹层 |
+| UE4 不提供 | `free_navigation`（旧分支没有）、回起点、机位切换、外观模型、`/api/video`、轨迹层。`basic_motion` 与 `visual_goal_navigation` 都已真机跑通 |
 | UE5 不做 | `visual_goal_above`，因为缺 `camera_view` 端口，由推导自动成立 |
 | 俯视属于谁 | 任务逻辑属共享层，只有 `CameraView` 端口属 AirSim |
 | UE5 进程 | 留在服务进程内，不搬进子进程。因此 `projectairsim` 会被主进程加载，`tests/test_architecture.py` 只禁 AirSim 栈进主进程 |
@@ -188,6 +188,7 @@ Blocks 上一个任务落地后它就再也没变过 0。拿它当"该不该起�
 | `POST /api/world blocks` | 2–6s 就绪（接管在跑的栈）/ 8s（新起） |
 | `POST /api/tasks` 「向前飞两米」 | 16.1s `completed; basis=local_measurement` |
 | 同一台引擎不重启接第二个任务 「向后飞两米」 | 12s 完成（修复前必挂，见 7.3 第 4 条） |
+| UE4 目标导航「向前飞到那个红色集装箱前面」 | 60s reached，9 次 grounding，`basis=model_assessment_with_local_checks` |
 | cityenviron → blocks → cityenviron，每段一个任务 | 40s/16.1s → 8s/16.1s → 42s/16.1s，全成 |
 | `POST /api/stop` | 200，状态 idle，无告警 |
 
