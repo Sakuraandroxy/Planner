@@ -203,9 +203,14 @@ class AirSimMissionSession:
             # Airborne before anything executes: the UE4 flight paths assume hover
             # authority from the first segment, and readiness is measured rather
             # than assumed -- the same rule the old branch's ServerVehicle encodes.
-            if self._ground_z is None:
-                self._ground_z = self.server.control.current_pose().z
-            self.server.prepare(takeoff_if_landed=True)
+            # The ground reference is the highest z this vehicle has ever stood at:
+            # UE points z downward, so the floor is the maximum, and taking the max
+            # keeps the reference honest when a session is built while the drone is
+            # already airborne after an earlier one.
+            z_now = self.server.control.current_pose().z
+            if self._ground_z is None or z_now > self._ground_z:
+                self._ground_z = z_now
+            self.server.prepare(takeoff_if_landed=True, ground_z=self._ground_z)
             event_sink("Drone airborne; position hold confirmed.")
             return application.execute_plan(plan)
         except KeyboardInterrupt:

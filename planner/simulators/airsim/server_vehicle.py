@@ -12,6 +12,13 @@ logger = logging.getLogger(__name__)
 
 
 class ServerVehicle:
+    #: How near the recorded ground height counts as "still on the ground".
+    #: AirSim's ``landed_state`` cannot answer this on the target build: measured on
+    #: Blocks it stays at 1 (Flying) after a confirmed landing, so a second task on
+    #: the same engine would skip takeoff and be commanded to fly along the ground --
+    #: which fails 60 s later as "synchronized motion timed out".
+    GROUND_TOLERANCE_M = 0.25
+
     def __init__(self, connection, limits, timeout_s, *, readiness_stable_s=2.,
                  readiness_poll_interval_s=.25,
                  speed_mps=2., tracking=ContinuousTrackingSettings(),
@@ -60,11 +67,23 @@ class ServerVehicle:
             self.sleep(self.readiness_poll_interval_s)
         raise ExecutionError("AirSim state did not become ready before the startup timeout")
 
-    def prepare(self, *, takeoff_if_landed: bool, require_airborne: bool = False):
+    def prepare(self, *, takeoff_if_landed: bool, require_airborne: bool = False,
+                ground_z: float | None = None):
+        """Get the vehicle ready for a task.
+
+        ``ground_z`` is the height the vehicle stood on before its first takeoff.
+        Pass it whenever you have it: on this build ``landed_state`` alone is not
+        enough, because it keeps reporting Flying after a landing and the vehicle
+        would then never be told to take off again.
+        """
         import airsim
         if takeoff_if_landed:
             state = self._wait_ready()
             landed = state.landed_state == airsim.LandedState.Landed
+            if ground_z is not None:
+                landed = landed or (
+                    self._position(state)[2] >= ground_z - self.GROUND_TOLERANCE_M
+                )
             self.connection.prepare_vehicle(arm=landed)
             if landed:
                 logger.info("AirSim ready; starting takeoff.")
