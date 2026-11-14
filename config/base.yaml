@@ -26,17 +26,13 @@ projectairsim:
   chase_camera: Chase
   down_camera: DownCamera
 
-# 仿真器进程托管：控制台换图时由后台 stop/launch 脚本重启整套仿真栈。
-# 只停止本项目启动脚本写下的 pidfile 进程，绝不强杀手动启动的仿真器。
+# 仿真器进程托管：控制台换图时由 planner/simulator/xpra_start.py 重启整套仿真栈。
+# 只停本项目拉起的进程：归属靠引擎二进制真路径与 xpra 会话目录判定，
+# 对不上就拒绝动作并打印运维命令，绝不强杀手动启动的仿真器。
+# 端口不在这里：每张图属于哪个家族、那个家族听哪些端口，写 config/simulators.yaml。
 simulator:
-  launch_script: scripts/launch_projectairsim_xpra.sh
-  stop_script: scripts/stop_projectairsim_xpra.sh
   display: ":104"
-  xpra_port: 10010
-  # 必须与 projectairsim.port_topics/port_services 一致，启动时校验。
-  topics_port: 8991
-  services_port: 8992
-  # pidfile 与 xpra 运行目录；当前地图标记也写在 map_marker_file。
+  # pidfile、xpra 会话与日志目录；当前地图标记写在 map_marker_file。
   runtime_dir: output/xpra
   map_catalog_file: maps.yaml
   map_marker_file: output/xpra/current_map

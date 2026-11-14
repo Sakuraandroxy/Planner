@@ -22,12 +22,11 @@ from planner.application.factories import (
 )
 from planner.config import load_config
 from planner.domain.mission import TaskKind
+from tests.support import write_config
 
 
 def _config(tmp_path, data):
-    path = tmp_path / "config.yaml"
-    path.write_text(yaml.safe_dump(data), encoding="utf-8")
-    return load_config(path)
+    return load_config(write_config(tmp_path, data))
 
 
 def test_build_completion_checker_uses_configured_endpoint(tmp_path):

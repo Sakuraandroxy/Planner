@@ -32,10 +32,10 @@ from .video import BOUNDARY, mjpeg_chunks
 
 CONSOLE_DIR = Path(__file__).resolve().parents[3] / "console"
 
-#: Process drivers live in planner/simulator: ``script`` runs the ProjectAirSim
-#: launch script, ``xpra_start`` renders the family's argv. ``supervisor_for``
-#: is what knows which ones exist, and ``SimulatorFamily`` rejects any other
-#: driver when the config is parsed, so the HTTP layer does not guess again.
+#: One process driver for every family: planner/simulator/xpra_start.py renders the
+#: argv the family declares in config/simulators.yaml. ``SimulatorFamily`` rejects
+#: any other driver when the config is parsed, so the HTTP layer does not guess
+#: again and nothing here branches on a simulator name.
 
 ViewMode = Literal["rover_front", "rover_chase", "drone_front", "drone_chase"]
 

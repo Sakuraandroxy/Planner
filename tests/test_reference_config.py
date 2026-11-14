@@ -11,12 +11,10 @@ from planner.config import (
 )
 from planner.domain.motion import ContinuousTrackingSettings
 from planner.domain.sliding_window import SlidingWindowSettings
+from tests.support import write_config
 
-
-def _write(tmp_path, data):
-    path = tmp_path / "config.yaml"
-    path.write_text(yaml.safe_dump(data), encoding="utf-8")
-    return path
+# One helper for every synthetic config directory in the suite.
+_write = write_config
 
 
 def test_reference_sections_have_defaults(tmp_path):

@@ -1,10 +1,10 @@
 """Route one controller to the driver that owns each map's simulator family.
 
 ``ServerController`` holds a single supervisor and calls it with no map in hand
-(``running()``, ``preflight()``, ``stop()``). Two families now share the service,
-and they are started and stopped differently: ProjectAirSim goes through the
-launch script, AirSim through a rendered ``xpra start`` argv. This object picks
-the driver by family and keeps the controller's five-method view intact.
+(``running()``, ``preflight()``, ``stop()``). Two families now share the service and
+both are started the same way -- a rendered ``xpra start --start-child`` argv -- so
+what differs per map is the family block the driver reads, not the driver code.
+This object keeps the controller's five-method view intact.
 
 Calls that carry a map route by ``entry.simulator``. Calls that do not route by
 the map the marker file names, which is the same record the boot sequence reads,
@@ -17,8 +17,8 @@ from pathlib import Path
 from typing import Callable
 
 from ..config import MapCatalog, MapEntry, SimulatorSettings
-from .supervisor import read_map_marker
-from .xpra_start import supervisor_for
+from .marker import read_map_marker
+from .xpra_start import XpraStartSupervisor
 
 LogFn = Callable[[str, str], None]
 
@@ -53,8 +53,9 @@ class FamilyRouter:
                     f"map family {family_id!r} is not configured in "
                     f"config/simulators.yaml; known families are {list(self._families.ids)}"
                 )
-            driver = supervisor_for(
-                family, self._settings, self._project, self._maps, log=self._log_fn, **self._kwargs
+            driver = XpraStartSupervisor(
+                family, self._settings, self._project, self._maps,
+                log=self._log_fn, **self._kwargs,
             )
             self._drivers[family_id] = driver
         return driver

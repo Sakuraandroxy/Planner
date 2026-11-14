@@ -5,11 +5,11 @@ Start the backend and console with one command:
     conda activate carla-vln
     python scripts/serve_planner.py
 The service starts disconnected: no scene is loaded and no simulator socket is
-opened until a map is chosen in the console (or POST /api/world). A simulator
-left over from a previous run is stopped at startup when the launch script owns
-it; an externally started one is left alone. Choosing a map then launches the
-stack through scripts/launch_projectairsim_xpra.sh (an unowned stack running the
-same map is attached to).
+opened until a map is chosen in the console (or POST /api/world). A simulator left
+over from a previous run is stopped at startup only when this project started it:
+ownership is proved from the engine binary path and the xpra session directory, and
+a stack somebody else launched is left alone. Choosing a map brings the stack up
+through planner/simulator/xpra_start.py, the one process driver for both families.
 
 Endpoints (see README):
     GET  /              console page

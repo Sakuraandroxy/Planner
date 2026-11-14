@@ -59,8 +59,6 @@ def argv_values(
         "display": settings.display,
         "display_number": str(settings.display).lstrip(":"),
         "runtime_dir": runtime_dir,
-        "launch_script": simulator.launch_script,
-        "stop_script": simulator.stop_script,
         "settings_file": simulator.settings_file,
         "res_x": simulator.res_x,
         "res_y": simulator.res_y,

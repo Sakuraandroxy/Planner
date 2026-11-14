@@ -10,7 +10,6 @@ from planner.config import (
     SimulatorSettings,
     load_config,
     load_map_catalog,
-    projectairsim_family,
 )
 from planner.domain.runtime import parse_family_catalog
 from planner.simulator import registry
@@ -35,17 +34,25 @@ def test_repository_file_declares_only_connection_and_process_data():
 
 def test_capabilities_block_in_yaml_is_rejected():
     """A config file cannot state capabilities; the ports decide."""
-    raw = {"airsim": {"driver": "script", "launch_script": "a", "stop_script": "b",
-                      "ports": {"rpc": 41451}, "capabilities": {"vehicles": ["drone"]}}}
+    raw = {"airsim": {"ports": {"rpc": 41451}, "capabilities": {"vehicles": ["drone"]}}}
     with pytest.raises(ValueError, match="must not declare capabilities"):
         parse_family_catalog(raw)
 
 
 def test_unknown_setting_is_rejected_rather_than_ignored():
-    raw = {"airsim": {"driver": "script", "launch_script": "a", "stop_script": "b",
-                      "ports": {"rpc": 1}, "typo_port": 9}}
+    raw = {"airsim": {"ports": {"rpc": 1}, "typo_port": 9}}
     with pytest.raises(ValueError, match="unknown settings"):
         parse_family_catalog(raw)
+
+
+def test_the_retired_script_driver_is_refused_with_a_sentence():
+    """``driver: script`` existed, drove UE5 through a shell script, and is gone.
+
+    An operator with an old config would otherwise meet "driver must be one of
+    ['xpra_start']" and have no idea what to do about it.
+    """
+    with pytest.raises(ValueError, match="launch scripts were removed"):
+        parse_family_catalog({"projectairsim": {"driver": "script", "ports": {"xpra": 1}}})
 
 
 def test_derived_airsim_capabilities():
@@ -76,18 +83,17 @@ def test_unknown_simulator_names_itself_in_the_error():
         registry.capabilities_for("ue9")
 
 
-def test_missing_catalog_file_keeps_todays_behaviour():
-    settings = SimulatorSettings()
-    with pytest.raises(ValueError, match="catalog is empty"):
-        parse_family_catalog({}, fallback=None)
-    families = parse_family_catalog({}, fallback=projectairsim_family(settings))
-    assert families.ids == ("projectairsim",)
-    family = families.require("projectairsim")
-    assert family.launch_script == settings.launch_script
-    assert family.ports == {
-        "xpra": settings.xpra_port, "topics": settings.topics_port,
-        "services": settings.services_port,
-    }
+def test_an_empty_catalog_is_an_error_rather_than_a_default():
+    """There used to be a fallback that synthesised the ProjectAirSim family.
+
+    It kept a second copy of the argv template in Python, so the config file and
+    the code could describe different commands, and a deployment without
+    config/simulators.yaml would launch a stack its driver could not stop.
+    """
+    with pytest.raises(ValueError, match="config/simulators.yaml must define"):
+        parse_family_catalog({})
+    with pytest.raises(ValueError, match="at least one family"):
+        parse_family_catalog({"default_simulator": "airsim"})
 
 
 def test_map_without_simulator_takes_the_catalog_default(tmp_path):

@@ -14,7 +14,9 @@ from typing import Any
 
 #: Controls the console may render for a map. Anything absent returns 501.
 KNOWN_ACTIONS = frozenset({"home", "models", "trajectory", "video", "weather"})
-KNOWN_DRIVERS = frozenset({"script", "xpra_start"})
+#: There is one process driver. The key stays in the schema so that a config left
+#: over from the launch-script era fails with a sentence instead of a stack trace.
+KNOWN_DRIVERS = frozenset({"xpra_start"})
 
 
 def _strings(value: Any, *, name: str) -> tuple[str, ...]:
@@ -88,9 +90,10 @@ class SimulatorFamily:
 
     id: str
     label: str
-    #: ``script`` runs launch/stop scripts (the UE5 stack in this repository);
-    #: ``xpra_start`` builds an ``xpra start --start-child`` argv from ``argv``.
-    driver: str = "script"
+    #: There is one process driver: ``xpra_start``, which renders ``argv`` into an
+    #: ``xpra start --start-child`` command. The key stays because a config left over
+    #: from the launch-script era has to fail with a sentence, not a stack trace.
+    driver: str = "xpra_start"
     #: Placeholder names resolved against the map entry plus this family.
     #: Every placeholder must be fillable, checked when the argv is rendered.
     argv: tuple[str, ...] = ()
@@ -102,18 +105,14 @@ class SimulatorFamily:
     runtime: str = ""
     #: Absolute log directory template for the child simulator process.
     abslog_dir: str = "output/logs"
-    #: Only used by driver ``script``: the launch and stop script paths.
-    launch_script: str = ""
-    stop_script: str = ""
-    #: Only used by driver ``xpra_start``: the engine settings file and the
-    #: window size handed to the binary as ``-ResX`` / ``-ResY``.
+    #: The engine settings file, empty for families whose binary takes none
+    #: (ProjectAirSim). It also carries the AirSim ownership fingerprint.
     settings_file: str = ""
     res_x: int = 1280
     res_y: int = 720
     #: argv for the rendered child process, joined by the driver into
-    #: ``--start-child`` (UE4 AirSim reads the map name as argv[1]).
+    #: ``--start-child`` (the UE engines read the map name as argv[1]).
     child_argv: tuple[str, ...] = ()
-
 
     def __post_init__(self) -> None:
         for name in ("id", "label"):
@@ -123,6 +122,13 @@ class SimulatorFamily:
         if any(ch.isspace() for ch in self.id):
             raise ValueError("simulator family id must not contain whitespace")
         if self.driver not in KNOWN_DRIVERS:
+            if self.driver == "script":
+                raise ValueError(
+                    f"simulator family '{self.id}' names driver 'script': the launch "
+                    "scripts were removed, every family is started from the argv it "
+                    "declares in config/simulators.yaml (see the airsim block for a "
+                    "worked example)"
+                )
             raise ValueError(
                 f"simulator family '{self.id}' driver must be one of "
                 f"{sorted(KNOWN_DRIVERS)}, got {self.driver!r}"
@@ -135,17 +141,13 @@ class SimulatorFamily:
         object.__setattr__(self, "probes", _strings(self.probes, name=f"simulator family '{self.id}' probes"))
         if not self.probes:
             raise ValueError(f"simulator family '{self.id}' must declare at least one probe")
-        if self.driver == "xpra_start" and not self.argv:
+        if not self.argv:
             raise ValueError(
-                f"simulator family '{self.id}' uses driver 'xpra_start' and needs an argv template"
+                f"simulator family '{self.id}' needs an argv template for xpra"
             )
-        if self.driver == "xpra_start" and not self.stop_argv:
+        if not self.stop_argv:
             raise ValueError(
-                f"simulator family '{self.id}' uses driver 'xpra_start' and needs a stop_argv template"
-            )
-        if self.driver == "script" and not (self.launch_script and self.stop_script):
-            raise ValueError(
-                f"simulator family '{self.id}' uses driver 'script' and needs launch_script and stop_script"
+                f"simulator family '{self.id}' needs a stop_argv template"
             )
         for name in ("res_x", "res_y"):
             value = getattr(self, name)
@@ -194,44 +196,28 @@ class FamilyCatalog:
         return {family.id: family.label for family in self.families}
 
 
-def projectairsim_family(simulator) -> SimulatorFamily:
-    """Build the ProjectAirSim entry from the existing ``simulator`` section.
-
-    A deployment without ``config/simulators.yaml`` keeps today's behaviour:
-    the launch and stop scripts drive the stack. Capabilities are never read
-    from here; the registry derives them from the ports the package implements.
-    """
-    return SimulatorFamily(
-        id="projectairsim",
-        label="ProjectAirSim (UE5)",
-        driver="script",
-        launch_script=simulator.launch_script,
-        stop_script=simulator.stop_script,
-        ports={"xpra": simulator.xpra_port, "topics": simulator.topics_port, "services": simulator.services_port},
-        runtime="planner.runtimes.ue5",
-    )
-
-
 KNOWN_FAMILY_KEYS = frozenset(
     {
         "label", "driver", "argv", "child_argv", "stop_argv", "probes", "ports",
-        "runtime", "abslog_dir", "launch_script", "stop_script", "settings_file",
-        "res_x", "res_y",
+        "runtime", "abslog_dir", "settings_file", "res_x", "res_y",
     }
 )
 
 
-def parse_family_catalog(raw: Any, *, fallback: SimulatorFamily | None = None) -> FamilyCatalog:
-    """Parse ``config/simulators.yaml``; an empty document keeps the fallback.
+def parse_family_catalog(raw: Any) -> FamilyCatalog:
+    """Parse ``config/simulators.yaml``.
 
     Unknown keys are rejected rather than ignored: a silently dropped setting is
     the hardest class of simulator misconfiguration to find on the machine that
-    owns it.
+    owns it. A missing file is an error too, because the only replacement for it
+    used to be a Python copy of the same argv template, and two copies of a command
+    line is how a driver ends up launching a stack it cannot stop.
     """
     if not raw:
-        if fallback is None:
-            raise ValueError("simulator catalog is empty")
-        return FamilyCatalog(families=(fallback,), default_family=fallback.id)
+        raise ValueError(
+            "simulator catalog is empty: config/simulators.yaml must define at "
+            "least one family"
+        )
     if not isinstance(raw, dict):
         raise ValueError("simulator catalog root must be a mapping")
     default_family = str(raw.get("default_simulator", raw.get("default_family", "")))
@@ -257,7 +243,7 @@ def parse_family_catalog(raw: Any, *, fallback: SimulatorFamily | None = None) -
             SimulatorFamily(
                 id=str(family_id),
                 label=str(item.get("label", family_id)),
-                driver=str(item.get("driver", "script")),
+                driver=str(item.get("driver", "xpra_start")),
                 argv=tuple(str(part) for part in item.get("argv", ())),
                 child_argv=tuple(str(part) for part in item.get("child_argv", ())),
                 stop_argv=tuple(str(part) for part in item.get("stop_argv", ())),
@@ -265,21 +251,13 @@ def parse_family_catalog(raw: Any, *, fallback: SimulatorFamily | None = None) -
                 ports={str(key): int(value) for key, value in (item.get("ports", {}) or {}).items()},
                 runtime=str(item.get("runtime", "")),
                 abslog_dir=str(item.get("abslog_dir", "output/logs")),
-                launch_script=str(item.get("launch_script", "")),
-                stop_script=str(item.get("stop_script", "")),
                 settings_file=str(item.get("settings_file", "")),
                 res_x=int(item.get("res_x", 1280)),
                 res_y=int(item.get("res_y", 720)),
-
             )
         )
     catalog = FamilyCatalog(
         families=tuple(families),
         default_family=default_family or (families[0].id if families else ""),
     )
-    if fallback is not None and catalog.entry(fallback.id) is None:
-        # The file exists but forgets the family the rest of the config assumes.
-        return FamilyCatalog(
-            families=(fallback, *catalog.families), default_family=catalog.default_family
-        )
     return catalog

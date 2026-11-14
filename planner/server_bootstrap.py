@@ -8,9 +8,7 @@ from pathlib import Path
 from .adapters.http.server_api import create_api
 from .simulators.projectairsim.session import ProjectAirSimMissionSession
 from .simulator.router import FamilyRouter
-from .simulator.supervisor import (
-    read_map_marker,
-)
+from .simulator.marker import read_map_marker
 from .simulator.worker import ThreadedMissionWorker
 from .application.factories import build_detector, build_geometry, build_planner
 from .application.server_controller import ServerController

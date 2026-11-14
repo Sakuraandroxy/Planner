@@ -12,18 +12,20 @@ class Settings:
     xpra_port = 10010
     topics_port = 8991
     services_port = 8992
-    launch_script = "scripts/launch_projectairsim_xpra.sh"
-    stop_script = "scripts/stop_projectairsim_xpra.sh"
 
 
 def values(entry=None, simulator=None):
     return argv_values(
-        entry=entry or MapEntry("city", "城市", "cityenviron",
-                                "scene_city_dual.jsonc", "config/scenes/city",
-                                "projectairsim"),
+        entry=entry or MapEntry(
+            id="city", label="城市", simulator="projectairsim",
+            launch_map="cityenviron", scene_file="scene_city_dual.jsonc",
+            sim_config_path="config/scenes/city",
+            binary="/sim/CityEnviron/Binaries/Linux/CityEnviron-Linux-Shipping",
+            map_name="CityEnviron",
+        ),
         simulator=simulator or SimulatorFamily(
-            id="projectairsim", label="ProjectAirSim", driver="script",
-            launch_script=Settings.launch_script, stop_script=Settings.stop_script,
+            id="projectairsim", label="ProjectAirSim", driver="xpra_start",
+            argv=("xpra", "start"), stop_argv=("xpra", "stop"),
             ports={"xpra": 10010, "topics": 8991, "services": 8992},
         ),
         settings=Settings(),
@@ -31,12 +33,13 @@ def values(entry=None, simulator=None):
     )
 
 
-def test_projectairsim_template_reproduces_the_script_invocation():
+def test_projectairsim_ports_come_from_the_family_block_not_the_settings():
+    """One family's port list cannot make another one resolve a wrong port."""
     got = render_argv(
-        ("{map.launch_map}", "{display}", "{ports.xpra}", "{ports.topics}", "{ports.services}"),
+        ("{map.map_name}", "{display}", "{ports.xpra}", "{ports.topics}", "{ports.services}"),
         values(),
     )
-    assert got == ["cityenviron", ":104", "10010", "8991", "8992"]
+    assert got == ["CityEnviron", ":104", "10010", "8991", "8992"]
 
 
 def test_airsim_template_carries_settings_and_the_binary_map_name():

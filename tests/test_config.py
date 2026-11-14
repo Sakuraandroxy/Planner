@@ -13,12 +13,10 @@ from planner.config import (
     load_map_catalog,
 )
 from planner.domain.visual_goal_completion import VisualGoalTriggerRules
+from tests.support import write_config
 
-
-def _write(tmp_path, data):
-    path = tmp_path / "config.yaml"
-    path.write_text(yaml.safe_dump(data), encoding="utf-8")
-    return path
+# One helper for every synthetic config directory in the suite.
+_write = write_config
 
 
 def test_server_defaults():
@@ -273,23 +271,22 @@ def test_simulator_defaults(tmp_path):
     config = load_config(_write(tmp_path, {}))
     simulator = config.simulator
     assert simulator.display == ":104"
-    assert simulator.xpra_port == 10010
-    assert simulator.topics_port == config.projectairsim.port_topics
-    assert simulator.services_port == config.projectairsim.port_services
     assert simulator.runtime_dir == "output/xpra"
     assert simulator.map_marker_file == "output/xpra/current_map"
     assert simulator.restart_attempts == 2
 
 
-def test_simulator_ports_must_match_projectairsim(tmp_path):
-    with pytest.raises(ValueError, match="must match"):
-        load_config(
-            _write(tmp_path, {"simulator": {"topics_port": 9991}})
-        )
-    with pytest.raises(ValueError, match="must match"):
-        load_config(
-            _write(tmp_path, {"simulator": {"services_port": 9992}})
-        )
+def test_simulator_ports_live_in_the_family_block(tmp_path):
+    """The process section used to carry xpra/topics/services ports too.
+
+    Nothing read them except a check that they equalled the projectairsim section,
+    which is what two homes for one number looks like from the outside. Ports are
+    declared once, per family, in config/simulators.yaml.
+    """
+    config = load_config(_write(tmp_path, {}))
+    assert not hasattr(config.simulator, "topics_port")
+    families = config.families.require("projectairsim")
+    assert families.ports == {"xpra": 10010, "topics": 8991, "services": 8992}
 
 
 @pytest.mark.parametrize(
@@ -297,10 +294,10 @@ def test_simulator_ports_must_match_projectairsim(tmp_path):
     [
         {"display": "104"},
         {"display": ":x"},
-        {"xpra_port": 0},
+        {"runtime_dir": " "},
+        {"map_marker_file": " "},
         {"launch_timeout_s": 0},
         {"restart_attempts": 0},
-        {"launch_script": ""},
     ],
 )
 def test_invalid_simulator_sections_are_rejected(tmp_path, simulator):

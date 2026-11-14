@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """M4 acceptance: live CityEnviron drone workflows through the adapter.
 
-Start the simulator first (the dual scene also spawns the rover, which stays
-parked), e.g.:
-    scripts/launch_projectairsim_xpra.sh cityenviron :104 10010 8991 8992
+Start the simulator first; the command to bring a stack up lives in
+docs/UE4_BRINGUP.md section 3.
 Then:
     conda activate carla-vln
     python scripts/smoke_projectairsim_drone.py --bbox 0.47,0.55,0.53,0.62

@@ -12,7 +12,7 @@ import yaml
 from .domain.depth import validate_depth_protocol
 from .domain.depth_foreground import DepthForegroundSettings
 from .domain.motion import ContinuousTrackingSettings
-from .domain.runtime import FamilyCatalog, parse_family_catalog, projectairsim_family
+from .domain.runtime import FamilyCatalog, parse_family_catalog
 from .domain.sliding_window import SlidingWindowSettings
 from .domain.visual_goal_completion import VisualGoalTriggerRules
 from .domain.visual_goal_limits import VisualGoalLimits
@@ -664,13 +664,7 @@ class MapCatalog:
 class SimulatorSettings:
     """``simulator`` section: process ownership for map switching."""
 
-    launch_script: str = "scripts/launch_projectairsim_xpra.sh"
-    stop_script: str = "scripts/stop_projectairsim_xpra.sh"
     display: str = ":104"
-    xpra_port: int = 10010
-    # Must match projectairsim.port_topics/port_services.
-    topics_port: int = 8991
-    services_port: int = 8992
     runtime_dir: str = "output/xpra"
     map_catalog_file: str = "maps.yaml"
     map_marker_file: str = "output/xpra/current_map"
@@ -680,7 +674,7 @@ class SimulatorSettings:
     restart_attempts: int = 2
 
     def __post_init__(self) -> None:
-        for name in ("launch_script", "stop_script", "runtime_dir",
+        for name in ("runtime_dir",
                      "map_catalog_file", "map_marker_file"):
             value = getattr(self, name)
             if not isinstance(value, str) or not value.strip():
@@ -689,10 +683,6 @@ class SimulatorSettings:
             self.display.startswith(":") and self.display[1:].isdigit()
         ):
             raise ValueError("simulator.display must look like ':104'")
-        for name in ("xpra_port", "topics_port", "services_port"):
-            value = getattr(self, name)
-            if type(value) is not int or not 1 <= value <= 65535:
-                raise ValueError(f"simulator.{name} must be in [1, 65535]")
         for name in ("launch_timeout_s", "stop_timeout_s",
                      "port_release_timeout_s"):
             value = getattr(self, name)
@@ -970,20 +960,7 @@ def load_config(path: str | Path) -> AppConfig:
 
     simulator_raw = _section(raw, "simulator")
     simulator = SimulatorSettings(
-        launch_script=str(
-            simulator_raw.get(
-                "launch_script", "scripts/launch_projectairsim_xpra.sh"
-            )
-        ),
-        stop_script=str(
-            simulator_raw.get(
-                "stop_script", "scripts/stop_projectairsim_xpra.sh"
-            )
-        ),
         display=str(simulator_raw.get("display", ":104")),
-        xpra_port=int(simulator_raw.get("xpra_port", 10010)),
-        topics_port=int(simulator_raw.get("topics_port", 8991)),
-        services_port=int(simulator_raw.get("services_port", 8992)),
         runtime_dir=str(simulator_raw.get("runtime_dir", "output/xpra")),
         map_catalog_file=str(
             simulator_raw.get("map_catalog_file", "maps.yaml")
@@ -998,19 +975,11 @@ def load_config(path: str | Path) -> AppConfig:
         ),
         restart_attempts=int(simulator_raw.get("restart_attempts", 2)),
     )
-    if simulator_raw and (
-        simulator.topics_port != projectairsim.port_topics
-        or simulator.services_port != projectairsim.port_services
-    ):
-        raise ValueError(
-            "simulator.topics_port/services_port must match "
-            "projectairsim.port_topics/port_services"
-        )
     families_path = Path(path).parent / "simulators.yaml"
     families_raw = _section(raw, "simulator_families")
     if not families_raw and families_path.is_file():
         families_raw = yaml.safe_load(families_path.read_text(encoding="utf-8")) or {}
-    families = parse_family_catalog(families_raw, fallback=projectairsim_family(simulator))
+    families = parse_family_catalog(families_raw)
     maps = load_map_catalog(
         Path(path).parent / simulator.map_catalog_file,
         default_simulator=families.default_family,

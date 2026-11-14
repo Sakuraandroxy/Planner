@@ -1,10 +1,35 @@
-"""Shared helpers for hand-built test observations (not collected by pytest)."""
+"""Shared helpers for tests that hand-build an observation or a config directory.
+
+Not collected by pytest.
+"""
 
 from __future__ import annotations
 
 import math
+from pathlib import Path
+import shutil
 
 import numpy as np
+import yaml
+
+REPO = Path(__file__).resolve().parents[1]
+
+
+def write_config(tmp_path, data) -> Path:
+    """Write a synthetic ``config.yaml`` next to the shipped family catalog.
+
+    ``config/simulators.yaml`` is required rather than defaulted. It is the one
+    place an xpra argv template is written down, and the old answer for a
+    deployment without it was a Python copy of the same command line -- two homes
+    for one command, which is how a driver ends up launching a stack it cannot
+    stop. A test config directory therefore carries a catalog exactly like a real
+    installation does.
+    """
+    directory = Path(tmp_path)
+    path = directory / "config.yaml"
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    shutil.copyfile(REPO / "config/simulators.yaml", directory / "simulators.yaml")
+    return path
 
 
 def ue_camera_matrix(

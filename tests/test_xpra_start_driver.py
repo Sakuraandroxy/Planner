@@ -19,12 +19,11 @@ import yaml
 from planner.config import MapCatalog, MapEntry, SimulatorSettings
 from planner.domain.runtime import SimulatorFamily, parse_family_catalog
 from planner.errors import SimulatorNotOwned, SimulatorRestartError
+from planner.simulator.marker import read_map_marker, write_map_marker
+from planner.simulator.processes import UnattributedListener, display_files, reclaim_stale_display
 from planner.simulator.xpra_start import (
     SUPPORTED_PROBES,
-    UnattributedListener,
     XpraStartSupervisor,
-    display_files,
-    supervisor_for,
 )
 
 DISPLAY = ":199"
@@ -93,9 +92,6 @@ def _entry(map_id="blocks"):
 def _settings(tmp_path, **overrides):
     values = dict(
         display=DISPLAY,
-        xpra_port=XPRA_PORT,
-        topics_port=20991,
-        services_port=20992,
         runtime_dir=str(tmp_path / "output/xpra"),
         map_marker_file=str(tmp_path / "output/xpra/current_map"),
         launch_timeout_s=5.0,
@@ -588,7 +584,7 @@ def test_stale_display_lock_is_reclaimed(tmp_path, monkeypatch):
 
 
 def _reclaim(tmp_path, monkeypatch):
-    import planner.simulator.xpra_start as module
+    import planner.simulator.processes as module
 
     monkeypatch.setattr(module, "display_files",
                         lambda display, lock_dir=Path("/tmp"), socket_dir=Path("/tmp/.X11-unix"):
@@ -599,7 +595,7 @@ def _reclaim(tmp_path, monkeypatch):
 def test_live_display_is_not_touched(tmp_path, monkeypatch):
     lock = tmp_path / ".X199-lock"
     lock.write_text(str(os.getpid()), encoding="utf-8")   # very much alive
-    import planner.simulator.xpra_start as module
+    import planner.simulator.processes as module
 
     monkeypatch.setattr(module, "display_files",
                         lambda display, **kw: (lock, tmp_path / "X199"))
@@ -617,27 +613,29 @@ def test_stop_waits_for_the_xvfb_to_drop_the_display(tmp_path, monkeypatch):
     going quiet is not the end of the teardown. The wait is bounded and silent: a
     display somebody else owns on purpose still fails in launch's reclaim.
     """
-    import planner.simulator.xpra_start as module
+    import planner.simulator.processes as processes
+    import planner.simulator.xpra_start as driver_module
 
     lock = tmp_path / ".X199-lock"
     sock = tmp_path / "X199"
-    monkeypatch.setattr(module, "display_files", lambda display, **kw: (lock, sock))
+    monkeypatch.setattr(processes, "display_files", lambda display, **kw: (lock, sock))
     harness = Harness(tmp_path, holders={RPC_PORT: ours_engine()}, alive={RPC_PORT})
     driver = harness.driver
     driver._process = SimpleNamespace(pid=4242, wait=lambda timeout: 0, poll=lambda: 0)
     lock.write_text(str(os.getpid()), encoding="utf-8")   # an Xvfb still winding down
 
     checks: list[bool] = []
-    real_released = module.display_released
+    real_released = driver_module.display_released
 
     def spy(display, **kwargs):
+        # The driver calls the name in its own module, so that is the one to wrap.
         result = real_released(display, **kwargs)
         checks.append(result)
         if len(checks) == 3:
             lock.unlink(missing_ok=True)                  # the Xvfb finally exits
         return result
 
-    monkeypatch.setattr(module, "display_released", spy)
+    monkeypatch.setattr(driver_module, "display_released", spy)
     driver.stop()
 
     assert checks[0] is False, checks
@@ -652,10 +650,11 @@ def test_a_stopped_adopted_stack_still_waits_for_the_display(tmp_path, monkeypat
     it is still our job, and so is the teardown wait -- without it the refusal
     arrives one second later, from the next launch, looking like a stuck display.
     """
-    import planner.simulator.xpra_start as module
+    import planner.simulator.processes as processes
+    import planner.simulator.xpra_start as driver_module
 
     lock = tmp_path / ".X199-lock"
-    monkeypatch.setattr(module, "display_files",
+    monkeypatch.setattr(processes, "display_files",
                         lambda display, **kw: (lock, tmp_path / "X199"))
     harness = Harness(tmp_path, holders={RPC_PORT: ours_engine()}, alive={RPC_PORT})
     driver = harness.driver
@@ -663,7 +662,7 @@ def test_a_stopped_adopted_stack_still_waits_for_the_display(tmp_path, monkeypat
     lock.write_text(str(os.getpid()), encoding="utf-8")
 
     checked: list[bool] = []
-    real_released = module.display_released
+    real_released = driver_module.display_released
 
     def spy(display, **kwargs):
         result = real_released(display, **kwargs)
@@ -672,7 +671,7 @@ def test_a_stopped_adopted_stack_still_waits_for_the_display(tmp_path, monkeypat
             lock.unlink(missing_ok=True)
         return result
 
-    monkeypatch.setattr(module, "display_released", spy)
+    monkeypatch.setattr(driver_module, "display_released", spy)
     driver.stop()
 
     assert len(checked) >= 2, checked
@@ -681,9 +680,9 @@ def test_a_stopped_adopted_stack_still_waits_for_the_display(tmp_path, monkeypat
 
 def test_no_wait_when_the_display_is_already_free(tmp_path, monkeypatch):
     """Nothing holds the display here, so the reaper must not spin or sleep."""
-    import planner.simulator.xpra_start as module
+    import planner.simulator.processes as processes
 
-    monkeypatch.setattr(module, "display_files",
+    monkeypatch.setattr(processes, "display_files",
                         lambda display, **kw: (tmp_path / ".X199-lock", tmp_path / "X199"))
     harness = Harness(tmp_path, holders={RPC_PORT: ours_engine()}, alive={RPC_PORT})
     driver = harness.driver
@@ -774,21 +773,3 @@ def test_rpc_probe_needs_a_port_named_rpc(tmp_path):
 
 def test_window_probe_is_supported():
     assert "window" in SUPPORTED_PROBES
-
-
-def test_supervisor_for_picks_the_driver(tmp_path):
-    settings = _settings(tmp_path)
-    script = _family(id="projectairsim", driver="script", launch_script="scripts/a.sh",
-                     stop_script="scripts/b.sh", argv=(), child_argv=(), stop_argv=(),
-                     probes=("ports",), ports={"xpra": XPRA_PORT})
-    from planner.simulator.supervisor import SimulatorSupervisor
-
-    assert isinstance(supervisor_for(script, settings, tmp_path, _maps()), SimulatorSupervisor)
-    assert isinstance(supervisor_for(_family(), settings, tmp_path, _maps()), XpraStartSupervisor)
-    assert isinstance(supervisor_for(None, settings, tmp_path, _maps()), SimulatorSupervisor)
-
-
-def test_unknown_driver_is_rejected(tmp_path):
-    bogus = SimpleNamespace(**{**vars(_family()), "driver": "carrier_pigeon"})
-    with pytest.raises(ValueError, match="carrier_pigeon"):
-        supervisor_for(bogus, _settings(tmp_path), tmp_path, _maps())
