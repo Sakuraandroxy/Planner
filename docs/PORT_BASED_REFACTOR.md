@@ -215,3 +215,30 @@ console/ config/               一份
 - 第 6 步的 48 处实现分歧仍需逐个读。端口化不消除语义差异，只是把它暴露出来：其中约 20 处在模型客户端与提示词，与仿真器无关，统一取 main 版再把旧规则作为新任务类型加入。
 - UE4 真机行为无法本地验证。旧 `README.md:435` 自己写明实际 AirSim 仍需联调。
 - 跨进程后端口对象不能直接暴露给父侧。父侧只见 `BackendWorker` 与握手上报的能力清单，任务循环整个跑在子进程里。这与 UE5 目前"进程内线程 worker"的形态不同，第 3 与第 4 步要决定 UE5 是否也移进子进程。
+
+## 9 本轮落地状态
+
+已做完（第 7 节的 1、2、3 与部分 4、5）：
+
+| 项 | 结果 |
+|---|---|
+| 删 `planner/ue4` | 完成。git 记为重命名，旧分支仍可单文件取回 |
+| `simulators/{airsim,projectairsim}` 并列 | 完成，同深度同形状 |
+| 端口层 | `planner/ports/capabilities.py` 八个可选端口；`SimulatorPorts` 与 `TASK_REQUIREMENTS` |
+| 能力位改推导 | 完成。`config/simulators.yaml` 写 `capabilities` 会被拒绝 |
+| 命名去偏心 | `family` 改 `simulator`，`ue4`/`ue5` 改 `airsim`/`projectairsim`，去掉 `default_family` 偏心 |
+| airsim 适配层接干线类型 | 14 模块导入通过，`Vehicle`、`StreamingVehicle`、`PositionHoldVehicle`、`ObservationSource` 零缺失方法 |
+| 俯视支持层进共享层 | 13 文件，含 `CameraMountPose` 上移到 `domain/pose.py` |
+| xpra argv 统一 | 一套渲染路径，两份模板；supervisor 测试断言命令串逐字不变 |
+| 架构规则可执行 | `tests/test_architecture.py` 用 AST 扫全仓 |
+
+测试 851 passed（起点 816）。
+
+## 10 本轮没做，以及为什么
+
+| 剩项 | 为什么停 |
+|---|---|
+| `xpra_start` 进程驱动 | 需要真机验证窗口就绪与 `/proc` 所有权判据，写出来也无法本地证明 |
+| UE4 会话装配（`build_ports` 真实调用方） | 上一条不做，装配没有消费者；留桩会腐烂 |
+| `visual_goal_above` 端到端接线 | 要改 `domain/mission.py` 的 `TaskKind` 与 `task_parser` 注册，那属于 48 处分歧。这些改动同时影响 UE5 行为，而我这边跑不了任何一侧仿真器，把未验证的行为改动塞进共享层违背"逻辑保真" |
+| UE5 移进子进程 | 保留进程内 worker 是既定取舍；`projectairsim` 因此仍在主进程被加载，`test_architecture.py` 的注释记下了这条边界 |

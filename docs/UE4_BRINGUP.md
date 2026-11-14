@@ -8,10 +8,13 @@
 |---|---|
 | UE5 全套（现有功能） | ok 完好，847 个测试通过 |
 | 两族注册表、能力位、配置校验 | ok 已实现并测试 |
-| 前端地图列表出现 6 张 UE4 图 | ok 已实现 |
-| 前端按能力位隐藏 UE4 不支持的控件 | ok 已实现 |
-| 切到 UE4 地图 | no 后端返回 501，进程驱动未实现 |
-| UE4 上飞行 | no 依赖上一条 |
+| 前端地图列表出现 6 张 AirSim 图 | ok 已实现 |
+| 前端按端口推导的能力位隐藏控件 | ok 已实现 |
+| AirSim 适配层接上共享端口 | ok 14 个模块，Vehicle 等四协议零缺失 |
+| 俯视的支持层进入共享层 | ok 13 个文件，不再属于任何仿真器目录 |
+| 两族共用一套 xpra argv 渲染 | ok 模板在 config/simulators.yaml |
+| 切到 AirSim 地图 | no 返回 501，xpra_start 进程驱动未实现 |
+| UE4 上飞行 | no 还缺会话装配与任务类型接线 |
 
 也就是说：这份代码不会破坏你现在的 UE5 用法，UE4 部分停在"配置与前端就绪、执行链路未接"的位置。第 6 节列出剩余要写的东西。
 
@@ -99,11 +102,13 @@ python scripts/serve_planner.py --host 0.0.0.0
 
 浏览器开 `http://<机器IP>:8000/`，逐项确认：
 
-1. 地图下拉里出现 8 项：2 张 UE5 加 6 张 UE4。
+1. 地图下拉里出现 8 项：2 张 ProjectAirSim 加 6 张 AirSim。
 2. 选 `cityenviron` 启动，UE5 全流程与今天一致。
-3. 状态轮询时 `GET /api/status` 的响应里出现 `family` 与 `capabilities`。
-4. 选一张 UE4 图点启动，界面应显示 501 提示 `driver:xpra_start`。这是预期行为。
-5. 在 UE5 地图下机位、外观模型、回起点、轨迹卡片都在；把 `capabilities.actions` 临时改成只有 `[weather]` 重启，这些控件应消失。
+3. `GET /api/status` 的响应里出现 `simulator` 与 `capabilities`。
+4. 选一张 AirSim 图点启动，界面显示 501 与 `driver:xpra_start`。这是预期行为。
+5. UE5 地图下机位、模型、回起点、轨迹卡片都在。能力位由端口推导，改 YAML 无效；
+   要验证门控真的在跑，从 `planner/simulators/projectairsim/runtime.py` 的
+   `PORT_SLOTS` 里删掉 `models` 再重启，那张卡片应消失。
 
 ## 4 剩下的实现工作
 
