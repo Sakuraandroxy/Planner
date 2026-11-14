@@ -232,16 +232,15 @@ class SubprocessMissionWorker:
         if self._process is None:
             return
         self._send(encode_command("shutdown", skip_landing=bool(skip_landing)))
-        self._await_closed(self._shutdown_timeout_s)
+        self._wait_for_closed(self._shutdown_timeout_s)
 
-    def _await_closed(self, timeout_s: float) -> bool:
+    def _wait_for_closed(self, timeout_s: float) -> None:
         """Wait for CLOSED, then hand the whole queue back in order for the caller.
 
         ``ServerController`` calls ``shutdown()`` and afterwards polls this worker, so
         the confirmation has to survive the wait rather than be consumed by it.
         """
         held: list[WorkerEvent] = []
-        closed = False
         deadline = time.monotonic() + max(0.0, float(timeout_s))
         try:
             while True:
@@ -253,14 +252,12 @@ class SubprocessMissionWorker:
                 except queue.Empty:
                     break
                 if event.kind is WorkerEventKind.CLOSED:
-                    closed = True
                     held.append(event)      # the caller's poll() must still see it
                     break
                 held.append(event)
         finally:
             for event in held:
                 self._events.put(event)
-        return closed
 
     def home(self, vehicle: str | None = None) -> None:
         self._send(encode_command("home", vehicle=vehicle or ""))
