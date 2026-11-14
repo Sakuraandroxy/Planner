@@ -168,11 +168,11 @@ ProjectAirSim 的 CityEnviron 与 AirSimNH 构建**不写任何日志文件**，
 
 | 项 | 位置 |
 |---|---|
-| **UE4 运行时子进程入口**（现在唯一挡住控制台飞 UE4 的东西） | 主进程不得加载 AirSim 客户端（`tests/test_architecture.py`），而 worker 现在跑在 HTTP 进程内，所以 UE4 会话目前只能直接构造。旧分支可取回：`git show origin/low-altitude-level-view-visual-goal-navigation:planner/server_worker.py`。心跳重连与停止接管的语义在旧 `ServerController` 里，不在 worker 协议里；旧 worker 的 IPC 只认 `task` 与 `shutdown` 两条命令 |
 | 标定降级 | `streaming-view` 四机位标定在本机四帧打分完全相同，于是回落内置顺序（见 5.2）。不阻断任务，但循环顺序在这台机器上没被实测标定过 |
+| 俯视与目标导航 | UE4 的 `visual_goal_navigation` 需要检测端点，UE5 俯视被用户明确推迟；见第 6 节与 `docs/UE4_REMAINING_WORK.md` 第 4 节 |
 
-会话装配、天气与进程驱动已落地；控制面三处冲突已修完，实测证据在
-`docs/UE4_REMAINING_WORK.md` 7.3 末尾的表里。
+会话装配、天气、进程驱动、控制面三处冲突、子进程入口、跨族切换都已落地并真机验证。
+实测数字与控制面冲突的证据在 `docs/UE4_REMAINING_WORK.md` 7.3 末尾的表里，跨族切换在 5.3。
 
 ## 5.1 脚本化验 HTTP 服务时会假卡死的一个坑
 
@@ -200,6 +200,47 @@ with TestClient(build_server(load_config("config/base.yaml"))) as client:
 前/后飞与偏航；垂直起飞是会话的准备动作，不是任务阶段。
 
 `vln-ue4` 需要 `httpx`（任务解析与轨迹端点都在 worker 侧发 HTTP）。
+
+## 5.3 跨族切换实测（本轮）
+
+一个服务、一段脚本，`POST /api/world` 连切三次，每次切完立刻下发一个飞行任务：
+
+| 段 | 目标 | 切换+就绪 | 任务 |
+|---|---|---|---|
+| 1 | cityenviron（UE5） | 40s | 向前飞两米，16.1s 完成 |
+| 2 | blocks（UE4） | 8s | 向前飞两米，16.1s 完成 |
+| 3 | cityenviron（UE5） | 42s | 向后飞两米，16.1s 完成 |
+
+UE5 就绪慢是引擎自己起图的时间；UE4 约 8s。这条路径上撞出三个缺陷，都在真机上复现并修完：
+
+1. **跨族停止被归属关口挡住**。`holders()` 用 `owned_map()` 判断"这是不是我们的进程"，
+   而 `owned_map()` 要求 argv 里有本族的 `-settings=` 标记。UE5 引擎没有这个标记，UE4
+   驱动因此把还在跑的 UE5 栈判成不可管理的进程，拒绝停它。停止问的是"能不能停"，
+   二进制在自家 `maps.yaml` 里就够了；"是哪一族的哪张图"才需要标记。两个问题拆成
+   `catalogued_map()` 与 `owned_map()`。
+2. **`FamilyRouter.restart` 把整次切换交给目标那一族的驱动**。UE4 驱动只读自己那套端口，
+   UE5 栈不占 41451，于是它认为机器空闲、跳过 stop 直接 launch，然后卡在显示锁上。
+   标记记着在跑的是哪一族，路由现在先让那一族 stop。
+3. **`xpra stop` 不收它自己起的 X 服务器**。实测引擎与会话都死、端口都放，
+   `Xvfb-for-Xpra-104` 还活着并占着 `/tmp/.X104-lock`，下次 launch 报
+   "display :104 is still held by PID"。停止收尾现在验三件事再动手：属同一 uid、
+   argv 里是这个显示号、名字是 Xvfb；别人的 X 服务器照旧只拒绝。
+
+路由层的第一份测试是 `tests/test_family_router.py`。`FamilyRouter` 因此多了
+`driver_factory` 参数——不然"哪一族负责停"这条规则只能靠真机验。
+
+## 5.4 停止与退出的实际语义（测量）
+
+这几条是读代码和量出来的，文档此前没写清：
+
+- `POST /api/stop` 只中止任务（`worker.stop()`）。会话与仿真栈按设计留着，控制台上一次
+  场景仍然可看。
+- 服务进程退出会关掉会话：子进程 worker 在约 1s 内退出。仿真栈仍留着。
+- 残留的仿真栈由**下一次启动**负责收：控制器启动时 preflight，认得出的就停掉
+  （"Leftover simulator stopped; the console starts blank"），认不出的只告警不动。
+- 子进程 `shutdown()` 现在会等到 CLOSED 为止（上限 `land_timeout_s + 10`）。之前它写完
+  命令就返回，而 `ServerController._drain()` 只翻队列里已有的事件，于是每次关闭都记一条
+  "Worker did not confirm shutdown within the timeout"，其实子进程收得干干净净。
 
 ## 6 UE5 俯视
 

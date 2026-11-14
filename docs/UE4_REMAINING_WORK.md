@@ -75,14 +75,15 @@ git show origin/low-altitude-level-view-visual-goal-navigation:planner/workflows
 
 第 2、3 步会改到 UE5 行为，两侧都要验证。每步之后跑 `pytest -q`。
 
-## 5 UE4 运行时还缺的两块
+## 5 UE4 运行时缺的两块（已落地）
 
 | 块 | 位置 | 要点 |
 |---|---|---|
-| `xpra_start` 进程驱动 | **已落地：`planner/simulator/xpra_start.py` + `router.py`** | 渲染 argv、起进程、三个探针逐个等就绪、按 `/proc` 里的 exe 真路径 + `-settings=` 判归属、只停自己拉起过的栈。生命周期那套（`identity` 快照、`descendants`、`terminate_verified_tree`、`reclaim_stale_display`、`window_ready`、先校验后动作的 stop 阶梯）逐字参照 `airsim-flight-console/scene_processes.py` 与 `environment_service.py`。真机实测见第 7.1 节 |
-| AirSim 会话装配 | `planner/simulators/airsim/runtime.py` | 现在只有 `describe()` 与 `PORT_SLOTS` 供能力推导。`build_ports` 曾因无调用方被删。补回时必须同一个提交里带上调用方：`AirSimVehicle`、`AirSimObservationSource`、`AirSimCameraView`、`AirSimWeather`（天气从 `airsim-flight-console/weather_service.py` 移植，走 msgpack RPC） |
+| `xpra_start` 进程驱动 | `planner/simulator/xpra_start.py`、`processes.py`、`marker.py`、`router.py` | 渲染 argv、起进程、探针逐个等就绪、按 `/proc` 里的 exe 真路径判能不能停、按 `-settings=` 判是哪张图、只停自己拉起过的栈。生命周期那套（`identity` 快照、`descendants`、`terminate_verified_tree`、`reclaim_stale_display`、`window_ready`、先校验后动作的 stop 阶梯）逐字参照 `airsim-flight-console/scene_processes.py` 与 `environment_service.py`。真机实测见 7.1 与 `docs/UE4_BRINGUP.md` 5.3 |
+| AirSim 会话装配 | `planner/simulators/airsim/{runtime,session,weather}.py` + `planner/application/mission_assembly.py` | `registry.build_session` 与 `runtime.build_session` 是调用方共存的证：`describe()`/`PORT_SLOTS` 现在真的有人读。`AirSimVehicle`、`AirSimObservationSource`、``AirSimCameraView`、`AirSimWeather`（从 `airsim-flight-console/weather_service.py` 移植，走 msgpack RPC）全部接入 |
+| 子进程 worker | `planner/simulator/{subprocess_worker,mission_child}.py` | 主进程不得加载 AirSim，会话跑在 `runtime_python` 拉起的子进程里；协议走专用 fd（`PLANNER_MISSION_EVENT_FD`）。真机：控制台飞 UE4 已跑通 |
 
-心跳重连（旧 `ConnectionMonitor`、`heartbeat_interval_s`、`readiness_stable_s`）与停止接管（旧 `README.md:428` 描述的 `rotateByYawRateAsync` 交接）都在旧 `ServerController` 里，不在 worker 协议中。旧 worker 的 IPC 只认 `task` 与 `shutdown` 两条命令。装配时只看 worker 接口会漏掉这两块。
+心跳重连（旧 `ConnectionMonitor`、`heartbeat_interval_s`、`readiness_stable_s`）与停止接管（旧 `README.md:428` 描述的 `rotateByYawRateAsync` 交接）都在旧 `ServerController` 里，不在 worker 协议中。旧 worker 的 IPC 只认 `task` 与 `shutdown` 两条命令——新协议实际按 `ServerController` 用到的十条方法对齐，不是按旧 IPC。这两块旧语义是否需要搬回，归入下面 7.2 的未知项。
 
 ## 6 已定的边界，不要重新讨论
 
@@ -153,6 +154,10 @@ Drone.camera_look_at_object(camera_id: str, object_name: str, ...) -> bool
 `Landed`，`z` 分别为 0.67 / 3.56。`connection.py:149` 与 `server_vehicle.py` 里的
 `state.landed_state == airsim.LandedState.Landed` 写法与构建一致，不用改。
 
+但这句只对冷启动成立：**落地之后 `landed_state` 会停在 1（Flying）不再回来**，实测在
+Blocks 上一个任务落地后它就再也没变过 0。拿它当"该不该起飞"的唯一依据，第二个任务
+就会贴地前飞、60s 后报 synchronized motion timeout（见 7.3 第 4 条）。
+
 **UE4 打包应用在本机能渲染、能取图、能切图（驱动真机实测）。**
 
 用线上配置经 `FamilyRouter` 跑完整周期，`vln-ue4` 取帧：
@@ -176,19 +181,33 @@ Drone.camera_look_at_object(camera_id: str, object_name: str, ...) -> bool
 
 顺带一条：campus 从来不是"图太大启动慢"，8 秒就好。之前那次失败只是撞上了上面第 2 条。
 
+**UE4 经 HTTP 控制台跑通，且与 UE5 双向切换。**
+
+| 动作 | 结果 |
+|---|---|
+| `POST /api/world blocks` | 2–6s 就绪（接管在跑的栈）/ 8s（新起） |
+| `POST /api/tasks` 「向前飞两米」 | 16.1s `completed; basis=local_measurement` |
+| 同一台引擎不重启接第二个任务 「向后飞两米」 | 12s 完成（修复前必挂，见 7.3 第 4 条） |
+| cityenviron → blocks → cityenviron，每段一个任务 | 40s/16.1s → 8s/16.1s → 42s/16.1s，全成 |
+| `POST /api/stop` | 200，状态 idle，无告警 |
+
+上面表里那句“`stop()` 后 `/tmp/.X104-lock` 无残留”只在本驱动自己拉起过栈时成立。
+接管一个由别的服务拉起过的栈时，实测 `xpra stop` 会留下 `Xvfb-for-Xpra-104` 继续持锁；
+现在停止收尾会验属后回收它（`docs/UE4_BRINGUP.md` 5.3 第 3 条）。
+
 ### 7.2 仍然未知
 
 - 深度图的实际内参。`settings.json` 里 `front_center` 的深度通道是 256x256 / FOV 90，
-  真帧已能取到（读数 0.3m–16.3km，中位 22m），但与 planner `camera_model` 的期望是否一致还没逐项核。
-- **UE5 启动脚本在本仓库路径下起不来**（已解决，2026-11-15）：`scripts/launch_projectairsim_xpra.sh`
-  把二进制路径写死为 `$PROJECT_DIR/sim/...`，而本仓库没有 `sim/`。用户定的方向是不包脚本、
-  直接驱动二进制；现在两个脚本、`driver: script` 与 `SimulatorSupervisor` 已整列删除，
-  UE5 与 UE4 同走 `xpra_start`。UE5 真机实测记录在 `docs/UE4_BRINGUP.md` 4.1。
+  planner 现在按 `depth_intrinsics` 收 256x144。深度网格的 FOV 与 RGB 是否同一个锥没被逐项核过，
+  本机只能读出尺寸与数值范围。
+- 旧分支的心跳重连与停止接管是否需要搬回。子进程 worker 现在只对齐 `ServerController` 用到的
+  方法，没搬旧 `ConnectionMonitor`：真机上没测到会话中途断链的场景，不确定那个丢失。
+- streaming-view 四机位标定在本机四帧打分完全相同（回落内置顺序），循环顺序未实测标定。
 - GPU：可见 3 张 RTX 3080 Ti 正常，另有一张 `0000:68:00.0` 报 `Unknown Error`，要避用。
   UE4 目前没显式指定适配器也能跑。
 - 旧分支自述实机未联调：旧 `README.md:435`。旧分支没有 `tests/`，UE4 保真来自代码照抄，不来自测试通过。
 
-### 7.3 实机跑出来的三处硬冲突（已修完，证据在下表）
+### 7.3 实机跑出来的四处硬冲突（已修完，证据在下表）
 
 把适配层接上真机之后才暴露得出来的，都是“旧分支没跑过硬件”的直接代价。
 
@@ -221,11 +240,20 @@ motion did not complete`。真正的完成信号得改成读回状态（位置�
 
 这三条都在飞行控制路径上，彼此有依赖，已按 2 → 3 → 1 的顺序全部修完（下表“怎么修的”）。
 
+**4. `landed_state` 落地后不会回 0。** 前三条修完，直接构造会话能飞了，但同一台引擎上的
+第二个任务必挂：prepare 问"在地面吗"，而 AirSim 在落地之后把 `landed_state` 永远停在 1，
+于是它相信"还在飞"、不起飞，贴地前飞 60s 后报
+`synchronized motion timed out before position/yaw settled`——症状像运动问题，真因是一个过期的
+枚举值。冷启动那条读数（7.1）恰好是对的，所以前一轮没测到。现在 `prepare` 接受地面高度参考，
+z 回到参考高度 0.25m 以内即算在地面；会话把参考值取为"见过的最高 z"（UE 的 z 轴朝下，地面
+就是最大值），这样即使会话是在空中重建的也不会反向失真。没有参考值时行为与修前逐字相同。
+
 | 冲突 | 修法 | 提交 | 真机证据 |
 |---|---|---|---|
 | 载具名为空 | `vehicle_name` 从 `AirSimConnection` 构造函数入，三条 RPC 通道统一注入；能不能收这个关键字由 `inspect.signature` 判定并缓存，不维护名单 | `2ecb503` | `prepare_vehicle()` 拿到 `enableApiControl` 与 `armDisarm` 确认 |
 | 异步返回值不可信 | ack 只记日志，完成与否看回读的位置与朝向（0.5m / 15°）；takeoff 看高度增益 ≥0.5m | `2ecb503` | `takeoffAsync` 报 False 而 z 从 0.68 到 -0.86；`moveToPositionAsync` 报 False 而确实移动 0.99m |
 | RGB 与深度必须同尺寸 | 走 C 方案：契约改为“深度必须与自己的 `depth_intrinsics` 一致”，UE5 逐字不变（它本就写 `depth_intrinsics=intrinsics`） | `465e493` | 单帧取回 25.97s → **0.40s**（中位，5 帧）；`measure_free_space` 在分裂网格上 9 个扇区全部有测量值 |
+| `landed_state` 不回 0 | 起飞判据改为读高度，参考值取"见过的最高 z"；无参考值时维持旧行为 | `0f1030e` | 同一台引擎不重启：「向前飞两米」16s → 「向后飞两米」12s 全成 |
 
 两条从真机拚出来的额外事实，已写进代码注释：
 

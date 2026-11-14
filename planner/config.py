@@ -449,7 +449,8 @@ class MapEntry:
 
     id: str
     label: str
-    # First argument of launch_projectairsim_xpra.sh.
+    # Kept for scene selection and older configs; the engine takes ``map_name``.
+    # Defaults to ``map_name`` when empty, so neither has to be written twice.
     launch_map: str = ""
     # Dual-vehicle scene JSONC inside sim_config_path.
     scene_file: str = ""

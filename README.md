@@ -47,12 +47,17 @@ XV3DGS-airsim-vln/
 
 ## 环境
 
+两个 conda 环境，各自对应一个仿真器客户端（完整记录在 `docs/ENVIRONMENT.md`）：
+
 ```bash
-conda activate carla-vln        # 环境名沿用参考项目，Python >= 3.10
+/home/kedior/miniconda3/envs/vln/bin/python        # 主服务、UE5 projectairsim 1.0.2、测试
+/home/kedior/miniconda3/envs/vln-ue4/bin/python    # UE4 airsim 1.8.1，只跑任务子进程
 ```
 
-Python 依赖见 `pyproject.toml`。`projectairsim` 客户端来自 ProjectAirSim
-v1.0.1 的 wheel（不在 PyPI），已安装在 `carla-vln` 环境中。
+两个客户端不能在同一个解释器里共存：`msgpack-python` 0.5.6 与 `msgpack` 1.2.4 抢同一个
+模块名，混装后 `client.ping()` 直接报 `TypeError: __init__() got an unexpected keyword
+argument 'encoding'`。因此 UE4 会话跑在 `vln-ue4` 拉起的子进程里，主进程不加载 AirSim
+（`tests/test_architecture.py` 守这条）。`projectairsim` 不在 PyPI，靠 `--no-deps` 装。
 
 仿真器不在仓库里。两个引擎都只用已经打包好的产物，不编译、不开编辑器；
 每张图的路径写在 `config/maps.yaml` 的 `binary` 字段，那里就是唯一出处：
@@ -71,8 +76,7 @@ v1.0.1 的 wheel（不在 PyPI），已安装在 `carla-vln` 环境中。
 在控制台「世界设置」里选择地图，点「启动场景」后，后台才会拉起仿真栈并连接。
 
 ```bash
-conda activate carla-vln
-python scripts/serve_planner.py --host 0.0.0.0
+/home/kedior/miniconda3/envs/vln/bin/python scripts/serve_planner.py --host 0.0.0.0
 # 浏览器打开 http://<本机IP>:8000/
 ```
 
@@ -84,7 +88,10 @@ python scripts/serve_planner.py --host 0.0.0.0
   可直接执行的建议——后台不会替你杀掉不属于本项目的进程。
 - 换图是停整套再起整套（xpra 会话、引擎、Xvfb 一起）：一个 UE 进程只能加载一张
   cooked 地图，而画面端口与会话绑在一起，所以浏览器里的画面会断开一次再自动重连。
-  实测 `restart(cityenviron)` 7.8s、`restart(neighborhood)` 7.0s。
+  两个时间尺度分开看：仿真栈本身 UE5 `restart(cityenviron)` 7.8s、`restart(neighborhood)`
+  7.0s，UE4 `restart(blocks)` 5–8s；而操作员在控制台上等到 `idle` 还要叠上场景与会话
+  装配，实测 UE5 约 40s、UE4 约 8–16s。跨族切换（UE5↔UE4）真机验证见
+  `docs/UE4_BRINGUP.md` 5.3。
 - 启动失败会回到 `disconnected`，`/api/status` 的 `sim_error` 写明原因；
   操作员修好仿真器后再点一次「启动场景」即可重试。
 
@@ -169,10 +176,9 @@ worker 并在**同一个仿真器进程**里重新加载场景（不重启 UE / 
 重新选择。切换失败（场景文件缺失或网格加载失败）会留在 connecting 并写日志，
 修好后重启规划服务即可。
 
-手动启动 Neighborhood（不经控制台）：
-`scripts/launch_projectairsim_xpra.sh neighborhood :105 10011 8993 8994`，
-同时让 `config/base.yaml` 的 `projectairsim.port_topics/port_services` 与
-`scene_file/sim_config_path` 匹配，再重启规划服务。不要让两张 UE 地图
+手动拉起仿真器（不经控制台）的命令在 `docs/UE4_BRINGUP.md` 第 3 节，两族同一条：
+驱动读 `config/simulators.yaml` 渲染 argv，没有 shell 脚本。想让两张图不挤同一张卡，
+改 `config/base.yaml` 的 `simulator.display` 与家族的端口后重启服务。不要让两张 UE 地图
 同时占用 GPU。
 
 ## 任务语义
@@ -326,8 +332,8 @@ worker 并在**同一个仿真器进程**里重新加载场景（不重启 UE / 
 ## 测试
 
 ```bash
-conda run -n carla-vln python -m pytest -q
-# 812 passed
+/home/kedior/miniconda3/envs/vln/bin/python -m pytest -q
+# 926 passed
 ```
 
 单元测试不启动仿真器（不 mock 物理公式，适配器的数学与协议转换用构造
@@ -337,13 +343,15 @@ conda run -n carla-vln python -m pytest -q
 
 ## 已知限制
 
-- **换图有短暂停机**：ProjectAirSim 一个进程只加载一张 cooked UE 地图；控制台
-  换图只重启 UE 进程（Xvfb/xpra 保留，画面不断流），通常约 18–20 秒（同一
-  场景再次加载约 15–17 秒），视机器冷热缓存而定，期间服务为 `connecting`、
-  任务返回 503。Xvfb/xpra 不在时才会整套重启。仿真器必须由启动脚本拉起，
-  否则后台拒绝换图。
+- **换图有短暂停机**：两个引擎都是一个进程只加载一张 cooked UE 地图，不能运行中换图。
+  控制台换图的真机耗时分两个尺度：仿真栈本身 UE4 5–8s、UE5 7–9s；等到控制台上一个可
+  下发任务的就绪会话，UE5 约 40s（场景装配在主进程内），UE4 约 8–16s。期间服务为
+  `connecting`、任务返回 503。Xvfb/xpra 不在时才会整套重启。
+- **UE4 的会话在主进程外**：主进程不得加载 AirSim 客户端，所以 UE4 的任务跑在
+  `vln-ue4` 拉起的子进程里，经 `config/simulators.yaml` 的 `runtime_python` 选定解释器。
+  没写这个字段的家族（UE5）仍用线程 worker。
 - **启动不连接仿真器**：规划服务启动时状态为 `disconnected`，没有场景也没有
-  画面；启动时若发现上一轮由启动脚本拉起的仿真栈还在跑，会先停掉它（手工
+  画面；启动时若发现上一轮由本项目驱动拉起的仿真栈还在跑，会先停掉它（手工
   启动的外部进程不动，此时画面可能仍显示旧场景）。必须在控制台选择地图并
   点击「启动场景」（或 `POST /api/world`）才会拉起/连接仿真栈。在此之前任务
   与其它设置返回 503。启动失败会回到 `disconnected` 并记录 `sim_error`，
