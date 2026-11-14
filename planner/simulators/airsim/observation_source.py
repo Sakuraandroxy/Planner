@@ -120,7 +120,7 @@ class AirSimObservationSource:
                     break
                 threading.Event().wait(.01)
             holding = self.vehicle.holding
-            ready = holding.observation_ready
+            ready = holding.observable
             image_inside = holding.contains_pose(result.pose)
             if ready and image_inside:
                 return replace(result,stopped=True)

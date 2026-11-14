@@ -170,6 +170,10 @@ class AirSimMissionSession:
             telemetry=trajectory,
             enabled_tasks=ENABLED_TASKS,
             execution=self.execution,
+            # AirSim keeps the two roles apart on purpose: the vehicle owns the control
+            # connection, and the observation source owns a second one for pixels.
+            observation_source=self.observation,
+            moving_source_factory=lambda vehicle: self.observation,
             log=log,
         )
 

@@ -129,9 +129,17 @@ def build_vehicle_arm(
     moving_source_factory: Callable | None = None,
     enabled_tasks: tuple[str, ...] | None = None,
     execution: ExecutionService | None = None,
+    observation_source=None,
     log: Callable[[str, str], None],
 ) -> VehicleArm:
     """Wire the task pipeline against one vehicle port.
+
+    ``observation_source`` is the object the visual-goal loop reads pixels from. It
+    defaults to ``vehicle`` because the ProjectAirSim vehicles also capture, but the
+    two are different ports: AirSim keeps capture in its own source with a second RPC
+    connection, and passing the vehicle there made the stage die on
+    "'AirSimVehicle' object has no attribute 'capture'" the moment it looked at an
+    image. Say which object plays which role instead of hoping one plays both.
 
     ``enabled_tasks`` is the simulator package's own list (``ENABLED_TASKS``). A
     family that has never flown a task must not be offered it because a model
@@ -148,6 +156,7 @@ def build_vehicle_arm(
     # AirSim passes an execution service it has already bound to the position hold and
     # the observation gate; every other caller gets a plain one.
     execution = ExecutionService(vehicle) if execution is None else execution
+    source = vehicle if observation_source is None else observation_source
     motion = SynchronizedMotionPlanner(config.motion.max_speed_mps, vehicle.tracking_limits)
     goal_observer = BBoxGoalObserver(
         detector,
@@ -164,7 +173,7 @@ def build_vehicle_arm(
         else None
     )
     visual = VisualGoalNavigationWorkflow(
-        vehicle,
+        source,
         goal_observer,
         planner,
         validator,

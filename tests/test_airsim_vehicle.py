@@ -49,7 +49,7 @@ class _Holding:
     def start(self, target=None):
         self.started.append(target)
 
-    def wait(self, budget=None):
+    def wait(self, *, budget=None, checkpoint=None):
         self.waited += 1
 
     def tick(self):
@@ -132,3 +132,26 @@ def test_basic_motion_without_a_hold_service_says_so():
     vehicle = _vehicle([TARGET], holding=None)
     with pytest.raises(ExecutionError, match="position hold service was not assembled"):
         vehicle.execute_basic_motion(START, TARGET, 0.0)
+
+
+def test_the_vehicle_waits_on_the_hold_service_by_its_real_name():
+    """The gate asks for ``wait_for_observation``; the service calls it ``wait``.
+
+    Measured on Blocks: with capture working, the visual-goal stage then died on
+    "'PositionHold' object has no attribute 'wait_for_observation'". The vehicle is the
+    only place that knows both names, so the translation lives there -- and a test keeps
+    the two from drifting apart again.
+    """
+    holding = _Holding()
+    calls = []
+    holding.wait = lambda budget=None, checkpoint=None: calls.append((budget, checkpoint))
+    vehicle = _vehicle([TARGET], holding=holding)
+    checkpoint = lambda: None
+    vehicle.wait_for_observation(budget="B", checkpoint=checkpoint)
+    assert calls == [("B", checkpoint)], calls
+
+
+def test_a_vehicle_without_the_hold_service_refuses_to_wait():
+    vehicle = _vehicle([TARGET], holding=None)
+    with pytest.raises(ExecutionError, match="position hold service was not assembled"):
+        vehicle.wait_for_observation()

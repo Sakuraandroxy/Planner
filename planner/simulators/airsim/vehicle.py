@@ -177,7 +177,14 @@ class AirSimVehicle:
     def wait_for_observation(self, *, budget=None, checkpoint=None):
         if self.holding is None:
             raise ExecutionError("AirSim position hold service was not assembled")
-        self.holding.wait_for_observation(budget=budget, checkpoint=checkpoint)
+        # The hold service exposes this as ``wait``: it ticks the hold until the state
+        # is observable (settled across the whole window, not merely net displacement),
+        # which is what a fresh image needs. The two names used to disagree and the
+        # visual-goal stage died on "'PositionHold' object has no attribute
+        # 'wait_for_observation'" -- measured on Blocks, one call after capture began
+        # working. Reusing the hold's own wait is deliberate: a second stabilization
+        # loop here would drift from the one motion already depends on.
+        self.holding.wait(budget=budget, checkpoint=checkpoint)
 
     def collision_state(self) -> bool:
         return bool(self.connection.call("simGetCollisionInfo").has_collided)
