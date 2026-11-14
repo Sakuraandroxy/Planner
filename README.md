@@ -311,6 +311,9 @@ worker 并在**同一个仿真器进程**里重新加载场景（不重启 UE / 
 | GET | `/api/weather` | 8 个字段定义与预设（每个预设都是完整 8 字段）；目录未就绪 503 |
 | POST | `/api/weather` | 任意子集，值必须是 0–1 有限数；202 返回合并后的完整 8 字段 |
 | POST | `/api/view` | `{"mode": "rover_front"\|"rover_chase"\|"drone_front"\|"drone_chase"}`；200 `{view_mode, deferred}`，未知机位 422 |
+| GET | `/api/video` | MJPEG 流（`multipart/x-mixed-replace`）。服务启动时没给出帧枢纽则不注册该路径；
+当前家族没有 `video` 端口时返回 **501**，详情里带 `unsupported` 与 `simulator`，不会返回一个空流 |
+| GET | `/api/status` 中的 `capabilities` | 由已实现的端口推导，不是配置项；前端按它决定控件可用性 |
 
 状态码：提交/回起点在连接中返回 503、运行/停止中返回 409；未知载具返回
 400；请求体校验失败返回 422。`POST /api/stop` 在解析、采集、模型调用、
