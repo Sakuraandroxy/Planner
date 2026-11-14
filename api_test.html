@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Planner API 测试</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 32px auto; padding: 0 20px; max-width: 960px; font-family: system-ui, sans-serif; color: #202833; background: #f4f6f9; }
+    h1 { font-size: 25px; margin-bottom: 8px; }
+    p { color: #596577; line-height: 1.6; }
+    section { background: white; border: 1px solid #dce1e8; border-radius: 10px; padding: 20px; margin-top: 18px; }
+    label { display: block; margin-bottom: 8px; font-weight: 600; }
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    input, textarea { border: 1px solid #b6c0ce; border-radius: 6px; padding: 10px; font: inherit; }
+    input { flex: 1; min-width: 200px; }
+    textarea { width: 100%; resize: vertical; min-height: 110px; margin-bottom: 12px; }
+    button { border: 0; border-radius: 6px; padding: 10px 16px; font: inherit; cursor: pointer; color: white; background: #285bb8; }
+    button:disabled { opacity: .45; cursor: default; }
+    #stop { background: #b63434; }
+    #clear { background: #566174; margin-left: auto; }
+    #state { font-family: monospace; background: #e9edf4; padding: 6px 12px; border-radius: 20px; }
+    #state[data-state="idle"] { background: #dcf2e5; color: #17673b; }
+    #state[data-state="running"] { background: #dfeaff; color: #224fa6; }
+    #notice { min-height: 24px; white-space: pre-wrap; overflow-wrap: anywhere; margin-bottom: 0; }
+    pre { background: #151d2b; color: #d6e2f2; padding: 15px; border-radius: 6px; height: 350px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.6; }
+    small { display: block; margin-top: 10px; color: #667080; line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <h1>Planner API 测试</h1>
+  <p>连接远端 Planner，输入任务后点击开始。状态和日志每秒更新。</p>
+  <section>
+    <label for="url">服务器 HTTP 地址</label>
+    <div class="row">
+      <input id="url" type="url" value="http://127.0.0.1:8080" spellcheck="false" aria-label="服务器 HTTP 地址">
+      <button id="connect">连接</button>
+      <span id="state" data-state="unknown" role="status">not connected</span>
+    </div>
+    <p id="backendHint" role="status">尚未连接 HTTP 服务。</p>
+    <small>填写后端服务器 IP，例如 http://192.168.1.100:8080，不是 AirSim 的 RPC 地址。</small>
+  </section>
+  <section>
+    <label for="instruction">任务指令</label>
+    <textarea id="instruction" placeholder="例如：飞到右前方第一辆红色汽车附近"></textarea>
+    <div class="row">
+      <button id="start" disabled>开始执行</button>
+      <button id="stop" disabled>停止当前任务</button>
+    </div>
+    <p id="notice" role="status">任务提交和停止请求的结果会显示在这里。</p>
+    <small>running 包含解析、规划、飞行及完成判断；idle 表示可以接收任务，不表示上一任务成功。关闭页面不会停止远端任务。</small>
+  </section>
+  <section>
+    <div class="row"><strong>服务器日志</strong><button id="clear">清空显示</button></div>
+    <pre id="logs" aria-label="服务器日志"></pre>
+  </section>
+  <script>
+    const element = id => document.getElementById(id);
+    let base = "", state = "unknown", cursor = 0, generation = 0;
+    let timer, busy = false, httpConnected = false, statusError = "", logsError = "";
+
+    function setState(value) {
+      state = value;
+      element("state").textContent = value;
+      element("state").dataset.state = value;
+      element("start").disabled = busy || value !== "idle";
+      element("stop").disabled = busy || value !== "running";
+      const hints = {
+        connecting: httpConnected
+          ? "HTTP 已连接；后端正在连接 AirSim、准备起飞或确认悬停。请查看下方日志。"
+          : "正在连接 HTTP 服务。",
+        idle: "后端已就绪，可以点击开始执行。",
+        running: "后端正在执行任务，可以点击停止当前任务。",
+        stopping: "后端正在停止任务并确认悬停，暂时不能提交新任务。",
+        "HTTP unavailable": "无法读取后端状态，正在自动重试。请检查地址、端口及 CORS 配置。",
+      };
+      element("backendHint").textContent = hints[value] || `后端返回的状态：${value}`;
+    }
+
+    function log(message) {
+      const box = element("logs");
+      const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+      box.textContent += message + "\n";
+      if (atBottom) box.scrollTop = box.scrollHeight;
+    }
+
+    async function request(path, options = {}) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+      try {
+        const response = await fetch(base + path, {
+          ...options, credentials: "omit", signal: controller.signal,
+        });
+        const body = await response.json();
+        if (!response.ok) {
+          const detail = body.detail;
+          const message = typeof detail === "string" ? detail : detail?.message || JSON.stringify(detail);
+          const error = new Error(`HTTP ${response.status}: ${message}`);
+          error.status = response.status;
+          throw error;
+        }
+        return body;
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+
+    async function poll(id) {
+      try {
+        const status = await request("/api/status");
+        if (id !== generation) return;
+        httpConnected = true;
+        setState(status.state);
+        if (statusError) log("[Client] 状态接口连接已恢复。");
+        statusError = "";
+      } catch (error) {
+        if (id !== generation) return;
+        httpConnected = false;
+        setState("HTTP unavailable");
+        const message = String(error.message);
+        if (message !== statusError) log(`[Status] ${message}；将自动重试。`);
+        statusError = message;
+      }
+      try {
+        let batch = await request(`/api/logs?cursor=${cursor}`);
+        if (id !== generation) return;
+        if (batch.next_cursor < cursor) {
+          log("[Client] 服务已重新编号，从头读取日志。");
+          cursor = 0;
+          batch = await request("/api/logs?cursor=0");
+          if (id !== generation) return;
+        }
+        if (logsError) log("[Client] 日志接口连接已恢复。");
+        logsError = "";
+        if (batch.truncated) log("[Client] 部分旧日志已被服务器淘汰。");
+        for (const item of batch.items) log(`${item.time} [${item.level}] ${item.message}`);
+        cursor = batch.next_cursor;
+      } catch (error) {
+        if (id !== generation) return;
+        const message = String(error.message);
+        if (message !== logsError) log(`[Logs] ${message}；将自动重试日志，按钮仍依据状态接口。`);
+        logsError = message;
+      } finally {
+        if (id === generation) timer = setTimeout(() => poll(id), 1000);
+      }
+    }
+
+    element("connect").onclick = () => {
+      try {
+        const url = new URL(element("url").value.trim());
+        if (!["http:", "https:"].includes(url.protocol) || url.pathname !== "/" || url.search || url.hash) {
+          throw new Error("请填写 http://服务器IP:端口，不要附加 /api 路径。");
+        }
+        base = url.origin;
+      } catch (error) {
+        element("notice").textContent = `地址无效：${error.message}`;
+        return;
+      }
+      clearTimeout(timer);
+      cursor = 0;
+      httpConnected = false;
+      statusError = logsError = "";
+      element("logs").textContent = "";
+      element("notice").textContent = "";
+      setState("connecting");
+      poll(++generation);
+    };
+
+    async function command(stop) {
+      const instruction = element("instruction").value.trim();
+      if (!stop && !instruction) {
+        element("notice").textContent = "请输入任务指令。";
+        return;
+      }
+      busy = true;
+      element("connect").disabled = true;
+      setState(state);
+      try {
+        const options = stop ? { method: "POST" } : {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ instruction }),
+        };
+        const result = await request(stop ? "/api/stop" : "/api/tasks", options);
+        setState(result.state);
+        element("notice").textContent = stop
+          ? `停止请求已返回 ${result.state}。等待 idle 后再提交任务。`
+          : `已接收 ${result.task_id}，不代表任务已完成。请查看日志。`;
+      } catch (error) {
+        const knownRejection = [409, 422, 503].includes(error.status);
+        element("notice").textContent = `${error.message}\n${knownRejection ? "请求未接收，请查看状态。" : "请求结果未确认，不会自动重发。请先查看状态和日志。"}`;
+      } finally {
+        busy = false;
+        element("connect").disabled = false;
+        setState(state);
+      }
+    }
+
+    element("start").onclick = () => command(false);
+    element("stop").onclick = () => command(true);
+    element("clear").onclick = () => { element("logs").textContent = ""; };
+  </script>
+</body>
+</html>
