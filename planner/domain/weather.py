@@ -62,6 +62,46 @@ class WeatherCatalog:
                 return preset
         return None
 
+    def to_payload(self) -> dict:
+        """The catalog as plain JSON-compatible data.
+
+        This is the one domain object that crosses the mission child's pipe. Left to the
+        generic encoder it arrived as a nested dict, and ``GET /api/weather`` -- which
+        reads ``catalog.fields`` -- answered 500 with
+        "'dict' object has no attribute 'fields'". The wire form belongs to the type.
+        """
+        return {
+            "fields": [{"id": field.id, "label": field.label} for field in self.fields],
+            "presets": [
+                {"id": preset.id, "label": preset.label, "values": dict(preset.values)}
+                for preset in self.presets
+            ],
+        }
+
+
+def weather_catalog_from_payload(payload: object) -> WeatherCatalog:
+    """Rebuild a :class:`WeatherCatalog` from :meth:`WeatherCatalog.to_payload`."""
+    if not isinstance(payload, dict):
+        raise ValueError("weather payload must be a mapping")
+    fields = payload.get("fields")
+    presets = payload.get("presets")
+    if not isinstance(fields, (list, tuple)) or not fields:
+        raise ValueError("weather payload carries no fields")
+    if not isinstance(presets, (list, tuple)):
+        raise ValueError("weather payload carries no presets list")
+    return WeatherCatalog(
+        fields=tuple(
+            WeatherField(str(item["id"]), str(item["label"])) for item in fields
+        ),
+        presets=tuple(
+            WeatherPreset(
+                str(item["id"]), str(item["label"]),
+                validate_weather_values(item.get("values")),
+            )
+            for item in presets
+        ),
+    )
+
 
 def _validate_value(name: str, value: object) -> float:
     if (

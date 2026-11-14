@@ -31,9 +31,11 @@ import queue
 import subprocess
 import threading
 import time
+import dataclasses
 from typing import Callable
 
 from ..domain.server import TaskSubmission, WorkerEvent, WorkerEventKind
+from ..domain.weather import weather_catalog_from_payload
 
 #: How long the child may take to exit after it is asked nicely.
 TERM_GRACE_S = 10.0
@@ -76,7 +78,7 @@ def decode_event(line: str) -> WorkerEvent:
         kind = WorkerEventKind(payload["kind"])
     except ValueError as error:
         raise ChildProcessError(f"child sent unknown event kind {payload['kind']!r}") from error
-    return WorkerEvent(
+    event = WorkerEvent(
         kind,
         task_id=payload.get("task_id"),
         message=payload.get("message", ""),
@@ -85,6 +87,18 @@ def decode_event(line: str) -> WorkerEvent:
         payload=payload.get("payload"),
         vehicle=payload.get("vehicle"),
     )
+    if event.kind is WorkerEventKind.WEATHER and isinstance(event.payload, dict):
+        # The weather catalog is the only domain object on this channel, and consumers
+        # read attributes off it. Rebuilding it here -- at the boundary where JSON turns
+        # back into objects -- is what keeps ``GET /api/weather`` identical between the
+        # threaded worker (an object all the way) and the child (a dict until now).
+        try:
+            event = dataclasses.replace(
+                event, payload=weather_catalog_from_payload(event.payload)
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ChildProcessError(f"child sent an unusable weather payload: {error}") from error
+    return event
 
 
 class SubprocessMissionWorker:

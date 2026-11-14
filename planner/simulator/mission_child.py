@@ -334,7 +334,11 @@ class MissionChild:
             catalog = getattr(self._session, "weather_catalog", None)
             if catalog is not None:
                 try:
-                    self.emitter.event(WorkerEventKind.WEATHER, payload=catalog())
+                    self.emitter.event(
+                        # The wire form is the domain type's own, so the parent can hand
+                        # back a WeatherCatalog instead of a dict of one.
+                        WorkerEventKind.WEATHER, payload=catalog().to_payload()
+                    )
                 except Exception as error:
                     self.log(f"weather catalog unavailable: {error}", "WARNING")
             idle_tick = getattr(self._session, "idle_tick", None)

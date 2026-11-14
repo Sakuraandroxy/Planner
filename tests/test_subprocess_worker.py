@@ -116,6 +116,35 @@ def test_shutdown_gives_up_on_the_bound_not_forever(tmp_path):
     assert worker.poll() is None
 
 
+def test_the_weather_catalog_survives_the_pipe():
+    """``GET /api/weather`` used to answer 500 on the UE4 path only.
+
+    The catalog is a domain dataclass. The generic encoder turned it into nested dicts,
+    the threaded worker kept passing the object, and the endpoint read
+    ``catalog.fields`` off whichever arrived -- so the same request worked for UE5 and
+    raised "'dict' object has no attribute 'fields'" for UE4.
+    """
+    from planner.domain.weather import WEATHER_CATALOG
+
+    line = json.dumps({
+        "kind": "weather",
+        "payload": WEATHER_CATALOG.to_payload(),
+    }, ensure_ascii=False)
+    event = decode_event(line)
+    assert isinstance(event.payload, type(WEATHER_CATALOG))
+    assert [field.id for field in event.payload.fields] == [
+        f.id for f in WEATHER_CATALOG.fields
+    ]
+    assert event.payload.preset("heavy_rain") is not None
+
+
+def test_a_mangled_weather_payload_is_a_protocol_error():
+    from planner.simulator.subprocess_worker import ChildProcessError
+
+    with pytest.raises(ChildProcessError, match="weather payload"):
+        decode_event('{"kind": "weather", "payload": {"fields": [], "presets": []}}')
+
+
 def test_the_child_reports_its_own_setup_failure_over_the_pipe():
     """A real process, a real pipe, and the failure this machine actually produces.
 
