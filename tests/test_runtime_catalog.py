@@ -133,11 +133,19 @@ def test_map_naming_an_unconfigured_simulator_is_rejected(tmp_path):
 
 
 def test_port_slots_match_the_shipped_yaml_drivers():
-    """The launch data in YAML and the package that owns it stay in step."""
+    """The launch data in YAML and the package that owns it stay in step.
+
+    Both families name the same driver: one process driver for every simulator, so
+    the lifecycle knowledge has a single home. The xpra session flags are shared by
+    YAML anchor, so equality here is the check that nobody forked them into two
+    lists that can drift apart on the next edit.
+    """
     raw = catalog(ROOT / "config/simulators.yaml")
-    assert raw["airsim"]["driver"] == "xpra_start"
+    assert raw["airsim"]["driver"] == raw["projectairsim"]["driver"] == "xpra_start"
+    assert raw["airsim"]["argv"] == raw["projectairsim"]["argv"]
+    assert raw["airsim"]["stop_argv"] == raw["projectairsim"]["stop_argv"]
     assert raw["airsim"]["ports"]["rpc"] == 41451
-    assert raw["projectairsim"]["driver"] == "script"
+    assert raw["projectairsim"]["ports"]["topics"] == 8991
     assert pas_runtime.PORT_SLOTS and airsim_runtime.PORT_SLOTS
     assert "camera_view" in airsim_runtime.PORT_SLOTS
     assert "camera_view" not in pas_runtime.PORT_SLOTS

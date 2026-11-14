@@ -6,62 +6,33 @@
 # 实现不能。HTTP 层、ServerController 与前端都只读推导结果，不判断仿真器名。
 #
 # driver:
-#   script      运行 launch_script / stop_script（现有 UE5 栈的方式）
-#   xpra_start  按 argv 模板拼 xpra start --start-child 命令
+#   xpra_start  按 argv 模板拼 xpra start --start-child 命令，两族共用
 # probes:
-#   window  按窗口标题确认渲染进程已起
+#   window  找到引擎窗口、校验归属，再 map + focus
 #   ports   确认 ports 里列出的端口全部监听
 #   rpc     向 AirSim RPC 发一次探测调用
 #
 # argv 占位符（由 planner/simulator/argv.py 的 argv_values 提供）：
 #   {display} {display_number} {runtime_dir} {settings_file} {res_x} {res_y} {abslog}
 #   {map.id} {map.binary} {map.map_name} {map.launch_map} {map.scene_file}
-#   {map.sim_config_path} {launch_script} {stop_script}
+#   {map.sim_config_path}
 #   {ports.<名字>}，名字就是本段 ports 里的键；xpra_start 驱动额外提供 {start_child}
 #   （已拼好的子进程命令行）。写错名字是报错，不是原样透传给 xpra。
-# 缺文件时 planner.config 会用 base.yaml 的 simulator 段合成 ue5，
-# 所以删掉本文件等于回到今天的行为。
 
 default_simulator: projectairsim
 
 projectairsim:
   label: ProjectAirSim (UE5)
-  driver: script
-  runtime: planner.simulators.projectairsim
-  argv: ["{map.launch_map}", "{display}", "{ports.xpra}", "{ports.topics}", "{ports.services}"]
-  launch_script: scripts/launch_projectairsim_xpra.sh
-  stop_script: scripts/stop_projectairsim_xpra.sh
-  ports: {xpra: 10010, topics: 8991, services: 8992}
-  probes: [window, ports]
-
-airsim:
-  label: AirSim (UE4)
   driver: xpra_start
-  runtime: planner.simulators.airsim
-  # planner 自己的一份 settings，不动 /data/airsim/settings.json（那是 airsim-flight-console 在用的）。
-  # RGB 与深度必须同尺寸，原因见 config/airsim_settings.json 的 _why。
-  settings_file: config/airsim_settings.json
+  runtime: planner.simulators.projectairsim
   res_x: 1280
   res_y: 720
   abslog_dir: output/logs
-  ports: {xpra: 10010, rpc: 41451}
-  # 三个探针都跑得到（实现照抄 ../airsim-flight-console/scene_processes.py）。
-  # window 不是只看窗口存在：seamless xpra 在客户端接上之前不会 map 窗口，
-  # UE4 对未 map 的窗口暂停渲染，subGetImages 永不返回。就绪 = xpra info 找到
-  # windows.<id>.pid、校验归属、再 xpra control map + focus。
-  # 不要用 -RenderOffscreen 绕它：那个参数只是抹掉了症状，而它会连桌面画面一起去掉。
-  probes: [window, ports, rpc]
-  # argv 逐字来自 airsim-flight-console/scene_launcher.py:33-75，不要随手加参数。
-  # {start_child} 由驱动用下面的 child_argv 拼成带引号的单个参数。
-  child_argv:
-    - "{map.binary}"
-    - "{map.map_name}"
-    - "-settings={settings_file}"
-    - "-abslog={abslog}"
-    - "-windowed"
-    - "-ResX={res_x}"
-    - "-ResY={res_y}"
-  argv:
+  ports: {xpra: 10010, topics: 8991, services: 8992}
+  # 两族共用一份 xpra 会话参数：同一个显示号、同一个画面端口、同一套运行时目录，
+  # 因为同一时刻只跑一个仿真器。锚点在本段，airsim 段引用 *xpra_argv。
+  # 写两份是下一个 agent 改了一处忘另一处的地方。
+  argv: &xpra_argv
     - /usr/bin/xpra
     - start
     - "{display}"
@@ -88,9 +59,53 @@ airsim:
     - "--socket-dir={runtime_dir}/sockets"
     - "--socket-dirs={runtime_dir}/sockets"
     - "--sessions-dir={runtime_dir}/sessions"
-  stop_argv:
+  stop_argv: &xpra_stop_argv
     - /usr/bin/xpra
     - stop
     - "socket://{runtime_dir}/sessions/{display_number}/socket"
     - "--socket-dirs={runtime_dir}/sockets"
     - "--sessions-dir={runtime_dir}/sessions"
+  # 引擎参数照 ProjectAirSim 的打包产物要求，与原启动脚本给的同字。
+  # -abslog 是给驱动报错时能指向日志用的，不是渲染开关。
+  child_argv:
+    - "{map.binary}"
+    - "{map.map_name}"
+    - "-windowed"
+    - "-ResX={res_x}"
+    - "-ResY={res_y}"
+    - "-nosound"
+    - "-log"
+    - "-abslog={abslog}"
+    - "-topicsport={ports.topics}"
+    - "-servicesport={ports.services}"
+  probes: [window, ports]
+
+airsim:
+  label: AirSim (UE4)
+  driver: xpra_start
+  runtime: planner.simulators.airsim
+  # planner 自己的一份 settings，不动 /data/airsim/settings.json（那是 airsim-flight-console 在用的）。
+  # RGB 与深度必须同尺寸，原因见 config/airsim_settings.json 的 _why。
+  settings_file: config/airsim_settings.json
+  res_x: 1280
+  res_y: 720
+  abslog_dir: output/logs
+  ports: {xpra: 10010, rpc: 41451}
+  argv: *xpra_argv
+  stop_argv: *xpra_stop_argv
+  # 三个探针都跑得到（实现照抄 ../airsim-flight-console/scene_processes.py）。
+  # window 不是只看窗口存在：seamless xpra 在客户端接上之前不会 map 窗口，
+  # UE4 对未 map 的窗口暂停渲染，simGetImages 永不返回。就绪 = xpra info 找到
+  # windows.<id>.pid、校验归属、再 xpra control map + focus。
+  # 不要用 -RenderOffscreen 绕它：那个参数只是抹掉了症状，而它会连桌面画面一起去掉。
+  probes: [window, ports, rpc]
+  # argv 逐字来自 airsim-flight-console/scene_launcher.py:33-75，不要随手加参数。
+  # {start_child} 由驱动用下面的 child_argv 拼成带引号的单个参数。
+  child_argv:
+    - "{map.binary}"
+    - "{map.map_name}"
+    - "-settings={settings_file}"
+    - "-abslog={abslog}"
+    - "-windowed"
+    - "-ResX={res_x}"
+    - "-ResY={res_y}"

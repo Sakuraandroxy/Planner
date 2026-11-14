@@ -1,21 +1,21 @@
 # 控制台可切换的仿真地图目录。
 #
-# ProjectAirSim 一个 UE 进程只加载一张 cooked 地图，不能在运行中换图；
-# 切换地图 = 后台停掉整套仿真栈（xpra + UE + Xvfb），再用 launch_map
-# 对应的启动脚本拉起目标地图，然后重连。
+# 一个 UE 进程只加载一张 cooked 地图，不能在运行中换图；切换地图 = 后台停掉整套
+# 仿真栈（xpra + UE + Xvfb），再按 binary/map_name 拉起目标地图，然后重连。两族同形。
 #
 # id:          控制台/API 使用的地图标识。
 # label:       控制台显示名称。
 # simulator:  驱动这张图的仿真器，对应 config/simulators.yaml 的一段。
 #
-# projectairsim（scene 驱动）额外字段：
-# launch_map:      scripts/launch_projectairsim_xpra.sh 的第一个参数。
+# projectairsim（现在也是 binary 驱动）额外字段：
+# launch_map:      保留给场景选择与历史配置，引擎不再读它。
 # scene_file:      该地图的双载具场景 JSONC（位于 sim_config_path 下）。
 # sim_config_path: World 加载场景时的配置目录（相对仓库根目录）。
 #
-# airsim（binary 驱动）额外字段：路径来自 airsim-flight-console/scene_launcher.py:19-27。
-# binary:          UE4  cooked 二进制绝对路径。
-# map_name:        传给二进制的地图名（AirSim 读作 argv[1]）。
+# 两族都需要的启动字段（路径来自 airsim-flight-console/scene_launcher.py:19-27 与
+# ProjectAirSim 的打包产物目录）：
+# binary:          引擎 cooked 二进制的绝对路径，同时也是归属判据。
+# map_name:        传给二进制的地图名（UE 读作 argv[1]，窗口标题与它同字）。
 default_map: cityenviron
 maps:
   - id: cityenviron
@@ -24,12 +24,18 @@ maps:
     launch_map: cityenviron
     scene_file: scene_city_dual.jsonc
     sim_config_path: config/scenes/city
+    binary: /roxy/sakura/XV3DGS-airsim-vln/sim/CityEnviron/Binaries/Linux/CityEnviron-Linux-Shipping
+    map_name: CityEnviron
   - id: neighborhood
     simulator: projectairsim
     label: 郊区 Neighborhood
     launch_map: neighborhood
     scene_file: scene_neighborhood_dual.jsonc
     sim_config_path: config/scenes/neighborhood
+    binary: /roxy/sakura/XV3DGS-airsim-vln/sim/Neighborhood/AirSimNH/Binaries/Linux/AirSimNH-Linux-Shipping
+    # 打包目录是 Neighborhood，交给引擎的地图名却是 AirSimNH，窗口标题也是它。
+    # 这两个字面量不同是 ProjectAirSim 自己的命名，不是笔误。
+    map_name: AirSimNH
 
   # ---- AirSim UE4 ----
   - id: airsimnh

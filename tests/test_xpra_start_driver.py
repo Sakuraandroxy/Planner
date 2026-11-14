@@ -316,6 +316,36 @@ def load_maps():
     return load_map_catalog(REPO / "config/maps.yaml")
 
 
+def test_shipped_templates_render_for_every_family(tmp_path):
+    """Both families in the shipped YAML must render, not just AirSim.
+
+    ProjectAirSim declares no settings_file, so a template that reaches for
+    {settings_file} would abort on the machine rather than in review. The engine
+    argv is also where the map's own binary and map name have to land.
+    """
+    catalog = parse_family_catalog(
+        yaml.safe_load((REPO / "config/simulators.yaml").read_text(encoding="utf-8"))
+    )
+    maps = load_maps()
+    for family_id in ("airsim", "projectairsim"):
+        family = catalog.require(family_id)
+        entry = next(item for item in maps.maps if item.simulator == family_id)
+        driver = XpraStartSupervisor(
+            family, _settings(tmp_path), tmp_path, maps,
+            spawn=lambda argv, **k: SimpleNamespace(pid=1, poll=lambda: None, wait=lambda **_: 0),
+            runner=lambda argv, **k: SimpleNamespace(returncode=0, stdout="", stderr=""),
+            port_checker=lambda port: True,
+        )
+        child = driver.child_argv(entry)
+        assert child[0] == entry.binary, child
+        assert child[1] == entry.map_name, child
+        argv = driver.launch_argv(entry)
+        assert not [part for part in argv if "{" in part], argv
+        assert not [part for part in driver.stop_argv() if "{" in part]
+        assert driver._settings_marker == ("" if family_id == "projectairsim"
+                                          else f"-settings={driver._settings_path}")
+
+
 # -- ownership -------------------------------------------------------------
 def test_engine_child_is_ours_by_exe_and_settings_marker(tmp_path):
     harness = Harness(tmp_path, holders={RPC_PORT: ours_engine()}, alive={RPC_PORT})
