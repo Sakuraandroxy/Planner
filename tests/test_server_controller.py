@@ -39,12 +39,12 @@ def _maps():
         maps=(
             MapEntry(
                 "city", "城市", "cityenviron", "scene_city_dual.jsonc",
-                "config/scenes/city",
+                "config/scenes/city", "projectairsim",
             ),
             MapEntry(
                 "suburb", "郊区", "neighborhood",
                 "scene_neighborhood_dual.jsonc",
-                "config/scenes/neighborhood",
+                "config/scenes/neighborhood", "projectairsim",
             ),
         ),
     )

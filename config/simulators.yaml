@@ -1,8 +1,9 @@
 # 仿真器族注册表。加一个新仿真器 = 在这里加一段，再在 maps.yaml 里引用它的 id。
 #
-# 约束：HTTP 层、ServerController 和前端都不许判断族名。可选控件只看
-# capabilities.actions，缺少的动作一律返回 501；可解析的任务类型只看
-# capabilities.task_kinds，未列出的类型不会进入任务解析提示词。
+# 约束：这里只写"怎么连、怎么起停"。能力位不在此声明，由仿真器包实现的端口推导
+# （planner/simulator/registry.py 读 planner/simulators/<name>/runtime.py 的
+# PORT_SLOTS）。写了 capabilities 会被配置校验拒绝，因为配置文件可以对现实说谎，
+# 实现不能。HTTP 层、ServerController 与前端都只读推导结果，不判断仿真器名。
 #
 # driver:
 #   script      运行 launch_script / stop_script（现有 UE5 栈的方式）
@@ -17,9 +18,9 @@
 # 缺文件时 planner.config 会用 base.yaml 的 simulator 段合成 ue5，
 # 所以删掉本文件等于回到今天的行为。
 
-default_family: ue5
+default_simulator: projectairsim
 
-ue5:
+projectairsim:
   label: ProjectAirSim (UE5)
   driver: script
   runtime: planner.runtimes.ue5
@@ -27,26 +28,8 @@ ue5:
   stop_script: scripts/stop_projectairsim_xpra.sh
   ports: {xpra: 10010, topics: 8991, services: 8992}
   probes: [window, ports]
-  capabilities:
-    vehicles: [rover, drone]
-    view_modes: [rover_front, rover_chase, drone_front, drone_chase]
-    # 俯视任务不在列：ProjectAirSim 只有预设机位循环 switch_streaming_view，
-    # 没有 simSetCameraPose 的等价方法。日后确认后再加 visual_goal_above。
-    task_kinds: [basic_motion, visual_goal_navigation, free_navigation]
-    actions: [home, models, trajectory, video, weather]
-    weather:
-      fields:
-        rain: rain
-        road_wetness: road_wetness
-        snow: snow
-        road_snow: road_snow
-        maple_leaf: maple_leaf
-        road_leaf: road_leaf
-        dust: dust
-        fog: fog
-      presets: [clear, overcast, light_rain, rain, snow, fog, dust]
 
-ue4:
+airsim:
   label: AirSim (UE4)
   driver: xpra_start
   runtime: planner.runtimes.ue4
@@ -99,22 +82,3 @@ ue4:
     - "socket://{runtime_dir}/sessions/{display_number}/socket"
     - "--socket-dirs={runtime_dir}/sockets"
     - "--sessions-dir={runtime_dir}/sessions"
-  capabilities:
-    # 旧分支是纯无人机：planner/config.py、domain/server.py 里没有 vehicles 概念。
-    vehicles: [drone]
-    view_modes: []
-    task_kinds: [basic_motion, visual_goal_navigation, visual_goal_above]
-    # 旧分支规划器没有回起点、没有遥测汇聚、没有帧流。
-    actions: [weather]
-    weather:
-      fields:
-        # 规范名 -> AirSim 的 WeatherParameter 名。只有路面湿度拼法不同。
-        rain: rain
-        road_wetness: roadwetness
-        snow: snow
-        road_snow: road_snow
-        maple_leaf: maple_leaf
-        road_leaf: road_leaf
-        dust: dust
-        fog: fog
-      presets: [clear, rain, fog, snow]

@@ -1,6 +1,6 @@
-"""Simulator-specific implementations. One package per simulator, peers.
+"""One package per simulator, as peers.
 
-Only code inside this package may import a simulator client library. The
-architecture test in ``tests/test_architecture.py`` enforces that, because it is
-the rule that keeps the shared task layer free of simulator names.
+Each package owns the code that imports its client library, plus the assembly
+that fills in ``planner.simulator.ports.SimulatorPorts``. Nothing here is the
+default: the shared layer receives a port bundle and never learns a package name.
 """

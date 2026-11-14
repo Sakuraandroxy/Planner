@@ -6,26 +6,26 @@
 #
 # id:          控制台/API 使用的地图标识。
 # label:       控制台显示名称。
-# family:      仿真器族，对应 config/simulators.yaml 的一段。
+# simulator:  驱动这张图的仿真器，对应 config/simulators.yaml 的一段。
 #
-# ue5（scene 驱动）额外字段：
+# projectairsim（scene 驱动）额外字段：
 # launch_map:      scripts/launch_projectairsim_xpra.sh 的第一个参数。
 # scene_file:      该地图的双载具场景 JSONC（位于 sim_config_path 下）。
 # sim_config_path: World 加载场景时的配置目录（相对仓库根目录）。
 #
-# ue4（binary 驱动）额外字段：路径来自 airsim-flight-console/scene_launcher.py:19-27。
+# airsim（binary 驱动）额外字段：路径来自 airsim-flight-console/scene_launcher.py:19-27。
 # binary:          UE4  cooked 二进制绝对路径。
 # map_name:        传给二进制的地图名（AirSim 读作 argv[1]）。
 default_map: cityenviron
 maps:
   - id: cityenviron
-    family: ue5
+    simulator: projectairsim
     label: 城市 CityEnviron
     launch_map: cityenviron
     scene_file: scene_city_dual.jsonc
     sim_config_path: config/scenes/city
   - id: neighborhood
-    family: ue5
+    simulator: projectairsim
     label: 郊区 Neighborhood
     launch_map: neighborhood
     scene_file: scene_neighborhood_dual.jsonc
@@ -33,32 +33,32 @@ maps:
 
   # ---- AirSim UE4 ----
   - id: airsimnh
-    family: ue4
+    simulator: airsim
     label: AirSim 郊区 NH
     binary: /data/airsim/AirSimNH/LinuxNoEditor/AirSimNH/Binaries/Linux/AirSimNH
     map_name: AirSimNH
   - id: abandonedpark
-    family: ue4
+    simulator: airsim
     label: AirSim 废弃公园
     binary: /data/airsim/AbandonedPark/LinuxNoEditor/AbandonedPark/Binaries/Linux/AbandonedPark
     map_name: AbandonedPark
   - id: msbuild2018
-    family: ue4
+    simulator: airsim
     label: AirSim MSBuild 园区
     binary: /data/airsim/MSBuild2018/LinuxNoEditor/MSBuild2018/Binaries/Linux/MSBuild2018
     map_name: MSBuild2018
   - id: trapcam
-    family: ue4
+    simulator: airsim
     label: AirSim TrapCam
     binary: /data/airsim/TrapCam/LinuxNoEditor/TrapCam/Binaries/Linux/TrapCam
     map_name: TrapCam
   - id: blocks
-    family: ue4
+    simulator: airsim
     label: AirSim Blocks
     binary: /data/airsim/Blocks/LinuxNoEditor/Blocks/Binaries/Linux/Blocks
     map_name: Blocks
   - id: shanghai
-    family: ue4
+    simulator: airsim
     label: AirSim 上海
     binary: /data/airsim/Shanghai/LinuxNoEditor/Shanghai/Binaries/Linux/Shanghai
     map_name: Shanghai

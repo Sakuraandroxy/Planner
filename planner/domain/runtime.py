@@ -113,9 +113,7 @@ class SimulatorFamily:
     #: argv for the rendered child process, joined by the driver into
     #: ``--start-child`` (UE4 AirSim reads the map name as argv[1]).
     child_argv: tuple[str, ...] = ()
-    capabilities: Capabilities = field(default_factory=lambda: Capabilities(
-        task_kinds=("basic_motion",)
-    ))
+
 
     def __post_init__(self) -> None:
         for name in ("id", "label"):
@@ -153,11 +151,6 @@ class SimulatorFamily:
             value = getattr(self, name)
             if type(value) is not int or value < 64:
                 raise ValueError(f"simulator family '{self.id}' {name} must be an integer of at least 64")
-        if not self.capabilities.view_modes and set(self.capabilities.actions) & {"models"}:
-            raise ValueError(
-                f"simulator family '{self.id}' lists the 'models' action but has no view modes; "
-                "appearance models are switched through the streaming views"
-            )
 
 
 @dataclass(frozen=True)
@@ -165,7 +158,7 @@ class FamilyCatalog:
     """Every configured family, keyed by id."""
 
     families: tuple[SimulatorFamily, ...]
-    default_family: str = "ue5"
+    default_family: str = "projectairsim"
 
     def __post_init__(self) -> None:
         ids = [family.id for family in self.families]
@@ -200,42 +193,22 @@ class FamilyCatalog:
     def labels(self) -> dict[str, str]:
         return {family.id: family.label for family in self.families}
 
-    def capabilities(self, family_id: str) -> Capabilities:
-        return self.require(family_id).capabilities
 
+def projectairsim_family(simulator) -> SimulatorFamily:
+    """Build the ProjectAirSim entry from the existing ``simulator`` section.
 
-def ue5_family(simulator) -> SimulatorFamily:
-    """Build the UE5 family from the existing ``simulator`` config section.
-
-    Deployments without ``config/simulators.yaml`` keep today's behaviour
-    exactly: the launch and stop scripts drive the stack, and the full
-    capability set the console already offers is advertised.
+    A deployment without ``config/simulators.yaml`` keeps today's behaviour:
+    the launch and stop scripts drive the stack. Capabilities are never read
+    from here; the registry derives them from the ports the package implements.
     """
     return SimulatorFamily(
-        id="ue5",
+        id="projectairsim",
         label="ProjectAirSim (UE5)",
         driver="script",
         launch_script=simulator.launch_script,
         stop_script=simulator.stop_script,
         ports={"xpra": simulator.xpra_port, "topics": simulator.topics_port, "services": simulator.services_port},
         runtime="planner.runtimes.ue5",
-        capabilities=Capabilities(
-            vehicles=("rover", "drone"),
-            view_modes=("rover_front", "rover_chase", "drone_front", "drone_chase"),
-            actions=("home", "models", "trajectory", "video", "weather"),
-            task_kinds=("basic_motion", "visual_goal_navigation", "free_navigation"),
-            weather_fields={
-                "rain": "rain",
-                "road_wetness": "road_wetness",
-                "snow": "snow",
-                "road_snow": "road_snow",
-                "maple_leaf": "maple_leaf",
-                "road_leaf": "road_leaf",
-                "dust": "dust",
-                "fog": "fog",
-            },
-            weather_presets=("clear", "overcast", "light_rain", "rain", "snow", "fog", "dust"),
-        ),
     )
 
 
@@ -243,11 +216,8 @@ KNOWN_FAMILY_KEYS = frozenset(
     {
         "label", "driver", "argv", "child_argv", "stop_argv", "probes", "ports",
         "runtime", "abslog_dir", "launch_script", "stop_script", "settings_file",
-        "res_x", "res_y", "capabilities",
+        "res_x", "res_y",
     }
-)
-KNOWN_CAPABILITY_KEYS = frozenset(
-    {"vehicles", "view_modes", "actions", "task_kinds", "weather"}
 )
 
 
@@ -264,31 +234,25 @@ def parse_family_catalog(raw: Any, *, fallback: SimulatorFamily | None = None) -
         return FamilyCatalog(families=(fallback,), default_family=fallback.id)
     if not isinstance(raw, dict):
         raise ValueError("simulator catalog root must be a mapping")
-    default_family = str(raw.get("default_family", ""))
+    default_family = str(raw.get("default_simulator", raw.get("default_family", "")))
     families = []
     for family_id, item in raw.items():
-        if family_id == "default_family":
+        if family_id in {"default_simulator", "default_family"}:
             continue
         if not isinstance(item, dict):
             raise ValueError(f"simulator family {family_id!r} must be a mapping")
+        if "capabilities" in item:
+            raise ValueError(
+                f"simulator {family_id!r} must not declare capabilities: they are "
+                "derived from the ports the simulator package implements "
+                "(see planner/simulator/registry.py)"
+            )
         unknown = set(item) - KNOWN_FAMILY_KEYS
         if unknown:
             raise ValueError(
                 f"simulator family {family_id!r} has unknown settings {sorted(unknown)}; "
                 f"expected any of {sorted(KNOWN_FAMILY_KEYS)}"
             )
-        caps_raw = item.get("capabilities", {}) or {}
-        if not isinstance(caps_raw, dict):
-            raise ValueError(f"simulator family {family_id} capabilities must be a mapping")
-        unknown_caps = set(caps_raw) - KNOWN_CAPABILITY_KEYS
-        if unknown_caps:
-            raise ValueError(
-                f"simulator family {family_id} capabilities has unknown settings "
-                f"{sorted(unknown_caps)}; expected any of {sorted(KNOWN_CAPABILITY_KEYS)}"
-            )
-        weather_raw = caps_raw.get("weather", {}) or {}
-        if not isinstance(weather_raw, dict):
-            raise ValueError(f"simulator family {family_id} capabilities.weather must be a mapping")
         families.append(
             SimulatorFamily(
                 id=str(family_id),
@@ -306,17 +270,7 @@ def parse_family_catalog(raw: Any, *, fallback: SimulatorFamily | None = None) -
                 settings_file=str(item.get("settings_file", "")),
                 res_x=int(item.get("res_x", 1280)),
                 res_y=int(item.get("res_y", 720)),
-                capabilities=Capabilities(
-                    vehicles=tuple(caps_raw.get("vehicles", ("drone",))),
-                    view_modes=tuple(caps_raw.get("view_modes", ())),
-                    actions=tuple(caps_raw.get("actions", ())),
-                    task_kinds=tuple(caps_raw.get("task_kinds", ())),
-                    weather_fields={
-                        str(key): str(value)
-                        for key, value in (weather_raw.get("fields", {}) or {}).items()
-                    },
-                    weather_presets=tuple(weather_raw.get("presets", ())),
-                ),
+
             )
         )
     catalog = FamilyCatalog(

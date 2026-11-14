@@ -1,17 +1,21 @@
-"""Simulator family catalog: defaults, validation and per-family capabilities."""
+"""Simulator catalog: connection data only, capabilities derived from ports."""
 
 from pathlib import Path
 
 import pytest
 import yaml
 
-from planner.config import MapEntry, SimulatorSettings, load_config
-from planner.domain.runtime import (
-    Capabilities,
-    SimulatorFamily,
-    parse_family_catalog,
-    ue5_family,
+from planner.config import (
+    MapEntry,
+    SimulatorSettings,
+    load_config,
+    load_map_catalog,
+    projectairsim_family,
 )
+from planner.domain.runtime import parse_family_catalog
+from planner.simulator import registry
+from planner.simulators.airsim import runtime as airsim_runtime
+from planner.simulators.projectairsim import runtime as pas_runtime
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -20,135 +24,120 @@ def catalog(path):
     return yaml.safe_load(Path(path).read_text(encoding="utf-8"))
 
 
-def test_repository_file_declares_both_families():
-    families = parse_family_catalog(catalog(ROOT / "config/simulators.yaml"))
-    assert families.ids == ("ue5", "ue4")
-    assert families.default_family == "ue5"
-
-    ue5 = families.require("ue5")
-    assert ue5.driver == "script"
-    assert ue5.ports["services"] == 8992
-    assert "free_navigation" in ue5.capabilities.task_kinds
-    assert "visual_goal_above" not in ue5.capabilities.task_kinds
-
-    ue4 = families.require("ue4")
-    assert ue4.driver == "xpra_start"
-    assert ue4.ports == {"xpra": 10010, "rpc": 41451}
-    # UE4 AirSim is drone-only and has no streaming camera cycle.
-    assert ue4.capabilities.vehicles == ("drone",)
-    assert ue4.capabilities.view_modes == ()
-    assert ue4.capabilities.supports_views is False
-    # Only weather is offered; home/models/trajectory/video are absent.
-    assert ue4.capabilities.actions == ("weather",)
-    assert not ue4.capabilities.supports("home")
-    assert "visual_goal_above" in ue4.capabilities.task_kinds
-    # The one AirSim spelling difference is data, not an if-branch.
-    assert ue4.capabilities.weather_fields["road_wetness"] == "roadwetness"
-    assert ue5.capabilities.weather_fields["road_wetness"] == "road_wetness"
+def test_repository_file_declares_only_connection_and_process_data():
+    raw = catalog(ROOT / "config/simulators.yaml")
+    families = parse_family_catalog(raw)
+    assert set(families.ids) == {"projectairsim", "airsim"}
+    for item in raw.values():
+        if isinstance(item, dict):
+            assert "capabilities" not in item
 
 
-def test_ue4_argv_carries_the_airsim_settings_file_through():
-    families = parse_family_catalog(catalog(ROOT / "config/simulators.yaml"))
-    ue4 = families.require("ue4")
-    assert ue4.settings_file == "/data/airsim/settings.json"
-    child = " ".join(ue4.child_argv)
-    assert "-settings={settings_file}" in child
-    assert "{map.map_name}" in child
-    assert any(part.startswith("/usr/bin/xpra") for part in ue4.argv)
-    assert "--exit-with-children=yes" in ue4.argv
-    assert ue4.stop_argv[:2] == ("/usr/bin/xpra", "stop")
+def test_capabilities_block_in_yaml_is_rejected():
+    """A config file cannot state capabilities; the ports decide."""
+    raw = {"airsim": {"driver": "script", "launch_script": "a", "stop_script": "b",
+                      "ports": {"rpc": 41451}, "capabilities": {"vehicles": ["drone"]}}}
+    with pytest.raises(ValueError, match="must not declare capabilities"):
+        parse_family_catalog(raw)
+
+
+def test_unknown_setting_is_rejected_rather_than_ignored():
+    raw = {"airsim": {"driver": "script", "launch_script": "a", "stop_script": "b",
+                      "ports": {"rpc": 1}, "typo_port": 9}}
+    with pytest.raises(ValueError, match="unknown settings"):
+        parse_family_catalog(raw)
+
+
+def test_derived_airsim_capabilities():
+    caps = registry.capabilities_for("airsim")
+    assert caps.vehicles == ("drone",)
+    assert caps.view_modes == ()
+    assert caps.actions == ("weather",)
+    assert not caps.supports("home") and not caps.supports("models")
+    assert "visual_goal_above" in caps.task_kinds
+    assert "free_navigation" not in caps.task_kinds
+    # The single AirSim spelling difference is carried by the adapter module.
+    assert caps.weather_fields["road_wetness"] == "roadwetness"
+
+
+def test_derived_projectairsim_capabilities():
+    caps = registry.capabilities_for("projectairsim")
+    assert caps.vehicles == ("rover", "drone")
+    assert len(caps.view_modes) == 4
+    assert set(caps.actions) == {"home", "models", "video", "trajectory", "weather"}
+    assert "free_navigation" in caps.task_kinds
+    # No camera_view port means no look-down task, with nothing to configure.
+    assert "visual_goal_above" not in caps.task_kinds
+    assert caps.weather_fields["road_wetness"] == "road_wetness"
+
+
+def test_unknown_simulator_names_itself_in_the_error():
+    with pytest.raises(ValueError, match="unknown simulator"):
+        registry.capabilities_for("ue9")
 
 
 def test_missing_catalog_file_keeps_todays_behaviour():
     settings = SimulatorSettings()
     with pytest.raises(ValueError, match="catalog is empty"):
         parse_family_catalog({}, fallback=None)
-
-    families = parse_family_catalog({}, fallback=ue5_family(settings))
-    assert families.ids == ("ue5",)
-    assert families.default_family == "ue5"
-    ue5 = families.require("ue5")
-    assert ue5.launch_script == settings.launch_script
-    assert ue5.stop_script == settings.stop_script
-    assert ue5.ports == {
-        "xpra": settings.xpra_port,
-        "topics": settings.topics_port,
+    families = parse_family_catalog({}, fallback=projectairsim_family(settings))
+    assert families.ids == ("projectairsim",)
+    family = families.require("projectairsim")
+    assert family.launch_script == settings.launch_script
+    assert family.ports == {
+        "xpra": settings.xpra_port, "topics": settings.topics_port,
         "services": settings.services_port,
     }
-    assert ue5.capabilities.supports("models")
-    assert ue5.capabilities.view_modes == (
-        "rover_front",
-        "rover_chase",
-        "drone_front",
-        "drone_chase",
+
+
+def test_map_without_simulator_takes_the_catalog_default(tmp_path):
+    """Single-simulator deployments need not repeat the field in YAML."""
+    (tmp_path / "maps.yaml").write_text(
+        "default_map: m\nmaps:\n  - id: m\n    label: M\n    launch_map: m\n"
+        "    scene_file: scene_city_dual.jsonc\n    sim_config_path: config/scenes/city\n",
+        encoding="utf-8",
     )
-
-
-def test_unknown_setting_is_rejected_rather_than_ignored():
-    raw = {"ue5": {"label": "x", "driver": "script", "launch_script": "a", "stop_script": "b",
-                   "ports": {"xpra": 1}, "typo_port": 9}}
-    with pytest.raises(ValueError, match="unknown settings"):
-        parse_family_catalog(raw)
-
-
-def test_unknown_capability_key_is_rejected():
-    raw = {"ue5": {"driver": "script", "launch_script": "a", "stop_script": "b",
-                   "ports": {"xpra": 1}, "capabilities": {"vehicle": ["drone"]}}}
-    with pytest.raises(ValueError, match="capabilities has unknown settings"):
-        parse_family_catalog(raw)
-
-
-def test_unknown_action_is_rejected():
-    with pytest.raises(ValueError, match="unknown entries"):
-        Capabilities(actions=("teleport",))
-
-
-def family(**overrides):
-    """A valid xpra_start family with one field broken per case."""
-    options = dict(id="ue4", label="x", driver="xpra_start", ports={"rpc": 41451},
-                   argv=("xpra", "start"), stop_argv=("xpra", "stop"),
-                   capabilities=Capabilities(task_kinds=("basic_motion",)))
-    options.update(overrides)
-    return SimulatorFamily(**options)
-
-
-def test_xpra_start_family_needs_both_argv_templates():
-    with pytest.raises(ValueError, match="needs an argv template"):
-        family(argv=())
-    with pytest.raises(ValueError, match="needs a stop_argv template"):
-        family(stop_argv=())
-
-
-def test_script_family_needs_its_scripts():
-    with pytest.raises(ValueError, match="needs launch_script and stop_script"):
-        family(driver="script", argv=(), stop_argv=())
-
-
-def test_unknown_driver_is_rejected():
-    with pytest.raises(ValueError, match="driver must be one of"):
-        family(driver="docker")
+    entry = load_map_catalog(
+        tmp_path / "maps.yaml", default_simulator="projectairsim"
+    ).entry("m")
+    assert entry.simulator == "projectairsim"
+    # But the dataclass itself has no opinion: an empty value is refused.
+    with pytest.raises(ValueError, match="must be non-empty text"):
+        MapEntry(id="m", label="m", simulator="")
+    with pytest.raises(ValueError, match="must not contain whitespace"):
+        MapEntry(id="m", label="m", simulator="two words")
 
 
 def test_binary_map_takes_its_launch_target_from_map_name():
-    entry = MapEntry(id="blocks", label="Blocks", binary="/bin/Blocks", map_name="Blocks",
-                     family="ue4")
+    entry = MapEntry(id="blocks", label="Blocks", simulator="airsim",
+                     binary="/bin/Blocks", map_name="Blocks")
     assert entry.launch_map == "Blocks"
     assert entry.uses_scene_config is False
 
 
 def test_half_a_pair_is_rejected():
     with pytest.raises(ValueError, match="half a binary pair"):
-        MapEntry(id="m", label="m", binary="/bin/m")
+        MapEntry(id="m", label="m", simulator="airsim", binary="/bin/m")
     with pytest.raises(ValueError, match="half a scene pair"):
-        MapEntry(id="m", label="m", scene_file="s.jsonc")
+        MapEntry(id="m", label="m", simulator="airsim", scene_file="s.jsonc")
     with pytest.raises(ValueError, match="must declare either"):
-        MapEntry(id="m", label="m")
+        MapEntry(id="m", label="m", simulator="airsim")
 
 
-def test_repository_config_accepts_the_grown_catalog():
-    config = load_config(ROOT / "config/base.yaml")
-    assert set(config.maps.family_ids()) == {"ue5", "ue4"}
-    # Appearance models stay scoped to the family that can switch them.
-    assert {entry.id for entry in config.maps.maps if entry.family == "ue4"} <= set(
-        config.maps.ids
-    )
+def test_map_naming_an_unconfigured_simulator_is_rejected(tmp_path):
+    (tmp_path / "maps.yaml").write_text(
+        "default_map: m\nmaps:\n  - id: m\n    label: M\n    simulator: nothere\n"
+        "    binary: /bin/m\n    map_name: M\n", encoding="utf-8")
+    maps = load_map_catalog(tmp_path / "maps.yaml")
+    assert maps.simulator_ids() == ("nothere",)
+
+
+def test_port_slots_match_the_shipped_yaml_drivers():
+    """The launch data in YAML and the package that owns it stay in step."""
+    raw = catalog(ROOT / "config/simulators.yaml")
+    assert raw["airsim"]["driver"] == "xpra_start"
+    assert raw["airsim"]["ports"]["rpc"] == 41451
+    assert raw["projectairsim"]["driver"] == "script"
+    assert pas_runtime.PORT_SLOTS and airsim_runtime.PORT_SLOTS
+    assert "camera_view" in airsim_runtime.PORT_SLOTS
+    assert "camera_view" not in pas_runtime.PORT_SLOTS

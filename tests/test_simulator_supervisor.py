@@ -21,10 +21,10 @@ def _catalog():
         default_map="city",
         maps=(
             MapEntry("city", "城市", "cityenviron", "scene_city.jsonc",
-                     "config/scenes/city"),
+                     "config/scenes/city", "projectairsim"),
             MapEntry("suburb", "郊区", "neighborhood",
                      "scene_neighborhood.jsonc",
-                     "config/scenes/neighborhood"),
+                     "config/scenes/neighborhood", "projectairsim"),
         ),
     )
 

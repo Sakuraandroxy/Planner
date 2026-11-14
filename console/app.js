@@ -42,7 +42,7 @@ let trajectoryExpanded = false;
 let lastTrajectory = null;
 let taskView = "rover_chase";
 let worldCatalog = null;
-// Capability flags for the active map's simulator family. The console renders
+// Capability flags for the simulator driving the active map. The console renders
 // optional controls from this and never tests a family name, so a new
 // simulator needs no change here. Null until the backend reports it.
 let caps = null;
@@ -517,10 +517,11 @@ async function loadWorldOptions() {
     worldCatalog = body;
     if (body.capabilities) caps = body.capabilities;
     if (Array.isArray(body.maps) && body.selection && body.selection.map) {
-      // The family follows the selected map, so switching scenes re-gates the
-      // controls without waiting for the next status poll.
-      const family = body.map_families && body.map_families[body.selection.map];
-      if (family) renderControls();
+      // The simulator follows the selected map, so switching scenes re-gates
+      // the controls without waiting for the next status poll.
+      if (body.map_simulators && body.map_simulators[body.selection.map]) {
+        renderControls();
+      }
     }
     fillSelect(
       $("world-map"),

@@ -12,7 +12,7 @@ import yaml
 from .domain.depth import validate_depth_protocol
 from .domain.depth_foreground import DepthForegroundSettings
 from .domain.motion import ContinuousTrackingSettings
-from .domain.runtime import FamilyCatalog, parse_family_catalog, ue5_family
+from .domain.runtime import FamilyCatalog, parse_family_catalog, projectairsim_family
 from .domain.sliding_window import SlidingWindowSettings
 from .domain.visual_goal_completion import VisualGoalTriggerRules
 from .domain.visual_goal_limits import VisualGoalLimits
@@ -455,20 +455,21 @@ class MapEntry:
     scene_file: str = ""
     # World scene-config directory, relative to the repository root.
     sim_config_path: str = ""
-    # Simulator family id, resolved against ``config/simulators.yaml``.
-    # New fields stay after the original five so positional construction holds.
-    family: str = "ue5"
+    # Simulator package that drives this map, resolved by
+    # ``planner.simulator.registry``. Named after the software, not the engine
+    # version, and required: no map inherits a simulator by default.
+    simulator: str = ""
     # Engine binary for families launched straight from an executable.
     binary: str = ""
     # Map name passed to that binary (AirSim takes it as argv[1]).
     map_name: str = ""
 
     def __post_init__(self) -> None:
-        for name in ("id", "label", "family"):
+        for name in ("id", "label", "simulator"):
             value = getattr(self, name)
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"map {name} must be non-empty text")
-        for name in ("id", "family"):
+        for name in ("id", "simulator"):
             value = getattr(self, name)
             if any(ch.isspace() for ch in value):
                 raise ValueError(f"map {name} must not contain whitespace")
@@ -640,9 +641,9 @@ class MapCatalog:
         if self.default_map not in ids:
             raise ValueError("default_map must appear in maps")
 
-    def family_ids(self) -> tuple[str, ...]:
-        """Every family referenced by a map, in catalog order."""
-        return tuple(dict.fromkeys(entry.family for entry in self.maps))
+    def simulator_ids(self) -> tuple[str, ...]:
+        """Every simulator referenced by a map, in catalog order."""
+        return tuple(dict.fromkeys(entry.simulator for entry in self.maps))
 
     def entry(self, map_id: str) -> MapEntry | None:
         for entry in self.maps:
@@ -758,7 +759,10 @@ def _project_root() -> Path:
 
 
 def load_map_catalog(
-    path: str | Path, *, fallback: MapEntry | None = None
+    path: str | Path,
+    *,
+    fallback: MapEntry | None = None,
+    default_simulator: str = "projectairsim",
 ) -> MapCatalog:
     """Load ``maps.yaml``; without the file fall back to a single map entry.
 
@@ -786,7 +790,7 @@ def load_map_catalog(
             MapEntry(
                 id=str(item.get("id", "")),
                 label=str(item.get("label", "")),
-                family=str(item.get("family", "ue5")),
+                simulator=str(item.get("simulator", default_simulator)),
                 launch_map=str(item.get("launch_map", "")),
                 scene_file=str(item.get("scene_file", "")),
                 sim_config_path=str(item.get("sim_config_path", "")),
@@ -883,10 +887,12 @@ def load_vehicle_models(
             )
         )
     catalog = VehicleModelCatalog(groups=tuple(groups))
+    from .simulator import registry
+
     modelable = {
         entry.id
         for entry in maps.maps
-        if families.capabilities(entry.family).supports("models")
+        if registry.capabilities_for(entry.simulator).supports("models")
     }
     root = _project_root()
     for group in catalog.groups:
@@ -1004,23 +1010,25 @@ def load_config(path: str | Path) -> AppConfig:
     families_raw = _section(raw, "simulator_families")
     if not families_raw and families_path.is_file():
         families_raw = yaml.safe_load(families_path.read_text(encoding="utf-8")) or {}
-    families = parse_family_catalog(families_raw, fallback=ue5_family(simulator))
+    families = parse_family_catalog(families_raw, fallback=projectairsim_family(simulator))
     maps = load_map_catalog(
         Path(path).parent / simulator.map_catalog_file,
+        default_simulator=families.default_family,
         fallback=MapEntry(
             id="default",
             label="默认地图",
+            simulator="projectairsim",
             launch_map="cityenviron",
             scene_file=projectairsim.scene_file,
             sim_config_path=projectairsim.sim_config_path,
         ),
     )
 
-    unknown_families = set(maps.family_ids()) - set(families.ids)
-    if unknown_families:
+    unknown = set(maps.simulator_ids()) - set(families.ids)
+    if unknown:
         raise ValueError(
-            f"maps reference simulator families that are not configured: "
-            f"{sorted(unknown_families)}; configured families are {list(families.ids)}"
+            f"maps reference simulators that are not configured: {sorted(unknown)}; "
+            f"configured simulators are {list(families.ids)}"
         )
 
     camera = CameraSettings(

@@ -40,12 +40,12 @@ class FakeController:
             maps=(
                 MapEntry(
                     "cityenviron", "城市", "cityenviron",
-                    "scene_city_dual.jsonc", "config/scenes/city",
+                    "scene_city_dual.jsonc", "config/scenes/city", "projectairsim",
                 ),
                 MapEntry(
                     "neighborhood", "郊区", "neighborhood",
                     "scene_neighborhood_dual.jsonc",
-                    "config/scenes/neighborhood",
+                    "config/scenes/neighborhood", "projectairsim",
                 ),
             ),
         )
@@ -290,7 +290,12 @@ def test_status_and_logs():
     with _client(controller) as client:
         status = client.get("/api/status")
         assert status.status_code == 200
-        assert status.json() == {
+        payload = status.json()
+        # Port-derived feature flags ride along with the status payload. They
+        # are asserted separately so the lifecycle fields below stay readable.
+        simulator = payload.pop("simulator")
+        caps = payload.pop("capabilities")
+        assert payload == {
             "state": "idle",
             "instruction": "",
             "last_result": None,
@@ -306,6 +311,10 @@ def test_status_and_logs():
             "models": {"rover": "offroad", "drone": "quadrotor"},
             "models_switching": False,
         }
+        assert simulator == "projectairsim"
+        assert caps["vehicles"] == ["rover", "drone"]
+        assert caps["actions"] == ["home", "models", "video", "trajectory", "weather"]
+        assert caps["task_kinds"] == ["basic_motion", "visual_goal_navigation", "free_navigation"]
         assert status.headers["cache-control"] == "no-store"
 
         first = client.get("/api/logs").json()

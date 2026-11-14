@@ -117,3 +117,78 @@ class SimulatorPorts:
             if self.slot(item.name) is not None
             and item.name not in {"vehicles", "enabled_tasks"}
         )
+    @classmethod
+    def from_slots(
+        cls,
+        slots: tuple[str, ...],
+        *,
+        vehicles: tuple[str, ...] = ("drone",),
+        view_modes: tuple[str, ...] = (),
+        weather_fields: dict[str, str] | None = None,
+        weather_presets: tuple[str, ...] = (),
+        enabled_tasks: tuple[str, ...] = (),
+    ) -> "SimulatorPorts":
+        """A stand-in bundle built from the slot names a simulator declares.
+
+        The console needs feature flags before any simulator is running, so the
+        port list is reported without constructing clients. ``_Slots`` answers
+        only what the derivation reads, and the test suite checks that the
+        declared list matches what ``build_ports`` really returns.
+        """
+        present = set(slots)
+        weather = _Weather(weather_fields or {}, weather_presets) if "weather" in present else None
+        views = _Views(view_modes) if "views" in present else None
+        return cls(
+            vehicle=_Slot("vehicle") if "vehicle" in present else None,
+            observation=_Slot("observation") if "observation" in present else None,
+            streaming=_Slot("streaming") if "streaming" in present else None,
+            controlled_capture=_Slot("controlled_capture") if "controlled_capture" in present else None,
+            moving_capture=_Slot("moving_capture") if "moving_capture" in present else None,
+            camera_view=_Slot("camera_view") if "camera_view" in present else None,
+            weather=weather,
+            views=views,
+            models=_Slot("models") if "models" in present else None,
+            frames=_Slot("frames") if "frames" in present else None,
+            telemetry=_Slot("telemetry") if "telemetry" in present else None,
+            home=_Slot("home") if "home" in present else None,
+            vehicles=vehicles,
+            enabled_tasks=enabled_tasks,
+        )
+
+
+class _Slot:
+    """Placeholder for a declared-but-not-yet-connected port."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def view_modes(self) -> tuple[str, ...]:  # pragma: no cover - placeholder
+        return ()
+
+    def fields(self) -> dict[str, str]:  # pragma: no cover - placeholder
+        return {}
+
+    def presets(self) -> tuple[str, ...]:  # pragma: no cover - placeholder
+        return ()
+
+
+class _Views(_Slot):
+    def __init__(self, modes: tuple[str, ...]) -> None:
+        super().__init__("views")
+        self._modes = modes
+
+    def view_modes(self) -> tuple[str, ...]:
+        return self._modes
+
+
+class _Weather(_Slot):
+    def __init__(self, fields: dict[str, str], presets: tuple[str, ...]) -> None:
+        super().__init__("weather")
+        self._fields = fields
+        self._presets = presets
+
+    def fields(self) -> dict[str, str]:
+        return dict(self._fields)
+
+    def presets(self) -> tuple[str, ...]:
+        return self._presets

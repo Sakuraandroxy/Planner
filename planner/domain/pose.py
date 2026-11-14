@@ -135,3 +135,18 @@ class RelativePoseDelta:
             and self.dz == 0.0
             and self.dyaw_deg == 0.0
         )
+
+Point3 = tuple[float, float, float]
+
+
+@dataclass(frozen=True)
+class CameraMountPose:
+    """Where a body-mounted camera sits, saved so it can be restored.
+
+    ``rotation`` is the camera-to-body matrix in rows. The AirSim camera view
+    reads it before aiming the lens down and writes it back afterwards, so the
+    type belongs to the shared pose layer rather than to one simulator.
+    """
+
+    position: Point3
+    rotation: tuple[Point3, Point3, Point3]
