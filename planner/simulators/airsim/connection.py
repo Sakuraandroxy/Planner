@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import inspect
 import threading
 import logging
+import time
 from collections import deque
 from typing import Any
 from contextlib import contextmanager
@@ -10,11 +12,45 @@ from .rpc_loop import close_rpc_client, configure_rpc_loop
 
 logger = logging.getLogger(__name__)
 
+#: What an async motion has to prove to be called done. Blocks measured a
+#: takeoffAsync that returned ``False`` while the aircraft climbed 1.54 m, so the
+#: ack is logged and height is what gets checked.
+MIN_CLIMB_M = 0.5
+
+#: Cache of "does this client method take a vehicle_name?", keyed by __qualname__.
+_VEHICLE_ARG: dict[str, bool] = {}
+
+
+def _accepts_vehicle_name(func) -> bool:
+    """Whether this AirSim client method answers to a named vehicle.
+
+    The server reads state calls from the default vehicle even when settings.json
+    names it ``Drone_1``, so leaving the name blank silently routes control calls
+    to a key that does not exist: ``moveToPositionAsync`` returns ``False`` and
+    ``landAsync`` raises an RPC exception. Not every method has the parameter
+    (``listVehicles`` does not), so the answer comes from the signature instead of
+    a hand-kept list that drifts when the client changes.
+    """
+    key = getattr(func, "__qualname__", "")
+    cached = _VEHICLE_ARG.get(key)
+    if cached is None:
+        try:
+            parameters = inspect.signature(func).parameters
+        except (TypeError, ValueError):
+            cached = False
+        else:
+            cached = "vehicle_name" in parameters or any(
+                p.kind is p.VAR_KEYWORD for p in parameters.values()
+            )
+        _VEHICLE_ARG[key] = cached
+    return cached
+
 
 class AirSimConnection:
     """Serialize state RPCs and optional longer-lived motion RPCs on one owner."""
 
-    def __init__(self, host: str, port: int, timeout_s: float, *, motion_timeout_s: float | None = None):
+    def __init__(self, host: str, port: int, timeout_s: float, *, motion_timeout_s: float | None = None,
+                 vehicle_name: str = ""):
         try:
             import airsim
         except ImportError as exc:
@@ -23,6 +59,8 @@ class AirSimConnection:
         if host:
             kwargs["ip"] = host
         self.client = airsim.MultirotorClient(**kwargs)
+        #: The vehicle every call targets. Empty keeps AirSim's own default.
+        self.vehicle_name = vehicle_name
         configure_rpc_loop(self.client)
         self._motion_client = None
         self._motion_kwargs = dict(kwargs, timeout_value=motion_timeout_s) if motion_timeout_s is not None else None
@@ -56,12 +94,22 @@ class AirSimConnection:
                 raise SimulatorConnectionError(f"AirSim transport failed ({type(exc).__name__})") from exc
             raise
 
+    def _for_vehicle(self, func, kwargs: dict[str, Any]) -> dict[str, Any]:
+        """Add the vehicle name unless the method cannot take one or a caller chose."""
+        if not self.vehicle_name or "vehicle_name" in kwargs:
+            return kwargs
+        if not _accepts_vehicle_name(func):
+            return kwargs
+        return {**kwargs, "vehicle_name": self.vehicle_name}
+
     def call(self, name: str, *args, **kwargs):
         with self._lock:
             if self._closed:
                 raise RuntimeError("AirSim connection is closed")
+            func = getattr(self.client, name)
+            kwargs = self._for_vehicle(func, kwargs)
             with self._transport_call():
-                result = getattr(self.client, name)(*args, **kwargs)
+                result = func(*args, **kwargs)
                 self._stream_error()
                 return result
 
@@ -75,9 +123,11 @@ class AirSimConnection:
         with self._lock:
             if self._closed:
                 raise RuntimeError("AirSim connection is closed")
+            func = getattr(self.client, name)
+            kwargs = self._for_vehicle(func, kwargs)
             with self._transport_call():
                 self._stream_error()
-                future = getattr(self.client,name)(*args,**kwargs)
+                future = func(*args, **kwargs)
                 def completed(value):
                     if value.error is not None:
                         self._stream_errors.append(value.error)
@@ -96,7 +146,8 @@ class AirSimConnection:
                         configure_rpc_loop(self._motion_client)
                     client = self._motion_client
                 # msgpackrpc.Future.join() discards both the result and RPC error.
-                return getattr(client, name)(*args, **kwargs).get()
+                func = getattr(client, name)
+                return func(*args, **self._for_vehicle(func, kwargs)).get()
 
     def connect(self) -> None:
         self.call("confirmConnection")
@@ -113,14 +164,39 @@ class AirSimConnection:
         if arm and self.call("armDisarm", True) is not True:
             raise ExecutionError("AirSim did not confirm vehicle arming")
 
-    def takeoff(self, *, timeout_s: float | None = None, hover_after: bool = True) -> None:
+    def takeoff(self, *, timeout_s: float | None = None, hover_after: bool = True,
+                settle_timeout_s: float = 30.0) -> None:
+        """Climb, and prove the climb from state rather than from the ack.
+
+        On the target build ``takeoffAsync().get()`` answers ``False`` while the
+        aircraft actually rises -- measured 0.68 m to -0.86 m on Blocks -- and
+        ``landed_state`` is no substitute in the other direction either: after a
+        ``landAsync()`` that returned ``True`` it stayed at ``1`` (Flying) with the
+        vehicle back on its spawn height. Height gained is the evidence that does
+        not lie, so that is what this waits for.
+        """
         options = {} if timeout_s is None else {"timeout_sec": timeout_s}
-        if self.call_async_and_wait("takeoffAsync", **options) is not True:
-            raise ExecutionError("AirSim takeoff did not complete")
+        before = self._ground_z()
+        ack = self.call_async_and_wait("takeoffAsync", **options)
+        if ack is not True:
+            logger.info("takeoffAsync ack=%r; deciding the takeoff from state", ack)
+        deadline = time.monotonic() + settle_timeout_s
+        gained = before - self._ground_z()
+        while gained < MIN_CLIMB_M and time.monotonic() < deadline:
+            time.sleep(0.2)
+            gained = before - self._ground_z()
+        if gained < MIN_CLIMB_M:
+            raise ExecutionError(
+                f"AirSim takeoff did not lift the vehicle: gained {gained:.2f} m in "
+                f"{settle_timeout_s:g}s (need {MIN_CLIMB_M} m), ack={ack!r}"
+            )
         if hover_after:
             # Native hover follows a path to the current height; a zero-length
             # path may return False. RPC errors still propagate through get().
             self.call_async_and_wait("hoverAsync")
+
+    def _ground_z(self) -> float:
+        return self.call("getMultirotorState").kinematics_estimated.position.z_val
 
     def shutdown(self) -> None:
         """Hold airborne vehicles; disarm/release only after positive landed evidence."""
@@ -153,7 +229,13 @@ class AirSimConnection:
             logger.exception("Cannot confirm landed state; keeping motors/API control unchanged")
             return
         if not landed:
-            logger.warning("Vehicle is airborne: requested hover; motors/API control remain enabled")
+            logger.warning(
+                "Landing was not confirmed by landed_state (%r) at z=%.2f: requesting "
+                "hover and leaving motors/API control enabled. This build keeps "
+                "landed_state at 1 (Flying) even after a land that returned True, so "
+                "this is the conservative branch, not proof the vehicle is airborne.",
+                status, state.kinematics_estimated.position.z_val,
+            )
             return
         try:
             if self.call("armDisarm", False) is not True:

@@ -15,6 +15,14 @@ import time
 
 logger = logging.getLogger(__name__)
 
+#: How close the aircraft has to be to the commanded endpoint for the motion to
+#: count as executed. Measured on Blocks: a commanded climb settles within 6 cm.
+ARRIVAL_TOLERANCE_M = 0.5
+#: Yaw is verified from state for the same reason position is. Loose, because the
+#: endpoint of a signed rotation is the thing the caller asked for, not a heading.
+ARRIVAL_TOLERANCE_DEG = 15.0
+
+
 class AirSimVehicle:
     def __init__(self, connection: AirSimConnection, speed_mps: float, timeout_s: float,
                  motion_limits: MotionLimits | None = None, *, velocity_command_duration_s: float = .2):
@@ -55,10 +63,45 @@ class AirSimVehicle:
     def cancel(self) -> None:
         self.connection.call("cancelLastTask")
 
+    def _await_arrival(self, target: WorldPose, *, yaw_delta_deg: float = 0.0) -> None:
+        """Decide from state that the commanded endpoint was reached.
+
+        This build does not report motion truthfully: measured on the machine,
+        ``takeoffAsync().get()`` returned ``False`` while the aircraft climbed from
+        z=0.68 to z=-0.86, and ``moveToPositionAsync().get()`` returned ``False`` a
+        metre up. ``landed_state`` is not a substitute either -- after a confirmed
+        ``landAsync()`` that returned ``True`` it stayed at ``1`` (Flying) with the
+        vehicle back on its spawn height. So the ack is logged and the position and
+        heading are read back, which is the only evidence here that cannot lie.
+
+        Raises ExecutionError when the vehicle has not settled inside the tolerances
+        before ``timeout_s``, and says what it measured.
+        """
+        deadline = time.monotonic() + self.timeout_s
+        pose = self.current_pose()
+        while True:
+            distance = math.sqrt(
+                (pose.x - target.x) ** 2 + (pose.y - target.y) ** 2 + (pose.z - target.z) ** 2
+            )
+            yaw_error = abs(((pose.yaw_deg - target.yaw_deg + 180.0) % 360.0) - 180.0)
+            if distance <= ARRIVAL_TOLERANCE_M and (
+                not yaw_delta_deg or yaw_error <= ARRIVAL_TOLERANCE_DEG
+            ):
+                return
+            if time.monotonic() >= deadline:
+                raise ExecutionError(
+                    f"AirSim basic motion did not reach its endpoint: {distance:.2f} m from "
+                    f"{target} (tolerance {ARRIVAL_TOLERANCE_M} m), yaw error "
+                    f"{yaw_error:.1f} deg after {self.timeout_s:g}s"
+                )
+            time.sleep(0.1)
+            pose = self.current_pose()
+
     def execute_basic_motion(self, start: WorldPose, target: WorldPose, yaw_delta_deg: float) -> None:
         """Execute once toward a fixed endpoint; verify it through local hold."""
         import airsim
 
+        native_target = None
         if self.holding is not None:
             self.holding.release()
 
@@ -87,16 +130,20 @@ class AirSimVehicle:
                     timeout_sec=self.timeout_s, drivetrain=airsim.DrivetrainType.MaxDegreeOfFreedom,
                     yaw_mode=airsim.YawMode(is_rate=True, yaw_or_rate=0))
         if result is not True:
-            logger.warning("[BasicMotion] native result=%r result_type=%s target=%s",
-                           result,type(result).__name__,target)
-            # Final yaw alone cannot certify a requested signed/full rotation.
-            if yaw_delta_deg or self.holding is None:
-                raise ExecutionError("AirSim basic motion did not complete")
-            logger.warning("[BasicMotion] native translation unconfirmed; checking the original fixed endpoint locally")
+            logger.info("[BasicMotion] native ack=%r result_type=%s target=%s; deciding from state",
+                        result,type(result).__name__,target)
         if self.holding is not None:
+            # The hold service owns the final approach and its own waiting rules, but
+            # the handoff point the native call was given still has to show up in
+            # state -- an ack that says False used to be the only evidence here.
+            if native_target is not None:
+                self._await_arrival(native_target)
             self.holding.start(target)
             self.holding.wait()
+            if yaw_delta_deg:
+                self._await_arrival(target, yaw_delta_deg=yaw_delta_deg)
         else:
+            self._await_arrival(target, yaw_delta_deg=yaw_delta_deg)
             self.hover()
 
     def hover(self) -> None:

@@ -1,0 +1,189 @@
+"""Every AirSim call must reach the vehicle the settings file actually names.
+
+``/data/airsim/settings.json`` registers ``Drone_1``. With a blank ``vehicle_name``
+the server still answers state reads, so a smoke test looks healthy right up to the
+first control call: ``moveToPositionAsync`` returns ``False``, ``landAsync`` raises an
+RPC exception, and the vehicle does not move. The adapter used to send the blank name
+on all 41 of its call sites.
+
+The fake client below keeps the real signatures, because the injection decision
+follows them: methods without a ``vehicle_name`` parameter must not be given one.
+"""
+
+import inspect
+import sys
+import types
+
+import pytest
+
+
+class _Future:
+    def __init__(self, value):
+        self._value = value
+
+    def get(self):
+        return self._value
+
+    def attach_callback(self, callback):
+        pass
+
+
+class _Pose:
+    class position:
+        x_val = y_val = 0.0
+        z_val = 0.67
+
+    class orientation:
+        x_val = y_val = z_val = 0.0
+        w_val = 1.0
+
+
+class _State:
+    """What getMultirotorState answers: just enough for ``_ground_z()``."""
+
+    class _Kinematics:
+        def __init__(self, z):
+            class P:
+                pass
+            p = P()
+            p.x_val = p.y_val = 0.0
+            p.z_val = z
+            self.position = p
+
+    def __init__(self, z):
+        self.kinematics_estimated = _State._Kinematics(z)
+
+
+class _Client:
+    """Signature-shaped stand-in for ``airsim.MultirotorClient``."""
+
+    def __init__(self, **kwargs):
+        self.seen: dict[str, object] = {}
+        # What getMultirotorState answers, in order. A list that runs out repeats its
+        # last value, which is how a vehicle that has settled behaves.
+        self.z_values: list[float] = [0.67]
+        self.takeoff_ack = True
+        # configure_rpc_loop() walks these; keep them inert but present.
+        self.client = types.SimpleNamespace(_loop=None, close=lambda: None)
+
+    def _z(self):
+        return self.z_values.pop(0) if len(self.z_values) > 1 else self.z_values[0]
+
+    def simGetVehiclePose(self, vehicle_name=""):
+        self.seen["simGetVehiclePose"] = vehicle_name
+        return _Pose()
+
+    def enableApiControl(self, is_enable, vehicle_name=""):
+        self.seen["enableApiControl"] = (is_enable, vehicle_name)
+        return True
+
+    def moveToPositionAsync(self, x, y, z, v, timeout_sec=None, drivetrain=None,
+                            yaw_mode=None, vehicle_name=""):
+        self.seen["moveToPositionAsync"] = vehicle_name
+        return _Future(True)
+
+    def listVehicles(self):
+        self.seen["listVehicles"] = "no-parameter"
+        return ["Drone_1"]
+
+    def ping(self):
+        return True
+
+    def getMultirotorState(self, timestamp=-1.0, vehicle_name=""):
+        self.seen["getMultirotorState"] = vehicle_name
+        return _State(self._z())
+
+    def takeoffAsync(self, max_seconds_z_err=None, vehicle_name=""):
+        self.seen["takeoffAsync"] = vehicle_name
+        return _Future(self.takeoff_ack)
+
+    def hoverAsync(self, vehicle_name=""):
+        return _Future(True)
+
+
+@pytest.fixture(autouse=True)
+def fake_airsim(monkeypatch):
+    module = types.ModuleType("airsim")
+    module.MultirotorClient = _Client
+    monkeypatch.setitem(sys.modules, "airsim", module)
+
+
+def _connection(**kwargs):
+    from planner.simulators.airsim.connection import AirSimConnection
+
+    connection = AirSimConnection(host="", port=41451, timeout_s=5, **kwargs)
+    return connection, connection.client
+
+
+def test_named_vehicle_reaches_state_and_control_calls():
+    connection, client = _connection(vehicle_name="Drone_1")
+    connection.call("simGetVehiclePose")
+    connection.call("enableApiControl", True)
+    assert client.seen["simGetVehiclePose"] == "Drone_1"
+    assert client.seen["enableApiControl"] == (True, "Drone_1")
+
+
+def test_the_async_channel_carries_it_too():
+    """This is the call that silently returned ``False`` on the real machine."""
+    connection, client = _connection(vehicle_name="Drone_1")
+    assert connection.call_async_and_wait("moveToPositionAsync", 0.0, 0.0, -2.0, 2.0) is True
+    assert client.seen["moveToPositionAsync"] == "Drone_1"
+
+
+def test_methods_without_the_parameter_are_left_alone():
+    connection, client = _connection(vehicle_name="Drone_1")
+    assert connection.call("listVehicles") == ["Drone_1"]
+    assert client.seen["listVehicles"] == "no-parameter"
+
+
+def test_a_caller_that_named_a_vehicle_wins():
+    connection, client = _connection(vehicle_name="Drone_1")
+    connection.call("simGetVehiclePose", vehicle_name="Drone_2")
+    assert client.seen["simGetVehiclePose"] == "Drone_2"
+
+
+def test_an_empty_name_injects_nothing():
+    """Builds whose vehicle is the client default must not get a surprise key."""
+    connection, client = _connection(vehicle_name="")
+    connection.call("simGetVehiclePose")
+    assert client.seen["simGetVehiclePose"] == ""
+
+
+def test_takeoff_succeeds_on_state_even_when_the_ack_says_false():
+    """Measured on Blocks: ``takeoffAsync().get()`` is False and the aircraft rises.
+
+    0.68 to -0.86, i.e. 1.54 m of climb in UE coordinates where up is negative.
+    Reading that ack as a verdict is what made every UE4 task fail before it flew.
+    """
+    connection, client = _connection(vehicle_name="Drone_1")
+    client.z_values = [0.68, -0.86]
+    client.takeoff_ack = False
+    connection.takeoff(hover_after=False)
+    assert client.seen["takeoffAsync"] == "Drone_1"
+
+
+def test_takeoff_fails_when_the_vehicle_never_lifts():
+    connection, client = _connection(vehicle_name="Drone_1")
+    client.z_values = [0.68, 0.68]
+    with pytest.raises(Exception, match="did not lift the vehicle"):
+        connection.takeoff(hover_after=False, settle_timeout_s=0.0)
+
+
+def test_the_signature_probe_survives_a_wrapped_method():
+    """The cache is keyed by __qualname__; a missing signature means "do not inject"."""
+    from planner.simulators.airsim.connection import _accepts_vehicle_name
+
+    def with_name(vehicle_name=""):
+        pass
+
+    def without_name():
+        pass
+
+    def catch_all(**kwargs):
+        pass
+
+    assert _accepts_vehicle_name(without_name) is False
+    assert _accepts_vehicle_name(with_name) is True
+    assert _accepts_vehicle_name(catch_all) is True
+    assert _accepts_vehicle_name(len) is False       # builtins have no signature
+    assert inspect.isfunction(with_name)
