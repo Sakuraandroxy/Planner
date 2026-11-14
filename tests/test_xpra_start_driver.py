@@ -277,6 +277,21 @@ def test_stop_argv_needs_no_map(tmp_path):
     assert "{" not in "".join(argv)
 
 
+def test_relative_settings_path_is_absolutised(tmp_path):
+    """The engine child resolves ``-settings=`` from xpra's cwd, not the repo's.
+
+    A relative path made UE4 abort with signal 6 while xpra still exited 0, so the
+    failure looked like a hang. The fingerprint and the argv must agree too, or
+    ownership checks stop matching the stack they describe.
+    """
+    loose = _family(settings_file="config/airsim_settings.json")
+    driver = Harness(tmp_path, family=loose).driver
+    child = driver.child_argv(_entry())
+    assert driver._settings_path == str(Path(driver._settings_path))
+    assert f"-settings={driver._settings_path}" in child
+    assert driver._settings_marker == f"-settings={driver._settings_path}"
+
+
 def test_shipped_template_renders(tmp_path):
     """The real config/simulators.yaml must render; it once referenced {binary}."""
     catalog = parse_family_catalog(

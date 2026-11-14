@@ -287,7 +287,11 @@ class XpraStartSupervisor:
         self._marker_file = self._resolve(settings.map_marker_file)
         self._process: object | None = None
         self._process_identity: tuple | None = None
-        self._settings_marker = f"-settings={family.settings_file}"
+        # ``-settings=`` is resolved by the engine child, whose working directory is
+        # xpra's, not the repository's. Hand it an absolute path, and derive the
+        # ownership fingerprint from the very same string so the two cannot drift.
+        self._settings_path = str(self._resolve(family.settings_file)) if family.settings_file else ""
+        self._settings_marker = f"-settings={self._settings_path}"
         for name in family.probes:
             if name not in SUPPORTED_PROBES:
                 raise ValueError(
@@ -300,28 +304,33 @@ class XpraStartSupervisor:
             )
 
     # -- argv --------------------------------------------------------------
-    def _values(self, entry=None) -> dict[str, object]:
+    def _base_values(self, entry) -> dict[str, object]:
+        """Placeholder map for one launch, with the settings path made absolute.
+
+        Both the child argv and the xpra argv read it from here. They used to build
+        it separately, so a relative ``settings_file`` stayed relative inside
+        ``--start-child`` while the ownership fingerprint carried the absolute form:
+        UE4 could not find the file, aborted with signal 6, and xpra exited 0.
+        """
         values = argv_values(
-            entry=entry if entry is not None else _NO_MAP,
+            entry=entry,
             simulator=self._family,
             settings=self._settings,
             runtime_dir=str(self._runtime_dir),
         )
+        if self._settings_path:
+            values["settings_file"] = self._settings_path
+        return values
+
+    def _values(self, entry=None) -> dict[str, object]:
+        values = self._base_values(entry if entry is not None else _NO_MAP)
         if entry is not None:
             values["start_child"] = shlex.join(self.child_argv(entry))
         return values
 
     def child_argv(self, entry: MapEntry) -> list[str]:
         """The engine command line, before xpra wraps it in ``--start-child``."""
-        return render_argv(
-            list(self._family.child_argv),
-            argv_values(
-                entry=entry,
-                simulator=self._family,
-                settings=self._settings,
-                runtime_dir=str(self._runtime_dir),
-            ),
-        )
+        return render_argv(list(self._family.child_argv), self._base_values(entry))
 
     def launch_argv(self, entry: MapEntry) -> list[str]:
         return render_argv(list(self._family.argv), self._values(entry))

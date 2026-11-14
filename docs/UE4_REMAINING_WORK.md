@@ -187,3 +187,37 @@ Drone.camera_look_at_object(camera_id: str, object_name: str, ...) -> bool
   UE4 目前没显式指定适配器也能跑。
 - 旧分支自述实机未联调：旧 `README.md:435`。旧分支没有 `tests/`，UE4 保真来自代码照抄，不来自测试通过。
 
+### 7.3 实机跑出来的三处硬冲突（待决策）
+
+把适配层接上真机之后才暴露得出来的，都是“旧分支没跑过硬件”的直接代价。
+
+**1. RGB 与深度的像素尺寸不能同时满足。** 主干 `Observation.__post_init__` 要求
+`depth_m.shape == rgb.shape[:2]`；而 `/data/airsim/settings.json` 给的是 Scene 1920x1080 对
+Depth 256x256，取图必定被契约拒收。为对齐尺寸改成两者都 1280x720 后，单次
+`capture()` 要 **25.97 秒**（实测）：`pixels_as_float=True` 时 AirSim 把 92 万个 float 当
+msgpack **数组**传回，而 `msgpack-python` 0.5.6 在这个环境里只有纯 Python 实现。三条出路：
+
+| 方案 | 代价 |
+|---|---|
+| A 两者都用低分辨率（如 256x256，实测深度回传 ~0.2s） | RGB 比 UE5 的 1280x720 粗，影响模型输入 |
+| B 都用 1280x720 | 26s 一帧，闭环不可用 |
+| C 放宽共享契约，允许深度自带分辨率 | 动的是 `domain/observation.py`，UE5 共用的；`depth_intrinsics` 这个字段本来就是为这种情况留的 |
+
+`compress=True` 不是出路：实测 `pixels_as_float=False` 下 AirSim 发回的是**可视化深度**
+（全图只有 4 个不同值，中位 0m），不是米制；`pixels_as_float=True` 时 `compress` 被忽略，
+24.7s 与不压缩基本同价。
+
+**2. 载具名不能为空。** `/data/airsim/settings.json` 把载具叫 `Drone_1`，适配层所有调用都不传
+`vehicle_name`（默认空串）。实测：`listVehicles()` 返回 `['Drone_1']`，`getMultirotorState()`
+能读到数据，但 `moveToPositionAsync(...)` 返回 `False`，`landAsync("")` 直接报
+`RPCError: function 'land' ... threw an exception`。`AirSimConnection` 需要从配置里拿到载具名。
+
+**3. 异步动作的返回值不能当成败依据。** 即使传了 `Drone_1` 并 `enableApiControl` + `armDisarm`，
+`moveToPositionAsync(...).get()` 仍返回 `False`，而**无人机确实从 z=-0.60 爬到了 -1.59**。
+`vehicle.py:58` 的 `execute_basic_motion` 把“返回假值”当成失败，招 `ExecutionError: AirSim basic
+motion did not complete`。真正的完成信号得改成读回状态（位置收敛 + `landed_state`），
+不能继续信这个 bool。
+
+这三条都在飞行控制路径上，彼此有依赖（先把载具名接通、再把完成判据改成状态驱动，
+最后才能量测真实闭环延时），所以要按 2 → 3 → 1 的顺序修。
+
