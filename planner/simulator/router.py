@@ -33,8 +33,15 @@ class FamilyRouter:
         project_dir: str | Path,
         maps: MapCatalog,
         log: LogFn | None = None,
+        driver_factory: Callable[[object], object] | None = None,
         **kwargs,
     ):
+        """``driver_factory`` exists so the routing rules can be read without a machine.
+
+        What is interesting here is which driver is asked to do what -- a question
+        about two families. Building real supervisors to answer it would make the test
+        depend on xpra, /proc and a GPU.
+        """
         self._families = families
         self._settings = settings
         self._maps = maps
@@ -42,6 +49,13 @@ class FamilyRouter:
         self._log_fn = log
         self._kwargs = kwargs
         self._drivers: dict[str, object] = {}
+        self._driver_factory = driver_factory or self._build_driver
+
+    def _build_driver(self, family):
+        return XpraStartSupervisor(
+            family, self._settings, self._project, self._maps,
+            log=self._log_fn, **self._kwargs,
+        )
 
     # -- driver selection --------------------------------------------------
     def _driver(self, family_id: str):
@@ -53,10 +67,7 @@ class FamilyRouter:
                     f"map family {family_id!r} is not configured in "
                     f"config/simulators.yaml; known families are {list(self._families.ids)}"
                 )
-            driver = XpraStartSupervisor(
-                family, self._settings, self._project, self._maps,
-                log=self._log_fn, **self._kwargs,
-            )
+            driver = self._driver_factory(family)
             self._drivers[family_id] = driver
         return driver
 
@@ -83,6 +94,18 @@ class FamilyRouter:
         self._driver(entry.simulator).start(entry)
 
     def restart(self, entry: MapEntry) -> None:
+        """Switch to ``entry``, stopping the family that is actually live.
+
+        A driver only reads its own ports, so a UE5 stack looks like an idle machine
+        to the AirSim driver. Delegating the whole switch to the target's driver then
+        skipped the stop, and the launch died on "display :104 is still held by" the
+        other family's X server -- measured switching UE5 -> UE4 both ways. The marker
+        already records who is live; hand the stop to that driver and the restart to
+        the target's.
+        """
+        live = self._active_family_id()
+        if live and live != entry.simulator:
+            self._driver(live).stop()
         self._driver(entry.simulator).restart(entry)
 
     def launch_command(self, entry: MapEntry) -> str:

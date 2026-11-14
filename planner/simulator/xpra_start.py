@@ -39,6 +39,7 @@ from .processes import (
     default_spawn,
     descendants,
     display_files,
+    display_holder,
     display_released,
     identity,
     listener_pids,
@@ -171,13 +172,28 @@ class XpraStartSupervisor:
         return argv
 
     def owned_map(self, pid: int) -> str | None:
-        """Which catalogued map this PID runs, or None when it is not ours.
+        """Which map of *this* family the PID runs, or None when it is not ours to name.
 
         Two fingerprints, matching the two processes that can hold a port: the
         engine binary itself (real path plus this project's settings file), and
         the xpra parent (our display, our socket directory, our binary inside
         ``--start-child``).
         """
+        return self._map_for(pid, require_marker=True)
+
+    def catalogued_map(self, pid: int) -> str | None:
+        """Which catalogued map the PID runs, whichever family is asking.
+
+        Stopping answers a different question from naming. A stack from the other
+        family is still a binary this repository lists in maps.yaml, so it is ours to
+        stop -- but the settings marker that identifies an AirSim map can never appear
+        in a UE5 command line, and demanding it there made a cross-family switch refuse
+        to release the stack it was switching away from. The display stayed held, and
+        the retry failed on ``reclaim_stale_display``.
+        """
+        return self._map_for(pid, require_marker=False)
+
+    def _map_for(self, pid: int, *, require_marker: bool) -> str | None:
         item = self._identity(pid)
         if item is None or item[1] != os.getuid():
             return None
@@ -192,7 +208,12 @@ class XpraStartSupervisor:
             # executable identity alone already proves the process is ours. The
             # settings marker tightens it for families that have one (AirSim) and
             # cannot apply to those that do not (ProjectAirSim has no -settings=).
-            if exe == real and (not self._settings_marker or self._settings_marker in argv):
+            marker_ok = (
+                not require_marker
+                or not self._settings_marker
+                or self._settings_marker in argv
+            )
+            if exe == real and marker_ok:
                 return entry.id
             if (
                 exe == os.path.realpath("/usr/bin/python3")
@@ -221,7 +242,9 @@ class XpraStartSupervisor:
             except UnattributedListener as error:
                 raise SimulatorNotOwned(str(error)) from error
             for pid in sorted(pids):
-                key = self.owned_map(pid)
+                # Name it within this family first; a stack from the other family is
+                # still ours to stop, and refusing here used to strand the display.
+                key = self.owned_map(pid) or self.catalogued_map(pid)
                 if key is None:
                     argv = " ".join(self._argv_of(pid)) or "exited"
                     raise SimulatorNotOwned(
@@ -493,6 +516,49 @@ class XpraStartSupervisor:
         # reclaim_stale_display, with that caller's message, so this stays silent
         # and bounded.
         self._wait_display_released(self._settings.port_release_timeout_s)
+        self._release_orphan_display()
+
+    def _release_orphan_display(self) -> None:
+        """Stop the X server an xpra session left holding the display.
+
+        Measured on this machine: ``xpra stop`` closes the engine and the session, and
+        its own ``Xvfb-for-Xpra-<n>`` stays alive with the X lock. The next launch then
+        refuses with "display is still held by PID", which reads like a foreign stack
+        even though it is the debris of ours. Killing is gated on evidence: the holder
+        runs as us, and its command line names this display. A genuinely foreign X
+        server on the number is left alone and still refused by launch's
+        :func:`reclaim_stale_display`, with that caller's message.
+        """
+        holder = display_holder(self._settings.display)
+        if holder is None:
+            return
+        before = self._identity(holder)
+        if before is None or before[1] != os.getuid():
+            self._log(
+                f"display {self._settings.display} is still held by PID {holder}, which "
+                "this project cannot prove it started; leaving it running",
+                "WARNING",
+            )
+            return
+        argv = self._argv_of(holder)
+        number = str(self._settings.display).lstrip(":")
+        head = argv[0] if argv else ""
+        if "Xvfb" not in head or number not in head:
+            self._log(
+                f"display {self._settings.display} is held by PID {holder} "
+                f"({head!r}), which is not the X server xpra started for this "
+                "display; leaving it running",
+                "WARNING",
+            )
+            return
+        terminate_verified_tree(
+            holder, before, KILL_WAIT_S, POLL_INTERVAL_S,
+            identity_reader=self._identity, sleep=self._sleep, clock=self._clock,
+        )
+        self._log(
+            f"Stopped the X server PID {holder} that the xpra session left holding "
+            f"display {self._settings.display}."
+        )
 
     def _wait_display_released(self, seconds: float) -> bool:
         deadline = self._clock() + seconds

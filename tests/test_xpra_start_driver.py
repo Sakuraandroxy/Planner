@@ -678,6 +678,137 @@ def test_a_stopped_adopted_stack_still_waits_for_the_display(tmp_path, monkeypat
     assert checked[0] is False and checked[-1] is True, checked
 
 
+def _with_orphan_xvfb(harness, holder_pid, *, uid_offset=0):
+    """Register the lock holder as an identity, not as a port listener.
+
+    A real Xvfb holds no socket, so it must not appear in ``holders()`` -- putting it
+    under a family port would make the driver refuse for the right reason and hide the
+    behaviour under test. The identity table is keyed by port only for convenience.
+    """
+    harness.bindings.setdefault(59999, {})[holder_pid] = (
+        "?", "/usr/bin/Xvfb",
+        ["Xvfb-for-Xpra-199", "-screen", "0", "1280x720x24"],
+    )
+    return harness
+
+
+def test_stop_reclaims_the_xvfb_xpra_leaves_behind(tmp_path, monkeypatch):
+    """Measured on the machine: ``xpra stop`` killed the engine and the session and
+    left ``Xvfb-for-Xpra-104`` alive with the lock, so the next launch refused with
+    "display is still held by PID" -- about debris of our own stack.
+    """
+    import planner.simulator.processes as processes
+    import planner.simulator.xpra_start as module
+
+    lock = tmp_path / ".X199-lock"
+    monkeypatch.setattr(processes, "display_files",
+                        lambda display, **kw: (lock, tmp_path / "X199"))
+    holder = os.getpid()
+    lock.write_text(str(holder) + "\n", encoding="utf-8")
+    killed: list[int] = []
+    monkeypatch.setattr(
+        module, "terminate_verified_tree",
+        lambda pid, before, *a, **k: killed.append(pid),
+    )
+    harness = Harness(tmp_path, holders={RPC_PORT: ours_engine()}, alive={RPC_PORT})
+    _with_orphan_xvfb(harness, holder)
+
+    harness.driver.stop()
+    assert killed == [holder], killed
+
+
+def test_a_foreign_x_server_on_the_display_is_not_killed(tmp_path, monkeypatch):
+    """Same shape, different owner: refusing is correct, killing would not be.
+
+    Only the lock holder is made foreign here. Forcing the whole harness to another
+    uid would also make the engine unattributable, and then the stop would refuse at
+    the ownership gate for a reason that has nothing to do with this test.
+    """
+    import planner.simulator.processes as processes
+    import planner.simulator.xpra_start as module
+
+    lock = tmp_path / ".X199-lock"
+    monkeypatch.setattr(processes, "display_files",
+                        lambda display, **kw: (lock, tmp_path / "X199"))
+    holder = os.getpid()
+    lock.write_text(str(holder) + "\n", encoding="utf-8")
+    killed: list[int] = []
+    monkeypatch.setattr(
+        module, "terminate_verified_tree",
+        lambda pid, before, *a, **k: killed.append(pid),
+    )
+    harness = Harness(tmp_path, holders={RPC_PORT: ours_engine()}, alive={RPC_PORT})
+    _with_orphan_xvfb(harness, holder)
+    driver = harness.driver
+    real_identity = driver._identity
+
+    def identity(pid):
+        found = real_identity(pid)
+        if pid == holder:
+            return (pid, os.getuid() + 1, found[2] if found else "/usr/bin/Xvfb",
+                    ["Xvfb-for-Xpra-199", "-screen", "0"])
+        return found
+
+    driver._identity = identity
+    driver.stop()
+    assert killed == [], killed
+
+
+# -- cross-family ownership ------------------------------------------------
+def _both_maps():
+    """One catalog, both families, both with real binary paths -- what the router
+    actually hands every driver."""
+    return MapCatalog(
+        default_map="blocks",
+        maps=(
+            MapEntry(id="blocks", label="Blocks", simulator="airsim",
+                     binary=BLOCKS, map_name="Blocks"),
+            MapEntry(id="cityenviron", label="City", simulator="projectairsim",
+                     binary=CITY, map_name="CityEnviron",
+                     scene_file="scene_city_dual.jsonc",
+                     sim_config_path="config/scenes/city"),
+        ),
+    )
+
+
+def test_the_other_family_stack_is_ours_to_stop(tmp_path):
+    """Switching UE5 -> UE4 used to fail here.
+
+    The AirSim driver demanded its own ``-settings=`` marker before it would call a
+    listener "ours", so a running UE5 engine was an unmanaged PID, ``stop()`` refused
+    to touch it, and the retry died on "display :104 is still held by PID".
+    """
+    engine = {91: ("cityenviron", os.path.realpath(CITY),
+                   [CITY, "CityEnviron", "-windowed"])}
+    harness = Harness(tmp_path, holders={RPC_PORT: engine}, alive={RPC_PORT},
+                      maps=_both_maps())
+    assert harness.driver.owned_map(91) is None          # not *our* map
+    assert harness.driver.catalogued_map(91) == "cityenviron"   # but ours to stop
+    assert [name for name, _ in harness.driver.holders().values()] == ["cityenviron"]
+
+
+def test_the_markerless_family_still_names_the_airsim_map(tmp_path):
+    """The other direction, for symmetry: UE5's driver stops a UE4 stack by path."""
+    engine = ours_engine(91)
+    harness = Harness(tmp_path, family=_ue5_family(),
+                      holders={TOPICS_PORT: engine}, alive={TOPICS_PORT},
+                      maps=_both_maps())
+    assert [name for name, _ in harness.driver.holders().values()] == ["blocks"]
+
+
+def test_start_reports_the_other_family_as_the_live_map(tmp_path):
+    """The message a console operator reads when two families fight over a port."""
+    engine = {91: ("cityenviron", os.path.realpath(CITY),
+                   [CITY, "CityEnviron", "-windowed"])}
+    maps = _both_maps()
+    harness = Harness(tmp_path,
+                      holders={RPC_PORT: engine, XPRA_PORT: engine},
+                      alive={XPRA_PORT, RPC_PORT}, maps=maps)
+    with pytest.raises(SimulatorRestartError) as raised:
+        harness.driver.start(maps.entry("blocks"))
+    assert "cityenviron" in str(raised.value)
+
+
 def test_no_wait_when_the_display_is_already_free(tmp_path, monkeypatch):
     """Nothing holds the display here, so the reaper must not spin or sleep."""
     import planner.simulator.processes as processes

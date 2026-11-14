@@ -236,6 +236,30 @@ def display_released(
     return pid <= 0 or not pid_alive(pid)
 
 
+def display_holder(
+    display: str,
+    *,
+    lock_dir: Path = Path("/tmp"),
+    socket_dir: Path = Path("/tmp/.X11-unix"),
+) -> int | None:
+    """The live PID recorded in this display's X lock, or None when nothing holds it.
+
+    ``xpra stop`` has been measured leaving the ``Xvfb-for-Xpra-<n>`` it started
+    behind: the engine and the session died, the ports closed, and the display stayed
+    claimed. The next launch then refuses with "display is still held by PID", so
+    whoever stops the stack has to notice that case instead of pushing it onto the
+    following start.
+    """
+    lock, _ = display_files(display, lock_dir=lock_dir, socket_dir=socket_dir)
+    try:
+        pid = int(lock.read_text().strip() or "0")
+    except (OSError, ValueError):
+        return None
+    if pid <= 0 or not pid_alive(pid):
+        return None
+    return pid
+
+
 def default_spawn(argv: list[str], **kwargs) -> subprocess.Popen:
     """Start ``argv`` detached and do not wait.
 
