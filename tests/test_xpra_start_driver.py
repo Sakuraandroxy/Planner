@@ -115,7 +115,7 @@ class Harness:
     """Driver wired to fakes: which ports answer, which PIDs exist, what they run."""
 
     def __init__(self, tmp_path, family=None, *, alive=(), holders=None, windows=None,
-                 uid=None, strict_pids=False):
+                 uid=None, strict_pids=False, maps=None):
         self.family = family or _family()
         self.now = 0.0
         self.alive = set(alive)                 # ports accepting a connection
@@ -181,7 +181,7 @@ class Harness:
             self.family,
             _settings(tmp_path),
             tmp_path,
-            _maps(),
+            maps if maps is not None else _maps(),
             spawn=spawn,
             runner=run,
             port_checker=lambda port: int(port) in self.alive,
@@ -320,6 +320,60 @@ def load_maps():
 def test_engine_child_is_ours_by_exe_and_settings_marker(tmp_path):
     harness = Harness(tmp_path, holders={RPC_PORT: ours_engine()}, alive={RPC_PORT})
     assert harness.driver.owned_map(77) == "blocks"
+
+
+CITY = "/roxy/sakura/XV3DGS-airsim-vln/sim/CityEnviron/Binaries/Linux/CityEnviron-Linux-Shipping"
+TOPICS_PORT = 20991
+SERVICES_PORT = 20992
+
+
+def _ue5_family():
+    """The ProjectAirSim shape: no settings file, socket ports held by the engine."""
+    return _family(
+        id="projectairsim",
+        label="ProjectAirSim (UE5)",
+        runtime="planner.simulators.projectairsim",
+        settings_file="",
+        ports={"xpra": XPRA_PORT, "topics": TOPICS_PORT, "services": SERVICES_PORT},
+        probes=("window", "ports"),
+        child_argv=(
+            "{map.binary}", "{map.map_name}", "-windowed", "-ResX={res_x}",
+            "-ResY={res_y}", "-nosound", "-log",
+            "-topicsport={ports.topics}", "-servicesport={ports.services}",
+        ),
+    )
+
+
+def _ue5_maps():
+    return MapCatalog(
+        default_map="cityenviron",
+        maps=(
+            MapEntry(id="cityenviron", label="City", simulator="projectairsim",
+                     binary=CITY, map_name="CityEnviron",
+                     scene_file="scene_city_dual.jsonc",
+                     sim_config_path="config/scenes/city"),
+        ),
+    )
+
+
+def test_a_settings_free_stack_is_ours_by_binary_alone(tmp_path):
+    """A family without a settings file must not be forced to carry the marker.
+
+    The fingerprint used to be built unconditionally, so an empty ``settings_file``
+    still produced the non-empty string ``"-settings="``, which can never appear in
+    the engine argv. Every ProjectAirSim stack therefore read as foreign, and the
+    driver refused to stop processes it had started itself.
+    """
+    harness = Harness(
+        tmp_path,
+        family=_ue5_family(),
+        maps=_ue5_maps(),
+        holders={TOPICS_PORT: {77: ("cityenviron", os.path.realpath(CITY),
+                                    [CITY, "CityEnviron", "-windowed", "-log"])}},
+        alive={TOPICS_PORT},
+    )
+    assert harness.driver._settings_marker == ""
+    assert harness.driver.owned_map(77) == "cityenviron"
 
 
 def test_xpra_parent_is_ours_by_display_and_socket_dir(tmp_path):

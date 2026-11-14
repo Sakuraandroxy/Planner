@@ -291,7 +291,10 @@ class XpraStartSupervisor:
         # xpra's, not the repository's. Hand it an absolute path, and derive the
         # ownership fingerprint from the very same string so the two cannot drift.
         self._settings_path = str(self._resolve(family.settings_file)) if family.settings_file else ""
-        self._settings_marker = f"-settings={self._settings_path}"
+        # Families launched without a settings file (ProjectAirSim) get no marker at
+        # all. Building "-settings=" anyway would leave a non-empty string that can
+        # never appear in the engine argv, and every UE5 stack would read as foreign.
+        self._settings_marker = f"-settings={self._settings_path}" if self._settings_path else ""
         for name in family.probes:
             if name not in SUPPORTED_PROBES:
                 raise ValueError(
@@ -377,7 +380,11 @@ class XpraStartSupervisor:
             if not entry.binary:
                 continue
             real = os.path.realpath(entry.binary)
-            if exe == real and self._settings_marker in argv:
+            # The binary path comes from this repository's own maps.yaml, so the
+            # executable identity alone already proves the process is ours. The
+            # settings marker tightens it for families that have one (AirSim) and
+            # cannot apply to those that do not (ProjectAirSim has no -settings=).
+            if exe == real and (not self._settings_marker or self._settings_marker in argv):
                 return entry.id
             if (
                 exe == os.path.realpath("/usr/bin/python3")
