@@ -98,11 +98,63 @@ git show origin/low-altitude-level-view-visual-goal-navigation:planner/workflows
 | 环境 | UE4 运行时独立 conda 环境，靠子进程隔离依赖冲突 |
 | 桩 | 不写无人调用的桩与开关。未实现的路径一律显式报错 |
 
-## 7 无法本地验证的事
+## 7 实测结论与残留未知
 
-- AirSim 与 ProjectAirSim 的依赖能否共存一个解释器。旧分支专写 `rpc_loop.py` 绕 msgpack-rpc 0.4.1 与 Tornado 4.5 的循环重启，这条链本就脆。
+环境安装、依赖版本、自检命另的完整记录在 `docs/ENVIRONMENT.md`。这里只记结论。
+
+### 7.1 已验证（从本节原来的"无法本地验证"移出）
+
+**两族依赖不能共存于一个解释器——确定，不是猜测。**
+
+- `airsim` → `msgpack-rpc-python` 0.4.1 → `msgpack-python` 0.5.6，提供模块 `msgpack`（1.2.4 也叫这个名字）。
+- `msgpackrpc/transport/tcp.py:12-13` 调 `msgpack.Packer(encoding=...)` 与 `Unpacker(encoding=...)`，`encoding` 在 msgpack 1.0 已删。
+- 对照实验：`vln-ue4`（msgpack 0.5.6）下 `client.ping()` 报 `TransportError`（ECONNREFUSED，序列化链路是通的）；
+  混装（msgpack 1.2.4 抢到模块名）下同样的调用报 `TypeError: unexpected keyword argument 'encoding'`。
+  两边的 `import airsim` 与 `MultirotorClient()` 都成功，只在真正发包时分岔。
+- **副作用：`AGENT_PROMPT.md` 第 1 步第 3 条的判据给假绿灯。** `import msgpackrpc, pynng, msgpack`
+  不碰打包 API，混装下照样打印 `coexist ok`。判共存要用 `client.ping()`。
+- 第 6 节"环境：UE4 运行时独立 conda 环境"从预防措施升级为实测约束。
+
+**3.11 能装整套 UE4 客户端，不必降级 Python。** `msgpack-python` 0.5.6、`tornado` 4.5.3、
+`msgpack-rpc-python` 0.4.1 三个 sdist 在 3.11.18 上均构建成功。代价：`msgpack-python` 的 wheel 只冇 10 KB，
+`msgpack._cmsgpack` 不存在，打包走纯 Python fallback，取图延迟上这是一个已知开销点。
+`BRINGUP` 第 1 节那两条 `pip install` 照抄会失败，原因与正确命令见 `ENVIRONMENT.md` 第 3 节。
+
+**UE5 有相机位姿写入 API。**
+
+```
+Drone.set_camera_pose(camera_id: str, pose: Transform, wait_for_pose_update: bool = True) -> bool
+Drone.reset_camera_pose(camera_id: str, wait_for_pose_update: bool = True) -> bool
+Drone.camera_look_at_object(camera_id: str, object_name: str, ...) -> bool
+```
+
+`set_camera_pose` 写的是载具相机的相对位姿；`World` 另有 `spawn_object` / `set_object_pose` / `get_object_pose`。
+按 `AGENT_PROMPT.md` 第 1 步的判读规则，这命中"UE5 可以做俯视"。此前认为"零命中"是因为只 `git grep`
+了 C++ 名 `setCameraPose`，没查 Python 端的 `set_camera_pose`。
+
+**建议重开第 6 节一条边界（按硬规则 8 的方式提出，不默改）：** "UE5 不做 `visual_goal_above`" 的前提
+是缺 `camera_view` 端口，而实测 `set_camera_pose` 存在，前提已不成立。改成"做"要动
+`planner/simulators/projectairsim/runtime.py` 的 `PORT_SLOTS` 与提示词过滤顺序，**等你拍板**。
+
+**`settings.json` 与配置的对应关系已读到。** `/data/airsim/settings.json`：`SimMode: Multirotor`，
+载具 `Drone_1`，相机 `front_center` + `down_center`（俯视用的下视相机已经在），无 `ApiServerPort`，
+即默认 41451，与 `config/simulators.yaml` 的 `airsim.ports.rpc` 一致。旧 config 的 `airsim.camera_id`
+随 `planner/ue4/` 一同删掉了，这顶"两边对不上"只剩 settings.json 一侧可核。
+`scripts/probe_ue4_env.py` 在 `vln` 下实测 `25 ok, 1 warn, 1 FAIL`，FAIL 就是 airsim 没装在主环境——
+按本节上面的结论，这是正确状态，不要为把它跑绿而往 `vln` 里装 airsim。
+
+**基线数字。** `pytest -q` 实测 **851 passed**（本文件上面那个由脚本生成的计数与本节无关）。
+`BRINGUP` 第 3 节的 `847 passed` 过时。另：`projectairsim` 已在 PyPI 上（`0.2.0/0.3.0/1.0.1/1.0.2/1.1.0`），
+`AGENT_PROMPT.md` 第 0 步要求的"wheel 路径"可以直接换成 `pip install --no-deps projectairsim==1.0.2`。
+
+### 7.2 仍然未知
+
 - `landed_state` 在现场 AirSim 构建里的实际取值。旧 `adapters/airsim/connection.py:126-155` 用连续两次相同读数判落地。
-- `settings.json` 相机名与深度内参 对 旧 config 的 `airsim.camera_id: front_center`、`depth_horizontal_fov_deg`。已定以 settings.json 为准并启动时校验，`scripts/probe_ue4_env.py` 会读两边报差异。
-- UE5 是否有相机位姿写入 API。全仓 `git grep setCameraPose` 零命中，`scripts/calibrate_streaming_views.py:4` 自己写着 ProjectAirSim has no free-spectator camera。但 `switch_streaming_view` 同样不在官方 API 文档里却可用，说明文档非全集。确认命令见 `docs/UE4_BRINGUP.md` 第 5 节。
+- 深度图的实际内参。`settings.json` 里 `front_center` 的深度通道是 256x256 / FOV 90，与 planner 期望是否一致要取一次真帧才能判。
+- UE4 应用在本机能否真的渲染出图（无桌面会话 + `DISPLAY` 为空）。xpra / Xvfb / `libGL.so.1` 已确认存在，
+  但还没起过 UE4 进程。另：可见 3 张 RTX 3080 Ti，另有一张 `0000:68:00.0` 报 `Unknown Error`，要避用。
+- **UE5 启动脚本在本仓库路径下起不来**（只读了脚本，未实跑）：`scripts/launch_projectairsim_xpra.sh:47,52,57`
+  把二进制路径写死为 `$PROJECT_DIR/sim/...`，`PROJECT_DIR` 由脚本自身位置推得 = 仓库根，而本仓库没有 `sim/`；
+  打包好的 UE5 在 `/roxy/sakura/XV3DGS-airsim-vln/sim/`。要建软链还是改脚本支持环境变量，**待定**。
 - 旧分支自述实机未联调：旧 `README.md:435`。旧分支没有 `tests/`，UE4 保真来自代码照抄，不来自测试通过。
 

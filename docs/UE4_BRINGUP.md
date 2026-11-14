@@ -20,6 +20,9 @@
 
 ## 1 建环境
 
+> 本节两条 `pip install` 照抄都会失败，`msgpack-python` 那套的版本预期也过时了。
+> 实测可用的命令与原因见 `docs/ENVIRONMENT.md` 第 2、3 节。
+
 两个环境，不要合成一个。UE4 的 `msgpack-rpc-python` 会拉一个老 `tornado`，UE5 的 `projectairsim` 依赖 `pynng` 与新 `msgpack`。旧分支专门写了 `planner/ue4/adapters/airsim/rpc_loop.py` 绕开 msgpack-rpc 0.4.1 与 Tornado 4.5 的循环重启问题，说明这条依赖链本来就脆。
 
 主进程只加载契约与注册表，永不 import 两族客户端，所以两个环境可以共存于同一台机器。这条约束由 `tests/test_import_boundary.py` 守着。
