@@ -435,9 +435,30 @@ def test_map_catalog_without_a_fallback_requires_the_file(tmp_path):
 def test_repository_catalog_lists_the_supported_maps():
     root = Path(__file__).resolve().parents[1]
     config = load_config(root / "config/base.yaml")
-    assert config.maps.ids == ("cityenviron", "neighborhood")
+    ue5 = tuple(entry.id for entry in config.maps.maps if entry.family == "ue5")
+    ue4 = tuple(entry.id for entry in config.maps.maps if entry.family == "ue4")
+    assert ue5 == ("cityenviron", "neighborhood")
+    # AirSim UE4 binaries come from airsim-flight-console's scene table.
+    assert ue4 == (
+        "airsimnh",
+        "abandonedpark",
+        "msbuild2018",
+        "trapcam",
+        "blocks",
+        "shanghai",
+    )
     assert config.maps.default_map == "cityenviron"
-    assert "blocks" not in {entry.launch_map for entry in config.maps.maps}
+    # Scene files are a UE5 concern; UE4 maps are launched from a binary.
+    assert all(entry.scene_file for entry in config.maps.maps if entry.family == "ue5")
+    assert all(
+        not entry.sim_config_path for entry in config.maps.maps if entry.family == "ue4"
+    )
+    assert set(config.families.ids) >= {"ue5", "ue4"}
+    assert config.families.capabilities("ue4").vehicles == ("drone",)
+    assert config.families.capabilities("ue4").view_modes == ()
+    # Blocks is a UE4-only map: it must never look like a UE5 launch target.
+    ue5_launches = {entry.launch_map for entry in config.maps.maps if entry.family == "ue5"}
+    assert "blocks" not in ue5_launches
 
 
 def test_vehicle_models_default_to_the_packaged_look(tmp_path):

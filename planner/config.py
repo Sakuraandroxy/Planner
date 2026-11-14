@@ -12,6 +12,7 @@ import yaml
 from .domain.depth import validate_depth_protocol
 from .domain.depth_foreground import DepthForegroundSettings
 from .domain.motion import ContinuousTrackingSettings
+from .domain.runtime import FamilyCatalog, parse_family_catalog, ue5_family
 from .domain.sliding_window import SlidingWindowSettings
 from .domain.visual_goal_completion import VisualGoalTriggerRules
 from .domain.visual_goal_limits import VisualGoalLimits
@@ -437,26 +438,64 @@ class ServerSettings:
 
 @dataclass(frozen=True)
 class MapEntry:
-    """One switchable simulator map (``config/maps.yaml``)."""
+    """One switchable simulator map (``config/maps.yaml``).
+
+    A map belongs to one simulator family. Scene-driven families need
+    ``launch_map``, ``scene_file`` and ``sim_config_path``; families started
+    straight from an engine binary (AirSim for UE4) need ``binary`` and
+    ``map_name`` instead. Which pair applies follows from what the entry
+    declares, not from a family-name test, so a new family needs no change here.
+    """
 
     id: str
     label: str
     # First argument of launch_projectairsim_xpra.sh.
-    launch_map: str
+    launch_map: str = ""
     # Dual-vehicle scene JSONC inside sim_config_path.
-    scene_file: str
+    scene_file: str = ""
     # World scene-config directory, relative to the repository root.
-    sim_config_path: str
+    sim_config_path: str = ""
+    # Simulator family id, resolved against ``config/simulators.yaml``.
+    # New fields stay after the original five so positional construction holds.
+    family: str = "ue5"
+    # Engine binary for families launched straight from an executable.
+    binary: str = ""
+    # Map name passed to that binary (AirSim takes it as argv[1]).
+    map_name: str = ""
 
     def __post_init__(self) -> None:
-        for name in ("id", "label", "launch_map", "scene_file", "sim_config_path"):
+        for name in ("id", "label", "family"):
             value = getattr(self, name)
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"map {name} must be non-empty text")
-        for name in ("id", "launch_map"):
+        for name in ("id", "family"):
             value = getattr(self, name)
             if any(ch.isspace() for ch in value):
                 raise ValueError(f"map {name} must not contain whitespace")
+        scene_pair = bool(self.scene_file.strip()) == bool(self.sim_config_path.strip())
+        if not scene_pair:
+            raise ValueError(
+                f"map '{self.id}' declares half a scene pair: scene_file and "
+                "sim_config_path are required together"
+            )
+        binary_pair = bool(self.binary.strip()) == bool(self.map_name.strip())
+        if not binary_pair:
+            raise ValueError(
+                f"map '{self.id}' declares half a binary pair: binary and "
+                "map_name are required together"
+            )
+        if not self.scene_file.strip() and not self.binary.strip():
+            raise ValueError(
+                f"map '{self.id}' must declare either scene_file plus sim_config_path "
+                "or binary plus map_name"
+            )
+        if not self.launch_map.strip():
+            # Binary families name their launch target through map_name.
+            object.__setattr__(self, "launch_map", self.map_name)
+
+    @property
+    def uses_scene_config(self) -> bool:
+        return bool(self.scene_file.strip() and self.sim_config_path.strip())
 
 
 @dataclass(frozen=True)
@@ -601,6 +640,10 @@ class MapCatalog:
         if self.default_map not in ids:
             raise ValueError("default_map must appear in maps")
 
+    def family_ids(self) -> tuple[str, ...]:
+        """Every family referenced by a map, in catalog order."""
+        return tuple(dict.fromkeys(entry.family for entry in self.maps))
+
     def entry(self, map_id: str) -> MapEntry | None:
         for entry in self.maps:
             if entry.id == map_id:
@@ -669,6 +712,7 @@ class AppConfig:
     camera: CameraSettings
     motion: MotionLimits
     maps: MapCatalog
+    families: FamilyCatalog = field(default_factory=lambda: FamilyCatalog(families=()))
     vehicle_models: VehicleModelCatalog = field(
         default_factory=default_vehicle_models
     )
@@ -742,9 +786,12 @@ def load_map_catalog(
             MapEntry(
                 id=str(item.get("id", "")),
                 label=str(item.get("label", "")),
+                family=str(item.get("family", "ue5")),
                 launch_map=str(item.get("launch_map", "")),
                 scene_file=str(item.get("scene_file", "")),
                 sim_config_path=str(item.get("sim_config_path", "")),
+                binary=str(item.get("binary", "")),
+                map_name=str(item.get("map_name", "")),
             )
         )
     catalog = MapCatalog(
@@ -753,6 +800,10 @@ def load_map_catalog(
     )
     root = _project_root()
     for entry in catalog.maps:
+        # Only scene-driven maps carry repository files worth pre-validating;
+        # binary-launched maps are checked on the machine that owns them.
+        if not entry.uses_scene_config:
+            continue
         config_dir = Path(entry.sim_config_path)
         if not config_dir.is_absolute():
             config_dir = root / config_dir
@@ -774,12 +825,15 @@ def load_vehicle_models(
     *,
     maps: MapCatalog,
     vehicles: tuple[str, ...],
+    families: FamilyCatalog,
 ) -> VehicleModelCatalog:
     """Parse the ``vehicle_models`` section and check its scene variants.
 
-    Every option that names scene variants must cover each catalog map, and
-    each named scene file must exist beside that map's robot configs. The
-    section is optional; without it the default appearance stays selected.
+    Coverage is required for every map whose family advertises the ``models``
+    action; appearance models are switched through the UE5 scene variants, so
+    binary-launched families (AirSim UE4) are out of scope and must not be
+    named here. The section is optional; without it the default appearance
+    stays selected.
     """
     if not raw:
         return default_vehicle_models()
@@ -829,17 +883,28 @@ def load_vehicle_models(
             )
         )
     catalog = VehicleModelCatalog(groups=tuple(groups))
+    modelable = {
+        entry.id
+        for entry in maps.maps
+        if families.capabilities(entry.family).supports("models")
+    }
     root = _project_root()
     for group in catalog.groups:
         for option in group.options:
             if not option.scene_files:
                 continue
             declared = {map_id for map_id, _ in option.scene_files}
-            missing = set(maps.ids) - declared
+            extra = declared - modelable
+            if extra:
+                raise ValueError(
+                    f"vehicle model '{group.vehicle}/{option.id}' names maps that "
+                    f"do not offer appearance models: {sorted(extra)}"
+                )
+            missing = modelable - declared
             if missing:
                 raise ValueError(
                     f"vehicle model '{group.vehicle}/{option.id}' needs a "
-                    f"scene variant for every map; missing {sorted(missing)}"
+                    f"scene variant for every model-capable map; missing {sorted(missing)}"
                 )
             for map_id, scene_file in option.scene_files:
                 entry = maps.entry(map_id)
@@ -935,6 +1000,11 @@ def load_config(path: str | Path) -> AppConfig:
             "simulator.topics_port/services_port must match "
             "projectairsim.port_topics/port_services"
         )
+    families_path = Path(path).parent / "simulators.yaml"
+    families_raw = _section(raw, "simulator_families")
+    if not families_raw and families_path.is_file():
+        families_raw = yaml.safe_load(families_path.read_text(encoding="utf-8")) or {}
+    families = parse_family_catalog(families_raw, fallback=ue5_family(simulator))
     maps = load_map_catalog(
         Path(path).parent / simulator.map_catalog_file,
         fallback=MapEntry(
@@ -945,6 +1015,13 @@ def load_config(path: str | Path) -> AppConfig:
             sim_config_path=projectairsim.sim_config_path,
         ),
     )
+
+    unknown_families = set(maps.family_ids()) - set(families.ids)
+    if unknown_families:
+        raise ValueError(
+            f"maps reference simulator families that are not configured: "
+            f"{sorted(unknown_families)}; configured families are {list(families.ids)}"
+        )
 
     camera = CameraSettings(
         width=int(camera_raw.get("width", 1280)),
@@ -1098,6 +1175,7 @@ def load_config(path: str | Path) -> AppConfig:
         _section(raw, "vehicle_models"),
         maps=maps,
         vehicles=server.vehicles,
+        families=families,
     )
 
     sliding_raw = _section(raw, "sliding_window")
@@ -1207,6 +1285,7 @@ def load_config(path: str | Path) -> AppConfig:
         camera=camera,
         motion=motion,
         maps=maps,
+        families=families,
         vehicle_models=vehicle_models,
         simulator=simulator,
         drone=drone,

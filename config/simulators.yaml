@@ -1,0 +1,120 @@
+# 仿真器族注册表。加一个新仿真器 = 在这里加一段，再在 maps.yaml 里引用它的 id。
+#
+# 约束：HTTP 层、ServerController 和前端都不许判断族名。可选控件只看
+# capabilities.actions，缺少的动作一律返回 501；可解析的任务类型只看
+# capabilities.task_kinds，未列出的类型不会进入任务解析提示词。
+#
+# driver:
+#   script      运行 launch_script / stop_script（现有 UE5 栈的方式）
+#   xpra_start  按 argv 模板拼 xpra start --start-child 命令
+# probes:
+#   window  按窗口标题确认渲染进程已起
+#   ports   确认 ports 里列出的端口全部监听
+#   rpc     向 AirSim RPC 发一次探测调用
+#
+# argv 占位符：{binary} {map.map_name} {map.launch_map} {display} {xpra_port}
+#   {runtime_dir} {abslog} {settings_file} {res_x} {res_y}
+# 缺文件时 planner.config 会用 base.yaml 的 simulator 段合成 ue5，
+# 所以删掉本文件等于回到今天的行为。
+
+default_family: ue5
+
+ue5:
+  label: ProjectAirSim (UE5)
+  driver: script
+  runtime: planner.runtimes.ue5
+  launch_script: scripts/launch_projectairsim_xpra.sh
+  stop_script: scripts/stop_projectairsim_xpra.sh
+  ports: {xpra: 10010, topics: 8991, services: 8992}
+  probes: [window, ports]
+  capabilities:
+    vehicles: [rover, drone]
+    view_modes: [rover_front, rover_chase, drone_front, drone_chase]
+    # 俯视任务不在列：ProjectAirSim 只有预设机位循环 switch_streaming_view，
+    # 没有 simSetCameraPose 的等价方法。日后确认后再加 visual_goal_above。
+    task_kinds: [basic_motion, visual_goal_navigation, free_navigation]
+    actions: [home, models, trajectory, video, weather]
+    weather:
+      fields:
+        rain: rain
+        road_wetness: road_wetness
+        snow: snow
+        road_snow: road_snow
+        maple_leaf: maple_leaf
+        road_leaf: road_leaf
+        dust: dust
+        fog: fog
+      presets: [clear, overcast, light_rain, rain, snow, fog, dust]
+
+ue4:
+  label: AirSim (UE4)
+  driver: xpra_start
+  runtime: planner.runtimes.ue4
+  settings_file: /data/airsim/settings.json
+  res_x: 1280
+  res_y: 720
+  abslog_dir: output/logs
+  ports: {xpra: 10010, rpc: 41451}
+  probes: [window, ports, rpc]
+  # 命令逐字来自 airsim-flight-console/scene_launcher.py:33-75。
+  # {start_child} 由驱动用下面的 child_argv 拼成带引号的单个参数。
+  child_argv:
+    - "{binary}"
+    - "{map.map_name}"
+    - "-settings={settings_file}"
+    - "-abslog={abslog}"
+    - "-windowed"
+    - "-ResX={res_x}"
+    - "-ResY={res_y}"
+  argv:
+    - /usr/bin/xpra
+    - start
+    - "{display}"
+    - --backend=x11
+    - --daemon=no
+    - --use-display=no
+    - --start-via-proxy=no
+    - "--start-child={start_child}"
+    - --exit-with-children=yes
+    - --terminate-children=yes
+    - --sharing=yes
+    - "--bind-tcp=0.0.0.0:{xpra_port}"
+    - --html=on
+    - --dbus=no
+    - --dbus-launch=
+    - --pulseaudio=no
+    - --notifications=no
+    - --mdns=no
+    - --printing=no
+    - --file-transfer=no
+    - "--log-dir={runtime_dir}/logs"
+    - "--pidfile={runtime_dir}/xpra.pid"
+    - "--xvfb=Xvfb -screen 0 {res_x}x{res_y}x24 +extension GLX +extension RANDR +extension RENDER +extension Composite -extension DOUBLE-BUFFER -nolisten tcp -noreset"
+    - "--socket-dir={runtime_dir}/sockets"
+    - "--socket-dirs={runtime_dir}/sockets"
+    - "--sessions-dir={runtime_dir}/sessions"
+  stop_argv:
+    - /usr/bin/xpra
+    - stop
+    - "socket://{runtime_dir}/sessions/{display_number}/socket"
+    - "--socket-dirs={runtime_dir}/sockets"
+    - "--sessions-dir={runtime_dir}/sessions"
+  capabilities:
+    # 旧分支是纯无人机：planner/config.py、domain/server.py 里没有 vehicles 概念。
+    vehicles: [drone]
+    view_modes: []
+    task_kinds: [basic_motion, visual_goal_navigation, visual_goal_above]
+    # 旧分支规划器没有回起点、没有遥测汇聚、没有帧流。
+    actions: [weather]
+    weather:
+      fields:
+        # 规范名 -> AirSim 的 WeatherParameter 名。只有路面湿度拼法不同。
+        rain: rain
+        road_wetness: roadwetness
+        snow: snow
+        road_snow: road_snow
+        maple_leaf: maple_leaf
+        road_leaf: road_leaf
+        dust: dust
+        fog: fog
+      presets: [clear, rain, fog, snow]
