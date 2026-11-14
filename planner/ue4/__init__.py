@@ -1,2 +1,0 @@
-"""Minimal, extensible UAV planner."""
-
