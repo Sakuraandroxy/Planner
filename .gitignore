@@ -1,0 +1,44 @@
+# Planning / internal (not part of the release)
+_planning/
+
+# OS / editor cruft
+.DS_Store
+.vscode/
+.codex/
+.claude/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+**/.env
+config/deepseek.yaml
+.cph
+.agents
+.pytest_cache
+# Local shell profiles / secrets
+$PROFILE.txt
+
+# Logs / outputs
+*.log
+output/
+/docs/
+AVLN
+周报
+Fast-Planner
+lora_example
+legcy
+AirsimNH
+see-point-fly
+TravelUAV
+*.pdf
+*.doc
+3DG-VLN-main
+test/
+tools/
+.cph
+graphify-out/
+.idea/
+.cph/
+.vscode/

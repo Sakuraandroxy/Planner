@@ -1,0 +1,6 @@
+airsim>=1.8.1
+msgpack-rpc-python>=0.4.1
+numpy>=1.24.0
+Pillow>=10.0.0
+PyYAML>=6.0
+requests>=2.31.0
