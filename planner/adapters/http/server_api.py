@@ -130,7 +130,39 @@ class ModelsRequest(BaseModel):
         return cleaned
 
 
-def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAPI:
+def create_api(controller, settings, frames=None, trajectory_hub=None, families=None) -> FastAPI:
+    """Build the console API.
+
+    ``families`` is the simulator family catalog. When present, every optional
+    control is gated on the active map's ``capabilities`` instead of a family
+    name: an action the map's simulator does not offer returns 501 with
+    ``detail.unsupported``. Without it the API behaves exactly as before.
+    """
+
+    def capabilities():
+        """Capabilities of the family that owns the currently selected map."""
+        if families is None:
+            return None, ""
+        catalog = getattr(controller, "maps", None)
+        entry = catalog.entry(controller.status.map) if catalog is not None else None
+        family_id = entry.family if entry is not None else families.default_family
+        return families.capabilities(family_id), family_id
+
+    def require(action):
+        caps, family_id = capabilities()
+        if caps is not None and not caps.supports(action):
+            raise HTTPException(
+                501,
+                detail={
+                    "unsupported": action,
+                    "family": family_id,
+                    "message": (
+                        f"simulator family '{family_id}' does not offer {action}; "
+                        "see config/simulators.yaml capabilities.actions"
+                    ),
+                },
+            )
+
     @asynccontextmanager
     async def lifespan(app):
         controller.start()
@@ -187,10 +219,16 @@ def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAP
 
     @app.get("/api/status")
     def status():
-        return asdict(controller.status)
+        payload = asdict(controller.status)
+        caps, family_id = capabilities()
+        if caps is not None:
+            payload["family"] = family_id
+            payload["capabilities"] = caps.as_dict()
+        return payload
 
     @app.get("/api/trajectory")
     def trajectory():
+        require("trajectory")
         snapshot = (
             TrajectorySnapshot()
             if trajectory_hub is None
@@ -210,6 +248,7 @@ def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAP
 
     @app.post("/api/home", status_code=202)
     def home(request: HomeRequest | None = None):
+        require("home")
         vehicle = request.vehicle if request is not None else None
         try:
             chosen = controller.home(vehicle)
@@ -223,6 +262,17 @@ def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAP
 
     @app.post("/api/vehicle", status_code=202)
     def activate_vehicle(request: VehicleRequest):
+        caps, family_id = capabilities()
+        if caps is not None and request.vehicle not in caps.vehicles:
+            raise HTTPException(
+                400,
+                detail={
+                    "message": (
+                        f"simulator family '{family_id}' drives "
+                        f"{list(caps.vehicles)}; '{request.vehicle}' is not available"
+                    )
+                },
+            )
         try:
             chosen = controller.activate(request.vehicle)
         except BackendUnavailable as exc:
@@ -245,7 +295,8 @@ def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAP
                 503, detail={"message": "map catalog is unavailable"}
             )
         current = controller.status
-        return {
+        caps, family_id = capabilities()
+        payload = {
             "maps": list(maps.ids),
             "map_labels": maps.labels,
             "default_map": maps.default_map,
@@ -254,6 +305,16 @@ def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAP
                 getattr(controller, "simulator_owned", False)
             ),
         }
+        if caps is not None:
+            # The console renders controls from these flags and never tests a
+            # family name, so a new simulator needs no frontend change.
+            payload["map_families"] = {
+                entry.id: entry.family for entry in maps.maps
+            }
+            payload["family_labels"] = families.labels
+            payload["family"] = family_id
+            payload["capabilities"] = caps.as_dict()
+        return payload
 
     @app.post("/api/world")
     def switch_world(request: WorldRequest):
@@ -272,6 +333,7 @@ def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAP
 
     @app.get("/api/models")
     def model_options():
+        require("models")
         catalog = getattr(controller, "vehicle_models", None)
         if catalog is None:
             raise HTTPException(
@@ -292,6 +354,7 @@ def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAP
 
     @app.post("/api/models")
     def switch_models(request: ModelsRequest):
+        require("models")
         try:
             state = controller.request_models(request.models)
         except BackendUnavailable as exc:
@@ -311,6 +374,7 @@ def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAP
 
     @app.get("/api/weather")
     def weather():
+        require("weather")
         catalog = getattr(controller, "weather_catalog", None)
         if catalog is None:
             raise HTTPException(
@@ -333,6 +397,7 @@ def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAP
 
     @app.post("/api/weather", status_code=202)
     def set_weather(payload: dict[str, object]):
+        require("weather")
         try:
             merged = controller.request_weather(payload)
         except BackendUnavailable as exc:
@@ -363,6 +428,8 @@ def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAP
 
         @app.get("/api/video")
         def video():
+            # The frame hub only ever fills while the active family publishes.
+            require("video")
             return StreamingResponse(
                 mjpeg_chunks(frames),
                 media_type=(

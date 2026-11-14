@@ -87,4 +87,5 @@ def build_server(config: AppConfig):
         config.server,
         frames=frames,
         trajectory_hub=trajectory,
+        families=config.families,
     )

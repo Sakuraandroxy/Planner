@@ -42,6 +42,10 @@ let trajectoryExpanded = false;
 let lastTrajectory = null;
 let taskView = "rover_chase";
 let worldCatalog = null;
+// Capability flags for the active map's simulator family. The console renders
+// optional controls from this and never tests a family name, so a new
+// simulator needs no change here. Null until the backend reports it.
+let caps = null;
 let currentWorld = { map: "" };
 let mapSwitching = false;
 let worldPending = false;
@@ -142,11 +146,48 @@ function renderControls() {
     submitPending || !idle || instruction.length === 0;
   $("stop").disabled = submitPending || currentState !== "running";
   $("home").disabled = submitPending || !idle;
+  applyCapabilities();
   renderVehicles();
   renderWorld();
   renderModels();
   renderWeather();
   renderViewButtons();
+}
+
+// ---- capability gating -------------------------------------------------
+// Every predicate tolerates a null ``caps``: an older backend or a deployment
+// without config/simulators.yaml keeps offering every control.
+function hasAction(action) {
+  return !caps || !Array.isArray(caps.actions) || caps.actions.includes(action);
+}
+
+function allowsVehicle(name) {
+  return !caps || !Array.isArray(caps.vehicles) || caps.vehicles.includes(name);
+}
+
+function show(node, visible) {
+  if (node) node.hidden = !visible;
+}
+
+function showCard(node, visible) {
+  // Cards own their heading and feedback line, so hide the section wrapper.
+  const card = node && node.closest ? node.closest("section") : null;
+  show(card || node, visible);
+}
+
+function applyCapabilities() {
+  show($("home"), hasAction("home"));
+  showCard($("models-apply"), hasAction("models"));
+  show($("trajectory-card"), hasAction("trajectory"));
+  const views =
+    caps && Array.isArray(caps.view_modes) ? caps.view_modes.length > 0 : true;
+  show($("view-modes"), views);
+  show($("view-toggle"), views);
+  const vehicleGroup = $("vehicle-modes");
+  show(vehicleGroup, vehicles.length > 1);
+  if (vehicleGroup && vehicleGroup.previousElementSibling) {
+    show(vehicleGroup.previousElementSibling, vehicles.length > 1);
+  }
 }
 
 function renderVehicles() {
@@ -254,9 +295,15 @@ async function pollStatus() {
     // default vehicle, so re-sync the vehicle buttons with the server.
     const previousState = currentState;
     if (currentState === "connecting" && state === "idle") vehicleTouched = false;
+    // Take the family flags first: the vehicle buttons below must be filtered
+    // by them, because server.vehicles is global while the active map is not.
+    if (body && body.capabilities) caps = body.capabilities;
     if (body && Array.isArray(body.vehicles) && body.vehicles.length) {
       vehicles = body.vehicles.filter(
-        (name) => typeof name === "string" && name.length > 0
+        (name) =>
+          typeof name === "string" &&
+          name.length > 0 &&
+          allowsVehicle(name)
       );
       if (!vehicles.includes(selectedVehicle)) {
         selectedVehicle = vehicles[0];
@@ -468,6 +515,13 @@ async function loadWorldOptions() {
   try {
     const body = await request("/api/world/options");
     worldCatalog = body;
+    if (body.capabilities) caps = body.capabilities;
+    if (Array.isArray(body.maps) && body.selection && body.selection.map) {
+      // The family follows the selected map, so switching scenes re-gates the
+      // controls without waiting for the next status poll.
+      const family = body.map_families && body.map_families[body.selection.map];
+      if (family) renderControls();
+    }
     fillSelect(
       $("world-map"),
       body.maps,
@@ -1087,6 +1141,9 @@ function renderViewButtons() {
 
 async function requestView(mode) {
   if (mode === taskView || !VIEW_LABELS[mode]) return;
+  if (caps && Array.isArray(caps.view_modes) && !caps.view_modes.includes(mode)) {
+    return;
+  }
   const previous = taskView;
   taskView = mode;
   viewPending = true;
