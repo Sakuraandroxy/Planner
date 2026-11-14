@@ -118,6 +118,12 @@ class SimulatorFamily:
     vehicle_name: str = ""
     camera_id: str = ""
     timeout_s: float = 10.0
+    #: Interpreter that can import this family's simulator client. Empty means the
+    #: mission session runs on a worker thread inside the HTTP process, which is how
+    #: ProjectAirSim has always worked. AirSim needs it because ``msgpack-python``
+    #: (its transport) and ``msgpack`` (ProjectAirSim's) own the same module name, so
+    #: no interpreter on this machine can hold both -- see docs/ENVIRONMENT.md 1.
+    runtime_python: str = ""
     res_x: int = 1280
     res_y: int = 720
     #: argv for the rendered child process, joined by the driver into
@@ -210,7 +216,7 @@ KNOWN_FAMILY_KEYS = frozenset(
     {
         "label", "driver", "argv", "child_argv", "stop_argv", "probes", "ports",
         "runtime", "abslog_dir", "settings_file", "res_x", "res_y",
-        "host", "vehicle_name", "camera_id", "timeout_s",
+        "host", "vehicle_name", "camera_id", "timeout_s", "runtime_python",
     }
 )
 
@@ -267,6 +273,7 @@ def parse_family_catalog(raw: Any) -> FamilyCatalog:
                 vehicle_name=str(item.get("vehicle_name", "")),
                 camera_id=str(item.get("camera_id", "")),
                 timeout_s=float(item.get("timeout_s", 10.0)),
+                runtime_python=str(item.get("runtime_python", "")),
                 res_x=int(item.get("res_x", 1280)),
                 res_y=int(item.get("res_y", 720)),
             )

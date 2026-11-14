@@ -8,6 +8,7 @@ from .adapters.http.server_api import create_api
 from .simulator import registry
 from .simulator.router import FamilyRouter
 from .simulator.marker import read_map_marker
+from .simulator.subprocess_worker import SubprocessMissionWorker
 from .simulator.worker import ThreadedMissionWorker
 from .application.factories import build_detector, build_geometry, build_planner
 from .application.mission_assembly import MissionResources
@@ -51,6 +52,22 @@ def build_server(config: AppConfig):
         # that into a session, so nothing here names a simulator package.
         entry = config.maps.entry(selection.map_id)
         family = config.families.require(entry.simulator)
+
+        if family.runtime_python:
+            # This family's simulator client cannot be imported in the interpreter
+            # serving HTTP, so the session goes to a child process. The child builds
+            # its own resources: sharing this process's would defeat the split.
+            # The config path is resolved because the child runs with the repository
+            # as its working directory, and a service started with a config outside
+            # the tree must still hand its children the file it was given.
+            return SubprocessMissionWorker(
+                python=family.runtime_python,
+                module="planner.simulator.mission_child",
+                config_path=str(Path(config.path).resolve()),
+                map_id=selection.map_id,
+                project_dir=str(PROJECT_DIR),
+                log=lambda message, level="INFO": None,
+            )
 
         def session_factory(log):
             return registry.build_session(

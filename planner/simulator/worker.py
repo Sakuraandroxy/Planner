@@ -11,7 +11,7 @@ import queue
 import threading
 from typing import Callable
 
-from ..application.reporting import mission_report
+from ..application.reporting import task_finish_events
 from ..domain.server import TaskSubmission, WorkerEvent, WorkerEventKind
 
 
@@ -269,26 +269,9 @@ class ThreadedMissionWorker:
             with self._lock:
                 self._stop_requested = False
             return
-        lines, code = mission_report(result)
+        lines, event = task_finish_events(result, task.task_id)
         for line in lines:
             self._log(line)
-        success = code == 0
-        message = lines[-1] if lines else "Task finished."
-        if (result.error or "").startswith("cancelled"):
-            # The kinematic car always holds the last applied setpoint; the
-            # FINISHED event is the stop confirmation the controller waits for.
-            self._log(
-                f"Stop confirmed for {task.task_id}: "
-                "the vehicle holds its last setpoint.",
-                "INFO",
-            )
-        self._emit(
-            WorkerEvent(
-                WorkerEventKind.FINISHED,
-                task_id=task.task_id,
-                message=message,
-                success=success,
-            )
-        )
+        self._emit(event)
         with self._lock:
             self._stop_requested = False

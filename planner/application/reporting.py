@@ -1,8 +1,10 @@
 """The same result text is displayed by the CLI and the HTTP log window."""
 from planner.domain.result import MissionResult
+from planner.domain.server import WorkerEvent, WorkerEventKind
 
 
 def mission_report(result: MissionResult) -> tuple[tuple[str, ...], int]:
+
     lines = []
     for stage in result.stages:
         summary = stage.summary
@@ -41,3 +43,28 @@ def mission_report(result: MissionResult) -> tuple[tuple[str, ...], int]:
         return tuple(lines), 0
     lines.append(f"Mission failed: {result.error}")
     return tuple(lines), 1
+
+
+def task_finish_events(result, task_id: str):
+    """Render a finished mission into its log lines and the one FINISHED event.
+
+    Both worker styles report through here on purpose: the console has to read the
+    same completion text whether the session ran on a thread inside the HTTP process
+    or in a child that holds the AirSim client. The cancellation line is part of that
+    contract -- the controller waits for it as the stop confirmation.
+    """
+    lines, code = mission_report(result)
+    lines = tuple(lines)
+    if (result.error or "").startswith("cancelled"):
+        # The kinematic car always holds the last applied setpoint; the FINISHED
+        # event is the stop confirmation the controller waits for.
+        lines = lines + (
+            f"Stop confirmed for {task_id}: the vehicle holds its last setpoint.",
+        )
+    message = lines[-1] if lines else "Task finished."
+    return lines, WorkerEvent(
+        WorkerEventKind.FINISHED,
+        task_id=task_id,
+        message=message,
+        success=code == 0,
+    )

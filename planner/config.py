@@ -732,6 +732,11 @@ class AppConfig:
     visual_goal_navigation: VisualGoalNavigationSettings = field(
         default_factory=VisualGoalNavigationSettings
     )
+    #: Where this configuration was read from. A mission child needs it verbatim:
+    #: the child is a separate process, and re-deriving the path from a repository
+    #: layout would let a service started with ``--config somewhere/else.yaml`` hand
+    #: its children a config it never asked for.
+    path: str = ""
     free_navigation: FreeNavigationSettings = field(
         default_factory=FreeNavigationSettings
     )
@@ -1276,6 +1281,7 @@ def load_config(path: str | Path) -> AppConfig:
         task_parser=task_parser,
         visual_goal_navigation=visual_goal_navigation,
         free_navigation=free_navigation,
+        path=str(Path(path)),
     )
 
 

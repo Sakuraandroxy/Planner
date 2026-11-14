@@ -1,0 +1,112 @@
+"""The parent/child protocol: encoding, decoding, and one real round trip.
+
+The interesting failure these guard against is not a crash; it is a silent stall.
+``ServerController`` waits for a ``READY`` event, and if an event is lost -- dropped
+because a library printed to the protocol channel, or never flushed because the child
+buffered it -- the console sits in ``connecting`` while a healthy simulator flies
+nothing. So the events travel on their own file descriptor, and every parse problem
+becomes an explicit error instead of a missing event.
+"""
+
+import json
+import sys
+import time
+
+import pytest
+
+from planner.domain.server import TaskSubmission, WorkerEvent, WorkerEventKind
+from planner.simulator.subprocess_worker import (
+    ChildProcessError,
+    SubprocessMissionWorker,
+    decode_event,
+    encode_command,
+)
+
+
+def test_command_round_trip():
+    line = encode_command("task", task_id="t1", instruction="向前飞三米", vehicle="drone")
+    assert line.endswith("\n")
+    payload = json.loads(line)
+    assert payload == {"cmd": "task", "task_id": "t1",
+                       "instruction": "向前飞三米", "vehicle": "drone"}
+
+
+def test_event_round_trip_keeps_the_optional_fields():
+    event = WorkerEvent(WorkerEventKind.FINISHED, task_id="t1", message="done",
+                        success=True, payload={"a": 1}, vehicle="drone", level="WARN")
+    decoded = decode_event(json.dumps({"kind": event.kind.value, "task_id": "t1",
+                                       "message": "done", "success": True,
+                                       "payload": {"a": 1}, "vehicle": "drone",
+                                       "level": "WARN"}))
+    assert decoded.kind is WorkerEventKind.FINISHED
+    assert (decoded.task_id, decoded.message, decoded.success) == ("t1", "done", True)
+    assert (decoded.payload, decoded.vehicle, decoded.level) == ({"a": 1}, "drone", "WARN")
+
+
+def test_a_non_protocol_line_is_an_error_not_a_skip():
+    """A banner from some library must surface as an error, not vanish."""
+    with pytest.raises(ChildProcessError, match="non-JSON line"):
+        decode_event("libEGL warning: failed to open /dev/dri/card0")
+    with pytest.raises(ChildProcessError, match="unknown event kind"):
+        decode_event('{"kind": "telepathy"}')
+    with pytest.raises(ChildProcessError, match="malformed event"):
+        decode_event("[1, 2, 3]")
+
+
+def test_submit_encodes_the_submission_fields_the_child_needs():
+    worker = SubprocessMissionWorker(
+        python=sys.executable, module="planner.simulator.mission_child",
+        config_path="config/base.yaml", map_id="blocks", project_dir=".",
+    )
+    sent = []
+    worker._stdin = type("W", (), {"write": staticmethod(lambda text: sent.append(text)),
+                                   "flush": staticmethod(lambda: None)})()
+    worker.submit(TaskSubmission(task_id="t9", instruction="左转", vehicle="drone"))
+    assert json.loads(sent[0])["task_id"] == "t9"
+    assert json.loads(sent[0])["cmd"] == "task"
+
+
+def test_the_child_reports_its_own_setup_failure_over_the_pipe():
+    """A real process, a real pipe, and the failure this machine actually produces.
+
+    The AirSim client is deliberately absent from the environment running the tests
+    (it lives in ``vln-ue4``; see docs/ENVIRONMENT.md 1), so the child cannot build a
+    UE4 session. What matters is that the parent learns that through the protocol and
+    then sees the child exit -- not that it waits for a READY nobody can send.
+    """
+    from pathlib import Path
+
+    from planner.config import load_config
+
+    config_path = Path("config/base.yaml").resolve()
+    config = load_config(config_path)
+    family = config.families.require("airsim")
+    assert family.runtime_python, (
+        "the airsim family must name an interpreter, or UE4 sessions would be built "
+        "in the HTTP process, which cannot import the AirSim client"
+    )
+
+    worker = SubprocessMissionWorker(
+        python=sys.executable,
+        module="planner.simulator.mission_child",
+        config_path=str(config_path),
+        map_id="blocks",
+        # The repository root is what holds ``planner/``; the child imports from there.
+        project_dir=str(config_path.parents[1]),
+    )
+    worker.start()
+    deadline = time.time() + 90
+    kinds, messages = [], []
+    while time.time() < deadline and WorkerEventKind.CLOSED not in kinds:
+        event = worker.poll()
+        if event is None:
+            time.sleep(0.1)
+            continue
+        kinds.append(event.kind)
+        messages.append(f"{event.kind.value}: {event.message[:120]}")
+    worker.terminate()
+
+    assert WorkerEventKind.ERROR in kinds, messages
+    assert WorkerEventKind.CLOSED in kinds, messages
+    failure = " ".join(m for k, m in zip(kinds, messages) if k is WorkerEventKind.ERROR)
+    assert "AirSim" in failure, failure
