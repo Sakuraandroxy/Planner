@@ -108,6 +108,16 @@ class SimulatorFamily:
     #: The engine settings file, empty for families whose binary takes none
     #: (ProjectAirSim). It also carries the AirSim ownership fingerprint.
     settings_file: str = ""
+    #: Connection data the runtime package needs to talk to the simulator. These
+    #: live with the family because that is what "how to connect" means; the old
+    #: branch kept the same four values in its own ``airsim`` config section.
+    #: ``vehicle_name`` is not cosmetic: AirSim routes control calls by it, and a
+    #: blank name silently fails against a build whose vehicle is named in
+    #: settings.json (see planner/simulators/airsim/connection.py).
+    host: str = ""
+    vehicle_name: str = ""
+    camera_id: str = ""
+    timeout_s: float = 10.0
     res_x: int = 1280
     res_y: int = 720
     #: argv for the rendered child process, joined by the driver into
@@ -200,6 +210,7 @@ KNOWN_FAMILY_KEYS = frozenset(
     {
         "label", "driver", "argv", "child_argv", "stop_argv", "probes", "ports",
         "runtime", "abslog_dir", "settings_file", "res_x", "res_y",
+        "host", "vehicle_name", "camera_id", "timeout_s",
     }
 )
 
@@ -252,6 +263,10 @@ def parse_family_catalog(raw: Any) -> FamilyCatalog:
                 runtime=str(item.get("runtime", "")),
                 abslog_dir=str(item.get("abslog_dir", "output/logs")),
                 settings_file=str(item.get("settings_file", "")),
+                host=str(item.get("host", "")),
+                vehicle_name=str(item.get("vehicle_name", "")),
+                camera_id=str(item.get("camera_id", "")),
+                timeout_s=float(item.get("timeout_s", 10.0)),
                 res_x=int(item.get("res_x", 1280)),
                 res_y=int(item.get("res_y", 720)),
             )

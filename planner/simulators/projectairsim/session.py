@@ -26,7 +26,6 @@ streaming view.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Callable, MutableMapping
 
 import numpy as np
@@ -34,31 +33,7 @@ import numpy as np
 from projectairsim import Drone, Rover
 from projectairsim.types import WeatherParameter
 
-from ...application.application import PlannerApplication
-from ...application.factories import (
-    build_completion_checker,
-    build_free_navigation_planner,
-    build_planner,
-    build_task_parser,
-    build_trace_factory,
-)
-from ...application.mission_runner import MissionRunner
-from ...application.mission_validator import MissionValidator
-from ...application.workflow_router import WorkflowRouter
-from ...capabilities.approach import TargetApproach
-from ...capabilities.completion.visual_goal import VisualGoalCompletion
-from ...capabilities.targeting.bbox_goal_observation import BBoxGoalObserver
-from ...capabilities.task_validation.basic_motion import (
-    BasicMotionStageValidator,
-)
-from ...capabilities.task_validation.free_navigation import (
-    FreeNavigationStageValidator,
-)
-from ...capabilities.task_validation.visual_goal_navigation import (
-    VisualGoalStageValidator,
-)
 from ...config import AppConfig
-from ...domain.mission import TaskKind
 from ...domain.pose import WorldPose
 from ...domain.result import MissionResult
 from ...domain.server import TaskSubmission
@@ -76,13 +51,6 @@ from ...domain.weather import (
     validate_weather_values,
 )
 from ...errors import ExecutionError, ProtocolError
-from ...services.execution import ExecutionService
-from ...services.model_calls import ModelCallService
-from ...services.motion import SynchronizedMotionPlanner
-from ...services.trajectory_validation import TrajectoryValidator
-from ...workflows.basic_motion import BasicMotionWorkflow
-from ...workflows.free_navigation import FreeNavigationWorkflow
-from ...workflows.visual_goal_navigation import VisualGoalNavigationWorkflow
 from .connection import (
     ProjectAirSimConnection,
     ProjectAirSimConnectionConfig,
@@ -90,6 +58,12 @@ from .connection import (
 from .drone import ProjectAirSimDrone
 from .moving_source import BorrowedMovingSource
 from .rover import ProjectAirSimRover
+from ...application.mission_assembly import (
+    VehicleArm,
+    build_mission_common,
+    build_vehicle_arm,
+    require_application,
+)
 from .streaming_views import (
     calibrate_streaming_views,
     service_frame_fetcher,
@@ -112,15 +86,8 @@ HIDE_ALTITUDE_GAIN_M = 1000.0
 HIDE_PIN_PERIOD_S = 2.0
 
 
-@dataclass
-class _VehicleArm:
-    vehicle_id: str
-    vehicle: object
-    is_drone: bool
-    execution: ExecutionService
-    application: PlannerApplication | None
-    model_calls: ModelCallService | None
-    workflows: tuple
+#: The shared assembly owns the arm type; this name stays for the session's internals.
+_VehicleArm = VehicleArm
 
 
 class ProjectAirSimMissionSession:
@@ -279,199 +246,31 @@ class ProjectAirSimMissionSession:
 
     # -- workflow assembly ------------------------------------------------
     def _build_arms(self) -> None:
-        config = self._config
-        free_planner = build_free_navigation_planner(config)
-        aerial_free_planner = build_free_navigation_planner(
-            config, aerial=True
-        )
-        # The drone keeps the reference Planner's UAV prompts; the rover keeps
-        # carla-vln's ground-vehicle prompts. Geometric mode has no prompt, so
-        # it reuses the already-built planner.
-        aerial_planner = (
-            build_planner(config, config.server.planner, aerial=True)
-            if config.server.planner == "vlm"
-            else self._planner
-        )
-        if free_planner is None:
-            self._log(
-                "free navigation planner is not configured; "
-                "free_navigation stages will be rejected",
-                "WARNING",
-            )
-        completion_checker = build_completion_checker(config)
-        trace_factory = build_trace_factory(
-            config, detector=self._detector, planner=self._planner
-        )
-        self._arms["rover"] = self._build_arm(
-            "rover",
-            self._rover,
-            self._planner,
-            free_planner,
-            completion_checker,
-            trace_factory,
-        )
-        self._arms["drone"] = self._build_arm(
-            "drone",
-            self._drone,
-            aerial_planner,
-            aerial_free_planner,
-            completion_checker,
-            trace_factory,
-        )
+        """Assemble both vehicles through the shared mission assembly.
 
-    def _build_arm(
-        self,
-        vehicle_id: str,
-        vehicle,
-        planner,
-        free_planner,
-        completion_checker,
-        trace_factory,
-    ) -> _VehicleArm:
-        config = self._config
-        settings = config.visual_goal_navigation
-        limits = settings.limits
-        execution = ExecutionService(vehicle)
-        motion = SynchronizedMotionPlanner(
-            config.motion.max_speed_mps, vehicle.tracking_limits
+        The task pipeline does not know which simulator owns the vehicle, so it
+        lives in ``planner/application/mission_assembly.py``; the AirSim session
+        builds its arm with the same call. This method only says which vehicles
+        ProjectAirSim has and which moving observation source belongs to them.
+        """
+        common = build_mission_common(
+            self._config,
+            planner=self._planner,
+            detector=self._detector,
+            log=self._log,
         )
-        goal_observer = BBoxGoalObserver(
-            self._detector,
-            min(
-                config.target_detection.timeout_s,
-                limits.model_request_timeout_s,
-            ),
-        )
-        validator = TrajectoryValidator(
-            config.trajectory_planner.point_count,
-            config.trajectory_planner.max_step_m,
-            config.trajectory_planner.max_yaw_step_deg,
-        )
-        visual = VisualGoalNavigationWorkflow(
-            vehicle,
-            goal_observer,
-            planner,
-            validator,
-            motion,
-            execution,
-            self._geometry,
-            VisualGoalCompletion(limits, TargetApproach()),
-            limits,
-            trace_factory=trace_factory,
-            completion_checker=completion_checker,
-            trigger_rules=settings.completion_rules,
-            sliding_window=config.sliding_window,
-            motion_limits=vehicle.tracking_limits,
-            collision_check=(
-                vehicle.collision_state
-                if settings.collision_check_enabled
-                else None
-            ),
-            moving_observation_source=(
-                BorrowedMovingSource(vehicle)
-                if config.sliding_window.enabled
-                else None
-            ),
-            stream_speed_mps=config.motion.max_speed_mps,
-            stream_waypoint_timeout_s=60.0,
-            continuous_tracking=config.continuous,
-            telemetry=self._trajectory,
-        )
-        basic = BasicMotionWorkflow(
-            vehicle,
-            motion,
-            execution,
-            limits=vehicle.tracking_limits,
-            telemetry=self._trajectory,
-        )
-        workflows = {
-            TaskKind.BASIC_MOTION: basic,
-            TaskKind.VISUAL_GOAL_NAVIGATION: visual,
-        }
-        stage_validators = {
-            TaskKind.BASIC_MOTION: BasicMotionStageValidator(),
-            TaskKind.VISUAL_GOAL_NAVIGATION: VisualGoalStageValidator(
-                limits, settings.completion_rules
-            ),
-        }
-        terminal_kinds: set[TaskKind] = set()
-        closed = [basic, visual]
-        if free_planner is not None:
-            free = FreeNavigationWorkflow(
-                vehicle,
-                free_planner,
-                validator,
-                motion,
-                execution,
-                model_request_timeout_s=config.trajectory_planner.timeout_s,
-                sliding_window=config.sliding_window,
-                motion_limits=vehicle.tracking_limits,
-                moving_observation_source=(
-                    BorrowedMovingSource(vehicle)
-                    if config.sliding_window.enabled
-                    else None
-                ),
-                stream_speed_mps=config.motion.max_speed_mps,
-                stream_waypoint_timeout_s=60.0,
-                collision_backoff_m=config.free_navigation.collision_backoff_m,
-                maximum_collision_recoveries=(
-                    config.free_navigation.maximum_collision_recoveries
-                ),
-                collision_recovery_reset_m=(
-                    config.free_navigation.collision_recovery_reset_m
-                ),
-                continuous_tracking=config.continuous,
-                lane_reference_provider=None,
+        for vehicle_id, vehicle in (("rover", self._rover), ("drone", self._drone)):
+            self._arms[vehicle_id] = build_vehicle_arm(
+                self._config,
+                common=common,
+                vehicle=vehicle,
+                vehicle_id=vehicle_id,
+                detector=self._detector,
+                geometry=self._geometry,
                 telemetry=self._trajectory,
+                moving_source_factory=BorrowedMovingSource,
+                log=self._log,
             )
-            workflows[TaskKind.FREE_NAVIGATION] = free
-            stage_validators[TaskKind.FREE_NAVIGATION] = (
-                FreeNavigationStageValidator()
-            )
-            terminal_kinds.add(TaskKind.FREE_NAVIGATION)
-            closed.append(free)
-        router = WorkflowRouter(workflows)
-        mission_validator = MissionValidator(
-            stage_validators, terminal_kinds=terminal_kinds
-        )
-        parser = build_task_parser(
-            config,
-            kinds=router.supported_kinds,
-            aerial=vehicle_id == "drone",
-        )
-        model_calls = None
-        application = None
-        if parser is None:
-            self._log(
-                "task parser is not configured; tasks will be rejected",
-                "WARNING",
-            )
-        else:
-            model_calls = ModelCallService()
-            parser_timeout_s = config.task_parser.timeout_s
-
-            def parse_call(instruction: str):
-                return model_calls.call(
-                    lambda: parser.parse(instruction),
-                    parser_timeout_s,
-                    execution.checkpoint,
-                )
-
-            application = PlannerApplication(
-                parser,
-                mission_validator,
-                MissionRunner(router),
-                parse_call=parse_call,
-            )
-        return _VehicleArm(
-            vehicle_id,
-            vehicle,
-            vehicle is self._drone,
-            execution,
-            application,
-            model_calls,
-            tuple(closed),
-        )
 
     # -- ports -------------------------------------------------------------
     def run(
@@ -485,11 +284,7 @@ class ProjectAirSimMissionSession:
         arm = self._arms.get(vehicle_id)
         if arm is None:
             raise ProtocolError(f"unknown vehicle '{vehicle_id}'")
-        if arm.application is None or arm.execution is None:
-            raise ProtocolError(
-                "task parser is not configured; set task_parser.url/model "
-                "in the configuration (strict parsing has no fallback)"
-            )
+        application = require_application(arm)
         event_sink = log or self._log
         if vehicle_id != self._active_vehicle:
             previous = self._active_vehicle
@@ -518,7 +313,7 @@ class ProjectAirSimMissionSession:
         try:
             if self._trajectory is not None:
                 self._trajectory.start(task.instruction)
-            plan = arm.application.prepare(task.instruction)
+            plan = application.prepare(task.instruction)
             event_sink(
                 f"{vehicle_id} mission plan: "
                 + ", ".join(
@@ -527,7 +322,7 @@ class ProjectAirSimMissionSession:
                 )
             )
             self._prepare_vehicle(arm, event_sink)
-            return arm.application.execute_plan(plan)
+            return application.execute_plan(plan)
         except KeyboardInterrupt:
             return MissionResult(
                 False, (), error="cancelled: task was cancelled"

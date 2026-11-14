@@ -88,6 +88,13 @@ airsim:
   # planner 自己的一份 settings，不动 /data/airsim/settings.json（那是 airsim-flight-console 在用的）。
   # RGB 与深度必须同尺寸，原因见 config/airsim_settings.json 的 _why。
   settings_file: config/airsim_settings.json
+  # 连接数据。名字来自 settings.json，与地图无关，所以放在家族段而不是 maps.yaml。
+  # vehicle_name 留空会让控制类 RPC 静默失效：这台机器的构建把载具注册成 Drone_1，
+  # 空名字读得到状态却下不了指令（moveToPositionAsync 返回 False，landAsync 抛异常）。
+  host: ""                       # 空串 = 用 AirSim 客户端的默认地址
+  vehicle_name: Drone_1
+  camera_id: front_center        # settings.json 里的相机名
+  timeout_s: 15.0                # 单次 RPC 超时；动作超时另见 config/base.yaml 的 drone 段
   res_x: 1280
   res_y: 720
   abslog_dir: output/logs

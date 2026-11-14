@@ -38,6 +38,33 @@ def capabilities_for(simulator: str):
     return ports_for(simulator).capabilities()
 
 
+def build_session(simulator: str, *, config, map_entry, family, resources, log):
+    """Build the mission session that drives one map.
+
+    Each simulator package owns its own construction: UE5 needs a scene JSONC and a
+    dual-vehicle world, UE4 needs an RPC port and a vehicle name. The caller says
+    which map it chose and this resolves the package -- nobody else branches on a
+    simulator name.
+    """
+    module_name = RUNTIME_MODULES.get(simulator)
+    if module_name is None:
+        raise ValueError(
+            f"unknown simulator {simulator!r}; configured simulators are "
+            f"{list(RUNTIME_MODULES)}"
+        )
+    module = import_module(module_name)
+    builder = getattr(module, "build_session", None)
+    if builder is None:
+        raise ValueError(
+            f"simulator {simulator!r} advertises no mission session; {module_name} "
+            "must define build_session(config=..., map_entry=..., family=..., "
+            "resources=..., log=...) before its maps can fly a task"
+        )
+    return builder(
+        config=config, map_entry=map_entry, family=family, resources=resources, log=log
+    )
+
+
 def labels() -> dict[str, str]:
     """Console-facing names. Kept here so no caller imports a simulator package."""
     return {

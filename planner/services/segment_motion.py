@@ -39,6 +39,26 @@ class MotionLimits:
         if self.min_duration_s < 0:
             raise ValueError("min_duration_s must be non-negative")
 
+    def to_tracking_limits(self):
+        """Convert this configured envelope into the domain tracking limits.
+
+        Two classes are named ``MotionLimits`` here: this one carries what
+        ``config/base.yaml`` states (``max_accel_mps2``, ``max_yaw_rate_dps``), and
+        ``planner/domain/motion.py`` carries what the motion trackers and the
+        position hold read (``max_acceleration_mps2``, ``max_yaw_rate_deg_s``, plus
+        the tolerances). Every simulator needs the second, so the mapping lives with
+        the first instead of being re-derived per simulator package.
+        """
+        from ..domain.motion import MotionLimits as TrackingLimits
+
+        return TrackingLimits(
+            max_acceleration_mps2=self.max_accel_mps2,
+            max_yaw_rate_deg_s=self.max_yaw_rate_dps,
+            max_yaw_acceleration_deg_s2=self.max_yaw_accel_dps2,
+            control_hz=self.control_hz,
+            min_duration_s=max(self.min_duration_s, 1e-3),
+        )
+
 
 @dataclass(frozen=True)
 class SegmentSetpoint:

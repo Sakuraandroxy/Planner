@@ -217,14 +217,17 @@ class SteppedMotionTracker:
             raise BudgetExceeded("motion/task deadline exhausted")
 
 
-def tracking_limits(motion: MotionLimits) -> MotionLimits:
-    """Convert the configured envelope into the domain tracking limits."""
-    from ...domain.motion import MotionLimits as TrackingLimits
+def tracking_limits(motion) -> MotionLimits:
+    """Convert the configured envelope into the domain tracking limits.
 
-    return TrackingLimits(
-        max_acceleration_mps2=motion.max_accel_mps2,
-        max_yaw_rate_deg_s=motion.max_yaw_rate_dps,
-        max_yaw_acceleration_deg_s2=motion.max_yaw_accel_dps2,
-        control_hz=motion.control_hz,
-        min_duration_s=max(motion.min_duration_s, 1e-3),
-    )
+    The mapping itself lives on the envelope class, in
+    ``services/segment_motion.MotionLimits.to_tracking_limits``. This wrapper stays
+    because UE5's vehicles call it in three places. It also fixes their fallback:
+    the old default built the *domain* type and then read envelope fields off it,
+    so ``tracking_limits(None)`` would have raised -- now it returns the neutral
+    envelope converted once, like any other input.
+    """
+    from ...services.segment_motion import MotionLimits as ConfiguredMotionLimits
+
+    return (motion if motion is not None else ConfiguredMotionLimits(
+    )).to_tracking_limits()

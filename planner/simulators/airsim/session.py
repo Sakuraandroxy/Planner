@@ -1,0 +1,244 @@
+"""AirSim (UE4) mission session: one owner thread's side of a UE4 stack.
+
+The UE5 counterpart is ``planner/simulators/projectairsim/session.py``. Both build
+their own vehicles and then hand them to the same wiring in
+``planner/application/mission_assembly.py``, so a task means the same thing on either
+engine and neither simulator package imports the other.
+
+Three pieces here are AirSim's own, and come from the old branch's ``build_runtime``
+rather than from a fresh idea:
+
+* the control connection owns the vehicle, while a capture that runs on another
+  thread gets its own connection (``capture_worker_factory``) -- one msgpack RPC
+  transport is not shared between the flight loop and a frame reader;
+* ``ObservationGate`` is what joins them: a frame is only taken when the flight loop
+  has left the vehicle in a state worth photographing;
+* the position hold is bound into the execution checkpoints, so a planned segment
+  cannot start while the aircraft is still settling.
+
+The session runs on the worker thread and owns the connection for its whole life:
+``AirSimConnection`` says so in its own docstring, and the close path is what honours
+that claim.
+"""
+
+from __future__ import annotations
+
+import threading
+from typing import Callable
+
+from planner.application.mission_assembly import (
+    build_mission_common,
+    build_vehicle_arm,
+    require_application,
+)
+from planner.domain.result import MissionResult
+from planner.domain.server import TaskSubmission
+from planner.domain.weather import WEATHER_CATALOG, validate_weather_values
+from planner.errors import ExecutionError, ProtocolError
+from planner.services.execution import ExecutionService
+
+from .above_camera import AirSimCameraView
+from .connection import AirSimConnection
+from .observation_gate import ObservationGate
+from .observation_source import AirSimObservationSource
+from .runtime import ENABLED_TASKS, WEATHER_FIELDS, WEATHER_PRESETS, build_ports
+from .server_vehicle import ServerVehicle
+from .weather import AirSimWeather
+
+
+class AirSimMissionSession:
+    """The UE4 side of the worker protocol: run, close, and the idle heartbeat."""
+
+    def __init__(
+        self,
+        config,
+        family,
+        *,
+        detector,
+        planner,
+        geometry,
+        log: Callable[[str, str], None],
+        trajectory=None,
+    ):
+        self._config = config
+        self._log = log
+        self._trajectory = trajectory
+        self._closed = False
+        self.connection = AirSimConnection(
+            family.host,
+            family.ports["rpc"],
+            family.timeout_s,
+            # A motion call outlives a state read by design: the flight task blocks
+            # until the aircraft settles.
+            motion_timeout_s=config.drone.move_timeout_s + 2,
+            vehicle_name=family.vehicle_name,
+        )
+        # ``config.motion`` is the configured envelope; the position hold and the
+        # motion tracker below read the domain tracking limits, whose fields are
+        # spelled differently. Converting once here is what lets one ``limits`` object
+        # be handed to all three without either class guessing.
+        limits = config.motion.to_tracking_limits()
+        self.server = ServerVehicle(
+            self.connection,
+            limits,
+            config.drone.move_timeout_s,
+            readiness_stable_s=config.drone.readiness_stable_s,
+            readiness_poll_interval_s=config.drone.readiness_poll_interval_s,
+            speed_mps=config.drone.speed_mps,
+            tracking=config.continuous,
+        )
+        control = self.server.control
+
+        self.execution = ExecutionService(control)
+        self.execution.bind_hold_checkpoint(self.server.holding.tick)
+        self.gate = ObservationGate(
+            control,
+            limits,
+            config.drone.move_timeout_s,
+            owner_thread_id=threading.get_ident(),
+            check_safety=self.execution.check_safety,
+        )
+        self.execution.bind_observation_checkpoint(
+            self.gate.service_requests, self.gate.cancel_requests
+        )
+        control.motion_tracker.observation_gate = self.gate
+
+        self.observation = AirSimObservationSource(
+            self.connection,
+            control,
+            family.camera_id,
+            config.depth.min_m,
+            config.depth.max_m,
+            observation_gate=self.gate,
+            verify_image_pair=True,
+            depth_mapping=config.depth.mapping,
+            camera_mount_position_body_m=config.drone.camera_offset_m,
+            camera_mount_rpy_deg=config.drone.camera_mount_rpy_deg,
+        )
+        #: Transports handed to capture workers; each is closed with the session.
+        self._capture_connections: list[AirSimConnection] = []
+
+        def build_capture_source() -> AirSimObservationSource:
+            read = AirSimConnection(
+                family.host, family.ports["rpc"], family.timeout_s,
+                vehicle_name=family.vehicle_name,
+            )
+            self._capture_connections.append(read)
+            return AirSimObservationSource(
+                read,
+                None,
+                family.camera_id,
+                config.depth.min_m,
+                config.depth.max_m,
+                verify_image_pair=True,
+                depth_mapping=config.depth.mapping,
+                camera_mount_position_body_m=config.drone.camera_offset_m,
+                camera_mount_rpy_deg=config.drone.camera_mount_rpy_deg,
+            )
+
+        self.observation.capture_worker_factory = build_capture_source
+
+        self.camera_view = AirSimCameraView(self.connection, family.camera_id)
+        self.weather = AirSimWeather(self.connection, WEATHER_FIELDS, WEATHER_PRESETS)
+        self.ports = build_ports(
+            vehicle=control,
+            observation=self.observation,
+            camera_view=self.camera_view,
+            weather=self.weather,
+        )
+
+        common = build_mission_common(
+            config, planner=planner, detector=detector, log=log
+        )
+        self._arm = build_vehicle_arm(
+            config,
+            common=common,
+            vehicle=control,
+            vehicle_id="drone",
+            detector=detector,
+            geometry=geometry,
+            telemetry=trajectory,
+            enabled_tasks=ENABLED_TASKS,
+            execution=self.execution,
+            log=log,
+        )
+
+    # -- worker protocol ---------------------------------------------------
+    def run(
+        self,
+        task: TaskSubmission,
+        *,
+        stop_event=None,
+        log: Callable[[str], None] | None = None,
+    ) -> MissionResult:
+        vehicle_id = task.vehicle or "drone"
+        if vehicle_id != "drone":
+            raise ProtocolError(
+                f"AirSim drives a drone only; asked for vehicle '{vehicle_id}'"
+            )
+        application = require_application(self._arm)
+        event_sink = log or (lambda message, level="INFO": self._log(message, level))
+
+        def _hold():
+            if stop_event is not None and stop_event.is_set():
+                raise KeyboardInterrupt
+
+        self.execution.bind_hold_checkpoint(_hold)
+        try:
+            plan = application.prepare(task.instruction)
+            event_sink(
+                "drone mission plan: "
+                + ", ".join(f"{stage.stage_id}:{stage.kind.value}" for stage in plan.stages)
+            )
+            # Airborne before anything executes: the UE4 flight paths assume hover
+            # authority from the first segment, and readiness is measured rather
+            # than assumed -- the same rule the old branch's ServerVehicle encodes.
+            self.server.prepare(takeoff_if_landed=True)
+            event_sink("Drone airborne; position hold confirmed.")
+            return application.execute_plan(plan)
+        except KeyboardInterrupt:
+            return MissionResult(False, (), error="cancelled: task was cancelled")
+        finally:
+            self.execution.bind_hold_checkpoint(self.server.holding.tick)
+
+    def idle_tick(self) -> None:
+        """Keep the hold alive between tasks so the drone does not sink."""
+        if self.server.holding.active:
+            self.server.holding.tick()
+
+    def weather_catalog(self) -> object:
+        return WEATHER_CATALOG
+
+    def set_weather(self, fields) -> dict[str, float]:
+        values = validate_weather_values(fields)
+        applied = self.weather.apply(values)
+        self._log(f"Weather applied: {applied}")
+        return dict(applied)
+
+    def close(self, *, skip_landing: bool = False) -> None:
+        """Land unless the world is being destroyed, then release every transport.
+
+        ``skip_landing`` is what a map switch passes: a scene about to be reloaded
+        has no use for a landing animation, and waiting for one would hold the
+        switch open.
+        """
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            if not skip_landing:
+                try:
+                    self.connection.shutdown()
+                    return
+                except ExecutionError as error:
+                    self._log(f"vehicle shutdown was incomplete: {error}", "WARNING")
+        finally:
+            for read in self._capture_connections:
+                try:
+                    read.close_transport()
+                except Exception as error:
+                    self._log(
+                        f"capture transport did not close cleanly: {error}", "WARNING"
+                    )
+            self._capture_connections.clear()
+            self.connection.close_transport()

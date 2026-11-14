@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from pathlib import Path
 
 from .adapters.http.server_api import create_api
-from .simulators.projectairsim.session import ProjectAirSimMissionSession
+from .simulator import registry
 from .simulator.router import FamilyRouter
 from .simulator.marker import read_map_marker
 from .simulator.worker import ThreadedMissionWorker
 from .application.factories import build_detector, build_geometry, build_planner
+from .application.mission_assembly import MissionResources
 from .application.server_controller import ServerController
 from .config import AppConfig
 from .domain.server import MapSelection
@@ -37,28 +37,29 @@ def build_server(config: AppConfig):
     # one-screenshot anchor check instead of the full calibration walk.
     view_cache: dict[str, tuple[str, ...]] = {}
 
+    resources = MissionResources(
+        detector=detector,
+        planner=planner,
+        geometry=geometry,
+        trajectory=trajectory,
+        view_cache=view_cache,
+        frame_sink=frames.publish,
+    )
+
     def worker_factory(selection: MapSelection) -> ThreadedMissionWorker:
-        # The selected catalog entry is the single source of the scene file
-        # and its config directory; everything else comes from base.yaml.
-        session_config = replace(
-            config,
-            projectairsim=replace(
-                config.projectairsim,
-                scene_file=selection.scene_file,
-                sim_config_path=selection.sim_config_path,
-            ),
-        )
+        # Which simulator owns the map is the catalog's business; the registry turns
+        # that into a session, so nothing here names a simulator package.
+        entry = config.maps.entry(selection.map_id)
+        family = config.families.require(entry.simulator)
 
         def session_factory(log):
-            return ProjectAirSimMissionSession(
-                session_config,
-                detector=detector,
-                planner=planner,
-                geometry=geometry,
+            return registry.build_session(
+                entry.simulator,
+                config=config,
+                map_entry=entry,
+                family=family,
+                resources=resources,
                 log=log,
-                frame_sink=frames.publish,
-                trajectory=trajectory,
-                view_cache=view_cache,
             )
 
         return ThreadedMissionWorker(session_factory)

@@ -42,6 +42,39 @@ def weather_fields() -> dict[str, str]:
     return {name: name for name in WEATHER_FIELDS}
 
 
+def build_session(*, config, map_entry, family, resources, log):
+    """Build the UE5 mission session for one map.
+
+    Called through ``registry.build_session``. The selected catalog entry is the
+    single source of the scene JSONC and its config directory, so the same map that
+    the process driver launches is the map the session loads -- this used to live in
+    ``server_bootstrap``, which meant the HTTP assembly knew ProjectAirSim's scene
+    layout while the UE4 side knew nothing of the kind.
+    """
+    from dataclasses import replace
+
+    from .session import ProjectAirSimMissionSession
+
+    session_config = replace(
+        config,
+        projectairsim=replace(
+            config.projectairsim,
+            scene_file=map_entry.scene_file,
+            sim_config_path=map_entry.sim_config_path,
+        ),
+    )
+    return ProjectAirSimMissionSession(
+        session_config,
+        detector=resources.detector,
+        planner=resources.planner,
+        geometry=resources.geometry,
+        log=log,
+        frame_sink=resources.frame_sink,
+        trajectory=resources.trajectory,
+        view_cache=resources.view_cache,
+    )
+
+
 def describe(vehicles: tuple[str, ...] = VEHICLES) -> SimulatorPorts:
     return SimulatorPorts.from_slots(
         PORT_SLOTS,

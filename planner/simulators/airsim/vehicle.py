@@ -35,6 +35,17 @@ class AirSimVehicle:
             connection, self.current_pose, motion_limits or MotionLimits(), timeout_s,
         )
 
+    @property
+    def tracking_limits(self) -> MotionLimits:
+        """The envelope the mission assembly plans against.
+
+        ProjectAirSim converts its own motion config into domain units; AirSim is
+        configured in domain units already, so this is the object the vehicle was
+        built with. The property exists so the shared assembly has one attribute to
+        ask every vehicle for instead of branching per simulator.
+        """
+        return self.motion_tracker.limits
+
     def current_pose(self) -> WorldPose:
         pose = self.connection.call("simGetVehiclePose")
         q = pose.orientation

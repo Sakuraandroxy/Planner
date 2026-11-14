@@ -33,6 +33,56 @@ ENABLED_TASKS: tuple[str, ...] = (
 VEHICLES: tuple[str, ...] = ("drone",)
 
 
+def build_ports(
+    *,
+    vehicle,
+    observation,
+    camera_view,
+    weather,
+    moving_capture=None,
+) -> SimulatorPorts:
+    """Bundle the live AirSim objects into the ports the mission uses.
+
+    Called by :class:`planner.simulators.airsim.session.AirSimMissionSession`, which
+    is also what makes ``describe()`` honest: the slots advertised before a
+    simulator is running are the slots this function can fill once it is running.
+    ``views``, ``models``, ``frames``, ``telemetry`` and ``home`` stay empty because
+    UE4 does not implement them, and the console hides those controls from that fact.
+    """
+    return SimulatorPorts(
+        vehicle=vehicle,
+        observation=observation,
+        streaming=vehicle,                 # AirSimVehicle implements stream_velocity
+        moving_capture=moving_capture if moving_capture is not None else observation,
+        camera_view=camera_view,
+        weather=weather,
+        vehicles=VEHICLES,
+        enabled_tasks=ENABLED_TASKS,
+    )
+
+
+def build_session(*, config, map_entry, family, resources, log):
+    """Build the UE4 mission session for one map.
+
+    Called through ``registry.build_session``. ``map_entry`` is part of the uniform
+    builder contract; UE4 does not read it, because its scene and spawn come from
+    the engine's own ``settings.json`` rather than from a planner scene JSONC. What
+    it does need -- the RPC port, the vehicle name and the camera name -- is family
+    data, and the family was resolved from this map's ``simulator`` field.
+    """
+    from .session import AirSimMissionSession
+
+    return AirSimMissionSession(
+        config,
+        family,
+        detector=resources.detector,
+        planner=resources.planner,
+        geometry=resources.geometry,
+        log=log,
+        trajectory=resources.trajectory,
+    )
+
+
 def describe() -> SimulatorPorts:
     """The declared bundle, for capability reporting without a live simulator."""
     return SimulatorPorts.from_slots(

@@ -1,0 +1,286 @@
+"""One assembly for the mission application, whatever simulator owns the vehicle.
+
+The task pipeline -- trajectory planner, validators, workflows, stage validation,
+task parser and ``PlannerApplication`` -- is simulator-independent: it is wired to
+the ``Vehicle``/``ObservationSource`` ports. It used to be written inside
+``ProjectAirSimMissionSession``, which meant that flying UE4 required either
+importing a UE5 module that loads ``projectairsim`` in the worker process, or
+copying ~170 lines. The copy is the mistake this repository already paid for once
+(12044 lines in ``planner/ue4/``), so the wiring lives here and both families call it.
+
+Nothing in this module imports a simulator client library; ``tests/test_architecture.py``
+holds that line.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Callable
+
+from ..capabilities.approach import TargetApproach
+from ..capabilities.completion.visual_goal import VisualGoalCompletion
+from ..capabilities.targeting.bbox_goal_observation import BBoxGoalObserver
+from ..capabilities.task_validation.basic_motion import BasicMotionStageValidator
+from ..capabilities.task_validation.free_navigation import FreeNavigationStageValidator
+from ..capabilities.task_validation.visual_goal_navigation import VisualGoalStageValidator
+from ..domain.mission import TaskKind
+from ..errors import ProtocolError
+from ..services.execution import ExecutionService
+from ..services.model_calls import ModelCallService
+from ..services.motion import SynchronizedMotionPlanner
+from ..services.trajectory_validation import TrajectoryValidator
+from ..workflows.basic_motion import BasicMotionWorkflow
+from ..workflows.free_navigation import FreeNavigationWorkflow
+from ..workflows.visual_goal_navigation import VisualGoalNavigationWorkflow
+from .application import PlannerApplication
+from .factories import (
+    build_completion_checker,
+    build_free_navigation_planner,
+    build_planner,
+    build_task_parser,
+    build_trace_factory,
+)
+from .mission_runner import MissionRunner
+from .mission_validator import MissionValidator
+from .workflow_router import WorkflowRouter
+
+
+@dataclass(frozen=True)
+class MissionResources:
+    """What every session needs that does not depend on the simulator.
+
+    The HTTP bootstrap builds these once and hands the same objects to every
+    session it creates. Passing them as one record keeps ``registry.build_session``
+    from growing five more keyword arguments each time a service appears.
+    """
+
+    detector: object
+    planner: object
+    geometry: object
+    trajectory: object | None = None
+    view_cache: dict | None = None
+    frame_sink: Callable | None = None
+
+
+@dataclass(frozen=True)
+class MissionCommon:
+    """The per-service objects every vehicle arm shares."""
+
+    planner: object
+    aerial_planner: object
+    free_planner: object | None
+    aerial_free_planner: object | None
+    completion_checker: object
+    trace_factory: object
+
+
+@dataclass
+class VehicleArm:
+    """One vehicle plus the application that can fly or drive it."""
+
+    vehicle_id: str
+    vehicle: object
+    is_drone: bool
+    execution: ExecutionService
+    application: PlannerApplication | None
+    model_calls: ModelCallService | None
+    workflows: tuple
+
+
+def build_mission_common(config, *, planner, detector, log) -> MissionCommon:
+    """Build what does not depend on which vehicle is asking.
+
+    The drone keeps the reference planner's UAV prompts and the rover keeps
+    carla-vln's ground-vehicle prompts. Geometric mode has no prompt, so the aerial
+    variant reuses the already-built planner.
+    """
+    free_planner = build_free_navigation_planner(config)
+    aerial_free_planner = build_free_navigation_planner(config, aerial=True)
+    aerial_planner = (
+        build_planner(config, config.server.planner, aerial=True)
+        if config.server.planner == "vlm"
+        else planner
+    )
+    if free_planner is None:
+        log(
+            "free navigation planner is not configured; "
+            "free_navigation stages will be rejected",
+            "WARNING",
+        )
+    return MissionCommon(
+        planner=planner,
+        aerial_planner=aerial_planner,
+        free_planner=free_planner,
+        aerial_free_planner=aerial_free_planner,
+        completion_checker=build_completion_checker(config),
+        trace_factory=build_trace_factory(config, detector=detector, planner=planner),
+    )
+
+
+def build_vehicle_arm(
+    config,
+    *,
+    common: MissionCommon,
+    vehicle,
+    vehicle_id: str,
+    detector,
+    geometry,
+    telemetry=None,
+    moving_source_factory: Callable | None = None,
+    enabled_tasks: tuple[str, ...] | None = None,
+    execution: ExecutionService | None = None,
+    log: Callable[[str, str], None],
+) -> VehicleArm:
+    """Wire the task pipeline against one vehicle port.
+
+    ``enabled_tasks`` is the simulator package's own list (``ENABLED_TASKS``). A
+    family that has never flown a task must not be offered it because a model
+    endpoint happens to be configured: UE4 has no free-navigation history with
+    main's planner, and the task parser prompt is built from the kinds the router
+    actually supports, so filtering here also filters the prompt.
+    """
+    settings = config.visual_goal_navigation
+    limits = settings.limits
+    is_drone = vehicle_id == "drone"
+    allowed = None if enabled_tasks is None else set(enabled_tasks)
+    planner = common.aerial_planner if is_drone else common.planner
+    free_planner = common.aerial_free_planner if is_drone else common.free_planner
+    # AirSim passes an execution service it has already bound to the position hold and
+    # the observation gate; every other caller gets a plain one.
+    execution = ExecutionService(vehicle) if execution is None else execution
+    motion = SynchronizedMotionPlanner(config.motion.max_speed_mps, vehicle.tracking_limits)
+    goal_observer = BBoxGoalObserver(
+        detector,
+        min(config.target_detection.timeout_s, limits.model_request_timeout_s),
+    )
+    validator = TrajectoryValidator(
+        config.trajectory_planner.point_count,
+        config.trajectory_planner.max_step_m,
+        config.trajectory_planner.max_yaw_step_deg,
+    )
+    moving_source = (
+        moving_source_factory(vehicle)
+        if moving_source_factory is not None and config.sliding_window.enabled
+        else None
+    )
+    visual = VisualGoalNavigationWorkflow(
+        vehicle,
+        goal_observer,
+        planner,
+        validator,
+        motion,
+        execution,
+        geometry,
+        VisualGoalCompletion(limits, TargetApproach()),
+        limits,
+        trace_factory=common.trace_factory,
+        completion_checker=common.completion_checker,
+        trigger_rules=settings.completion_rules,
+        sliding_window=config.sliding_window,
+        motion_limits=vehicle.tracking_limits,
+        collision_check=(
+            vehicle.collision_state if settings.collision_check_enabled else None
+        ),
+        moving_observation_source=moving_source,
+        stream_speed_mps=config.motion.max_speed_mps,
+        stream_waypoint_timeout_s=60.0,
+        continuous_tracking=config.continuous,
+        telemetry=telemetry,
+    )
+    basic = BasicMotionWorkflow(
+        vehicle,
+        motion,
+        execution,
+        limits=vehicle.tracking_limits,
+        telemetry=telemetry,
+    )
+    workflows = {
+        TaskKind.BASIC_MOTION: basic,
+        TaskKind.VISUAL_GOAL_NAVIGATION: visual,
+    }
+    stage_validators = {
+        TaskKind.BASIC_MOTION: BasicMotionStageValidator(),
+        TaskKind.VISUAL_GOAL_NAVIGATION: VisualGoalStageValidator(
+            limits, settings.completion_rules
+        ),
+    }
+    terminal_kinds: set[TaskKind] = set()
+    closed = [basic, visual]
+    if allowed is not None:
+        workflows = {kind: workflow for kind, workflow in workflows.items()
+                     if kind.value in allowed}
+        stage_validators = {kind: validator for kind, validator in stage_validators.items()
+                            if kind.value in allowed}
+        closed = list(workflows.values())
+    if free_planner is not None and (allowed is None or "free_navigation" in allowed):
+        free = FreeNavigationWorkflow(
+            vehicle,
+            free_planner,
+            validator,
+            motion,
+            execution,
+            model_request_timeout_s=config.trajectory_planner.timeout_s,
+            sliding_window=config.sliding_window,
+            motion_limits=vehicle.tracking_limits,
+            moving_observation_source=moving_source,
+            stream_speed_mps=config.motion.max_speed_mps,
+            stream_waypoint_timeout_s=60.0,
+            collision_backoff_m=config.free_navigation.collision_backoff_m,
+            maximum_collision_recoveries=(
+                config.free_navigation.maximum_collision_recoveries
+            ),
+            collision_recovery_reset_m=config.free_navigation.collision_recovery_reset_m,
+            continuous_tracking=config.continuous,
+            lane_reference_provider=None,
+            telemetry=telemetry,
+        )
+        workflows[TaskKind.FREE_NAVIGATION] = free
+        stage_validators[TaskKind.FREE_NAVIGATION] = FreeNavigationStageValidator()
+        terminal_kinds.add(TaskKind.FREE_NAVIGATION)
+        closed.append(free)
+    router = WorkflowRouter(workflows)
+    mission_validator = MissionValidator(stage_validators, terminal_kinds=terminal_kinds)
+    parser = build_task_parser(config, kinds=router.supported_kinds, aerial=is_drone)
+    application = None
+    model_calls = None
+    if parser is None:
+        log(
+            "task parser is not configured; tasks will be rejected",
+            "WARNING",
+        )
+    else:
+        model_calls = ModelCallService()
+        parser_timeout_s = config.task_parser.timeout_s
+
+        def parse_call(instruction: str):
+            return model_calls.call(
+                lambda: parser.parse(instruction),
+                parser_timeout_s,
+                execution.checkpoint,
+            )
+
+        application = PlannerApplication(
+            parser,
+            mission_validator,
+            MissionRunner(router),
+            parse_call=parse_call,
+        )
+    return VehicleArm(
+        vehicle_id,
+        vehicle,
+        is_drone,
+        execution,
+        application,
+        model_calls,
+        tuple(closed),
+    )
+
+
+def require_application(arm: VehicleArm) -> PlannerApplication:
+    """Fail with the operator's fix instead of running a task against nothing."""
+    if arm.application is None or arm.execution is None:
+        raise ProtocolError(
+            "task parser is not configured; set task_parser.url/model "
+            "in the configuration (strict parsing has no fallback)"
+        )
+    return arm.application
