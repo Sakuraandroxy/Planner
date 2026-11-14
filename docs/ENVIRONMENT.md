@@ -169,10 +169,11 @@ python scripts/probe_ue4_env.py
 | `Pillow` | `test_architecture` 2 条失败，报 `No module named 'PIL'` |
 | `opencv-python-headless` | `test_architecture::test_main_process_never_loads_a_simulator_client` 失败 |
 
-**`probe_ue4_env.py` 在 `vln` 里必然报 1 个 FAIL**，内容是 `airsim packages: missing ['airsim', 'msgpackrpc']`。
-这是设计使然——UE4 客户端按第 1 节装在另一个环境。实测其余为 `25 ok, 1 warn`。
-**不要为了让它变绿把 airsim 装进 `vln`**，那会触发 `msgpack` 撞车。
-把它跑到 `0 failed` 的唯一正确做法不在这台机器的文档里，需要改脚本让它按环境分工来判。
+**`probe_ue4_env.py` 现在按角色判**（`--role auto|service|runtime`，默认 auto，看哪个包能导入就认定站在哪个环境）。
+实测两个环境都是 `0 failed`：`vln` 报 `24 ok, 5 warn`，`vln-ue4` 报 `23 ok, 6 warn`。
+以前它把两套要求压在一起，在 `vln-ue4` 里因缺 `fastapi/uvicorn` 报一个无法修的 FAIL。
+**不要为了让它变绿把 airsim 装进 `vln`**，那会触发 `msgpack` 撞车；也不要把 web 装进 `vln-ue4`，
+子进程不导入它们。
 
 那条 warn 是 `ApiServerPort: absent, AirSim will default to 41451`。
 `/data/airsim/settings.json` 没有这个字段，AirSim 用默认 41451，与

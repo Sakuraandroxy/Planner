@@ -142,8 +142,8 @@ Drone.camera_look_at_object(camera_id: str, object_name: str, ...) -> bool
 载具 `Drone_1`，相机 `front_center` + `down_center`（俯视用的下视相机已经在），无 `ApiServerPort`，
 即默认 41451，与 `config/simulators.yaml` 的 `airsim.ports.rpc` 一致。旧 config 的 `airsim.camera_id`
 随 `planner/ue4/` 一同删掉了，这顶"两边对不上"只剩 settings.json 一侧可核。
-`scripts/probe_ue4_env.py` 在 `vln` 下实测 `25 ok, 1 warn, 1 FAIL`，FAIL 就是 airsim 没装在主环境——
-按本节上面的结论，这是正确状态，不要为把它跑绿而往 `vln` 里装 airsim。
+`scripts/probe_ue4_env.py` 现在按角色判环境：`vln` 实测 `24 ok, 5 warn, 0 failed`，
+`vln-ue4` 实测 `23 ok, 6 warn, 0 failed`。不要把 airsim 装进 `vln` 凑绿，那会撞 msgpack。
 
 **基线数字。** `pytest -q` 实测 **851 passed**（本文件上面那个由脚本生成的计数与本节无关）。
 `BRINGUP` 第 3 节的 `847 passed` 过时。另：`projectairsim` 已在 PyPI 上（`0.2.0/0.3.0/1.0.1/1.0.2/1.1.0`），

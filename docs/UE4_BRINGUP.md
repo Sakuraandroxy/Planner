@@ -36,8 +36,10 @@ python -m pytest -q tests/test_architecture.py
 test ! -e planner/ue4 && echo "复制树未复活"
 ```
 
-`python scripts/probe_ue4_env.py` 在 `vln` 里必然报 1 个 FAIL（`airsim` 装在另一个环境），
-这是设计使然，不要为了跑绿把 airsim 装进 `vln`。
+`python scripts/probe_ue4_env.py` 按角色判（`--role auto|service|runtime`）：
+它看哪个包能导入就认定你站在服务环境还是子进程环境，两边实测都是 `0 failed`。
+**不要为了让它变绿把 airsim 装进 `vln`**（会触发 `msgpack` 撞车），也不要把 fastapi 装进
+`vln-ue4`（子进程不导入它）。
 
 ## 2 配置
 

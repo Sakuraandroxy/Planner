@@ -28,14 +28,20 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 
 #: import name -> pip name. They differ, and the hint must be installable.
+#: The two groups belong to two interpreters: the web stack only ever runs in the
+#: service environment, while the mission child runs in the client environment and
+#: imports none of it. Requiring both in one place produced a FAIL with nothing to fix
+#: -- measured in ``vln-ue4``, where fastapi and uvicorn are deliberately absent.
 CORE_PACKAGES = {
-    "fastapi": "fastapi",
-    "uvicorn": "uvicorn[standard]",
     "pydantic": "pydantic",
     "numpy": "numpy",
     "cv2": "opencv-python-headless",
     "httpx": "httpx",
     "yaml": "pyyaml",
+}
+SERVICE_PACKAGES = {
+    "fastapi": "fastapi",
+    "uvicorn": "uvicorn[standard]",
 }
 UE4_PACKAGES = {
     "airsim": "airsim>=1.8.1",
@@ -80,21 +86,38 @@ def check_python() -> None:
         ok("python", sys.version.split()[0])
 
 
-def check_packages() -> None:
-    for label, packages, required in (
+def check_packages(role: str) -> None:
+    """``role`` says which interpreter this is: the service, or the child's client env.
+
+    The other side's packages are reported as a note instead of a failure, because a
+    correct machine has each half in a different environment on purpose.
+    """
+    groups = [
         ("core", CORE_PACKAGES, True),
-        ("airsim", UE4_PACKAGES, True),
+        ("service", SERVICE_PACKAGES, role == "service"),
+        ("airsim", UE4_PACKAGES, role == "runtime"),
         ("projectairsim", UE5_PACKAGES, False),
-    ):
+    ]
+    for label, packages, required in groups:
         missing = [name for name in packages if not have(name)]
         if missing:
             pip_names = " ".join(packages[name].split("[")[0] for name in missing)
             (fail if required else warn)(
                 f"{label} packages",
-                f"missing {missing} — pip install {pip_names}",
+                f"missing {missing} — pip install {pip_names}"
+                + ("" if required else " (this interpreter is not the one that needs it)"),
             )
         else:
             ok(f"{label} packages", ", ".join(packages))
+
+
+def detect_role() -> str:
+    """Where we are standing: the web stack marks the service interpreter."""
+    if have("fastapi"):
+        return "service"
+    if have("airsim"):
+        return "runtime"
+    return "service"      # neither: report against the service, the louder half
     if have("airsim") and have("projectairsim"):
         warn(
             "client coexistence",
@@ -262,11 +285,17 @@ def check_xpra() -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.parse_args()
+    parser.add_argument(
+        "--role", choices=("auto", "service", "runtime"), default="auto",
+        help="which interpreter this is; 'auto' reads it from what is importable",
+    )
+    args = parser.parse_args()
+    role = args.role if args.role != "auto" else detect_role()
     print(f"repository: {ROOT}")
     print(f"python    : {sys.executable}")
+    print(f"role      : {role}")
     check_python()
-    check_packages()
+    check_packages(role)
     check_repo_layout()
     families, maps = check_families_and_maps()
     check_ue4_binaries(maps)
