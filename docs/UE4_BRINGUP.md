@@ -168,12 +168,38 @@ ProjectAirSim 的 CityEnviron 与 AirSimNH 构建**不写任何日志文件**，
 
 | 项 | 位置 |
 |---|---|
-| **AirSim 会话装配**（唯一剩下的大块） | `planner/simulators/airsim/runtime.py` 现在只有 `describe()` 与 `PORT_SLOTS`。补 `build_ports` 时同一提交内必须带上调用方；`vehicle_name` 也在那个提交进家族段——在那之前它是一个没人读的配置项，所以上一轮没加 |
-| 天气 | 从 `airsim-flight-console/weather_service.py` 移植，字段拼写差异读同包 `WEATHER_FIELDS` |
-| 心跳重连与停止接管 | 在旧分支 `ServerController` 里，不在 worker 协议中；只看 worker 接口会漏掉 |
+| **UE4 运行时子进程入口**（现在唯一挡住控制台飞 UE4 的东西） | 主进程不得加载 AirSim 客户端（`tests/test_architecture.py`），而 worker 现在跑在 HTTP 进程内，所以 UE4 会话目前只能直接构造。旧分支可取回：`git show origin/low-altitude-level-view-visual-goal-navigation:planner/server_worker.py`。心跳重连与停止接管的语义在旧 `ServerController` 里，不在 worker 协议里；旧 worker 的 IPC 只认 `task` 与 `shutdown` 两条命令 |
+| 标定降级 | `streaming-view` 四机位标定在本机四帧打分完全相同，于是回落内置顺序（见 5.2）。不阻断任务，但循环顺序在这台机器上没被实测标定过 |
 
-控制面三处冲突已修完（载具名、动作完成判据、深度分辨率），实测证据在
+会话装配、天气与进程驱动已落地；控制面三处冲突已修完，实测证据在
 `docs/UE4_REMAINING_WORK.md` 7.3 末尾的表里。
+
+## 5.1 脚本化验 HTTP 服务时会假卡死的一个坑
+
+`server_api.py` 在 **lifespan** 里启动控制器的监控线程。`TestClient(app)` 不进上下文
+管理器就不会跑 lifespan：事件没人排空，服务一直停在 `connecting`，而底下的仿真器是好的。
+我在这上面白花了一轮，差点把好好的重构当 bug 查。正确写法：
+
+```python
+with TestClient(build_server(load_config("config/base.yaml"))) as client:
+    ...
+```
+
+## 5.2 UE5 与 UE4 的任务级实测（本轮）
+
+同一句「无人机向前飞三米，然后向右转90度」，`vehicle=drone`。
+
+| | UE5 cityenviron（经 `/api/world` + `/api/tasks`） | UE4 blocks（直接构造会话） |
+|---|---|---|
+| 解析 | stage_1、stage_2 basic_motion | 同样两阶段 |
+| 执行 | 两阶段 `completed; basis=local_measurement`，39s | 位移 0→3.084m、偏航 0→89.81°，25.4s |
+| 收尾 | `POST /api/stop` 200，状态 idle | `Vehicle on the ground: z=0.68 against the ground record 0.67` |
+
+一句否定的实测值记下来：「起飞并向上爬升两米」被解析器拒绝
+（`Unsupported actions: takeoff and vertical climb ...`）。basic_motion 在这套提示词下只支持
+前/后飞与偏航；垂直起飞是会话的准备动作，不是任务阶段。
+
+`vln-ue4` 需要 `httpx`（任务解析与轨迹端点都在 worker 侧发 HTTP）。
 
 ## 6 UE5 俯视
 
