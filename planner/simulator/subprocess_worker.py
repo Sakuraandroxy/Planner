@@ -30,6 +30,7 @@ import os
 import queue
 import subprocess
 import threading
+import time
 from typing import Callable
 
 from ..domain.server import TaskSubmission, WorkerEvent, WorkerEventKind
@@ -108,6 +109,7 @@ class SubprocessMissionWorker:
         log: Callable[[str, str], None] | None = None,
         popen: Callable[..., object] = subprocess.Popen,
         join_timeout_s: float = TERM_GRACE_S,
+        shutdown_timeout_s: float = 60.0,
     ):
         self._python = python
         self._module = module
@@ -117,6 +119,7 @@ class SubprocessMissionWorker:
         self._log_fn = log or (lambda message, level="INFO": None)
         self._popen = popen
         self._join_timeout_s = float(join_timeout_s)
+        self._shutdown_timeout_s = float(shutdown_timeout_s)
         self._events: queue.Queue = queue.Queue()
         self._process: object | None = None
         self._reader: threading.Thread | None = None
@@ -215,8 +218,49 @@ class SubprocessMissionWorker:
             self._send(encode_command("stop"))
 
     def shutdown(self, *, skip_landing: bool = False) -> None:
-        if self._process is not None:
-            self._send(encode_command("shutdown", skip_landing=bool(skip_landing)))
+        """Ask the child to close, and wait until it says it did.
+
+        ``ThreadedMissionWorker.shutdown`` lands the vehicle in the calling thread and
+        puts CLOSED in the queue before returning, so ``ServerController._drain`` --
+        which only ever looks at what is already queued -- finds the confirmation.
+        Handing the same call over a pipe made this one return as soon as the command
+        was written, roughly half a second before the answer, and every shutdown ended
+        in "Worker did not confirm shutdown within the timeout" while the child closed
+        cleanly. Waiting also keeps the map-switch path honest: the old session still
+        holds the RPC port while it lands, and the next engine should not start under it.
+        """
+        if self._process is None:
+            return
+        self._send(encode_command("shutdown", skip_landing=bool(skip_landing)))
+        self._await_closed(self._shutdown_timeout_s)
+
+    def _await_closed(self, timeout_s: float) -> bool:
+        """Wait for CLOSED, then hand the whole queue back in order for the caller.
+
+        ``ServerController`` calls ``shutdown()`` and afterwards polls this worker, so
+        the confirmation has to survive the wait rather than be consumed by it.
+        """
+        held: list[WorkerEvent] = []
+        closed = False
+        deadline = time.monotonic() + max(0.0, float(timeout_s))
+        try:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    event = self._events.get(timeout=remaining)
+                except queue.Empty:
+                    break
+                if event.kind is WorkerEventKind.CLOSED:
+                    closed = True
+                    held.append(event)      # the caller's poll() must still see it
+                    break
+                held.append(event)
+        finally:
+            for event in held:
+                self._events.put(event)
+        return closed
 
     def home(self, vehicle: str | None = None) -> None:
         self._send(encode_command("home", vehicle=vehicle or ""))

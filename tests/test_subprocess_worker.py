@@ -10,6 +10,7 @@ becomes an explicit error instead of a missing event.
 
 import json
 import sys
+import threading
 import time
 
 import pytest
@@ -64,6 +65,55 @@ def test_submit_encodes_the_submission_fields_the_child_needs():
     worker.submit(TaskSubmission(task_id="t9", instruction="左转", vehicle="drone"))
     assert json.loads(sent[0])["task_id"] == "t9"
     assert json.loads(sent[0])["cmd"] == "task"
+
+
+def test_shutdown_waits_for_the_child_to_confirm(tmp_path):
+    """The ordering bug that made every UE4 shutdown log an error.
+
+    ``ServerController`` calls ``shutdown()`` and then only looks at what is already in
+    the queue. Over a pipe the confirmation arrived after the call returned, so the
+    console reported "Worker did not confirm shutdown within the timeout" against a
+    child that had closed cleanly.
+    """
+    worker = SubprocessMissionWorker(
+        python=sys.executable, module="planner.simulator.mission_child",
+        config_path=str(tmp_path / "base.yaml"), map_id="blocks", project_dir=".",
+        shutdown_timeout_s=5.0,
+    )
+    worker._process = type("P", (), {"poll": lambda self: None})()
+    sent = []
+    worker._stdin = type("W", (), {"write": staticmethod(lambda text: sent.append(text)),
+                                   "flush": staticmethod(lambda: None)})()
+    threading.Thread(
+        target=lambda: (time.sleep(0.3),
+                        worker._events.put(WorkerEvent(WorkerEventKind.CLOSED))),
+        daemon=True,
+    ).start()
+
+    t0 = time.monotonic()
+    worker.shutdown()
+    waited = time.monotonic() - t0
+
+    assert waited >= 0.25, waited                     # it really waited
+    assert json.loads(sent[0])["cmd"] == "shutdown"
+    event = worker.poll()                             # still deliverable to _drain
+    assert event is not None and event.kind is WorkerEventKind.CLOSED
+
+
+def test_shutdown_gives_up_on_the_bound_not_forever(tmp_path):
+    """A wedged child must not wedge the service: the wait is bounded."""
+    worker = SubprocessMissionWorker(
+        python=sys.executable, module="planner.simulator.mission_child",
+        config_path=str(tmp_path / "base.yaml"), map_id="blocks", project_dir=".",
+        shutdown_timeout_s=0.4,
+    )
+    worker._process = type("P", (), {"poll": lambda self: None})()
+    worker._stdin = type("W", (), {"write": staticmethod(lambda text: None),
+                                   "flush": staticmethod(lambda: None)})()
+    t0 = time.monotonic()
+    worker.shutdown()
+    assert 0.3 < time.monotonic() - t0 < 2.0
+    assert worker.poll() is None
 
 
 def test_the_child_reports_its_own_setup_failure_over_the_pipe():

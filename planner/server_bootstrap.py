@@ -67,6 +67,7 @@ def build_server(config: AppConfig):
                 map_id=selection.map_id,
                 project_dir=str(PROJECT_DIR),
                 log=lambda message, level="INFO": None,
+                shutdown_timeout_s=config.drone.land_timeout_s + 10.0,
             )
 
         def session_factory(log):
