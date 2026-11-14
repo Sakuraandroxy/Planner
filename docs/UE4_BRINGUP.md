@@ -7,13 +7,14 @@
 
 | 能力 | 状态 |
 |---|---|
-| UE5 全套（现有任务、双载具、机位、模型、天气） | ok 完好，并且已在这台机器上实测（见 3.4） |
+| UE5 全套（现有任务、双载具、机位、模型、天气） | ok 完好，启动与客户端握手已在这台机器实测（见 4.1）；任务级流程未变 |
 | 两族注册表、能力位、配置校验 | ok 已实现并测试 |
 | 前端地图列表 | ok 9 张：2 张 UE5 加 7 张 UE4 |
 | 两族共用一个进程驱动 | ok `planner/simulator/xpra_start.py`，shell 启动脚本已删除 |
 | UE4 起图 / 切图 / 停止 | ok 真机实测：blocks 5s、campus 8s、stop 1.4s 无 X 锁残留 |
-| UE4 取帧与位姿 | ok 真机实测，观测已对齐主干 `Observation` 契约 |
-| UE4 上飞任务 | no 卡在控制面三处冲突，见 `docs/UE4_REMAINING_WORK.md` 7.3 |
+| UE4 取帧与几何 | ok 真机实测：RGB 1280x720 + 米制深度 256x144，单帧中位 **0.40s** |
+| UE4 解锁、起飞、平移、降落 | ok 真机实测（载具名接通后 `prepare_vehicle` 拿到确认；完成与否看回读状态） |
+| UE4 上飞任务 | no 缺会话装配：还没人构造 `AirSimConnection` 与观测源（见第 5 节） |
 | UE4 俯视任务端到端 | no 本轮不做（用户 2026-11-15 定的顺序：先把整体程序跑起来） |
 
 缺的每一处都会显式报错，没有静默降级的路径。
@@ -167,9 +168,12 @@ ProjectAirSim 的 CityEnviron 与 AirSimNH 构建**不写任何日志文件**，
 
 | 项 | 位置 |
 |---|---|
-| UE4 控制面三处冲突（载具名、动作完成判据、深度分辨率） | `docs/UE4_REMAINING_WORK.md` 7.3，修法顺序 2 → 3 → 1 |
-| AirSim 会话装配 | `planner/simulators/airsim/runtime.py`，补回时同一提交内必须带调用方 |
-| 心跳重连与停止接管 | 在旧分支的 `ServerController` 里，不在 worker 协议中；装配时只看 worker 接口会漏掉 |
+| **AirSim 会话装配**（唯一剩下的大块） | `planner/simulators/airsim/runtime.py` 现在只有 `describe()` 与 `PORT_SLOTS`。补 `build_ports` 时同一提交内必须带上调用方；`vehicle_name` 也在那个提交进家族段——在那之前它是一个没人读的配置项，所以上一轮没加 |
+| 天气 | 从 `airsim-flight-console/weather_service.py` 移植，字段拼写差异读同包 `WEATHER_FIELDS` |
+| 心跳重连与停止接管 | 在旧分支 `ServerController` 里，不在 worker 协议中；只看 worker 接口会漏掉 |
+
+控制面三处冲突已修完（载具名、动作完成判据、深度分辨率），实测证据在
+`docs/UE4_REMAINING_WORK.md` 7.3 末尾的表里。
 
 ## 6 UE5 俯视
 

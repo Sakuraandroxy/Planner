@@ -188,7 +188,7 @@ Drone.camera_look_at_object(camera_id: str, object_name: str, ...) -> bool
   UE4 目前没显式指定适配器也能跑。
 - 旧分支自述实机未联调：旧 `README.md:435`。旧分支没有 `tests/`，UE4 保真来自代码照抄，不来自测试通过。
 
-### 7.3 实机跑出来的三处硬冲突（待决策）
+### 7.3 实机跑出来的三处硬冲突（已修完，证据在下表）
 
 把适配层接上真机之后才暴露得出来的，都是“旧分支没跑过硬件”的直接代价。
 
@@ -219,8 +219,23 @@ msgpack **数组**传回，而 `msgpack-python` 0.5.6 在这个环境里只有�
 motion did not complete`。真正的完成信号得改成读回状态（位置收敛 + `landed_state`），
 不能继续信这个 bool。
 
-这三条都在飞行控制路径上，彼此有依赖（先把载具名接通、再把完成判据改成状态驱动，
-最后才能量测真实闭环延时），所以要按 2 → 3 → 1 的顺序修。
+这三条都在飞行控制路径上，彼此有依赖，已按 2 → 3 → 1 的顺序全部修完（下表“怎么修的”）。
+
+| 冲突 | 修法 | 提交 | 真机证据 |
+|---|---|---|---|
+| 载具名为空 | `vehicle_name` 从 `AirSimConnection` 构造函数入，三条 RPC 通道统一注入；能不能收这个关键字由 `inspect.signature` 判定并缓存，不维护名单 | `2ecb503` | `prepare_vehicle()` 拿到 `enableApiControl` 与 `armDisarm` 确认 |
+| 异步返回值不可信 | ack 只记日志，完成与否看回读的位置与朝向（0.5m / 15°）；takeoff 看高度增益 ≥0.5m | `2ecb503` | `takeoffAsync` 报 False 而 z 从 0.68 到 -0.86；`moveToPositionAsync` 报 False 而确实移动 0.99m |
+| RGB 与深度必须同尺寸 | 走 C 方案：契约改为“深度必须与自己的 `depth_intrinsics` 一致”，UE5 逐字不变（它本就写 `depth_intrinsics=intrinsics`） | `465e493` | 单帧取回 25.97s → **0.40s**（中位，5 帧）；`measure_free_space` 在分裂网格上 9 个扇区全部有测量值 |
+
+两条从真机拚出来的额外事实，已写进代码注释：
+
+- 深度分辨率的生效位置是 `Vehicles.Drone_1.Cameras.<相机>.CaptureSettings`；
+  `getSettingsString()` 回报的是 `CameraDefaults`，相机级覆盖它不报——改错地方会静默无效。
+- PNG 不是米制：与同帧 float 参考逐像素比对，中位误差 22.99m，误差<1cm 的像素 0.00%，
+  每通道只有 5–11 个唯一值。它发回的就是可视化图，不是可解开的毫米编码。
+
+修这两条时顺带发现并修了一个被“同尺寸”掩盖的真 bug：`depth_foreground` 拿 RGB 内参
+给深度网格像素圈窗口、算 forward 距离（`465e493`）。
 
 决策已拍（用户 2026-11-15，“都用你倾向的决定”）：
 
