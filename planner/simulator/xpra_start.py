@@ -674,34 +674,40 @@ class XpraStartSupervisor:
         return not any(self._port(port) for port in self.ports)
 
     def _cleanup_launch(self) -> None:
-        """Reap the process this launch spawned, leaving anything else untouched."""
-        if self._process is None:
-            return
-        pid = _pid_of(self._process)
-        now = self._identity(pid)
-        if (
-            self._process_identity is not None
-            and now is not None
-            and now[:2] == self._process_identity[:2]
-            and _poll(self._process) is None
-        ):
-            terminate_verified_tree(
-                pid, now, KILL_WAIT_S, POLL_INTERVAL_S,
-                identity_reader=self._identity, sleep=self._sleep, clock=self._clock,
-            )
-        try:
-            self._process.wait(timeout=3)
-        except (subprocess.TimeoutExpired, AttributeError):
-            pass
-        # The launch is reaped, but xpra's Xvfb still holds the display for a
-        # moment. Returning now lets the next launch meet a live holder and refuse
-        # with "display :104 is still held by PID", which reads like a stuck stack
-        # rather than the few hundred milliseconds it actually is. A display that
-        # somebody else really owns still fails in launch's reclaim_stale_display,
-        # with that caller's message, so waiting here stays silent and bounded.
+        """Leave the machine ready for the next launch.
+
+        Two parts, and only the first depends on who started the stack: reap the
+        process this launch spawned, then wait for the display to come free. The
+        wait cannot hide behind a ``_process is None`` return -- stopping a stack
+        that a previous HTTP process started leaves no child of ours to reap at
+        all, and that is exactly the case measured on the machine as
+        ``restart`` refusing one second in with "display :104 is still held by
+        PID".
+        """
+        if self._process is not None:
+            pid = _pid_of(self._process)
+            now = self._identity(pid)
+            if (
+                self._process_identity is not None
+                and now is not None
+                and now[:2] == self._process_identity[:2]
+                and _poll(self._process) is None
+            ):
+                terminate_verified_tree(
+                    pid, now, KILL_WAIT_S, POLL_INTERVAL_S,
+                    identity_reader=self._identity, sleep=self._sleep, clock=self._clock,
+                )
+            try:
+                self._process.wait(timeout=3)
+            except (subprocess.TimeoutExpired, AttributeError):
+                pass
+            self._process = None
+            self._process_identity = None
+        # xpra's own Xvfb lets go of the display a moment after its ports close.
+        # A display somebody else really owns still fails later in launch's
+        # reclaim_stale_display, with that caller's message, so this stays silent
+        # and bounded.
         self._wait_display_released(self._settings.port_release_timeout_s)
-        self._process = None
-        self._process_identity = None
 
     def _wait_display_released(self, seconds: float) -> bool:
         deadline = self._clock() + seconds

@@ -645,6 +645,40 @@ def test_stop_waits_for_the_xvfb_to_drop_the_display(tmp_path, monkeypatch):
     assert len(checks) >= 2, "stop() returned before the display was free"
 
 
+def test_a_stopped_adopted_stack_still_waits_for_the_display(tmp_path, monkeypatch):
+    """The case the machine caught: a stack this process never spawned.
+
+    Another HTTP process started it, so there is no child of ours to reap. Stopping
+    it is still our job, and so is the teardown wait -- without it the refusal
+    arrives one second later, from the next launch, looking like a stuck display.
+    """
+    import planner.simulator.xpra_start as module
+
+    lock = tmp_path / ".X199-lock"
+    monkeypatch.setattr(module, "display_files",
+                        lambda display, **kw: (lock, tmp_path / "X199"))
+    harness = Harness(tmp_path, holders={RPC_PORT: ours_engine()}, alive={RPC_PORT})
+    driver = harness.driver
+    assert driver._process is None, "this test is about a stack we did not spawn"
+    lock.write_text(str(os.getpid()), encoding="utf-8")
+
+    checked: list[bool] = []
+    real_released = module.display_released
+
+    def spy(display, **kwargs):
+        result = real_released(display, **kwargs)
+        checked.append(result)
+        if len(checked) == 2:
+            lock.unlink(missing_ok=True)
+        return result
+
+    monkeypatch.setattr(module, "display_released", spy)
+    driver.stop()
+
+    assert len(checked) >= 2, checked
+    assert checked[0] is False and checked[-1] is True, checked
+
+
 def test_no_wait_when_the_display_is_already_free(tmp_path, monkeypatch):
     """Nothing holds the display here, so the reaper must not spin or sleep."""
     import planner.simulator.xpra_start as module
