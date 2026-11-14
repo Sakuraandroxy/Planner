@@ -86,19 +86,32 @@ class Observation:
     depth_max_m: float = 200.0
 
     def __post_init__(self) -> None:
+        matrix = np.asarray(self.camera_matrix, dtype=np.float64)
+        if self.depth_intrinsics is None:
+            object.__setattr__(self, "depth_intrinsics", self.intrinsics)
         if self.rgb.ndim != 3 or self.rgb.shape[2] != 3:
             raise ValueError("rgb must be HxWx3")
-        if self.depth_m.shape != self.rgb.shape[:2]:
-            raise ValueError("depth shape must match rgb")
-        if self.depth_image is not None and self.depth_image.shape[:2] != self.rgb.shape[:2]:
-            raise ValueError("depth_image shape must match rgb")
+        # Depth answers for its own pixel grid. Requiring it to equal rgb was only
+        # ever true because both simulators happened to render at one size; AirSim
+        # cannot ship metric depth at the rgb resolution inside a control loop at
+        # all (measured: 921600 floats arrive in 25-37 s through msgpack-python's
+        # pure-Python unpacker, 36864 in 0.24 s), so it renders rgb large and depth
+        # small, and the geometry code already reads depth_intrinsics for that.
+        if self.depth_m.ndim != 2:
+            raise ValueError("depth_m must be HxW")
+        if self.depth_m.shape != (
+            self.depth_intrinsics.height, self.depth_intrinsics.width
+        ):
+            raise ValueError("depth shape must match depth_intrinsics")
+        if (
+            self.depth_image is not None
+            and self.depth_image.shape[:2] != self.depth_m.shape
+        ):
+            raise ValueError("depth_image shape must match depth_m")
         if self.camera_matrix.shape != (4, 4):
             raise ValueError("camera_matrix must be 4x4")
         if self.depth_kind not in ("optical_depth", "ray_range"):
             raise ValueError("depth_kind must be optical_depth or ray_range")
-        matrix = np.asarray(self.camera_matrix, dtype=np.float64)
-        if self.depth_intrinsics is None:
-            object.__setattr__(self, "depth_intrinsics", self.intrinsics)
         if self.depth_timestamp_ns <= 0:
             object.__setattr__(self, "depth_timestamp_ns", self.timestamp_ns)
         if self.rotation_camera_to_world is None:

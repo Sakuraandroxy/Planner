@@ -223,15 +223,23 @@ def test_aligned_depth_image_requires_a_registered_visualisation():
     assert aligned_depth_image(observation) is depth
     with pytest.raises(ObservationError):
         aligned_depth_image(_observation(depth_image=None))
-    bad = Observation(
-        frame=1,
-        timestamp_s=0.0,
-        pose=WorldPose(0.0, 0.0, 0.0, 0.0),
-        rgb=np.zeros((6, 8, 3), dtype=np.uint8),
-        depth_m=np.full((6, 8), 5.0, dtype=np.float32),
-        intrinsics=CameraIntrinsics.from_horizontal_fov(10, 10, 90.0),
-        camera_matrix=ue_camera_matrix(0.0, 0.0, 0.0, 0.0),
-        depth_image=depth,
-    )
-    with pytest.raises(ObservationError):
-        aligned_depth_image(bad)
+
+
+def test_depth_calibration_that_disagrees_with_the_arrays_is_refused():
+    """An Observation cannot claim a 10x10 camera while carrying a 6x8 grid.
+
+    This used to be caught downstream in ``aligned_depth_image``, after the object
+    had already been handed to consumers. ``depth_intrinsics`` defaults to
+    ``intrinsics``, so the contract can check the pairing where it is written.
+    """
+    with pytest.raises(ValueError, match="depth shape must match depth_intrinsics"):
+        Observation(
+            frame=1,
+            timestamp_s=0.0,
+            pose=WorldPose(0.0, 0.0, 0.0, 0.0),
+            rgb=np.zeros((6, 8, 3), dtype=np.uint8),
+            depth_m=np.full((6, 8), 5.0, dtype=np.float32),
+            intrinsics=CameraIntrinsics.from_horizontal_fov(10, 10, 90.0),
+            camera_matrix=ue_camera_matrix(0.0, 0.0, 0.0, 0.0),
+            depth_image=np.full((6, 8, 3), 128, dtype=np.uint8),
+        )

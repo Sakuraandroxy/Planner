@@ -142,12 +142,38 @@ def test_depth_is_reported_in_metres_from_the_response():
     assert float(np.nanmax(observation.depth_m)) == pytest.approx(4.5)
 
 
-def test_mismatched_depth_shape_is_rejected():
-    """The contract is explicit: depth must cover the same pixels as rgb."""
+def test_a_depth_response_that_lies_about_its_size_is_rejected():
+    """``reshape`` is where a short float array shows up, wrapped as ObservationError.
+
+    Depth no longer has to match the rgb grid -- that requirement was what forced
+    metric depth to 1280x720 and a 25 s capture. What still has to hold is that the
+    buffer is as long as the response claims.
+    """
+    from planner.errors import ObservationError
+
     source = _source()
-    source.connection.responses[1] = _Response(4, 3, depth=True, timestamp_ns=1_000_000_020)
-    with pytest.raises(Exception, match="depth shape must match rgb"):
+    lying = _Response(4, 3, depth=True, timestamp_ns=1_000_000_020)
+    lying.image_data_float = lying.image_data_float[:6]      # claims 12, sends 6
+    source.connection.responses[1] = lying
+    with pytest.raises(ObservationError, match="cannot reshape array of size 6"):
         source.capture()
+
+
+def test_a_smaller_depth_grid_is_accepted_and_calibrated():
+    """The point of the shared contract change: rgb large, depth small, one FOV."""
+    source = _source()
+    source.depth_horizontal_fov_deg = None      # depth follows the camera's own FOV
+    source.connection.responses[1] = _Response(4, 3, depth=True, timestamp_ns=1_000_000_020)
+    observation = source.capture()
+
+    assert observation.depth_m.shape == (3, 4)
+    assert observation.rgb.shape[:2] == (6, 8), "rgb keeps its own grid"
+    depth = observation.depth_intrinsics
+    assert (depth.width, depth.height) == (4, 3)
+    assert depth.fx == pytest.approx(observation.intrinsics.fx / 2.0), (
+        "same FOV at half the width means half the focal length in pixels"
+    )
+    assert observation.depth_image.shape[:2] == observation.depth_m.shape
 
 
 def test_incomplete_pair_is_rejected():

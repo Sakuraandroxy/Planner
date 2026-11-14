@@ -20,7 +20,7 @@ class DepthForegroundFilter:
             if layer is not None:
                 near_min, near_max, far_min, cutoff = layer
                 layers.append(DepthPointLayer(sample.image_point, near_min, near_max, far_min, cutoff))
-                k = observation.intrinsics
+                k = observation.depth_intrinsics or observation.intrinsics
                 x,y = int(pixel[0]),int(pixel[1])
                 forward = sample.depth_m/math.sqrt(1+((x-k.cx)/k.fx)**2+((y-k.cy)/k.fy)**2)
                 if forward > cutoff:
@@ -34,7 +34,11 @@ class DepthForegroundFilter:
 
     def _layer(self,obs,bbox,depth,minimum_m,pixel):
         x,y = int(pixel[0]),int(pixel[1])
-        rgb,k = obs.intrinsics,obs.intrinsics
+        # ``pixel`` comes from project_camera against depth_intrinsics, so the window
+        # and its bounds belong to the depth grid; only the u/v mapping crosses back
+        # into normalised rgb coordinates. With one shared grid the two intrinsics are
+        # equal and this distinction is invisible, which is how it stayed wrong.
+        rgb,k = obs.intrinsics,(obs.depth_intrinsics or obs.intrinsics)
         radius = self.settings.pixel_radius
         x0,x1 = max(0,x-radius),min(k.width,x+radius+1)
         y0,y1 = max(0,y-radius),min(k.height,y+radius+1)

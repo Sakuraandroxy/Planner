@@ -1,15 +1,6 @@
 {
   "SeeDocsAt": "https://microsoft.github.io/AirSim/settings/",
-  "_why": [
-    "Planner-owned AirSim settings. /data/airsim/settings.json is shared with",
-    "airsim-flight-console and is left untouched.",
-    "Scene and DepthPerspective are captured at the SAME resolution because the",
-    "shared Observation contract validates depth_m.shape == rgb.shape[:2]",
-    "(planner/domain/observation.py). The console-facing file asks for",
-    "1920x1080 Scene against 256x256 Depth, which no capture can satisfy.",
-    "1280x720 matches the ProjectAirSim rig in config/base.yaml camera.width/height",
-    "so both simulator families hand the model the same geometry."
-  ],
+  "_why": "planner 自用的 AirSim settings，不动 /data/airsim/settings.json（airsim-flight-console 在用它）。RGB 保持 1280x720 供模型输入；深度改为 256x144 是传输层决定的：pixels_as_float=True 把深度当 float 数组发，msgpack-python 0.5.6 只有纯 Python 实现，实测 36864 个 float 同帧取回 0.24s，921600 个要 25-37s。两个 ImageType 用同一个 FOV，深度几何才能直接用 depth_intrinsics 反投射。",
   "SettingsVersion": 1.2,
   "LogMessagesVisible": false,
   "ClockSpeed": 1,
@@ -18,8 +9,18 @@
   "TargetFPS": 60,
   "CameraDefaults": {
     "CaptureSettings": [
-      { "ImageType": 0, "FOV_Degrees": 90, "Width": 1280, "Height": 720 },
-      { "ImageType": 2, "FOV_Degrees": 90, "Width": 1280, "Height": 720 }
+      {
+        "ImageType": 0,
+        "FOV_Degrees": 90,
+        "Width": 1280,
+        "Height": 720
+      },
+      {
+        "ImageType": 2,
+        "FOV_Degrees": 90,
+        "Width": 256,
+        "Height": 144
+      }
     ]
   },
   "Vehicles": {
@@ -28,19 +29,47 @@
       "AutoCreate": true,
       "Cameras": {
         "front_center": {
-          "X": 1, "Y": 0, "Z": 0,
-          "Pitch": 0, "Roll": 0, "Yaw": 0,
+          "X": 1,
+          "Y": 0,
+          "Z": 0,
+          "Pitch": 0,
+          "Roll": 0,
+          "Yaw": 0,
           "CaptureSettings": [
-            { "ImageType": 0, "Width": 1280, "Height": 720, "FOV_Degrees": 90.0 },
-            { "ImageType": 2, "Width": 1280, "Height": 720, "FOV_Degrees": 90.0 }
+            {
+              "ImageType": 0,
+              "Width": 1280,
+              "Height": 720,
+              "FOV_Degrees": 90.0
+            },
+            {
+              "ImageType": 2,
+              "Width": 256,
+              "Height": 144,
+              "FOV_Degrees": 90.0
+            }
           ]
         },
         "down_center": {
-          "X": 0, "Y": 0, "Z": 0,
-          "Pitch": -90, "Roll": 0, "Yaw": 0,
+          "X": 0,
+          "Y": 0,
+          "Z": 0,
+          "Pitch": -90,
+          "Roll": 0,
+          "Yaw": 0,
           "CaptureSettings": [
-            { "ImageType": 0, "Width": 1280, "Height": 720, "FOV_Degrees": 90.0 },
-            { "ImageType": 2, "Width": 1280, "Height": 720, "FOV_Degrees": 90.0 }
+            {
+              "ImageType": 0,
+              "Width": 1280,
+              "Height": 720,
+              "FOV_Degrees": 90.0
+            },
+            {
+              "ImageType": 2,
+              "Width": 256,
+              "Height": 144,
+              "FOV_Degrees": 90.0
+            }
           ]
         }
       }

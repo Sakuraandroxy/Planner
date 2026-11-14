@@ -198,6 +198,14 @@ class AirSimObservationSource:
             camera_position_world=(camera_position.x_val, camera_position.y_val, camera_position.z_val),
             rotation_camera_to_world=rotation,
             timestamp_ns=timestamp_ns,
+            # AirSim renders RGB and depth from one camera at one FOV into two
+            # buffers of two sizes; a pinhole with the same angle on a smaller grid
+            # keeps fx == width/2, so the depth calibration comes from the depth
+            # response. The build cannot report the effective per-camera FOV over
+            # RPC -- getSettingsString answers CameraDefaults even when the camera
+            # block overrides it -- so config/airsim_settings.json is what keeps the
+            # two ImageTypes at one FOV, and depth_horizontal_fov_deg is the escape
+            # hatch for a rig that renders depth at a different angle.
             depth_intrinsics=intrinsics_from_horizontal_fov(
                 depth_response.width, depth_response.height,
                 self.depth_horizontal_fov_deg or self._get_horizontal_fov_deg(),

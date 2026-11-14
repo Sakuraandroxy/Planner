@@ -37,9 +37,16 @@ def test_aligned_depth_image_requires_a_visualization():
 
 
 def test_aligned_depth_image_requires_matching_dimensions():
+    """Calibration that disagrees with the arrays now fails where it is written.
+
+    The contract used to compare depth against rgb only, so an observation could
+    declare a 4x4 depth camera while carrying a 6x8 grid and the lie surfaced
+    downstream in aligned_depth_image. ``depth_intrinsics`` is part of the invariant
+    now, so construction refuses it.
+    """
     smaller = CameraIntrinsics.from_horizontal_fov(4, 4, 90.0)
-    with pytest.raises(ObservationError):
-        aligned_depth_image(_observation(depth_intrinsics=smaller))
+    with pytest.raises(ValueError, match="depth shape must match depth_intrinsics"):
+        _observation(depth_intrinsics=smaller)
 
 
 def test_aligned_depth_image_rejects_invalid_depth_calibration():
