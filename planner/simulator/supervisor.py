@@ -26,6 +26,22 @@ from ..errors import SimulatorNotOwned, SimulatorRestartError
 LogFn = Callable[[str, str], None]
 
 
+class _LegacyPorts:
+    """Adapts the flat ``simulator`` section to the ``{ports.*}`` namespace."""
+
+    def __init__(self, settings) -> None:
+        self.launch_script = settings.launch_script
+        self.stop_script = settings.stop_script
+        self.settings_file = ""
+        self.res_x = 0
+        self.res_y = 0
+        self.ports = {
+            "xpra": settings.xpra_port,
+            "topics": settings.topics_port,
+            "services": settings.services_port,
+        }
+
+
 @dataclass(frozen=True)
 class _OwnedPid:
     label: str
@@ -87,12 +103,21 @@ def read_map_marker(path: str | Path, catalog: MapCatalog) -> str | None:
 class SimulatorSupervisor:
     """Stop and relaunch the simulator stack for a catalog map entry."""
 
+    #: Arguments the launch script receives, rendered from these placeholders.
+    #: Overridable per simulator so every family shares this one code path.
+    DEFAULT_TEMPLATE = (
+        "{map.launch_map}", "{display}", "{ports.xpra}",
+        "{ports.topics}", "{ports.services}",
+    )
+
     def __init__(
         self,
         settings: SimulatorSettings,
         project_dir: str | Path,
         log: LogFn | None = None,
         *,
+        simulator=None,
+        argv_template: tuple[str, ...] | None = None,
         runner: Callable[..., object] = subprocess.run,
         port_checker: Callable[[int], bool] = port_listening,
         clock: Callable[[], float] = time.monotonic,
@@ -107,6 +132,10 @@ class SimulatorSupervisor:
         self._clock = clock
         self._sleep = sleep
         self._cmdline_reader = cmdline_reader
+        # Without an explicit simulator the port names fall back to the flat
+        # settings block, which keeps single-simulator callers working.
+        self._simulator = simulator if simulator is not None else _LegacyPorts(settings)
+        self._template = tuple(argv_template or self.DEFAULT_TEMPLATE)
         self._runtime_dir = self._resolve(settings.runtime_dir)
         self._marker_file = self._resolve(settings.map_marker_file)
         self._display_name = settings.display[1:]
@@ -123,13 +152,21 @@ class SimulatorSupervisor:
             )
         )
 
+    def launch_argv(self, entry: MapEntry) -> list[str]:
+        """The launch-script arguments, rendered from the simulator template."""
+        from .argv import argv_values, render_argv
+
+        values = argv_values(
+            entry=entry,
+            simulator=self._simulator,
+            settings=self._settings,
+            runtime_dir=str(self._runtime_dir),
+        )
+        return render_argv(self._template, values)
+
     def launch_command(self, entry: MapEntry) -> str:
         """The exact launch-script invocation, for operator-facing logs."""
-        return (
-            f"{self._settings.launch_script} {entry.launch_map} "
-            f"{self._settings.display} {self._settings.xpra_port} "
-            f"{self._settings.topics_port} {self._settings.services_port}"
-        )
+        return " ".join([self._settings.launch_script, *self.launch_argv(entry)])
 
     def preflight(self) -> None:
         """Refuse to restart a stack that this project does not own."""
@@ -243,13 +280,7 @@ class SimulatorSupervisor:
             f"Launching map '{entry.id}' ({entry.launch_map}) {target}.",
             "INFO",
         )
-        args = [
-            entry.launch_map,
-            self._settings.display,
-            str(self._settings.xpra_port),
-            str(self._settings.topics_port),
-            str(self._settings.services_port),
-        ]
+        args = self.launch_argv(entry)
         if sim_only:
             args.append("--sim-only")
         output = self._run_script(

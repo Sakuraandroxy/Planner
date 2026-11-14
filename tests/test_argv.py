@@ -1,0 +1,74 @@
+"""One argv renderer for every simulator, with no silent literal leakage."""
+
+import pytest
+
+from planner.config import MapEntry
+from planner.simulator.argv import argv_values, render, render_argv
+from planner.domain.runtime import SimulatorFamily
+
+
+class Settings:
+    display = ":104"
+    xpra_port = 10010
+    topics_port = 8991
+    services_port = 8992
+    launch_script = "scripts/launch_projectairsim_xpra.sh"
+    stop_script = "scripts/stop_projectairsim_xpra.sh"
+
+
+def values(entry=None, simulator=None):
+    return argv_values(
+        entry=entry or MapEntry("city", "城市", "cityenviron",
+                                "scene_city_dual.jsonc", "config/scenes/city",
+                                "projectairsim"),
+        simulator=simulator or SimulatorFamily(
+            id="projectairsim", label="ProjectAirSim", driver="script",
+            launch_script=Settings.launch_script, stop_script=Settings.stop_script,
+            ports={"xpra": 10010, "topics": 8991, "services": 8992},
+        ),
+        settings=Settings(),
+        runtime_dir="output/xpra",
+    )
+
+
+def test_projectairsim_template_reproduces_the_script_invocation():
+    got = render_argv(
+        ("{map.launch_map}", "{display}", "{ports.xpra}", "{ports.topics}", "{ports.services}"),
+        values(),
+    )
+    assert got == ["cityenviron", ":104", "10010", "8991", "8992"]
+
+
+def test_airsim_template_carries_settings_and_the_binary_map_name():
+    entry = MapEntry("blocks", "Blocks", simulator="airsim",
+                     binary="/data/airsim/Blocks/Binaries/Linux/Blocks", map_name="Blocks")
+    simulator = SimulatorFamily(
+        id="airsim", label="AirSim", driver="xpra_start",
+        ports={"xpra": 10010, "rpc": 41451}, settings_file="/data/airsim/settings.json",
+        res_x=1280, res_y=720, argv=("xpra", "start"),
+        stop_argv=("xpra", "stop"),
+    )
+    got = render_argv(
+        ("{map.binary}", "{map.map_name}", "-settings={settings_file}", "-abslog={abslog}"),
+        values(entry, simulator),
+    )
+    assert got == [
+        "/data/airsim/Blocks/Binaries/Linux/Blocks",
+        "Blocks",
+        "-settings=/data/airsim/settings.json",
+        "-abslog=output/xpra/logs/blocks.log",
+    ]
+
+
+def test_unresolved_placeholder_raises_instead_of_leaking_the_token():
+    with pytest.raises(ValueError, match="does not provide"):
+        render("--start-child={nope}", values())
+
+
+def test_empty_value_raises_because_xpra_would_get_a_bare_flag():
+    with pytest.raises(ValueError, match="resolved to nothing"):
+        render("-settings={settings_file}", {"settings_file": "  "})
+
+
+def test_display_number_strips_the_colon_for_socket_paths():
+    assert values()["display_number"] == "104"
