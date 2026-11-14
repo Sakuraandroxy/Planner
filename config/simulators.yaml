@@ -23,7 +23,8 @@ default_simulator: projectairsim
 projectairsim:
   label: ProjectAirSim (UE5)
   driver: script
-  runtime: planner.runtimes.ue5
+  runtime: planner.simulators.projectairsim
+  argv: ["{map.launch_map}", "{display}", "{ports.xpra}", "{ports.topics}", "{ports.services}"]
   launch_script: scripts/launch_projectairsim_xpra.sh
   stop_script: scripts/stop_projectairsim_xpra.sh
   ports: {xpra: 10010, topics: 8991, services: 8992}
@@ -32,7 +33,7 @@ projectairsim:
 airsim:
   label: AirSim (UE4)
   driver: xpra_start
-  runtime: planner.runtimes.ue4
+  runtime: planner.simulators.airsim
   settings_file: /data/airsim/settings.json
   res_x: 1280
   res_y: 720

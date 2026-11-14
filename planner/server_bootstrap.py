@@ -65,7 +65,15 @@ def build_server(config: AppConfig):
 
         return ThreadedMissionWorker(session_factory)
 
-    supervisor = SimulatorSupervisor(config.simulator, PROJECT_DIR)
+    # One code path launches both simulators; only the argv template differs,
+    # and that template lives in config/simulators.yaml.
+    declared = config.families.entry("projectairsim")
+    supervisor = SimulatorSupervisor(
+        config.simulator,
+        PROJECT_DIR,
+        simulator=declared,
+        argv_template=declared.argv if declared is not None else None,
+    )
     marker = Path(config.simulator.map_marker_file)
     if not marker.is_absolute():
         marker = PROJECT_DIR / marker
