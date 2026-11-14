@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+
+# Runtime artifacts
+output/
+*.log
+
+# Simulator binaries, maps, scene packages and their bundled configs.
+# This directory is multi-GB; download it separately, never commit it.
+sim/
+
+# Local configuration with the plaintext API key (4 occurrences).
+# Keep the file locally; use api_key_env / VLN_API_KEY for publishing.
+
+# Packaging
+*.whl
+*.tar.gz
+
+# OS
+.DS_Store

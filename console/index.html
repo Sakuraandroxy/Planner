@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0e1214" />
+  <title>ProjectAirSim VLN 控制台</title>
+  <link rel="stylesheet" href="/console/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>ProjectAirSim VLN 控制台</h1>
+      <p class="subtitle">无人机 / 无人车视觉语言导航 · 实时画面、规划状态与剩余轨迹</p>
+    </div>
+    <div class="state-chip" id="state-chip" data-state="unknown">
+      <span class="dot"></span><span id="state-text">状态未确认</span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="card viewport-card" aria-label="交互画面">
+      <div class="card-head">
+        <h2>交互画面</h2>
+        <div class="head-tools">
+          <span class="muted" id="stream-status">连接交互画面…</span>
+          <button type="button" class="ghost" id="view-toggle">相机画面</button>
+        </div>
+      </div>
+      <div class="viewport" id="viewport">
+        <iframe id="xpra-frame" tabindex="0" title="ProjectAirSim 交互画面"
+          allow="fullscreen" referrerpolicy="no-referrer"></iframe>
+        <img id="video" alt="ProjectAirSim 相机实时画面" hidden />
+        <div class="overlay" id="video-overlay" hidden>
+          画面未就绪
+          <small>worker 连接 ProjectAirSim 后自动显示；任务运行时为实时画面</small>
+        </div>
+        <div class="overlay" id="xpra-overlay" hidden>
+          未连接任何场景
+          <small>先在「世界设置」选择地图并点击「启动场景」，就绪后点「重试画面」</small>
+        </div>
+        <div class="shield" id="view-shield" hidden></div>
+      </div>
+      <div class="card-foot">
+        <span class="muted" id="view-hint">xpra 交互画面 · 点击画面后用 WASD / 右键拖动</span>
+        <div class="foot-actions">
+          <div class="segmented" id="view-modes" role="group" aria-label="任务视角">
+            <button type="button" data-mode="rover_front" title="无人车前视">车前</button>
+            <button type="button" data-mode="rover_chase" title="无人车追尾">车尾</button>
+            <button type="button" data-mode="drone_front" title="无人机前视">机前</button>
+            <button type="button" data-mode="drone_chase" title="无人机追尾">机尾</button>
+          </div>
+          <button type="button" class="ghost" id="focus-view"
+            title="返回画面接收键盘输入；鼠标视角请点击画面">恢复控制</button>
+          <button type="button" class="ghost" id="retry-video">重试画面</button>
+          <a class="ghost" id="open-xpra" target="_blank"
+            rel="noopener noreferrer" hidden>独立打开 ↗</a>
+        </div>
+      </div>
+    </section>
+
+    <aside class="side">
+      <div class="side-scroll">
+        <section class="card">
+          <div class="card-head">
+            <h2>载具指令</h2>
+            <span class="hint">Enter 发送 · Shift+Enter 换行</span>
+          </div>
+          <form id="task-form" class="stack">
+            <label>载具</label>
+            <div class="segmented" id="vehicle-modes" role="group" aria-label="选择载具">
+              <button type="button" data-vehicle="rover"
+                title="切换到无人车：停放无人机并回到起点">无人车</button>
+              <button type="button" data-vehicle="drone"
+                title="切换到无人机：停放无人车并回到起点">无人机</button>
+            </div>
+            <label for="instruction">指令</label>
+            <textarea id="instruction" rows="3" maxlength="2000"
+              placeholder="例如：向前直行 5 米，然后左转 90 度，再开到前方的红色汽车；或：飞到画面中的目标"></textarea>
+            <div class="toolbar">
+              <button type="submit" id="start" class="primary" disabled>开始执行</button>
+              <button type="button" id="stop" class="danger" disabled>停止当前任务</button>
+              <button type="button" id="home" class="ghost" disabled
+                title="仅空闲时可用，当前选中载具会瞬时传送回出生点">回到起点</button>
+              <button type="button" id="clear-instruction" class="ghost">清空指令</button>
+            </div>
+          </form>
+          <p class="feedback" id="feedback" role="status"></p>
+          <dl class="facts">
+            <div><dt>当前载具</dt><dd id="current-vehicle">—</dd></div>
+            <div><dt>当前指令</dt><dd id="current-instruction">—</dd></div>
+            <div><dt>最近结果</dt><dd id="last-result">—</dd></div>
+          </dl>
+        </section>
+
+        <section class="card">
+          <div class="card-head">
+            <h2>世界设置</h2>
+            <span class="muted" id="world-current">选项未加载</span>
+          </div>
+          <div class="stack">
+            <label for="world-map">地图</label>
+            <select id="world-map" disabled></select>
+            <div class="toolbar">
+              <button type="button" id="world-apply" class="primary" disabled>应用世界设置</button>
+              <button type="button" id="world-reload" class="ghost" disabled>刷新选项</button>
+            </div>
+          </div>
+          <p class="feedback" id="world-feedback" role="status"></p>
+          <div class="model-block">
+            <div class="weather-head">
+              <strong>载具模型</strong>
+              <span class="hint" id="models-current">—</span>
+            </div>
+            <label for="model-rover">无人车模型</label>
+            <select id="model-rover" disabled></select>
+            <label for="model-drone">无人机模型</label>
+            <select id="model-drone" disabled></select>
+            <div class="toolbar">
+              <button type="button" id="models-apply" class="primary" disabled>应用载具模型</button>
+            </div>
+            <p class="feedback" id="models-feedback" role="status"></p>
+          </div>
+          <div class="weather-block">
+            <div class="weather-head">
+              <strong>天气</strong>
+              <span class="hint" id="weather-current">—</span>
+            </div>
+            <label for="weather-preset">预设</label>
+            <select id="weather-preset" disabled></select>
+            <details class="weather-details" id="weather-details">
+              <summary>全部天气参数</summary>
+              <div class="weather-grid" id="weather-fields"></div>
+            </details>
+            <div class="toolbar">
+              <button type="button" id="weather-apply" class="primary" disabled>应用天气</button>
+            </div>
+            <p class="feedback" id="weather-feedback" role="status"></p>
+          </div>
+        </section>
+      </div>
+
+      <section class="card trajectory-card" id="trajectory-card">
+        <div class="card-head">
+          <h2>剩余轨迹</h2>
+          <div class="head-tools">
+            <span class="muted" id="trajectory-status">等待连接</span>
+            <button type="button" class="ghost" id="trajectory-toggle"
+              aria-expanded="false" hidden>展开 ▾</button>
+          </div>
+        </div>
+        <ol class="trajectory-list" id="trajectory-list" hidden></ol>
+        <div class="trajectory-empty" id="trajectory-empty">
+          <strong id="trajectory-empty-title">等待任务</strong>
+          <small id="trajectory-empty-hint">提交任务后这里会显示剩余航点</small>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <footer class="foot">
+    <span>状态与剩余轨迹来自规划服务；执行日志仍可通过 /api/logs 获取。交互画面经 xpra 提供。</span>
+    <a href="/docs" target="_blank" rel="noopener">API 文档 ↗</a>
+  </footer>
+
+  <script src="/console/app.js"></script>
+</body>
+</html>

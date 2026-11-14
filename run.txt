@@ -1,0 +1,186 @@
+conda activate carla-vln
+
+仿真器端口: 8991 主题 / 8992 服务（CityEnviron 默认）
+规划服务端口: 8000（控制台同源）
+xpra 交互画面端口: 10010
+显示号: :104（Xvfb，本机 Display，不是 TCP 端口）
+
+# ---- 端口分配 ----
+# 8991  ProjectAirSim topic（msgpack 订阅，单消费者）
+# 8992  ProjectAirSim service（同步请求）
+# 8000  规划服务 + 控制台（scripts/serve_planner.py）
+# 10010 xpra HTML5 交互画面（浏览器直连，控制台默认嵌入）
+# :104  Xvfb 虚拟显示（CityEnviron 默认）
+# :105  第二张地图（例如 Neighborhood）建议使用的独立显示
+
+# 终端 1：后端 + 控制台（同源，无需单独前端）
+python scripts/serve_planner.py
+# 启动时不连接仿真器、不加载场景、没有画面，状态 disconnected。
+#   若上一轮由启动脚本拉起的仿真栈还在跑，启动时先按要求停掉它
+#   （只停 pidfile + 命令行校验属于本项目的进程；手工启动的外部进程不动，
+#   这时画面可能仍显示旧场景）。
+#   任务、载具、天气、模型控件在选场景前都不可用（503）。
+# 浏览器打开控制台 →「世界设置」选地图 → 点「启动场景」：
+#   后台用 scripts/launch_projectairsim_xpra.sh 拉起仿真栈（状态 connecting，
+#   就绪后自动变 idle，交互画面自动重试加载）。
+#   同图已在运行（例如只重启了规划服务）→ 直接连接，不重启仿真器；
+#   另一张图在运行 → 只重启 UE 进程（Xvfb/xpra 保留、画面不断流；两者不在时
+#   才整套重启；一个 UE 进程只能加载一张 cooked 地图）。
+#   启动失败回到 disconnected，原因写在 /api/status 的 sim_error；
+#   修好仿真器后再点一次「启动场景」重试。
+# 本机浏览器：http://127.0.0.1:8000/
+# 局域网浏览器：python scripts/serve_planner.py --host 0.0.0.0
+#              然后打开 http://<本机IP>:8000/
+# 控制台主画面是 xpra 交互窗口（默认嵌入 10010）；
+# xpra 换端口时用 ?xpra=<host>:<port> 覆盖，例如
+# http://127.0.0.1:8000/?xpra=127.0.0.1:10011
+# 也可以不用控制台，直接 POST /api/world {"map":"cityenviron"} 启动。
+
+# 终端 1（可选，手动）：提前拉起仿真器 + xpra（Xvfb → 窗口化 UE → xpra shadow）
+# 手动跑它用于提前开画面、换显示号/端口，或让控制台直接连接。
+# 参数：scripts/launch_projectairsim_xpra.sh [MAP] [DISPLAY] [XPRA_PORT] [TOPICS_PORT] [SERVICES_PORT]
+# 默认：cityenviron :104 10010 8991 8992
+scripts/launch_projectairsim_xpra.sh
+# 显示号上已有同名仿真窗口时只启动 xpra 并复用现有窗口（不会重启仿真器）。
+# 交互画面：http://<本机IP>:10010/   （无鉴权，仅限可信局域网）
+# 点击画面后用 WASD / 右键拖动操作场景。
+# 日志与 pidfile：output/logs/、output/xpra/
+# 只想看画面、不想停仿真器时：scripts/stop_projectairsim_xpra.sh :104 --view-only
+
+# 终端 2（可选）：实机冒烟（不经过规划服务，直接连仿真器）
+# 注意：一个仿真器实例只允许一个客户端；先停规划服务（或让控制台回到
+#   disconnected），冒烟完再起服务。规划服务只在你点「启动场景」时才拉起
+#   仿真器，所以先停仿真器再跑冒烟是安全的。
+python scripts/smoke_projectairsim.py            # M1：双载具场景 + RGB/深度取图
+python scripts/smoke_projectairsim_adapter.py    # M2：连接、取帧、碰撞、重载场景
+python scripts/smoke_projectairsim_rover.py      # M3：直行/倒车 + 连续 free_navigation + 停止
+python scripts/smoke_projectairsim_drone.py      # M4：起飞、位置保持、基础飞行、视觉目标
+# 产物默认写到 output/ 下。
+
+# ---- 任务语义 ----
+# 控制台/API 只提交自然语言指令：
+#   {"instruction":"向前直行 5 米，然后左转 90 度，再开到前方的红色汽车","vehicle":"rover"}
+# task_parser 把指令解析成 mission_plan_v1 的有序阶段，逐阶段执行：
+#   - basic_motion：直行/倒车 N 米、左/右转 N 度的同步运动段；
+#     forward_m 为负=倒车，yaw_right_deg 为负=左转；不启用碰撞门。
+#   - visual_goal_navigation：静态目标检测 + 5 航点规划 + 滑窗连续执行，
+#     本地到达条件与 task_completion 语义确认都通过才报告 reached；
+#     完成规则在 config/tasks/visual_goal_navigation.yaml。
+#   - free_navigation：“沿着道路一直前进，不要碰到障碍物”这类无目标道路跟随。
+#     连续滑窗执行：队列常驻 5–10 个世界航点、后台续规划、20 Hz 连续跟随，
+#     不再每 5 个航点停车取帧；无总时长上限、不会自动完成，只能停止或本地失败。
+#     原生碰撞传感器触发有界倒车（3/6/9 m）+ 清空队列 + 重新规划；
+#     累计前进 20 m 后清零恢复预算。必须是最后一个阶段。
+#   - sliding_window.enabled=false 时回退为停车分批执行（用于对比/排障）。
+# 严格解析：task_parser 未配置或端点不可用时服务仍启动、画面可看，
+#   但所有任务被明确拒绝；解析失败/超时整单拒绝，不执行部分阶段。
+#   未配置 trajectory_planner 时 free_navigation 不会被宣告为可用类别。
+
+# ---- 双载具 ----
+# 一个会话同时持有 Rover1 与 Drone1，任务按 vehicle 路由（rover / drone）。
+# 控制台点击“无人机/无人车”= 切换即归位：停放另一台（无人机落地确认、
+# 无人车刹车）、把选中载具瞬时传送回出生点、把另一台抬升到地图上方
+# 1000 m 并保持高度（画面里只剩一台）、画面切到选中载具的尾视角（追尾相机）。
+# 场景就绪（点「启动场景」后）的初始状态是默认载具（无人车）+ 尾视角，
+# 无人机在画面外；disconnected 时没有会话，也就没有载具与视角。
+# 重复点当前载具 = 再次归位；停放失败时状态回滚到点击前的载具与视角。
+# 切换载具时先停放非活动载具：无人机降落并确认触地，无人车刹车。
+# 无人车归位目标是暖机刹车沉降后实测的贴地姿态（日志 Rover home pose measured ... z=...），
+#   不是场景文件里的作者坐标；后者比路面高约 1 米，直接按它归位会让车悬空
+#   （归位日志也打印 z）。
+# 标定/切载具/切机位期间控制台盖不透明黑色遮罩（status.view_pending=true 或
+#   状态 connecting），机位确认后才显示画面，看不到相机循环的中间帧。
+# 无人机只在任务真正路由到它时才起飞并进入位置保持。
+# 队列空闲时 idle_tick 以 20 Hz 推进暂停世界，xpra 画面保持实时。
+# 无人车控制：速度/偏航率 → 纯追踪 + 速度 PID → set_rover_controls。
+# 无人机控制：MoveByVelocity / MoveByVelocityAsync。
+
+# ---- HTTP ----
+# POST /api/tasks   {"instruction":"...","vehicle":"rover"|"drone"}；仅 idle，202
+# GET  /api/status  状态、当前指令、最近结果、当前/可用载具、view_mode/view_pending
+# GET  /api/logs?cursor=N   增量日志（内存环形缓冲，默认 500 条）
+# GET  /api/trajectory      剩余世界航点、队列占用、里程、位姿
+# POST /api/stop    停止当前任务；执行中 202、空闲 200
+# POST /api/home    回出生点 {"vehicle":"rover"|"drone"}，缺省当前载具；仅 idle，202
+# POST /api/vehicle 切换载具 {"vehicle":"rover"|"drone"}：停放另一台 +
+#                   选中载具回出生点 + 切到它的尾视角；仅 idle，202
+# POST /api/world   启动/切换地图 {"map":"cityenviron"|"neighborhood"}
+#                   可在 disconnected（启动场景）或 idle（应用世界设置）提交；
+#                   202 已接受（拉起/连接/换图重拉 UE）/ 200 无变化（仅 idle 同图）/
+#                   409 运行或停止中 / 503 连接中 / 400 未知地图或非脚本托管
+# GET  /api/world/options  地图目录、标签、当前选择、simulator_owned
+# GET  /api/models  每台载具当前模型、可选模型（id + 标签）与 switching
+# POST /api/models  切载具外观模型 {"models":{"drone":"hexarotor"}}（可只给一台）；
+#                   仅 idle，202 重载场景 / 200 无变化 / 409 / 503 / 400
+# GET  /api/weather        8 参数定义 + 预设；POST /api/weather 提交任意子集（0–1）
+# POST /api/view    切机位 {"mode":"rover_front"|"rover_chase"|"drone_front"|"drone_chase"}
+#                   任务运行中接受但 deferred=true，任务结束后生效
+# 状态码：连接中 503；运行/停止中 409；未知载具/地图 400；请求体校验失败 422。
+# 两车出生点完全相同、同一时刻只显示一台：
+#   CityEnviron：Rover 与 Drone 均在 -45,-22（西侧路口沥青路中心）；
+#   Neighborhood：均在 0,-16（沥青路中心，朝 +x）。
+#   场景时钟在加载时暂停（pause-on-start），无人机不会在加载等待里下坠；
+#   标定前先把非活动载具传送到地图上方 1000 m 并隐藏（物理世界里仍存在），
+#   四个机位因此看到不同画面，标定完成后再切到默认载具的追尾视角。
+# 停止在解析/采集/模型调用/航点/连续控制环检查点生效，
+#   日志出现 “Stop confirmed”，last_result = cancelled: ...，状态回 idle。
+# 回起点对无人机同样可用（瞬时 SetPose 回出生点，实测高度确认贴地）。
+
+# ---- 地图切换 ----
+# ProjectAirSim 一个进程只加载一张 cooked UE 地图，不能热换。
+# 控制台/API 换图 = 停 worker（跳过无人机降落，场景马上销毁）→ stop 脚本只停
+#   UE（--sim-only，Xvfb/xpra 保留、画面不断流）→ launch 脚本在同一显示上拉起
+#   目标地图 → 重连并重建双载具会话。显示号/端口保持不变（:104 10010 8991
+#   8992）；Xvfb/xpra 不在时才整套重启。
+# 前提：仿真器必须由 scripts/launch_projectairsim_xpra.sh 拉起（有 pidfile）；
+#   手工启动的仿真器会被拒绝换图，后台不会误杀外部进程。
+# 地图目录：config/maps.yaml；当前地图记录在 output/xpra/current_map，
+#   规划服务重启时按 marker 恢复，marker 无效才回退 default_map。
+# 换图成功后天气自动重放；视角一律重置为默认载具的尾视角（不回放旧机位）。
+# 服务重启后天气也重置为默认。
+# 换图期间服务短暂 connecting，任务返回 503；等状态回 idle 再提交。
+# 视角顺序不再依赖固定列表：会话加载场景后自动标定（xpra 截图与各相机
+#   GetImages 帧匹配，首次约 5 秒；无人车 Chase 相机不可取帧，配置
+#   uncapturable_views 直接跳过、用排除法定位），按整圈做全局排列求解；
+#   两台无人机相机画面接近时用“另一台相机在别处得分更高”的整圈证据判定，
+#   两组排列总分差小于 0.10 视为歧义。每次切机位后等 xpra 影子帧稳定
+#   （连续两帧相关度 ≥ 0.9995 且不同于上一机位）再采样，避免读到旧画面。
+#   标定成功后立即切到默认载具的尾视角；结果按场景文件缓存，同一场景再次
+#   加载只用一张截图做锚点校验（约 2 秒），不通过再完整标定；失败才回退
+#   内置顺序并记 WARNING。
+# 手动取证可跑：
+#   conda run -n carla-vln python scripts/calibrate_streaming_views.py --display :104
+#   截图写到 output/calibration/，按画面确认 4 个机位。
+# 手动启动 Neighborhood（不经控制台）：
+#   scripts/launch_projectairsim_xpra.sh neighborhood :105 10011 8993 8994
+#   并让 config/base.yaml 的 projectairsim 端口/场景匹配后重启服务。
+# 不要让两张 UE5 地图同时占用 GPU；Blocks 只用于启动链路冒烟。
+# 关闭：scripts/stop_projectairsim_xpra.sh :105
+
+# ---- 载具外观模型（config/base.yaml 的 vehicle_models）----
+# 这里指仿真里显示哪一款载具网格，不是 VLM 端点。
+# 可选值只来自引擎打包资源：无人车仅 offroad（越野车）；
+#   无人机 quadrotor（四旋翼，默认）/ hexarotor（六旋翼）。
+#   跑车是 skeletal mesh（SKM_SportsCar），unreal_mesh 只能加载 StaticMesh，
+#   所以不放进目录。
+# 控制台“世界设置 → 载具模型”两个下拉框 + 应用按钮；也可直接调
+#   GET  /api/models、POST /api/models。
+# 切换只重启 worker 并在同一个仿真器进程里重新加载场景变体（不重启 UE、
+#   不换 cooked 地图）；两台载具都回出生点，已保存天气在新会话 READY 后重放。
+# 六旋翼用 scene_*_dual_hexarotor.jsonc + robot_drone_hexarotor.jsonc
+#   （官方布局，simple-flight-api 六电机顺序）。
+# 切换期间状态 connecting，任务与其它设置返回 503/409。
+# 模型选择不跨规划服务重启保存，重启后回 vehicle_models 的 default。
+
+# ---- 模型端点（config/base.yaml）----
+# task_parser / target_detection / trajectory_planner / task_completion
+# 每段可写 api_key（优先），留空则读 api_key_env（默认 VLN_API_KEY）；
+# 改完重启服务。填入真实密钥的配置文件不要提交版本库，密钥不要写进日志。
+
+# ---- 日志与诊断 ----
+# 运行日志 = LogBuffer 内存环形缓冲（server.log_buffer_size，默认 500 条），
+#   通过 GET /api/logs?cursor=N 增量读取，进程退出即丢失。
+# Python logging / uvicorn 写 stderr（nohup 时重定向到文件）。
+# 视觉目标诊断：output/visual_goal/（每个任务一个目录，含观测 RGB/深度、
+#   depth_m npy、events.jsonl、控制遥测 CSV）。
+# xpra 日志：output/xpra/logs/；仿真器日志：output/logs/。

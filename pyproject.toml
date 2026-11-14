@@ -1,0 +1,25 @@
+[project]
+name = "airsim-vln"
+version = "0.1.0"
+description = "Vision-language navigation closed loop on ProjectAirSim (UE5): drone + rover"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "opencv-python-headless>=4.8",
+    "pyyaml>=6.0",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "pydantic>=2.0",
+    "httpx>=0.27",
+    # projectairsim==1.0.2 is installed from the ProjectAirSim client wheel
+    # (not published on PyPI); it is a pure-Python package and its runtime
+    # dependencies (msgpack, pynng, commentjson, jsonschema, pykml, pqdict,
+    # cryptography) are installed separately.
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

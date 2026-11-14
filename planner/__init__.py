@@ -1,0 +1,1 @@
+"""CARLA vision-language navigation skeleton."""

@@ -1,0 +1,291 @@
+# ProjectAirSim（UE5）仿真连接配置。
+# CityEnviron 使用双端口协议：8991 主题（msgpack 订阅）、8992 服务（同步请求），
+# 与经典 AirSim 的 41451 RPC 不兼容。
+projectairsim:
+  address: 127.0.0.1
+  port_topics: 8991
+  port_services: 8992
+  timeout_s: 10.0
+  # 由 World 加载的双车场景（无人机 + 地面车）与配置目录。
+  scene_file: scene_city_dual.jsonc
+  # 相对路径以仓库根目录为基准。
+  sim_config_path: config/scenes/city
+  # 场景加载完成后等待渲染稳定再取第一帧，单位秒。
+  # 双载具场景的时钟在加载时是暂停的（pause-on-start），两台车共用同一个
+  # 地面出生点；会话在任何时钟推进之前先把非活动载具传出画面，因此不会出现
+  # 无人机下坠或两车碰撞。这里的等待只用于等 UE 渲染出首帧。
+  delay_after_load_s: 2.0
+  # 机位标定时不尝试 GetImages 的机位（对应 robot JSONC 里
+  # capture-enabled: false）。无人车 Chase 相机从不采集帧，提前标记可省掉
+  # 每次 8 秒的取帧超时；该机位由排除法定位。
+  uncapturable_views: [rover_chase]
+  rover_name: Rover1
+  drone_name: Drone1
+  # 传感器 id，须与 robot_rover.jsonc / robot_drone_cameras.jsonc 一致。
+  front_camera: FrontCamera
+  chase_camera: Chase
+  down_camera: DownCamera
+
+# 仿真器进程托管：控制台换图时由后台 stop/launch 脚本重启整套仿真栈。
+# 只停止本项目启动脚本写下的 pidfile 进程，绝不强杀手动启动的仿真器。
+simulator:
+  launch_script: scripts/launch_projectairsim_xpra.sh
+  stop_script: scripts/stop_projectairsim_xpra.sh
+  display: ":104"
+  xpra_port: 10010
+  # 必须与 projectairsim.port_topics/port_services 一致，启动时校验。
+  topics_port: 8991
+  services_port: 8992
+  # pidfile 与 xpra 运行目录；当前地图标记也写在 map_marker_file。
+  runtime_dir: output/xpra
+  map_catalog_file: maps.yaml
+  map_marker_file: output/xpra/current_map
+  # 脚本等待窗口/端口就绪的顶层超时与端口释放轮询超时，单位秒。
+  launch_timeout_s: 180.0
+  stop_timeout_s: 40.0
+  port_release_timeout_s: 30.0
+  # 换图失败时整套重启的最大尝试次数。
+  restart_attempts: 2
+
+# 载具外观模型（不是 target_detection/trajectory_planner 的模型服务端点）。
+# 切换模型只重启 worker 并重载场景：仿真器进程与 cooked 地图不变，
+# 两台载具回到出生点，天气按已保存状态重放。
+# 只能使用引擎里打包的网格：无人车 OffroadCar，无人机四旋翼/六旋翼。
+vehicle_models:
+  rover:
+    default: offroad
+    options:
+      - id: offroad
+        label: 越野车
+  drone:
+    default: quadrotor
+    options:
+      - id: quadrotor
+        label: 四旋翼
+      # 六旋翼没有默认场景；每张可切换地图都要有对应场景文件。
+      - id: hexarotor
+        label: 六旋翼
+        scene_files:
+          cityenviron: scene_city_dual_hexarotor.jsonc
+          neighborhood: scene_neighborhood_dual_hexarotor.jsonc
+
+camera:
+  # 运行相机（FrontCamera）的实际采集分辨率，须与 robot_rover.jsonc 的
+  # capture-settings 一致；内参由图像尺寸与水平视场角推导。
+  width: 1280
+  height: 720
+  hfov_deg: 90.0
+  # ProjectAirSim 深度图（image-type 2）直接给出米制射线距离（float16），
+  # 天空/远景饱和为 65504；far_m 不参与解码，仅保留配置校验。
+  far_m: 1000.0
+  depth_is_range: true
+  # 相机挂载偏移，机体坐标：前、右、下（米），与 ProjectAirSim NED 机体一致。
+  # 机体原点基本贴地（车轮中心在原点上方 0.45 米），前视相机装在车头前缘
+  # 并抬高 0.8 米，避免相机沉到路面以下、也避免车身占据画面下部。
+  offset_m: [1.8, 0.0, -0.8]
+  # 相机相对机体的安装姿态（度，NED roll/pitch/yaw），
+  # 用于从相机主题消息的位姿反推车体位姿。
+  mount_rpy_deg: [0.0, -3.0, 0.0]
+
+drone:
+  # 参考 Planner 的无人机飞行参数（AirSimConfig.speed_mps / move_timeout_s）。
+  # 平滑运动规划使用的平移速度上限，单位米/秒。
+  speed_mps: 2.0
+  # 单段运动执行与停稳等待的超时上限，单位秒。
+  move_timeout_s: 60.0
+  # 原生起飞与降落各自的仿真时间上限，单位秒。
+  takeoff_timeout_s: 30.0
+  land_timeout_s: 30.0
+  # 起飞前等待状态稳定（时间戳推进且静止）的持续时间与轮询间隔，单位秒。
+  readiness_stable_s: 2.0
+  readiness_poll_interval_s: 0.25
+  # 前视相机相对机体原点的安装位置（前、右、下，米）与姿态（度）。
+  # 与 robot_drone_flight.jsonc 的 FrontCamera origin/rpy 一致。
+  camera_offset_m: [1.0, 0.0, 0.0]
+  camera_mount_rpy_deg: [0.0, 0.0, 0.0]
+
+# 深度可视化协议与范围；原始目标定位沿用下限，但不受显示上限限制。
+depth:
+  # 深度可视化编码协议，须与规划模型训练一致；当前为对数反向灰度。
+  mapping: log_inverse_gray_v1
+  # 深度可视化下限及原始目标定位深度下限，单位米。
+  min_m: 0.5
+  # 深度可视化上限，单位米；不限制原始目标定位距离。
+  max_m: 200.0
+
+motion:
+  max_speed_mps: 5.0
+  max_accel_mps2: 1.5
+  max_yaw_rate_dps: 30.0
+  max_yaw_accel_dps2: 60.0
+  control_hz: 20.0
+  min_duration_s: 1.0
+  # 参考连续跟踪协议（滑窗续规划与连续执行使用）。
+  continuous:
+    # 路径参考点的前瞻时间，单位秒，随当前速度调整前瞻距离。
+    lookahead_time_s: 0.6
+    # 路径参考点的最小前瞻距离，单位米。
+    min_lookahead_m: 0.3
+    # 路径参考点的最大前瞻距离，单位米。
+    max_lookahead_m: 1.5
+    # 平移加速度的最大变化率，单位米/秒³。
+    max_jerk_mps3: 3.0
+    # 偏航角加速度的最大变化率，单位度/秒³。
+    max_yaw_jerk_deg_s3: 60.0
+
+# OpenAI-compatible vision endpoint used for target grounding (M3).
+# Leave url/model empty to use the manual detector configured under server.
+# Port 8010 keeps the model service separate from this planner's HTTP API (8000).
+target_detection:
+  # HTTP request format: openai sends max_completion_tokens; deepseek sends
+  # max_tokens plus a thinking switch; anthropic uses the Messages API
+  # (reasoning_effort must stay none). The local vLLM endpoint is OpenAI-style.
+  request_format: anthropic
+  url: https://api.deepseek.com/anthropic
+  model: deepseek-flash
+  # 直接写在配置里的密钥，优先于 api_key_env；留空则读取环境变量。
+  # 填入真实 key 后请勿把本文件提交到版本库。
+  api_key: ""
+  # Read the bearer token from this environment variable; never commit keys.
+  api_key_env: VLN_API_KEY
+  timeout_s: 30.0
+  # none disables thinking for openai (reasoning_effort=none).
+  reasoning_effort: none
+  # Upper bound for the bbox plus up to five self-chosen surface points.
+  max_completion_tokens: 2048
+  max_image_side: 1024
+  # Surface samples nearer than this are treated as invalid.
+  minimum_depth_m: 0.5
+
+# OpenAI-compatible VLM endpoint used for the 5-waypoint trajectory (M4).
+trajectory_planner:
+  url: https://api.deepseek.com/anthropic
+  model: deepseek-flash
+  # 优先使用此处的 key；留空则读取 api_key_env。
+  api_key: ""
+  api_key_env: VLN_API_KEY
+  timeout_s: 60.0
+  max_tokens: 256
+  # 与其它三段一致：openai / deepseek / anthropic。
+  # anthropic 使用 Messages API，只接受 reasoning_effort: none。
+  request_format: anthropic
+  reasoning_effort: none
+  # 地面车 VLM 实测输出约 4 m 步长；参考 UAV 默认上限为 30 m。
+  max_step_m: 10.0
+
+# 独立任务完成判断模型：本地到达条件满足后调用，只接受 true 或 false。
+task_completion:
+  url: https://api.deepseek.com/anthropic
+  model: deepseek-flash
+  # 优先使用此处的 key；留空则读取 api_key_env。
+  api_key: ""
+  api_key_env: VLN_API_KEY
+  timeout_s: 20.0
+  max_completion_tokens: 2048
+  reasoning_effort: none
+  request_format: anthropic
+
+# 任务解析模型：自然语言指令 → mission_plan_v1（有先后顺序的阶段）。
+# 严格要求：url/model 留空或端点不可用时，控制台仍可连接/看画面，
+# 但所有任务都会被明确拒绝，没有确定性回退。
+task_parser:
+  url: https://api.deepseek.com/anthropic
+  model: deepseek-flash
+  # 优先使用此处的 key；留空则读取 api_key_env。
+  api_key: ""
+  api_key_env: VLN_API_KEY
+  timeout_s: 60.0
+  max_completion_tokens: 2048
+  reasoning_effort: none
+  request_format: anthropic
+
+# 滑窗续规划：已有队列执行时请求后续点；队列耗尽而新点未就绪时允许等待。
+sliding_window:
+  # true 启用支持滑窗的工作流续规划。
+  enabled: true
+  # 已授权世界航点的队列容量；每次新增仍为 5 点。
+  max_buffer_points: 10
+  # 剩余航点数不超过此值时触发补点，范围 1 至 5。
+  refill_pending_count: 3
+  # 提前补点的时间余量，单位秒。
+  latency_margin_s: 1.5
+  # 连续执行以时间触发续规划，单位秒。
+  planning_interval_s: 5.0
+  # 单次滑窗阶段的总时长上限，单位秒。
+  max_task_duration_s: 600.0
+  # 连续规划失败达到此次数时终止滑窗续规划；留出余量吸收端点偶发超时。
+  max_consecutive_plan_failures: 4
+  # 滑窗规划观测的最大有效年龄，单位秒。
+  max_observation_age_s: 120.0
+
+# 无目标道路跟随（free_navigation）的接触恢复。
+free_navigation:
+  # ProjectAirSim 原生碰撞事件触发后沿当前航向倒车的距离，单位米。
+  # 第 n 次连续恢复按 n 倍递增（默认 3/6/9 米），让重规划获得更宽的视野。
+  collision_backoff_m: 3.0
+  # 单次任务允许的碰撞恢复次数；超过后按执行错误结束。
+  maximum_collision_recoveries: 3
+  # 恢复后累计前进达到此距离时清零连续恢复计数，单位米。
+  # 自由导航是无界任务：只有连续原地反复碰撞才应耗尽预算。
+  collision_recovery_reset_m: 20.0
+
+# 视觉目标导航工作流专用配置。
+visual_goal_navigation:
+  enabled: true
+  # 确认 RGB/深度配准、内参与深度语义已核实；false 阻止视觉任务准备。
+  geometry_verified: true
+  # 本工作流是否读取仿真器碰撞事件并中断。
+  collision_check_enabled: false
+  # 视觉任务诊断日志和观测图像的输出根目录。
+  output_root: output/visual_goal
+  # 完成判定规则文件；相对路径以主配置所在目录为基准。
+  completion_rules_file: tasks/visual_goal_navigation.yaml
+  # 本地表面点深度筛选：不增加模型请求，只删除明显远背景层的原有点。
+  depth_foreground_filter:
+    enabled: true
+    pixel_radius: 3
+    depth_gap_ratio: 4.0
+  # 目标框中心测距、接近、确认与搜索策略参数。
+  limits:
+    # 距离测量的工程余量，单位米；0 表示不额外收紧完成判定半径上限。
+    distance_uncertainty_margin_m: 0.0
+    # 相对阶段起点允许的最大高度变化，单位米；null 不限制。
+    maximum_vertical_offset_m: null
+    # 本地到达条件需要的连续合格观测次数，至少 2。
+    confirmation_count: 2
+    # 连续到达确认观测之间的最小时间间隔，单位秒。
+    confirmation_interval_s: 0.5
+    # 单个视觉任务阶段允许的最大规划轮数。
+    maximum_planning_rounds: 30
+    # 单个视觉任务阶段总时长上限，单位秒。
+    maximum_task_duration_s: 600.0
+    # true 允许目标不可见时按本地策略分步转向搜索。
+    search_enabled: true
+    # 飞行中目标检测的最小刷新间隔，单位秒。
+    target_refresh_interval_s: 5.0
+    # 后续候选位置相对首次锁定点允许的最大三维偏差，单位米。
+    target_position_update_radius_m: 0.5
+
+# HTTP planner service (M5). The console talks to this process; the worker
+# owns the ProjectAirSim connection on a dedicated thread.
+server:
+  host: 127.0.0.1
+  port: 8000
+  # manual = fixed normalized box; vlm = target_detection endpoint above.
+  detector: vlm
+  # geometric = deterministic bearing planner; vlm = trajectory_planner above.
+  planner: vlm
+  # Box used by the manual detector, normalized to the image frame.
+  manual_bbox: [0.47, 0.62, 0.53, 0.66]
+  # Optional normalized u,v surface points; empty aims at the box centre.
+  manual_surface_points: []
+  allowed_origins: ["*"]
+  log_buffer_size: 500
+  reconnect_interval_s: 2.0
+  startup_timeout_s: 60.0
+  # Latest-frame rate for GET /api/video (the 20 Hz control loop is decoupled).
+  video_fps: 10.0
+  # 会话内可接任务的载具；任务提交时必须指定其中之一。
+  vehicles: ["rover", "drone"]
+  # 控制台默认选中的载具。
+  default_vehicle: rover

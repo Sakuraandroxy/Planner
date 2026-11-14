@@ -1,0 +1,23 @@
+# 控制台可切换的仿真地图目录。
+#
+# ProjectAirSim 一个 UE 进程只加载一张 cooked 地图，不能在运行中换图；
+# 切换地图 = 后台停掉整套仿真栈（xpra + UE + Xvfb），再用 launch_map
+# 对应的启动脚本拉起目标地图，然后重连。
+#
+# id:            控制台/API 使用的地图标识。
+# label:         控制台显示名称。
+# launch_map:    scripts/launch_projectairsim_xpra.sh 的第一个参数。
+# scene_file:    该地图的双载具场景 JSONC（位于 sim_config_path 下）。
+# sim_config_path: World 加载场景时的配置目录（相对仓库根目录）。
+default_map: cityenviron
+maps:
+  - id: cityenviron
+    label: 城市 CityEnviron
+    launch_map: cityenviron
+    scene_file: scene_city_dual.jsonc
+    sim_config_path: config/scenes/city
+  - id: neighborhood
+    label: 郊区 Neighborhood
+    launch_map: neighborhood
+    scene_file: scene_neighborhood_dual.jsonc
+    sim_config_path: config/scenes/neighborhood

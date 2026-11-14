@@ -1,0 +1,4 @@
+from .system import TARGET_DETECTION_SYSTEM_PROMPT
+from .visual_goal_target_detection import VisualGoalTargetDetectionPrompt
+
+__all__ = ["TARGET_DETECTION_SYSTEM_PROMPT", "VisualGoalTargetDetectionPrompt"]
