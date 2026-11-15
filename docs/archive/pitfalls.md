@@ -130,6 +130,29 @@ CityEnviron 与 AirSimNH 两个打包产物不写日志文件，`-log` 也不往
 新增 `tests/test_airsim_port_names.py`，用 AST 扫属性访问并比对真实成员，0.19 秒跑完。
 这类错不该靠整机启动才发现。
 
+### 规划器飞行时机身左右摆动，视角大抖
+
+现象：同一台机，`basic_motion` 的「往前飞 50 米」机身几乎不摆；
+换成 `visual_goal_navigation`（连续跟踪）后飞行中横滚 ±7°、俯仰峰峰 27.6°，画面明显晃。
+
+根因：运动取帧走的是控制回路那条连接。`capture_moving` 跑在 worker 线程上，
+而 `AirSimConnection.call` 全程持锁，这台机器上 `simGetImages`（1280×720 PNG + 256×144 深度浮点）
+持锁 0.4~0.5 秒。控制拍被拖长后，0.2 秒的速度指令在空档里过期，AirSim 让飞机自己刹车，
+下一拍再加速——每个规划轮一次。
+
+量化证据（一次 66 秒的规划器飞行，`control_samples.csv`）：控制拍 16 次达到 0.41~0.54 秒
+（正常 0.05 秒），roll 峰峰 16.9°、pitch 峰峰 27.6°，命令速度在 0.6~3.6 m/s 之间摆动；
+同一份数据里 `basic_motion` 那一段 roll 恒为 0。
+
+为什么只有 UE4：UE5 的画面走 msgpack 主题订阅，不占控制 RPC；而且它的时钟是暂停的，
+回路被挡住时仿真不前进，指令不会过期。
+
+处理：运动取帧改用独立只读传输，照 `origin/low-altitude-level-view-visual-goal-navigation`
+里 `visual_goal_bootstrap.py` 的接法（那里写着 "Dedicated read-only transport: it receives no
+controller or gate"）。`tests/test_airsim_session.py` 的
+`test_moving_capture_does_not_share_the_control_transport` 守住。
+诊断口径：新一次飞行后看 `dt_s` 是否还有 0.4 秒尖峰。
+
 ### 路面与自身接触被当成碰撞
 
 现象：郊区图输入"沿着道路行驶，不要发生碰撞"，车连续退 3/6/9 米，报 `collision recovery budget exhausted`。
