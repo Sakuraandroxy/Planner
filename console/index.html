@@ -75,11 +75,14 @@
             </div>
           </div>
           <p class="feedback" id="world-feedback" role="status"></p>
-          <div class="model-block">
-            <div class="weather-head">
-              <strong>载具模型</strong>
-              <span class="hint" id="models-current">—</span>
-            </div>
+        </section>
+
+        <section class="card" id="models-card">
+          <div class="card-head">
+            <h2>载具模型</h2>
+            <span class="hint" id="models-current">—</span>
+          </div>
+          <div class="stack">
             <label for="model-rover">无人车模型</label>
             <select id="model-rover" disabled></select>
             <label for="model-drone">无人机模型</label>
@@ -87,13 +90,15 @@
             <div class="toolbar">
               <button type="button" id="models-apply" class="primary" disabled>应用载具模型</button>
             </div>
-            <p class="feedback" id="models-feedback" role="status"></p>
+          <p class="feedback" id="models-feedback" role="status"></p>
+        </section>
+
+        <section class="card" id="weather-card">
+          <div class="card-head">
+            <h2>天气</h2>
+            <span class="hint" id="weather-current">—</span>
           </div>
-          <div class="weather-block">
-            <div class="weather-head">
-              <strong>天气</strong>
-              <span class="hint" id="weather-current">—</span>
-            </div>
+          <div class="stack">
             <label for="weather-preset">预设</label>
             <select id="weather-preset" disabled></select>
             <details class="weather-details" id="weather-details">
@@ -103,8 +108,7 @@
             <div class="toolbar">
               <button type="button" id="weather-apply" class="primary" disabled>应用天气</button>
             </div>
-            <p class="feedback" id="weather-feedback" role="status"></p>
-          </div>
+          <p class="feedback" id="weather-feedback" role="status"></p>
         </section>
 
         <section class="card">

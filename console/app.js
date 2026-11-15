@@ -169,15 +169,14 @@ function show(node, visible) {
   if (node) node.hidden = !visible;
 }
 
-function showCard(node, visible) {
-  // Cards own their heading and feedback line, so hide the section wrapper.
-  const card = node && node.closest ? node.closest("section") : null;
-  show(card || node, visible);
-}
-
 function applyCapabilities() {
   show($("home"), hasAction("home"));
-  showCard($("models-apply"), hasAction("models"));
+  // Gate by the card's own id, never by DOM nesting. The models block used to be
+  // markup *inside* the world card, so hiding it for a simulator without model
+  // control also hid the map selector: a second after load the console lost its whole
+  // world panel and there was no way to start a scene. A helper that resolves its
+  // target with closest("section") breaks again the moment anyone moves a control.
+  show($("models-card"), hasAction("models"));
   show($("trajectory-card"), hasAction("trajectory"));
   const views =
     caps && Array.isArray(caps.view_modes) ? caps.view_modes.length > 0 : true;
