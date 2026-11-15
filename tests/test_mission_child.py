@@ -153,3 +153,46 @@ def test_a_stop_that_lands_mid_task_cancels_that_task(monkeypatch):
     child._run_task({"cmd": "task", "task_id": "t1", "instruction": "向前飞八米"})
     assert during == {"before_stop": False, "after_stop": True}, during
     assert child._stop_requested is False, "the cancellation must not outlive its task"
+
+
+def test_relayed_telemetry_coalesces_updates_but_never_state_changes():
+    """The child's task loop has no hub, so it relays -- without flooding the pipe.
+
+    A sliding-window planner can publish several times per control period. One
+    protocol line each would bury READY and FINISHED, which the console waits on.
+    State changes are different: a finished path left on the panel looks like a
+    live plan, so ``start`` and ``clear`` always cross.
+    """
+    from planner.simulator.telemetry_relay import RelayedTelemetry
+
+    sent = []
+    now = [0.0]
+    relay = RelayedTelemetry(
+        emit=sent.append, clock=lambda: now[0], min_interval_s=0.4
+    )
+
+    relay.start("fly to the red car")
+    assert len(sent) == 1
+    for _ in range(3):
+        relay.publish_no_queue(instruction="fly", stage_id="stage_1")
+        now[0] += 0.1
+    assert len(sent) == 1, "queue updates inside the interval must coalesce"
+
+    now[0] = 0.5
+    relay.publish_no_queue(instruction="fly", stage_id="stage_1")
+    assert len(sent) == 2
+
+    relay.clear()
+    assert len(sent) == 3
+    assert sent[-1].active is False
+
+
+def test_a_blocked_telemetry_pipe_cannot_stop_a_flight():
+    from planner.simulator.telemetry_relay import RelayedTelemetry
+
+    def explode(snapshot):
+        raise OSError("pipe closed")
+
+    relay = RelayedTelemetry(emit=explode)
+    snapshot = relay.publish_no_queue(instruction="fly", stage_id="stage_1")
+    assert snapshot.active is True

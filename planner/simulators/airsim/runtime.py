@@ -75,18 +75,14 @@ def build_session(*, config, map_entry, family, resources, log):
     the engine's own ``settings.json`` rather than from a planner scene JSONC. What
     it does need -- the RPC port, the vehicle name and the camera name -- is family
     data, and the family was resolved from this map's ``simulator`` field.
+
+    ``resources`` is not forwarded to the session. The registry hands it to
+    ``assemble_missions`` once this session has reported its ports, so the
+    simulator package never builds a planner, a detector or a telemetry sink.
     """
     from .session import AirSimMissionSession
 
-    return AirSimMissionSession(
-        config,
-        family,
-        detector=resources.detector,
-        planner=resources.planner,
-        geometry=resources.geometry,
-        log=log,
-        trajectory=resources.trajectory,
-    )
+    return AirSimMissionSession(config, family, log=log)
 
 
 def describe() -> SimulatorPorts:

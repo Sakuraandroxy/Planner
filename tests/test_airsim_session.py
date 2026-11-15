@@ -55,23 +55,32 @@ def fake_airsim(monkeypatch):
 
 
 def _session():
+    """Build the session the way the registry does: ports first, then wiring.
+
+    The session no longer receives the planner stack. It hands over
+    ``mission_inputs()`` and the shared assembly builds the arm from the
+    service-side resources -- which is the arrangement this test exists to keep
+    honest, because the UE4 mission child once skipped one of those resources
+    and the console quietly lost its trajectory panel.
+    """
+    from planner.application.mission_assembly import assemble_missions
+    from planner.services.trajectory_hub import TrajectoryHub
     from planner.simulators.airsim.session import AirSimMissionSession
 
     config = load_config("config/base.yaml")
     family = config.families.require("airsim")
+    quiet = lambda message, level="INFO": None
     resources = MissionResources(
         detector=object(), planner=object(), geometry=object(),
-        trajectory=None, frame_sink=None,
+        trajectory=TrajectoryHub(), frame_sink=None,
     )
-    return AirSimMissionSession(
-        config,
-        family,
-        detector=resources.detector,
-        planner=resources.planner,
-        geometry=resources.geometry,
-        log=lambda message, level="INFO": None,
-        trajectory=resources.trajectory,
+    session = AirSimMissionSession(config, family, log=quiet)
+    session.attach_arms(
+        assemble_missions(
+            config, inputs=session.mission_inputs(), resources=resources, log=quiet
+        )
     )
+    return session
 
 
 def test_the_session_fills_exactly_the_declared_slots():
@@ -180,3 +189,42 @@ def test_close_without_landing_releases_every_transport():
     assert closed == ["capture", "control"]
     session.close(skip_landing=True)          # idempotent: the worker may retry
     assert closed == ["capture", "control"]
+
+
+def test_assembly_refuses_to_run_without_a_trajectory_sink():
+    """A missing sink must be an error, not a quietly missing console panel.
+
+    The UE4 mission child built its own resources and left ``trajectory`` out.
+    The visual-goal workflow answered ``None`` by publishing nothing, so the
+    console lost the remaining-path panel with no error anywhere -- and the
+    capability list blamed the simulator instead.
+    """
+    from planner.application.mission_assembly import (
+        MissionInputs,
+        assemble_missions,
+    )
+
+    config = load_config("config/base.yaml")
+    resources = MissionResources(
+        detector=object(), planner=object(), geometry=object(),
+        trajectory=None, frame_sink=None,
+    )
+    with pytest.raises(ProtocolError, match="trajectory sink"):
+        assemble_missions(
+            config,
+            inputs=MissionInputs(vehicles={"drone": object()}),
+            resources=resources,
+            log=lambda message, level="INFO": None,
+        )
+
+
+def test_a_session_without_its_arm_is_refused_at_wiring_time():
+    from planner.simulators.airsim.session import AirSimMissionSession
+
+    config = load_config("config/base.yaml")
+    family = config.families.require("airsim")
+    session = AirSimMissionSession(
+        config, family, log=lambda message, level="INFO": None
+    )
+    with pytest.raises(ProtocolError, match="no drone arm"):
+        session.attach_arms({"rover": object()})

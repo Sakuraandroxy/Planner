@@ -25,6 +25,11 @@ class WorkerEventKind(str, Enum):
     WEATHER = "weather"
     ACTIVE = "active"
     VIEW = "view"
+    #: The task loop lives in the child for families whose simulator client cannot
+    #: be imported here, so the remaining-trajectory snapshots it publishes have to
+    #: ride this channel to reach the hub the HTTP thread reads. Not a simulator
+    #: capability: the console's trajectory panel exists for every family.
+    TRAJECTORY = "trajectory"
 
 
 @dataclass(frozen=True)

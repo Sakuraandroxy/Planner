@@ -290,6 +290,26 @@ worker 并在**同一个仿真器进程**里重新加载场景（不重启 UE / 
   `Rover home pose measured: ... z=...`），归位时也打印 `z=`，便于核对是否
   贴地。
 
+## 分层与依赖
+
+规划器（`adapters/`）、仿真器（`simulators/` + `simulator/`）、服务层（`adapters/http`、
+`application/server_controller`）是**并列的中间件**。它们不互相构造，只由
+`application/mission_assembly.py` 接线。三条不变量：
+
+1. **并列件不构造并列件。** 仿真器会话只交出端口（`vehicle`、`observation`、
+   `camera_view`、`weather`），不再接收 `detector`/`planner`/`geometry`/遥测汇；
+   它报 `mission_inputs()`，装配层还它 `attach_arms()`。
+2. **只有装配层知道全部。** 少接一根线在构造期报错：`assemble_missions` 要求
+   轨迹汇存在，`attach_arms` 要求每台载具都有 arm。以前是默认参数 `=None`，
+   工作流遇到 `None` 就静默不发，于是一个通用面板在 UE4 上默默消失。
+3. **能力门只描述引擎能不能做这个动作。** `models`、`views`、`weather`、
+   `camera_view`、`home`、`video` 进门；遥测、日志、任务列表、指令卡不进。
+
+进程边界与功能归属无关：UE4 的 AirSim 客户端不能和 HTTP 进程的依赖同解释器共存，
+所以任务循环跑在子进程；子进程拿不到父进程的 `TrajectoryHub`，用
+`simulator/telemetry_relay.py` 里的转发实现（同一接口、按 0.4s 合并），快照走已有的
+工作者事件管道，父进程 `adopt` 进真汇。`/api/trajectory` 读的一直是同一个对象。
+
 ## HTTP API
 
 服务默认 `127.0.0.1:8000`，完整 schema 见 `http://127.0.0.1:8000/docs`。

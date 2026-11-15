@@ -60,9 +60,24 @@ def build_session(simulator: str, *, config, map_entry, family, resources, log):
             "must define build_session(config=..., map_entry=..., family=..., "
             "resources=..., log=...) before its maps can fly a task"
         )
-    return builder(
+    session = builder(
         config=config, map_entry=map_entry, family=family, resources=resources, log=log
     )
+    # The assembly, not the session, wires the task pipelines. Doing it here means
+    # no caller can forget it and no family can half-do it: the UE4 mission child
+    # built its own resources, left out the trajectory sink, and the console lost
+    # its remaining-path panel without an error anywhere.
+    from ..application.mission_assembly import assemble_missions
+
+    session.attach_arms(
+        assemble_missions(
+            config,
+            inputs=session.mission_inputs(),
+            resources=resources,
+            log=log,
+        )
+    )
+    return session
 
 
 def labels() -> dict[str, str]:

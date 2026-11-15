@@ -28,8 +28,7 @@ import time
 from typing import Callable
 
 from planner.application.mission_assembly import (
-    build_mission_common,
-    build_vehicle_arm,
+    MissionInputs,
     require_application,
 )
 from planner.domain.result import MissionResult
@@ -61,15 +60,10 @@ class AirSimMissionSession:
         config,
         family,
         *,
-        detector,
-        planner,
-        geometry,
         log: Callable[[str, str], None],
-        trajectory=None,
     ):
         self._config = config
         self._log = log
-        self._trajectory = trajectory
         self._closed = False
         #: Height the vehicle stood on before the first takeoff, in UE coordinates.
         #: ``close`` lands back onto it; None means this session never flew.
@@ -157,25 +151,33 @@ class AirSimMissionSession:
             weather=self.weather,
         )
 
-        common = build_mission_common(
-            config, planner=planner, detector=detector, log=log
-        )
-        self._arm = build_vehicle_arm(
-            config,
-            common=common,
-            vehicle=control,
-            vehicle_id="drone",
-            detector=detector,
-            geometry=geometry,
-            telemetry=trajectory,
-            enabled_tasks=ENABLED_TASKS,
+    def mission_inputs(self) -> MissionInputs:
+        """Hand the assembly the engine-side objects it wires pipelines around.
+
+        This session used to build the planner stack itself -- ``detector``,
+        ``planner``, ``geometry`` and the telemetry sink arrived as constructor
+        arguments and it called ``build_vehicle_arm`` in ``__init__``. Two peer
+        middlewares do not construct each other: the assembly does that, from
+        here and from ``attach_arms``.
+        """
+        return MissionInputs(
+            vehicles={"drone": self.server.control},
             execution=self.execution,
-            # AirSim keeps the two roles apart on purpose: the vehicle owns the control
-            # connection, and the observation source owns a second one for pixels.
+            # AirSim keeps the two roles apart on purpose: the vehicle owns the
+            # control connection, and the observation source owns a second one
+            # for pixels.
             observation_source=self.observation,
             moving_source_factory=lambda vehicle: self.observation,
-            log=log,
+            enabled_tasks=ENABLED_TASKS,
         )
+
+    def attach_arms(self, arms: dict) -> None:
+        """Accept the assembled pipeline the registry built for these ports."""
+        if "drone" not in arms:
+            raise ProtocolError(
+                f"mission assembly returned no drone arm, got {sorted(arms)}"
+            )
+        self._arm = arms["drone"]
 
     # -- worker protocol ---------------------------------------------------
     def run(

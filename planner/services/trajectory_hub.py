@@ -38,6 +38,17 @@ class TrajectoryHub:
             self._snapshot = published
             return published
 
+    def adopt(self, snapshot: TrajectorySnapshot) -> TrajectorySnapshot:
+        """Publish a snapshot produced somewhere else -- a mission child.
+
+        The child cannot hold this hub, so it sends the snapshot over the worker
+        channel and the parent adopts it here. The child's ``updated_monotonic``
+        is meaningless across processes, so the parent stamps its own clock.
+        """
+        return self.publish(
+            replace(snapshot, updated_monotonic=self._clock())
+        )
+
     def start(self, instruction: str) -> TrajectorySnapshot:
         """Mark a task as active before its first stage publishes a queue."""
         return self.publish(

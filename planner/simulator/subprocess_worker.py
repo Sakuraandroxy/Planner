@@ -34,6 +34,8 @@ import time
 import dataclasses
 from typing import Callable
 
+from ..domain.trajectory_telemetry import snapshot_from_payload
+
 from ..domain.server import TaskSubmission, WorkerEvent, WorkerEventKind
 from ..domain.weather import weather_catalog_from_payload
 
@@ -87,8 +89,7 @@ def decode_event(line: str) -> WorkerEvent:
         payload=payload.get("payload"),
         vehicle=payload.get("vehicle"),
     )
-    if event.kind is WorkerEventKind.WEATHER and isinstance(event.payload, dict):
-        # The weather catalog is the only domain object on this channel, and consumers
+    if event.kind is WorkerEventKind.WEATHER and isinstance(event.payload, dict):        # The weather catalog is the only domain object on this channel, and consumers
         # read attributes off it. Rebuilding it here -- at the boundary where JSON turns
         # back into objects -- is what keeps ``GET /api/weather`` identical between the
         # threaded worker (an object all the way) and the child (a dict until now).
@@ -98,6 +99,15 @@ def decode_event(line: str) -> WorkerEvent:
             )
         except (KeyError, TypeError, ValueError) as error:
             raise ChildProcessError(f"child sent an unusable weather payload: {error}") from error
+    if event.kind is WorkerEventKind.TRAJECTORY and isinstance(event.payload, dict):
+        # Same rule as the weather catalog: JSON turns back into a domain object at
+        # the boundary, so nothing downstream has to know the wire shape.
+        try:
+            event = dataclasses.replace(
+                event, payload=snapshot_from_payload(event.payload)
+            )
+        except ValueError as error:
+            raise ChildProcessError(str(error)) from error
     return event
 
 
@@ -124,6 +134,7 @@ class SubprocessMissionWorker:
         popen: Callable[..., object] = subprocess.Popen,
         join_timeout_s: float = TERM_GRACE_S,
         shutdown_timeout_s: float = 60.0,
+        trajectory_sink=None,
     ):
         self._python = python
         self._module = module
@@ -134,6 +145,11 @@ class SubprocessMissionWorker:
         self._popen = popen
         self._join_timeout_s = float(join_timeout_s)
         self._shutdown_timeout_s = float(shutdown_timeout_s)
+        # The console reads the remaining path out of the hub in *this* process, so
+        # the child's snapshots have to land here. They are not relayed to the
+        # controller as events: nothing upstream polls for them, and a queue that
+        # fills several times a second would starve the events that matter.
+        self._trajectory_sink = trajectory_sink
         self._events: queue.Queue = queue.Queue()
         self._process: object | None = None
         self._reader: threading.Thread | None = None
@@ -190,9 +206,15 @@ class SubprocessMissionWorker:
             if not line:
                 continue
             try:
-                self._events.put(decode_event(line))
+                event = decode_event(line)
             except ChildProcessError as error:
                 self._events.put(WorkerEvent(WorkerEventKind.ERROR, message=str(error)))
+                continue
+            if event.kind is WorkerEventKind.TRAJECTORY:
+                if self._trajectory_sink is not None:
+                    self._trajectory_sink.adopt(event.payload)
+                continue
+            self._events.put(event)
         # Anything the child wrote to stdout or stderr bypassed the protocol on
         # purpose; forwarding it is what makes a crash diagnosable from the console
         # instead of only from a terminal.

@@ -58,9 +58,8 @@ from .drone import ProjectAirSimDrone
 from .moving_source import BorrowedMovingSource
 from .rover import ProjectAirSimRover
 from ...application.mission_assembly import (
+    MissionInputs,
     VehicleArm,
-    build_mission_common,
-    build_vehicle_arm,
     require_application,
 )
 
@@ -93,13 +92,8 @@ class ProjectAirSimMissionSession:
         geometry,
         log: Callable[[str], None] | None = None,
         frame_sink: Callable[[np.ndarray, float], None] | None = None,
-        trajectory=None,
     ):
         self._config = config
-        self._detector = detector
-        self._planner = planner
-        self._geometry = geometry
-        self._trajectory = trajectory
         self._log = log or (lambda message: None)
         self._connection: ProjectAirSimConnection | None = None
         self._drone: ProjectAirSimDrone | None = None
@@ -190,7 +184,8 @@ class ProjectAirSimMissionSession:
             )
             self._rover.start()
             self._drone.start()
-            self._build_arms()
+            # The arms are assembled by the registry once this session has
+            # handed over its ports; the boot below only needs the vehicles.
             # The scene starts paused with both robots on the same ground
             # point. Move the inactive one out of view before the first clock
             # advance so the two colliders never touch and every streaming
@@ -239,32 +234,28 @@ class ProjectAirSimMissionSession:
             raise
 
     # -- workflow assembly ------------------------------------------------
-    def _build_arms(self) -> None:
-        """Assemble both vehicles through the shared mission assembly.
+    def mission_inputs(self) -> MissionInputs:
+        """Hand the assembly the engine-side objects it wires pipelines around.
 
         The task pipeline does not know which simulator owns the vehicle, so it
-        lives in ``planner/application/mission_assembly.py``; the AirSim session
-        builds its arm with the same call. This method only says which vehicles
-        ProjectAirSim has and which moving observation source belongs to them.
+        lives in ``planner/application/mission_assembly.py``. This session says
+        which vehicles ProjectAirSim has and which moving observation source
+        belongs to them; it does not build planners, detectors or telemetry
+        sinks -- a peer middleware may not construct its peer.
         """
-        common = build_mission_common(
-            self._config,
-            planner=self._planner,
-            detector=self._detector,
-            log=self._log,
+        return MissionInputs(
+            vehicles={"rover": self._rover, "drone": self._drone},
+            moving_source_factory=BorrowedMovingSource,
         )
-        for vehicle_id, vehicle in (("rover", self._rover), ("drone", self._drone)):
-            self._arms[vehicle_id] = build_vehicle_arm(
-                self._config,
-                common=common,
-                vehicle=vehicle,
-                vehicle_id=vehicle_id,
-                detector=self._detector,
-                geometry=self._geometry,
-                telemetry=self._trajectory,
-                moving_source_factory=BorrowedMovingSource,
-                log=self._log,
+
+    def attach_arms(self, arms: dict) -> None:
+        """Accept the assembled pipelines the registry built for these vehicles."""
+        missing = set(self._config.server.vehicles) - set(arms)
+        if missing:
+            raise ProtocolError(
+                f"mission assembly returned no arm for {sorted(missing)}"
             )
+        self._arms = dict(arms)
 
     # -- ports -------------------------------------------------------------
     def run(

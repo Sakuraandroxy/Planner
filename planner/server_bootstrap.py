@@ -63,6 +63,9 @@ def build_server(config: AppConfig):
                 project_dir=str(PROJECT_DIR),
                 log=lambda message, level="INFO": None,
                 shutdown_timeout_s=config.drone.land_timeout_s + 10.0,
+                # The child's task loop cannot hold this hub, so its snapshots are
+                # adopted here -- the same object ``/api/trajectory`` reads.
+                trajectory_sink=trajectory,
             )
 
         def session_factory(log):

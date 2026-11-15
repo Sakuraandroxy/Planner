@@ -37,8 +37,10 @@ from ..application.mission_assembly import MissionResources
 from ..application.reporting import task_finish_events
 from ..config import load_config
 from ..domain.server import TaskSubmission, WorkerEvent, WorkerEventKind
+from ..domain.trajectory_telemetry import snapshot_to_payload
 from . import registry
 from .subprocess_worker import EVENT_FD_ENV
+from .telemetry_relay import RelayedTelemetry
 
 
 def _protocol_fd() -> int:
@@ -236,6 +238,17 @@ class MissionChild:
             ),
             planner=build_planner(config, config.server.planner),
             geometry=build_geometry(config),
+            # The hub lives in the process that serves HTTP, so this process gets
+            # a relay with the same interface rather than nothing. ``registry``
+            # requires a sink here: the day this line was missing, the workflows
+            # published into ``None`` and the console lost the remaining-path
+            # panel without an error anywhere.
+            trajectory=RelayedTelemetry(
+                emit=lambda snapshot: self.emitter.event(
+                    WorkerEventKind.TRAJECTORY,
+                    payload=snapshot_to_payload(snapshot),
+                )
+            ),
         )
         self.log(f"Connecting to {family.label} for the mission child.")
         return registry.build_session(

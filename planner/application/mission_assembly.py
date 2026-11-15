@@ -62,6 +62,67 @@ class MissionResources:
 
 
 @dataclass(frozen=True)
+class MissionInputs:
+    """The engine-side objects the assembly wires a task pipeline around.
+
+    A simulator session owns these and hands them over. It does not get to build
+    planners, detectors or telemetry sinks: two peer middlewares may not
+    construct each other, and this assembly is the only place allowed to know
+    both. That inversion is what made the console's trajectory panel a UE4-only
+    mystery -- the child process built its own resources, forgot one sink, and
+    the workflow published nothing without saying so.
+    """
+
+    #: vehicle id -> the object that drives it
+    vehicles: dict
+    execution: object | None = None
+    observation_source: object | None = None
+    moving_source_factory: Callable | None = None
+    enabled_tasks: tuple[str, ...] | None = None
+
+
+def assemble_missions(
+    config, *, inputs: MissionInputs, resources, log
+) -> dict:
+    """Wire every vehicle the simulator exposes into a task pipeline.
+
+    Returns ``{vehicle_id: VehicleArm}``. ``resources.trajectory`` is required:
+    it used to be an optional argument the visual-goal workflow answered by
+    publishing nothing, so a family that failed to pass it lost the console's
+    remaining-trajectory panel silently. A missing sink is now a construction
+    error, which is the only kind of error that reaches a developer.
+    """
+    if resources.trajectory is None:
+        raise ProtocolError(
+            "mission assembly requires a trajectory sink: the console reads "
+            "the remaining path from it for every simulator"
+        )
+    common = build_mission_common(
+        config,
+        planner=resources.planner,
+        detector=resources.detector,
+        log=log,
+    )
+    return {
+        vehicle_id: build_vehicle_arm(
+            config,
+            common=common,
+            vehicle=vehicle,
+            vehicle_id=vehicle_id,
+            detector=resources.detector,
+            geometry=resources.geometry,
+            telemetry=resources.trajectory,
+            moving_source_factory=inputs.moving_source_factory,
+            enabled_tasks=inputs.enabled_tasks,
+            execution=inputs.execution,
+            observation_source=inputs.observation_source,
+            log=log,
+        )
+        for vehicle_id, vehicle in inputs.vehicles.items()
+    }
+
+
+@dataclass(frozen=True)
 class MissionCommon:
     """The per-service objects every vehicle arm shares."""
 

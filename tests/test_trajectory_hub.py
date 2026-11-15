@@ -1,4 +1,7 @@
+import json
 import math
+
+import pytest
 
 from planner.domain.pose import WorldPose
 from planner.domain.sliding_window import QueuedWaypoint
@@ -6,8 +9,10 @@ from planner.domain.trajectory_telemetry import (
     MODE_CONTINUOUS,
     MODE_IDLE,
     MODE_NO_QUEUE,
+    MODE_STOPPED_BATCH,
     MODE_PENDING,
     QueueSnapshot,
+    TrajectorySnapshot,
 )
 from planner.services.trajectory_hub import TrajectoryHub
 
@@ -72,3 +77,105 @@ def test_revisions_increase_and_reads_return_the_latest_snapshot():
     assert cleared.active is False
     assert cleared.mode == MODE_IDLE
     assert hub.read().revision == 3
+
+def test_adopt_stamps_the_parent_clock_and_bumps_revision():
+    """A snapshot relayed from a mission child is published like a local one.
+
+    The child's ``updated_monotonic`` is another process's clock; keeping it would
+    make the console's staleness checks compare numbers that never meant the same
+    instant.
+    """
+    ticks = iter([100.0, 200.0])
+    hub = TrajectoryHub(clock=lambda: next(ticks))
+    hub.clear()
+    adopted = hub.adopt(
+        TrajectorySnapshot(active=True, mode=MODE_CONTINUOUS, revision=7)
+    )
+    assert adopted.updated_monotonic == 200.0
+    assert adopted.revision == 2
+
+
+def test_snapshot_payload_round_trips_every_field():
+    """The wire form is the domain type's own business, not the pipe's."""
+    from planner.domain.pose import WorldPose
+    from planner.domain.trajectory_telemetry import (
+        snapshot_from_payload,
+        snapshot_to_payload,
+    )
+
+    hub = TrajectoryHub()
+    original = hub.publish_queue(
+        instruction="Fly to the red car. 飞到红色汽车那里。",
+        stage_id="stage_1",
+        mode=MODE_STOPPED_BATCH,
+        capacity=4,
+        pose=WorldPose(1.0, 2.0, -3.0, 10.0),
+        items=[
+            type("W", (), {})() for _ in range(0)
+        ],
+        planning_calls=2,
+        path_length_m=4.0,
+    )
+    payload = snapshot_to_payload(original)
+    assert json.dumps(payload, ensure_ascii=False)
+    assert snapshot_from_payload(payload) == original
+
+
+
+def test_adopt_stamps_the_parent_clock_and_bumps_revision():
+    """A snapshot relayed from a mission child is published like a local one.
+
+    The child's ``updated_monotonic`` is another process's clock; keeping it would
+    make the console's staleness checks compare numbers that never meant the same
+    instant.
+    """
+    ticks = iter([100.0, 200.0])
+    hub = TrajectoryHub(clock=lambda: next(ticks))
+    hub.clear()
+    adopted = hub.adopt(
+        TrajectorySnapshot(active=True, mode=MODE_CONTINUOUS, revision=7)
+    )
+    assert adopted.updated_monotonic == 200.0
+    assert adopted.revision == 2
+
+
+def test_snapshot_payload_round_trips_every_field():
+    """The wire form belongs to the domain type, not to the pipe that carries it."""
+    from planner.domain.trajectory_telemetry import (
+        QueueSnapshot,
+        TrajectoryPointSnapshot,
+        VehicleSnapshot,
+        snapshot_from_payload,
+        snapshot_to_payload,
+    )
+
+    snapshot = TrajectorySnapshot(
+        active=True,
+        instruction="Fly to the red car. \u98de\u5230\u7ea2\u8272\u6c7d\u8f66\u3002",
+        stage_id="stage_1",
+        mode=MODE_STOPPED_BATCH,
+        queue=QueueSnapshot(2, 4),
+        vehicle=VehicleSnapshot(1.0, 2.0, -3.0, 10.0),
+        planning_calls=3,
+        path_length_m=12.5,
+        points=(
+            TrajectoryPointSnapshot(0, 1, 1.0, 2.0, -3.0, 10.0, 5.0, 1.2, 0.9),
+            TrajectoryPointSnapshot(1, 2, 2.0, 3.0, -3.0, 15.0, 5.0, 1.1, 1.4),
+        ),
+        revision=9,
+        updated_monotonic=44.0,
+    )
+    payload = snapshot_to_payload(snapshot)
+    assert json.loads(json.dumps(payload, ensure_ascii=False)) == payload
+    # ``updated_monotonic`` deliberately does not cross the pipe: it is another
+    # process's clock, and TrajectoryHub.adopt stamps the parent's own.
+    from dataclasses import replace
+
+    assert snapshot_from_payload(payload) == replace(snapshot, updated_monotonic=0.0)
+
+
+def test_an_unusable_snapshot_payload_is_refused():
+    from planner.domain.trajectory_telemetry import snapshot_from_payload
+
+    with pytest.raises(ValueError, match="unusable trajectory snapshot"):
+        snapshot_from_payload({"active": True})

@@ -145,6 +145,98 @@ def test_a_mangled_weather_payload_is_a_protocol_error():
         decode_event('{"kind": "weather", "payload": {"fields": [], "presets": []}}')
 
 
+def test_a_trajectory_snapshot_reaches_the_hub_and_not_the_event_queue():
+    """The child's task loop cannot hold the parent's hub, so it relays snapshots.
+
+    They must land in the hub the HTTP thread reads, and must not be queued as
+    events: nothing upstream polls for them, and a sliding-window planner can
+    publish several times per control period -- that would starve READY and
+    FINISHED out of the queue that carries them.
+    """
+    from planner.domain.trajectory_telemetry import (
+        QueueSnapshot,
+        TrajectoryPointSnapshot,
+        TrajectorySnapshot,
+        VehicleSnapshot,
+        snapshot_to_payload,
+    )
+
+    class Sink:
+        def __init__(self):
+            self.adopted = []
+
+        def adopt(self, snapshot):
+            self.adopted.append(snapshot)
+
+    sink = Sink()
+    worker = SubprocessMissionWorker(
+        python=sys.executable,
+        module="unused",
+        config_path="unused",
+        map_id="blocks",
+        project_dir=".",
+        trajectory_sink=sink,
+    )
+    snapshot = TrajectorySnapshot(
+        active=True,
+        instruction="Fly to the red car. 飞到红色汽车那里。",
+        stage_id="stage_1",
+        mode="stopped_batch",
+        queue=QueueSnapshot(1, 4),
+        vehicle=VehicleSnapshot(0.0, 0.0, -1.5, 0.0),
+        planning_calls=2,
+        path_length_m=4.0,
+        points=(
+            TrajectoryPointSnapshot(
+                0, 3, 1.0, 2.0, -3.0, 10.0, 5.0, 1.2, 0.9
+            ),
+        ),
+        revision=7,
+    )
+    line = json.dumps(
+        {"kind": "trajectory", "payload": snapshot_to_payload(snapshot)},
+        ensure_ascii=False,
+    )
+
+    class _Stream:
+        def __init__(self, lines):
+            self._items = iter(lines)
+
+        def readline(self):
+            return next(self._items, "")
+
+    class _Process:
+        stdout = _Stream([])
+        stderr = _Stream([])
+
+        @staticmethod
+        def wait():
+            return 0
+
+    worker._event_stream = _Stream([line + "\n"])
+    worker._process = _Process()
+    worker._pump()
+
+    assert len(sink.adopted) == 1
+    adopted = sink.adopted[0]
+    assert isinstance(adopted, TrajectorySnapshot)
+    assert adopted.points[0].waypoint_id == 3
+    assert adopted.instruction.startswith("Fly to the red car")
+    queued = []
+    while (event := worker.poll()) is not None:
+        queued.append(event.kind)
+    assert WorkerEventKind.TRAJECTORY not in queued, (
+        "a snapshot must not occupy the event queue the console waits on"
+    )
+
+
+def test_a_mangled_trajectory_payload_is_a_protocol_error():
+    from planner.simulator.subprocess_worker import ChildProcessError
+
+    with pytest.raises(ChildProcessError, match="trajectory snapshot"):
+        decode_event('{"kind": "trajectory", "payload": {"active": true}}')
+
+
 def test_the_child_reports_its_own_setup_failure_over_the_pipe():
     """A real process, a real pipe, and the failure this machine actually produces.
 
