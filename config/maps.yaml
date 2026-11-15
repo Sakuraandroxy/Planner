@@ -4,7 +4,8 @@
 # 仿真栈（xpra + UE + Xvfb），再按 binary/map_name 拉起目标地图，然后重连。两族同形。
 #
 # id:          控制台/API 使用的地图标识。
-# label:       控制台显示名称。
+# label:       控制台显示名称，格式统一为「场景名 · 引擎」。同一张图不在名字里重复
+#              引擎前缀，引擎只出现在后缀里。
 # simulator:  驱动这张图的仿真器，对应 config/simulators.yaml 的一段。
 #
 # projectairsim（现在也是 binary 驱动）额外字段：
@@ -20,7 +21,7 @@ default_map: cityenviron
 maps:
   - id: cityenviron
     simulator: projectairsim
-    label: 城市 CityEnviron
+    label: 城市 · 虚幻 5
     launch_map: cityenviron
     scene_file: scene_city_dual.jsonc
     sim_config_path: config/scenes/city
@@ -28,7 +29,7 @@ maps:
     map_name: CityEnviron
   - id: neighborhood
     simulator: projectairsim
-    label: 郊区 Neighborhood
+    label: 郊区 · 虚幻 5
     launch_map: neighborhood
     scene_file: scene_neighborhood_dual.jsonc
     sim_config_path: config/scenes/neighborhood
@@ -40,37 +41,37 @@ maps:
   # ---- AirSim UE4 ----
   - id: airsimnh
     simulator: airsim
-    label: AirSim 郊区 NH
+    label: 郊区 NH · 虚幻 4
     binary: /data/airsim/AirSimNH/LinuxNoEditor/AirSimNH/Binaries/Linux/AirSimNH
     map_name: AirSimNH
   - id: abandonedpark
     simulator: airsim
-    label: AirSim 废弃公园
+    label: 废弃公园 · 虚幻 4
     binary: /data/airsim/AbandonedPark/LinuxNoEditor/AbandonedPark/Binaries/Linux/AbandonedPark
     map_name: AbandonedPark
   - id: msbuild2018
     simulator: airsim
-    label: AirSim MSBuild 园区
+    label: MSBuild 园区 · 虚幻 4
     binary: /data/airsim/MSBuild2018/LinuxNoEditor/MSBuild2018/Binaries/Linux/MSBuild2018
     map_name: MSBuild2018
   - id: trapcam
     simulator: airsim
-    label: AirSim TrapCam
+    label: TrapCam · 虚幻 4
     binary: /data/airsim/TrapCam/LinuxNoEditor/TrapCam/Binaries/Linux/TrapCam
     map_name: TrapCam
   - id: blocks
     simulator: airsim
-    label: AirSim Blocks
+    label: Blocks · 虚幻 4
     binary: /data/airsim/Blocks/LinuxNoEditor/Blocks/Binaries/Linux/Blocks
     map_name: Blocks
   - id: shanghai
     simulator: airsim
-    label: AirSim 上海
+    label: 上海 · 虚幻 4
     binary: /data/airsim/Shanghai/LinuxNoEditor/Shanghai/Binaries/Linux/Shanghai
     map_name: Shanghai
   # 本机从 ue4/urbanScene 自己打包的那张，已验二进制存在且可执行。
   - id: campus
     simulator: airsim
-    label: AirSim 校园
+    label: 校园 · 虚幻 4
     binary: /data/airsim/Campus/LinuxNoEditor/Campus/Binaries/Linux/Campus
     map_name: Campus

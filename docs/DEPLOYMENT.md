@@ -162,7 +162,7 @@ default_map: cityenviron
 maps:
   - id: cityenviron              # 控制台与 API 使用的地图标识
     simulator: projectairsim     # 由哪个仿真器驱动，对应 simulators.yaml 的一段
-    label: 城市 CityEnviron       # 控制台显示名
+    label: 城市 · 虚幻 5            # 控制台显示名，格式为「场景名 · 引擎」
     binary: /path/to/CityEnviron-Linux-Shipping
     map_name: CityEnviron        # 传给二进制的参数，窗口标题与它同字
     scene_file: scene_city_dual.jsonc
