@@ -165,7 +165,6 @@ python scripts/probe_ue4_env.py
 
 | 缺口 | 说明 |
 |---|---|
-| UE5 会话构造签名与新装配路径不一致 | `ProjectAirSimMissionSession.__init__` 仍要求 `detector`、`planner`、`geometry` 三个关键字参数，而 `runtime.build_session` 不再传它们，构造会抛 `TypeError`。装配改到 `mission_assembly` 后这三个参数已无用途，签名应删掉 |
 | `visual_goal_above` 未接线 | UE4 的能力位宣告了它（`TASK_REQUIREMENTS` 与 `ENABLED_TASKS` 都有），但 `TaskKind` 没有这个成员，也没有解码器与工作流，实际不可执行。接线顺序见 `docs/archive/decisions.md` |
 | UE4 没有 `/api/video` | 会话从不往帧汇写帧，端口缺 `frames`，端点返回 501 |
 | UE4 没有 `/api/home` | 引擎支持（`moveToHome` / `reset`），代码没实现端口 |
