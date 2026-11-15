@@ -17,15 +17,21 @@ from planner.workflows.basic_motion import BasicMotionWorkflow
 
 def test_parameters_require_a_finite_non_zero_action():
     with pytest.raises(ValueError):
-        BasicMotionParameters("turn", forward_m=0.0, yaw_right_deg=0.0)
+        BasicMotionParameters(
+            "turn", forward_m=0.0, yaw_right_deg=0.0, up_m=0.0
+        )
     with pytest.raises(ValueError):
         BasicMotionParameters("turn", forward_m=True)
     with pytest.raises(ValueError):
         BasicMotionParameters("turn", yaw_right_deg=False)
     with pytest.raises(ValueError):
+        BasicMotionParameters("turn", up_m=True)
+    with pytest.raises(ValueError):
         BasicMotionParameters("turn", forward_m=float("nan"))
     with pytest.raises(ValueError):
         BasicMotionParameters("turn", yaw_right_deg=float("inf"))
+    with pytest.raises(ValueError):
+        BasicMotionParameters("turn", up_m=float("nan"))
     with pytest.raises(ValueError):
         BasicMotionParameters("turn", forward_m="5")
     with pytest.raises(ValueError):
@@ -42,6 +48,23 @@ def test_parameters_allow_reverse_left_and_simultaneous_actions():
     assert left.yaw_right_deg == -90.0
     assert combined.forward_m == 5.0
     assert combined.yaw_right_deg == 45.0
+
+
+def test_a_climb_alone_is_a_valid_action():
+    """A UAV instruction with only a height change must parse into a stage.
+
+    This used to be rejected outright: the aerial wire rules told the parser
+    the runtime could not change altitude, so "climb 10 meters" came back as an
+    unsupported action even though the flight path already interpolates z.
+    """
+    climb = BasicMotionParameters("climb 10m", up_m=10.0)
+    descend = BasicMotionParameters("descend 3m", up_m=-3.0)
+    hover_up_and_forward = BasicMotionParameters(
+        "forward and up", forward_m=4.0, up_m=2.0
+    )
+    assert climb.up_m == 10.0
+    assert descend.up_m == -3.0
+    assert (hover_up_and_forward.forward_m, hover_up_and_forward.up_m) == (4.0, 2.0)
 
 
 def _start(yaw_deg=0.0):
@@ -90,13 +113,31 @@ def _start(yaw_deg=0.0):
             _start(350.0),
             WorldPose(0.0, 0.0, 0.0, 10.0),
         ),
+        (
+            BasicMotionParameters("climb 10m", up_m=10.0),
+            _start(),
+            WorldPose(0.0, 0.0, -10.0, 0.0),
+        ),
+        (
+            BasicMotionParameters("descend 3m", up_m=-3.0),
+            WorldPose(0.0, 0.0, -20.0, 0.0),
+            WorldPose(0.0, 0.0, -17.0, 0.0),
+        ),
+        (
+            BasicMotionParameters(
+                "forward 5m and climb 2m", forward_m=5.0, up_m=2.0
+            ),
+            _start(),
+            WorldPose(5.0, 0.0, -2.0, 0.0),
+        ),
     ],
 )
 def test_converter_uses_the_ground_heading(parameters, start, expected):
     target = BasicMotionConverter().create_target(parameters, start)
     assert target.x == pytest.approx(expected.x)
     assert target.y == pytest.approx(expected.y)
-    assert target.z == start.z
+    # The world frame's z points down: climbing lowers it.
+    assert target.z == pytest.approx(expected.z)
     assert target.yaw_deg == pytest.approx(expected.yaw_deg)
 
 
@@ -167,6 +208,27 @@ def test_workflow_completes_and_confirms_by_local_measurement():
     assert execution.acquired == [workflow]
     assert execution.released == [workflow]
     assert execution.stops == 0
+
+
+def test_workflow_executes_a_climb_as_a_vertical_move():
+    """The trajectory handed to the execution service must contain the height."""
+    workflow, execution, vehicle, stage = _workflow(
+        BasicMotionParameters("climb 10m", up_m=10.0)
+    )
+    result = workflow.run(stage)
+    assert result.success is True
+    segment = execution.executed[0].segments[0]
+    assert segment.start.z == pytest.approx(0.0)
+    assert segment.end.z == pytest.approx(-10.0)
+    assert vehicle.pose.z == pytest.approx(-10.0)
+
+
+def test_workflow_rejects_a_climb_that_stops_short():
+    workflow, execution, _, stage = _workflow(
+        BasicMotionParameters("climb 10m", up_m=10.0), reach=False
+    )
+    result = workflow.run(stage)
+    assert result.success is False
 
 
 def test_workflow_reports_a_pose_tolerance_failure():

@@ -33,7 +33,7 @@ ALL_KINDS = {
 }
 
 
-def _basic(stage_id="stage_1", forward_m=5.0):
+def _basic(stage_id="stage_1", forward_m=5.0, up_m=0.0):
     return {
         "stage_id": stage_id,
         "kind": "basic_motion",
@@ -41,6 +41,7 @@ def _basic(stage_id="stage_1", forward_m=5.0):
             "instruction": "Drive forward 5 metres. 向前直行 5 米。",
             "forward_m": forward_m,
             "yaw_right_deg": 0,
+            "up_m": up_m,
         },
     }
 
@@ -79,11 +80,42 @@ def test_system_prompt_lists_allowed_kinds_and_rules():
     assert "basic_motion" in prompt
     assert "visual_goal_navigation" in prompt
     assert "free_navigation" in prompt
-    assert "Parameters: instruction, forward_m, yaw_right_deg" in prompt
+    assert "Parameters: instruction, forward_m, yaw_right_deg, up_m" in prompt
     assert "Parameters: instruction only" in prompt
     assert "must be the final stage" in prompt
     assert "forward-facing ground-vehicle camera" in prompt
     assert "ground-vehicle mission parser" in prompt
+    # The car still has no way to change height: the field exists in the wire
+    # format, so the ground rules have to say it must stay zero.
+    assert "up_m must always be 0 for this vehicle" in prompt
+
+
+def test_aerial_rules_allow_an_altitude_change():
+    """A UAV that cannot climb is not a UAV.
+
+    The aerial rules used to advertise only forward and yaw and to tell the
+    parser to reject height changes, so "上升十米" came back as
+    "Unsupported action ... only forward/backward translation and yaw rotation
+    are supported" while the flight path already interpolated z.
+    """
+    prompt = task_parser_system_prompt(ALL_KINDS, aerial=True)
+    assert "Positive up_m = climb" in prompt
+    assert "Climb 10 meters" in prompt
+    assert "cannot strafe sideways or change altitude" not in prompt
+
+
+def test_basic_motion_wire_requires_all_four_fields():
+    from planner.adapters.task_parser.tasks.basic_motion import (
+        decode_basic_motion,
+    )
+
+    stage = _basic(up_m=10.0)
+    params = decode_basic_motion(stage["parameters"])
+    assert params.up_m == 10.0
+    missing = dict(stage["parameters"])
+    del missing["up_m"]
+    with pytest.raises(ProtocolError, match="up_m"):
+        decode_basic_motion(missing)
 
 
 def test_aerial_system_prompt_uses_the_uav_rules():
@@ -92,7 +124,6 @@ def test_aerial_system_prompt_uses_the_uav_rules():
     assert "UAV mission parser" in prompt
     assert "ground-vehicle" not in prompt
     assert "fly forward 5m" in prompt
-    assert "cannot strafe sideways or change altitude" in prompt
     assert "fly near/beside it" in prompt
     assert "Keep flying along the road" in prompt
 
@@ -231,7 +262,9 @@ def test_free_navigation_codec_is_strict(parameters):
                     "instruction": "turn",
                     "forward_m": 0,
                     "yaw_right_deg": 90,
-                    "up_m": 0,
+                    # Strafe is not supported by either vehicle; an unknown
+                    # field must be rejected, not ignored.
+                    "right_m": 5,
                 },
             }
         ),

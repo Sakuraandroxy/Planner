@@ -156,6 +156,12 @@ def main() -> int:
     parser.add_argument("--config", default=str(ROOT / "config" / "base.yaml"))
     parser.add_argument("--forward-m", type=float, default=3.0)
     parser.add_argument(
+        "--up-m",
+        type=float,
+        default=0.0,
+        help="vertical offset for the basic-motion run; positive climbs",
+    )
+    parser.add_argument(
         "--bbox",
         default=None,
         help="normalized xmin,ymin,xmax,ymax; enables the visual-goal run",
@@ -189,6 +195,11 @@ def main() -> int:
     workflow = None
     try:
         world = connection.load_scene()
+        # The dual scene loads with the clock paused at zero, and every state
+        # read needs a positive simulator timestamp. The service steps the world
+        # while it measures the rover home pose during boot; this script has no
+        # such sequence, so it advances once before touching the vehicle.
+        connection.advance_for_sim_time(0.05)
         robot = Drone(connection.client, world, pas.drone_name)
         drone = ProjectAirSimDrone(
             connection,
@@ -230,7 +241,15 @@ def main() -> int:
             config.motion.max_speed_mps, drone.tracking_limits
         )
         ok = True
-        if args.forward_m:
+        if args.forward_m or args.up_m:
+            parts = []
+            if args.forward_m:
+                parts.append(f"forward {args.forward_m:g} m")
+            if args.up_m:
+                parts.append(
+                    f"{'climb' if args.up_m > 0 else 'descend'} "
+                    f"{abs(args.up_m):g} m"
+                )
             basic = BasicMotionWorkflow(
                 drone, motion, execution, limits=drone.tracking_limits
             )
@@ -240,14 +259,15 @@ def main() -> int:
                     "stage_1",
                     TaskKind.BASIC_MOTION,
                     BasicMotionParameters(
-                        f"drone forward {args.forward_m:g} m",
+                        "drone " + " and ".join(parts),
                         forward_m=args.forward_m,
+                        up_m=args.up_m,
                     ),
                 )
             )
             value = result.value
             print(
-                f"basic forward ({time.monotonic() - began:.1f}s): "
+                f"basic motion ({time.monotonic() - began:.1f}s): "
                 f"success={result.success} status={value.status.value} "
                 f"reason={value.reason!r} "
                 f"actual={value.actual} stop_confirmed={value.stop.confirmed}"

@@ -9,22 +9,25 @@ from .pose import WorldPose
 
 @dataclass(frozen=True)
 class BasicMotionParameters:
-    """One target-less ground action: relative translation and/or yaw.
+    """One target-less relative action: translation, climb and/or yaw.
 
     Positive ``forward_m`` drives forward, negative reverses. Positive
-    ``yaw_right_deg`` turns right, negative turns left. Both may be non-zero for
-    one explicit simultaneous action. Vertical and lateral motion are not
-    supported by a ground vehicle.
+    ``yaw_right_deg`` turns right, negative turns left. Positive ``up_m`` climbs
+    and negative descends, measured from the altitude at the start of the
+    stage; the world frame's z points down, so the converter subtracts it.
+    Any two or three may be non-zero for one explicit simultaneous action.
+    Lateral (strafe) motion is not supported by either vehicle.
     """
 
     instruction: str
     forward_m: float = 0.0
     yaw_right_deg: float = 0.0
+    up_m: float = 0.0
 
     def __post_init__(self) -> None:
         if not isinstance(self.instruction, str) or not self.instruction.strip():
             raise ValueError("basic motion instruction must be non-empty")
-        values = (self.forward_m, self.yaw_right_deg)
+        values = (self.forward_m, self.yaw_right_deg, self.up_m)
         if any(
             isinstance(v, bool)
             or not isinstance(v, (int, float))
