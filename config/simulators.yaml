@@ -97,7 +97,7 @@ airsim:
   timeout_s: 15.0                # 单次 RPC 超时；动作超时另见 config/base.yaml 的 drone 段
   # 跑这一族任务管线的解释器。projectairsim 没有这一项，它的会话就留在 HTTP 进程里。
   # 不是偏好而是依赖：airsim 客户端拖进 msgpack-python 0.5.6，与 projectairsim 要的
-  # msgpack 1.2.4 抢同一个模块名，两个环境不可合并（docs/ENVIRONMENT.md 第 1 节）。
+  # msgpack 1.2.4 抢同一个模块名，两个环境不可合并（docs/DEPLOYMENT.md 第 2 节）。
   runtime_python: /home/kedior/miniconda3/envs/vln-ue4/bin/python
   res_x: 1280
   res_y: 720

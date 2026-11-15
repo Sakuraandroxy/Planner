@@ -3,7 +3,7 @@
 ``ContinuousExecution`` and ``SynchronizedMotionPlanner`` emit a world-frame
 velocity and a yaw rate; the rover only accepts ``engine``, ``steering_angle``
 and ``brake``. This module is that actuator mapping (approach A in
-``docs/PLAN.md``), measured on CityEnviron's ``fast-physics`` OffroadCar:
+``docs/archive/measurements.md``), measured on CityEnviron's ``fast-physics`` OffroadCar:
 
 - ``engine`` maps linearly to signed ground speed at about ``23.3 m/s`` per
   unit in both directions (0.05 -> 1.16 m/s, 0.5 -> 11.65 m/s, -0.2 -> -4.66).

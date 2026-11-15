@@ -122,7 +122,7 @@ class SimulatorFamily:
     #: mission session runs on a worker thread inside the HTTP process, which is how
     #: ProjectAirSim has always worked. AirSim needs it because ``msgpack-python``
     #: (its transport) and ``msgpack`` (ProjectAirSim's) own the same module name, so
-    #: no interpreter on this machine can hold both -- see docs/ENVIRONMENT.md 1.
+    #: no interpreter on this machine can hold both -- see docs/DEPLOYMENT.md 2.
     runtime_python: str = ""
     res_x: int = 1280
     res_y: int = 720

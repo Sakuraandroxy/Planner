@@ -2,9 +2,9 @@
 """M1 smoke test: load the dual-vehicle ProjectAirSim scene and capture frames.
 
 Start the simulator first; the command to bring a stack up lives in
-docs/UE4_BRINGUP.md section 3.
+docs/DEPLOYMENT.md section 11.
 Then:
-    conda activate carla-vln
+    conda activate vln
     python scripts/smoke_projectairsim.py
 
 The script loads scene_city_dual.jsonc (Drone1 + Rover1), pauses the clock,

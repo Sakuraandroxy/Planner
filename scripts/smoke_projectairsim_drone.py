@@ -2,9 +2,9 @@
 """M4 acceptance: live CityEnviron drone workflows through the adapter.
 
 Start the simulator first; the command to bring a stack up lives in
-docs/UE4_BRINGUP.md section 3.
+docs/DEPLOYMENT.md section 11.
 Then:
-    conda activate carla-vln
+    conda activate vln
     python scripts/smoke_projectairsim_drone.py --bbox 0.47,0.55,0.53,0.62
 
 The script attaches ``ProjectAirSimDrone`` to Drone1, runs the reference

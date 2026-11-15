@@ -3,7 +3,7 @@
 Why this exists is a dependency fact, not a preference: the AirSim client pulls
 ``msgpack-python`` 0.5.6, which owns the module name ``msgpack`` that
 ``projectairsim`` needs at 1.2.4, and the HTTP service runs in the interpreter that has
-``projectairsim`` installed (``docs/ENVIRONMENT.md`` section 1). UE4 therefore has to run
+``projectairsim`` installed (``docs/DEPLOYMENT.md`` section 2). UE4 therefore has to run
 somewhere else, and the only "somewhere else" that shares no ``sys.modules`` is a process.
 A family says so with ``runtime_python`` in ``config/simulators.yaml``; a family without
 it keeps the in-process :class:`~planner.simulator.worker.ThreadedMissionWorker`.

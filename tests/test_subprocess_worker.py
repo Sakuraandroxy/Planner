@@ -241,7 +241,7 @@ def test_the_child_reports_its_own_setup_failure_over_the_pipe():
     """A real process, a real pipe, and the failure this machine actually produces.
 
     The AirSim client is deliberately absent from the environment running the tests
-    (it lives in ``vln-ue4``; see docs/ENVIRONMENT.md 1), so the child cannot build a
+    (it lives in ``vln-ue4``; see docs/DEPLOYMENT.md 2), so the child cannot build a
     UE4 session. What matters is that the parent learns that through the protocol and
     then sees the child exit -- not that it waits for a READY nobody can send.
     """

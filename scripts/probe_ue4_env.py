@@ -307,7 +307,7 @@ def main() -> int:
         f"\nsummary: {counts['ok']} ok, {counts['warn']} warn, {counts['FAIL']} failed"
     )
     if counts["FAIL"]:
-        print("fix every FAIL before starting the planner; see docs/UE4_BRINGUP.md")
+        print("fix every FAIL before starting the planner; see docs/DEPLOYMENT.md")
         return 1
     return 0
 

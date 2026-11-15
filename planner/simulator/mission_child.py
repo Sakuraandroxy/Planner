@@ -6,7 +6,7 @@ by hand: it writes its protocol on the file descriptor the parent names in
 that variable is missing, because a manually started child would otherwise sit reading
 stdin while its parent waits for a ``READY`` that never comes.
 
-Why a process at all is a dependency fact, recorded in ``docs/ENVIRONMENT.md`` section 1:
+Why a process at all is a dependency fact, recorded in ``docs/DEPLOYMENT.md`` section 2:
 the AirSim client's ``msgpack-python`` and ProjectAirSim's ``msgpack`` own the same module
 name, so the UE4 session cannot live in the interpreter that serves HTTP.
 

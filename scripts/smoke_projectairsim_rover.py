@@ -2,9 +2,9 @@
 """M3 acceptance: live CityEnviron rover workflows through the adapter.
 
 Start the simulator first; the command to bring a stack up lives in
-docs/UE4_BRINGUP.md section 3.
+docs/DEPLOYMENT.md section 11.
 Then:
-    conda activate carla-vln
+    conda activate vln
     python scripts/smoke_projectairsim_rover.py
 
 The script loads the dual scene, attaches a ``ProjectAirSimRover`` to Rover1,

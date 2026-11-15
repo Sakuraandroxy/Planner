@@ -2,7 +2,7 @@
 """M5 runner: the planner HTTP service and console backed by ProjectAirSim.
 
 Start the backend and console with one command:
-    conda activate carla-vln
+    conda activate vln
     python scripts/serve_planner.py
 The service starts disconnected: no scene is loaded and no simulator socket is
 opened until a map is chosen in the console (or POST /api/world). A simulator left
