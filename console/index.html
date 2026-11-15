@@ -60,6 +60,38 @@
     </section>
 
     <aside class="side">
+      <section class="card command-card">
+        <div class="card-head">
+          <h2>载具指令</h2>
+          <span class="hint">Enter 发送 · Shift+Enter 换行</span>
+        </div>
+        <form id="task-form" class="stack">
+          <label>载具</label>
+          <div class="segmented" id="vehicle-modes" role="group" aria-label="选择载具">
+            <button type="button" data-vehicle="rover"
+              title="切换到无人车：停放无人机并回到起点">无人车</button>
+            <button type="button" data-vehicle="drone"
+              title="切换到无人机：停放无人车并回到起点">无人机</button>
+          </div>
+          <label for="instruction">指令</label>
+          <textarea id="instruction" rows="3" maxlength="2000"
+            placeholder="例如：向前直行 5 米，然后左转 90 度，再开到前方的红色汽车；或：飞到画面中的目标"></textarea>
+          <div class="toolbar">
+            <button type="submit" id="start" class="primary" disabled>开始执行</button>
+            <button type="button" id="stop" class="danger" disabled>停止当前任务</button>
+            <button type="button" id="home" class="ghost" disabled
+              title="仅空闲时可用，当前选中载具会瞬时传送回出生点">回到起点</button>
+            <button type="button" id="clear-instruction" class="ghost">清空指令</button>
+          </div>
+        </form>
+        <p class="feedback" id="feedback" role="status"></p>
+        <dl class="facts">
+          <div><dt>当前载具</dt><dd id="current-vehicle">—</dd></div>
+          <div><dt>当前指令</dt><dd id="current-instruction">—</dd></div>
+          <div><dt>最近结果</dt><dd id="last-result">—</dd></div>
+        </dl>
+      </section>
+
       <div class="side-scroll">
         <section class="card">
           <div class="card-head">
@@ -77,22 +109,6 @@
           <p class="feedback" id="world-feedback" role="status"></p>
         </section>
 
-        <section class="card" id="models-card">
-          <div class="card-head">
-            <h2>载具模型</h2>
-            <span class="hint" id="models-current">—</span>
-          </div>
-          <div class="stack">
-            <label for="model-rover">无人车模型</label>
-            <select id="model-rover" disabled></select>
-            <label for="model-drone">无人机模型</label>
-            <select id="model-drone" disabled></select>
-            <div class="toolbar">
-              <button type="button" id="models-apply" class="primary" disabled>应用载具模型</button>
-            </div>
-          <p class="feedback" id="models-feedback" role="status"></p>
-        </section>
-
         <section class="card" id="weather-card">
           <div class="card-head">
             <h2>天气</h2>
@@ -108,39 +124,25 @@
             <div class="toolbar">
               <button type="button" id="weather-apply" class="primary" disabled>应用天气</button>
             </div>
+          </div>
           <p class="feedback" id="weather-feedback" role="status"></p>
         </section>
 
-        <section class="card">
+        <section class="card" id="models-card">
           <div class="card-head">
-            <h2>载具指令</h2>
-            <span class="hint">Enter 发送 · Shift+Enter 换行</span>
+            <h2>载具模型</h2>
+            <span class="hint" id="models-current">—</span>
           </div>
-          <form id="task-form" class="stack">
-            <label>载具</label>
-            <div class="segmented" id="vehicle-modes" role="group" aria-label="选择载具">
-              <button type="button" data-vehicle="rover"
-                title="切换到无人车：停放无人机并回到起点">无人车</button>
-              <button type="button" data-vehicle="drone"
-                title="切换到无人机：停放无人车并回到起点">无人机</button>
-            </div>
-            <label for="instruction">指令</label>
-            <textarea id="instruction" rows="3" maxlength="2000"
-              placeholder="例如：向前直行 5 米，然后左转 90 度，再开到前方的红色汽车；或：飞到画面中的目标"></textarea>
+          <div class="stack">
+            <label for="model-rover">无人车模型</label>
+            <select id="model-rover" disabled></select>
+            <label for="model-drone">无人机模型</label>
+            <select id="model-drone" disabled></select>
             <div class="toolbar">
-              <button type="submit" id="start" class="primary" disabled>开始执行</button>
-              <button type="button" id="stop" class="danger" disabled>停止当前任务</button>
-              <button type="button" id="home" class="ghost" disabled
-                title="仅空闲时可用，当前选中载具会瞬时传送回出生点">回到起点</button>
-              <button type="button" id="clear-instruction" class="ghost">清空指令</button>
+              <button type="button" id="models-apply" class="primary" disabled>应用载具模型</button>
             </div>
-          </form>
-          <p class="feedback" id="feedback" role="status"></p>
-          <dl class="facts">
-            <div><dt>当前载具</dt><dd id="current-vehicle">—</dd></div>
-            <div><dt>当前指令</dt><dd id="current-instruction">—</dd></div>
-            <div><dt>最近结果</dt><dd id="last-result">—</dd></div>
-          </dl>
+          </div>
+          <p class="feedback" id="models-feedback" role="status"></p>
         </section>
       </div>
 
