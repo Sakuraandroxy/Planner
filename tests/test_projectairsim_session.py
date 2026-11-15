@@ -233,6 +233,7 @@ def make_session(*, active="rover", order=None, error=None):
     session._view_positions = VIEW_MODES
     session._view_index = INITIAL_STREAM_INDEX
     session._view_mode = VIEW_MODES[INITIAL_STREAM_INDEX]
+    session._view_verified = False
     session._weather = None
     applications = {
         "rover": FakeApplication(error=error),
@@ -799,6 +800,76 @@ def test_set_view_mode_uses_the_calibrated_cycle_order():
     assert session.set_view_mode("rover_chase") == "rover_chase"
     assert session._connection.switch_calls == 2
     assert session.view_mode == "rover_chase"
+
+
+class FakeSight:
+    """Stand in for reading the camera off the desktop."""
+
+    def __init__(self, observed):
+        self._observed = list(observed)
+        self.calls = 0
+
+    def __call__(self):
+        value = self._observed[min(self.calls, len(self._observed) - 1)]
+        self.calls += 1
+        return value
+
+
+def test_unverified_view_reads_the_cycle_position_from_the_screen():
+    """The cycle position is a guess until the screen confirms it.
+
+    Counting switches from a guessed position is what left the console showing
+    the hidden vehicle a kilometre above the map under a rover label. One look
+    pins the ring; the distance to the request is then arithmetic.
+    """
+    session = make_session()
+    session._confirm_view = FakeSight(["drone_front"])
+
+    assert session.set_view_mode("rover_chase") == "rover_chase"
+    # drone_front is cycle position 2, rover_chase is 1: three steps forward.
+    assert session._connection.switch_calls == 3
+    assert session._view_verified is True
+    assert session._view_index == VIEW_MODES.index("rover_chase")
+    assert any(
+        "read from the screen" in message for message in session.messages
+    ), session.messages
+
+
+def test_confirmed_position_switches_without_looking():
+    session = make_session()
+    session._view_verified = True
+
+    def no_look():
+        raise AssertionError("a confirmed position should not need a screenshot")
+
+    session._confirm_view = no_look
+    assert session.set_view_mode("drone_front") == "drone_front"
+    assert session._connection.switch_calls == 2
+
+
+def test_unreadable_desktop_falls_back_to_counting_switches():
+    """With nothing to look at the console does what it always did, quietly."""
+    session = make_session()
+    session._confirm_view = FakeSight([None])
+
+    assert session.set_view_mode("drone_chase") == "drone_chase"
+    assert session._view_verified is False
+    assert session._connection.switch_calls == 3
+    assert not any(
+        "read from the screen" in message for message in session.messages
+    ), session.messages
+
+
+def test_identification_is_attempted_once_per_request():
+    """Looking at the screen costs seconds, so it must not happen per step."""
+    session = make_session()
+    sight = FakeSight(["drone_front", "rover_front", "rover_chase"])
+    session._confirm_view = sight
+
+    assert session.set_view_mode("rover_chase") == "rover_chase"
+    assert session.set_view_mode("drone_chase") == "drone_chase"
+    # The first request looks; the confirmed position makes the second arithmetic.
+    assert sight.calls == 1
 
 
 def test_calibrate_views_stores_the_measured_order(monkeypatch):

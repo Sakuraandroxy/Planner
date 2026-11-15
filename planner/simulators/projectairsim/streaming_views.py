@@ -57,9 +57,18 @@ MAX_UNMATCHED_SCORE = 0.90
 # camera's frame twice (two live positions scored identically). Wait for the
 # screenshot to be stable across two captures *and* different from the
 # previous position before matching it.
-SETTLE_S = 0.9
-SCREENSHOT_RETRY_S = 0.5
-SCREENSHOT_RETRIES = 5
+#
+# Measured on the live machine: after ``switch_streaming_view()`` returns, the
+# desktop frame changes between 2 s and 4 s later (correlation against the
+# previous frame drops from 0.997 to 0.07 in that window). The old budget of
+# 0.5 s x 5 = 2.5 s stopped just short of it, so every cycle position sampled
+# the same frame, calibration reported "no consistent position assignment" and
+# the console fell back to a guessed index -- which left the operator looking at
+# the hidden vehicle a kilometre above the map. The retries are a deadline, not
+# a fixed cost: the loop returns as soon as a frame is stable and changed.
+SETTLE_S = 1.5
+SCREENSHOT_RETRY_S = 1.0
+SCREENSHOT_RETRIES = 8
 STABLE_SCORE = 0.9995
 ADVANCE_S = 15.0 / 1000.0
 FRAME_TIMEOUT_S = 8.0
@@ -451,9 +460,16 @@ def calibrate_streaming_views(
         returns the previous camera's frame for the new position. Two
         consecutive identical captures prove the shadow has caught up; the
         change against the previous position proves the switch was applied.
+
+        The clock is advanced on every poll. ``switch_streaming_view`` only
+        reaches the picture through a rendered frame, and with a steppable clock
+        nothing is rendered until the world is advanced: sampling after a single
+        15 ms step returned the previous camera's frame for the whole cycle, so
+        every position scored identically and calibration could not assign one.
         """
         last = signature_bgr(screenshot())
         for _ in range(SCREENSHOT_RETRIES):
+            advance(advance_s)
             sleep(SCREENSHOT_RETRY_S)
             current = signature_bgr(screenshot())
             stable = signature_score(last, current) >= STABLE_SCORE
@@ -582,6 +598,9 @@ def verify_streaming_views(
         return None
     sleep(settle_s)
     for attempt in range(2):
+        # A rendered frame needs the clock to move; see _settled_signature.
+        advance(advance_s)
+        sleep(settle_s)
         try:
             shot = signature_bgr(screenshot())
         except Exception as error:  # noqa: BLE001
