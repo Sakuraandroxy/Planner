@@ -422,6 +422,30 @@ class ServerController:
         self._log(f"Preparing map '{entry.id}'; the simulator stack starts.")
         return ServerState.CONNECTING
 
+    def stop_world(self) -> ServerState:
+        """Console "stop scene": close the session, then take our stack down.
+
+        Only from ``idle``: a running task owns the session, and the operator can
+        stop the task first. The stack is stopped through the same ownership check
+        a map switch uses, so a simulator this service did not launch keeps running
+        and the console says why.
+        """
+        if self._simulator is None:
+            raise ValueError("this deployment does not manage the simulator")
+        with self._lock:
+            if self._closing.is_set() or self._state is not ServerState.IDLE:
+                raise BackendUnavailable(self._state)
+            self._active = None
+            self._instruction = ""
+            self._last_result = None
+            self._pending_activation = None
+            self._view_pending = False
+            self._weather_applied = False
+            self._state = ServerState.CONNECTING
+            self._commands.put(("stop_world", self._generation, None))
+        self._log("Stopping the scene at the operator's request.")
+        return ServerState.CONNECTING
+
     def request_models(self, updates: dict[str, str]) -> ServerState:
         """Select appearance models and reload the scene (idle only).
 
@@ -547,6 +571,9 @@ class ServerController:
         if kind == "models":
             self._switch_models()
             return
+        if kind == "stop_world":
+            self._stop_world()
+            return
         if worker is None:
             return
         if kind == "task" and state is ServerState.RUNNING and value.task_id == active:
@@ -635,6 +662,43 @@ class ServerController:
             self._pending_world = None
         self._log(f"Map switched to '{entry.id}'.")
         self._connect()
+
+    def _stop_world(self) -> None:
+        """Worker CLOSED -> stack stop -> disconnected, owner thread."""
+        if not self._close_worker(skip_landing=True):
+            self._failed_worker(
+                "The worker did not confirm shutdown for the scene stop."
+            )
+            return
+        warning = None
+        simulator = self._simulator
+        if simulator is not None:
+            try:
+                if simulator.running():
+                    simulator.preflight()
+                    simulator.stop()
+            except SimulatorNotOwned as error:
+                warning = (
+                    "The scene was not started by this service; it keeps "
+                    f"running. {error}"
+                )
+            except Exception as error:
+                warning = (
+                    "Stopping the simulator failed: "
+                    f"{type(error).__name__}: {error}"
+                )
+        with self._lock:
+            self._state = ServerState.DISCONNECTED
+            self._session_started = False
+            self._next_start = 0.0
+            self._map_switching = False
+            self._pending_world = None
+            self._worker_ready = False
+            self._sim_error = warning
+        if warning is not None:
+            self._log(warning, "WARNING")
+        else:
+            self._log("Scene stopped; the console starts blank.")
 
     def _switch_models(self) -> None:
         """Worker CLOSED -> reconnect with the variant scene, same simulator."""

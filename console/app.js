@@ -50,6 +50,9 @@ let currentWorld = { map: "" };
 let mapSwitching = false;
 let worldPending = false;
 let worldRebuilding = false;
+// Set while /api/world/stop is in flight, so the status poll can tell a clean
+// stop apart from a failed launch.
+let worldStopping = false;
 let worldOptionsPending = false;
 let weatherCatalog = null;
 let weatherStatus = null;
@@ -399,6 +402,17 @@ async function pollStatus() {
     if (body && body.sim_error && worldRebuilding) {
       setWorldFeedback("切换失败：" + body.sim_error, "error");
     }
+    if (worldStopping && (state === "disconnected" || (body && body.sim_error))) {
+      worldStopping = false;
+      if (body && body.sim_error) {
+        setWorldFeedback("停止失败：" + body.sim_error, "error");
+      } else {
+        setWorldFeedback("场景已停止，可以重新选择地图启动。", "ok");
+        loadWorldOptions();
+        stopVideo();
+        resetXpra();
+      }
+    }
     // The simulator may finish launching after this page loaded; retry the
     // embedded xpra view once the worker becomes ready.
     if (
@@ -519,6 +533,15 @@ function renderWorld() {
   for (const id of ["world-map", "world-apply", "world-reload"]) {
     $(id).disabled = !selectable;
   }
+  // Stopping only makes sense while a scene is up, and only when this service
+  // launched it: /api/world/options reports that as simulator_owned.
+  const owned = worldCatalog === null || worldCatalog.simulator_owned !== false;
+  $("world-stop").disabled = !(
+    selectable &&
+    owned &&
+    currentState === "idle"
+  );
+  $("world-stop").hidden = !owned;
   $("world-apply").textContent =
     currentState === "disconnected" ? "启动场景" : "应用世界设置";
   const selection = (worldCatalog && worldCatalog.selection) || currentWorld;
@@ -533,6 +556,26 @@ function renderWorld() {
       selection && selection.map
         ? `${selection.map}${switching ? " · 切换中…" : ""}`
         : "选项未加载";
+  }
+}
+
+async function stopWorld() {
+  if (worldPending || currentState !== "idle" || !worldCatalog) return;
+  worldPending = true;
+  renderControls();
+  setWorldFeedback("正在停止场景；先关闭会话，再停掉仿真器…");
+  try {
+    const body = await request("/api/world/stop", { method: "POST" });
+    if (body && body.state === "disconnected") {
+      setWorldFeedback("场景已停止。", "ok");
+    } else {
+      worldStopping = true;
+    }
+  } catch (error) {
+    setWorldFeedback("停止失败：" + error.message, "error");
+  } finally {
+    worldPending = false;
+    renderControls();
   }
 }
 
@@ -1246,6 +1289,7 @@ function init() {
     button.addEventListener("click", () => requestView(button.dataset.mode));
   });
   $("world-apply").addEventListener("click", applyWorld);
+  $("world-stop").addEventListener("click", stopWorld);
   settingsTabs().forEach((tab) => {
     tab.addEventListener("click", () => selectSettingsTab(tab.dataset.tab));
   });

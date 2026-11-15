@@ -330,6 +330,21 @@ def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAP
             {"state": state.value, "map": request.map}, status_code=code
         )
 
+    @app.post("/api/world/stop", status_code=202)
+    def stop_world():
+        # Service-level action: no capability gate. A simulator family states what
+        # it can do inside the scene, not whether this service may take the whole
+        # scene down; the controller refuses when it does not own the simulator.
+        try:
+            state = controller.stop_world()
+        except BackendUnavailable as exc:
+            raise _unavailable(exc) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                400, detail={"message": str(exc)}
+            ) from exc
+        return JSONResponse({"state": state.value}, status_code=202)
+
     @app.get("/api/models")
     def model_options():
         require("models")

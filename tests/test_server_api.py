@@ -78,6 +78,8 @@ class FakeController:
         self.sim_error = None
         self.simulator_owned = True
         self.world_calls = []
+        self.world_stop_calls = 0
+        self.manages_simulator = True
         self.weather_calls = []
         self.view_calls = []
         self.activate_calls = []
@@ -134,6 +136,15 @@ class FakeController:
         self.map = entry.id
         self.state_value = ServerState.CONNECTING
         self.map_switching = True
+        return ServerState.CONNECTING
+
+    def stop_world(self):
+        if not self.manages_simulator:
+            raise ValueError("this deployment does not manage the simulator")
+        if self.state_value is not ServerState.IDLE:
+            raise BackendUnavailable(self.state_value)
+        self.world_stop_calls += 1
+        self.state_value = ServerState.CONNECTING
         return ServerState.CONNECTING
 
     def request_weather(self, values):
@@ -533,6 +544,36 @@ def test_world_switch_starts_a_scene_while_disconnected():
             "map": "neighborhood",
         }
     assert controller.world_calls == ["neighborhood"]
+
+
+def test_stop_world_returns_202_and_leaves_the_console_disconnected():
+    controller = FakeController()
+    with _client(controller) as client:
+        response = client.post("/api/world/stop")
+    assert response.status_code == 202
+    assert response.json() == {"state": "connecting"}
+    assert controller.world_stop_calls == 1
+
+
+@pytest.mark.parametrize(
+    ("state", "code"),
+    [(ServerState.CONNECTING, 503), (ServerState.RUNNING, 409)],
+)
+def test_stop_world_requires_idle(state, code):
+    controller = FakeController(state)
+    with _client(controller) as client:
+        response = client.post("/api/world/stop")
+    assert response.status_code == code
+    assert controller.world_stop_calls == 0
+
+
+def test_stop_world_without_a_managed_simulator_returns_400():
+    controller = FakeController()
+    controller.manages_simulator = False
+    with _client(controller) as client:
+        response = client.post("/api/world/stop")
+    assert response.status_code == 400
+    assert "does not manage" in response.json()["detail"]["message"]
 
 
 def test_disconnected_commands_return_503():

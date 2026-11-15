@@ -232,6 +232,7 @@ Xvfb 由 xpra 自己拉起。
 | POST | `/api/vehicle` | 停放另一台、选中载具归位、切尾视角；仅 idle，202 |
 | GET | `/api/world/options` | 地图目录、标签、默认、当前、`simulator_owned`、能力位 |
 | POST | `/api/world` | 起场景或换图；202 已接受，200 无变化 |
+| POST | `/api/world/stop` | 停止当前场景并断开会话；仅 idle，202 |
 | GET | `/api/models` | 每台载具当前模型、可选模型、切换中 |
 | POST | `/api/models` | 提交部分模型变更；仅 idle，202 / 200 |
 | GET | `/api/weather` | 8 个字段定义与预设 |

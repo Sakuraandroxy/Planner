@@ -352,6 +352,74 @@ def test_start_leaves_an_unowned_stack_alone():
 
 
 # -- shutdown takes the stack with it -------------------------------------
+def test_stop_world_closes_the_session_and_stops_the_stack():
+    """The console needs a way to take a scene down without exiting."""
+    workers = []
+    supervisor = FakeSupervisor(running=False)
+    controller = _controller(
+        workers, simulator=supervisor, autostart_session=False
+    )
+    controller.start()
+    controller.request_world("city")
+    _wait(lambda: controller.state is ServerState.IDLE)
+    worker = workers[0]
+
+    assert controller.stop_world() is ServerState.CONNECTING
+    _wait(lambda: controller.state is ServerState.DISCONNECTED)
+
+    assert worker.closed
+    assert supervisor.stops == [True]
+    # A disconnected service stays disconnected; the reconnect loop must not
+    # rebuild the session it was just asked to drop.
+    time.sleep(0.15)
+    assert controller.state is ServerState.DISCONNECTED
+    assert len(workers) == 1
+    messages = "\n".join(item.message for item in controller.logs.read(0).items)
+    assert "Scene stopped" in messages
+    controller.close()
+
+
+def test_stop_world_requires_an_idle_service():
+    workers = []
+    controller = _ready_controller(
+        workers, simulator=FakeSupervisor(running=True)
+    )
+    task = controller.submit("fly")
+    _wait(lambda: controller.state is ServerState.RUNNING)
+
+    with pytest.raises(BackendUnavailable) as error:
+        controller.stop_world()
+    assert error.value.state is ServerState.RUNNING
+
+    workers[0].emit(
+        WorkerEventKind.FINISHED,
+        task_id=task.task_id,
+        success=True,
+        message="done",
+    )
+    _wait(lambda: controller.state is ServerState.IDLE)
+    controller.close()
+
+
+def test_stop_world_leaves_a_stack_it_does_not_own():
+    workers = []
+    supervisor = FakeSupervisor(running=False)
+    controller = _controller(
+        workers, simulator=supervisor, autostart_session=False
+    )
+    controller.start()
+    controller.request_world("city")
+    _wait(lambda: controller.state is ServerState.IDLE)
+    supervisor.preflight_error = SimulatorNotOwned("no pidfiles")
+
+    controller.stop_world()
+    _wait(lambda: controller.state is ServerState.DISCONNECTED)
+
+    assert supervisor.stops == []
+    assert "keeps running" in (controller.status.sim_error or "")
+    controller.close()
+
+
 def test_closing_the_service_stops_the_stack_it_started():
     """Ctrl-C used to stop the service and leave UE rendering on the GPU.
 
