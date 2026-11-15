@@ -30,7 +30,9 @@ projectairsim:
   view_cycle_start: drone_front
   rover_name: Rover1
   drone_name: Drone1
-  # 传感器 id，须与 robot_rover.jsonc / robot_drone_cameras.jsonc 一致。
+  # 传感器 id，须与 robot_rover.jsonc / robot_drone_flight.jsonc 一致。
+  # 控制台的四个视角按「每台载具：前视、追尾」轮转，因此两个 robot 文件里
+  # FrontCamera 都必须声明在 Chase 之前。顺序反过来，车前与车尾会整体对调。
   front_camera: FrontCamera
   chase_camera: Chase
   down_camera: DownCamera

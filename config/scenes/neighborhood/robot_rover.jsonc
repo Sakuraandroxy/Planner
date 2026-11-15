@@ -253,6 +253,40 @@
   ],
   "sensors": [
     {
+      "id": "FrontCamera",
+      "type": "camera",
+      "enabled": true,
+      "parent-link": "Frame",
+      "capture-interval": 0.03,
+      "capture-settings": [
+        {
+          "image-type": 0,
+          "width": 1280,
+          "height": 720,
+          "fov-degrees": 90,
+          "capture-enabled": true,
+          "streaming-enabled": true,
+          "pixels-as-float": false,
+          "compress": false,
+          "target-gamma": 2.5
+        },
+        {
+          "image-type": 2,
+          "width": 1280,
+          "height": 720,
+          "fov-degrees": 90,
+          "capture-enabled": true,
+          "streaming-enabled": false,
+          "pixels-as-float": true,
+          "compress": false
+        }
+      ],
+      "origin": {
+        "xyz": "1.8 0.0 -0.8",
+        "rpy-deg": "0 -3 0"
+      }
+    },
+    {
       "id": "Chase",
       "type": "camera",
       "enabled": true,
@@ -385,40 +419,7 @@
         "rpy-deg": "0 -90 0"
       }
     },
-    {
-      "id": "FrontCamera",
-      "type": "camera",
-      "enabled": true,
-      "parent-link": "Frame",
-      "capture-interval": 0.03,
-      "capture-settings": [
-        {
-          "image-type": 0,
-          "width": 1280,
-          "height": 720,
-          "fov-degrees": 90,
-          "capture-enabled": true,
-          "streaming-enabled": true,
-          "pixels-as-float": false,
-          "compress": false,
-          "target-gamma": 2.5
-        },
-        {
-          "image-type": 2,
-          "width": 1280,
-          "height": 720,
-          "fov-degrees": 90,
-          "capture-enabled": true,
-          "streaming-enabled": false,
-          "pixels-as-float": true,
-          "compress": false
-        }
-      ],
-      "origin": {
-        "xyz": "1.8 0.0 -0.8",
-        "rpy-deg": "0 -3 0"
-      }
-    },
+    
     {
       "id": "IMU1",
       "type": "imu",
