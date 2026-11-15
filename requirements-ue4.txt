@@ -1,0 +1,21 @@
+# 运行时环境：只跑 UE4 任务子进程，不导入 fastapi/uvicorn。
+# 需要 Python 3.10 以上。
+#
+# 安装分两步，顺序不能反：airsim 只有 sdist，它的 setup.py 开头就 import numpy，
+# 而构建隔离环境里没有 numpy。
+#   pip install -r requirements-ue4.txt
+#   pip install --no-deps --no-build-isolation airsim==1.8.1
+#
+# 这个环境不能安装 projectairsim：两边的客户端库抢同一个 msgpack 模块名，
+# 后装的会覆盖前一个。原因见 docs/DEPLOYMENT.md 第 2 节。
+
+numpy>=1.24
+requests>=2.31
+Pillow>=10.0
+pyyaml>=6.0
+pydantic>=2.0
+opencv-contrib-python-headless>=4.8
+msgpack-rpc-python>=0.4.1
+
+# 子进程侧要发 HTTP 请求给模型端点（任务解析与轨迹规划）。
+httpx>=0.27

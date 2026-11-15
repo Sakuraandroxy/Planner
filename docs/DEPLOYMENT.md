@@ -50,22 +50,21 @@ python -c "import airsim; airsim.MultirotorClient().ping()"
 
 ## 3 依赖安装
 
+两个环境的依赖各一份清单，分别在 `requirements.txt` 与 `requirements-ue4.txt`。
+
 ### 3.1 主环境
 
 ```bash
 conda create -n vln python=3.11 -y && conda activate vln
-pip install numpy pyyaml httpx fastapi "uvicorn[standard]" pydantic \
-  opencv-python-headless Pillow pytest
+pip install -r requirements.txt
 pip install --no-deps projectairsim==1.0.2
-pip install pynng "msgpack>=1.0.5" matplotlib commentjson "jsonschema>=4.4.0" \
-  inputs pqdict cryptography pykml junit-xml jsonlines Shapely azure-storage-blob
 ```
 
 三个要点：
 
-- **`projectairsim` 用 `--no-deps`，基础依赖手工补齐。** 它声明依赖 `opencv-python`（GUI 版），
-  会把第二份 `cv2/` 写进 `site-packages`，和 `opencv-python-headless` 抢同一个目录。
-  上面第三条命令就是它 wheel 元数据里的基础依赖，去掉了 `opencv-python`。
+- **`projectairsim` 用 `--no-deps`，基础依赖由清单末尾那几行补齐。** 它声明依赖 `opencv-python`（GUI 版），
+  会把第二份 `cv2/` 写进 `site-packages`，和 `opencv-python-headless` 抢同一个目录。清单里已列出它
+  wheel 元数据里的基础依赖，只去掉了 `opencv-python`。
 - **`Pillow` 是主环境的硬需求。**
   `planner/simulators/airsim/observation_source.py` 在模块顶层 `from PIL import Image`，缺它会有测试失败，
   失败点看着与 UE4 无关。
@@ -75,17 +74,17 @@ pip install pynng "msgpack>=1.0.5" matplotlib commentjson "jsonschema>=4.4.0" \
 
 ```bash
 conda create -n vln-ue4 python=3.11 -y && conda activate vln-ue4
-pip install numpy requests Pillow pyyaml pydantic \
-  opencv-contrib-python-headless "msgpack-rpc-python>=0.4.1"
+pip install -r requirements-ue4.txt
 pip install --no-deps --no-build-isolation airsim==1.8.1
 ```
 
-- **先装 numpy 再装 airsim。** `airsim` 只有 sdist，`setup.py` 开头就 `import numpy`，构建隔离环境里没有它，
-  报 `Getting requirements to build wheel did not run successfully`。`--no-build-isolation` 让它用当前解释器。
+- **先装清单再装 airsim，顺序不能反。** `airsim` 只有 sdist，`setup.py` 开头就 `import numpy`，构建隔离环境里
+  没有它，报 `Getting requirements to build wheel did not run successfully`。
+  `--no-build-isolation` 让它用当前解释器。
 - `airsim` 声明的是 `opencv-contrib-python`（GUI 版），用 headless 变体替代，同样有 `pip check` 噪音。
 - `msgpack-python` 在这个 Python 上没有 C 扩展，打包走纯 Python 实现。功能正确，取图慢；
   换 msgpack 1.x 会破坏 `msgpackrpc`，不要在依赖上动它。深度分辨率因此是配置项（见 7 节）。
-- 这个环境需要 `httpx`：任务解析与轨迹规划在子进程侧发 HTTP。
+- 清单里有 `httpx`：任务解析与轨迹规划在子进程侧发 HTTP 请求。
 
 ## 4 配置总览
 

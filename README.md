@@ -42,7 +42,7 @@
    两套客户端库在同一个环境里会互相覆盖，这一点在[部署文档](docs/DEPLOYMENT.md)里说清了原因。
    ```bash
    python -m venv .venv && . .venv/bin/activate
-   pip install -e ".[test]"
+   pip install -r requirements.txt
    pip install --no-deps projectairsim==1.0.2
    ```
 2. **登记地图。** 打开 `config/maps.yaml`，把每张地图的引擎可执行文件路径和地图名填上。
