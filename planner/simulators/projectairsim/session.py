@@ -87,14 +87,17 @@ class ProjectAirSimMissionSession:
         self,
         config: AppConfig,
         *,
-        detector,
-        planner,
-        geometry,
         log: Callable[[str], None] | None = None,
         frame_sink: Callable[[np.ndarray, float], None] | None = None,
+        trajectory=None,
     ):
         self._config = config
         self._log = log or (lambda message: None)
+        # The console reads the remaining path from this sink. It arrives from the
+        # assembly's resources, like ``frame_sink``: the session marks task
+        # boundaries on it (start / clear) because it is what knows a task began
+        # and ended, but it never builds one.
+        self._trajectory = trajectory
         self._connection: ProjectAirSimConnection | None = None
         self._drone: ProjectAirSimDrone | None = None
         self._rover: ProjectAirSimRover | None = None

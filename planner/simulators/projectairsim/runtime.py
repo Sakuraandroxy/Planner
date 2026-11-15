@@ -66,6 +66,7 @@ def build_session(*, config, map_entry, family, resources, log):
         session_config,
         log=log,
         frame_sink=resources.frame_sink,
+        trajectory=resources.trajectory,
     )
 
 

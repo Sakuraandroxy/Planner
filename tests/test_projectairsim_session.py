@@ -1,5 +1,6 @@
 """Dual-vehicle session routing without a live ProjectAirSim server."""
 
+import inspect
 import threading
 from types import SimpleNamespace
 
@@ -20,6 +21,64 @@ from planner.domain.view import VIEW_MODES
 from planner.domain.weather import WEATHER_FIELDS, default_weather
 from planner.errors import ExecutionError, ProtocolError
 from projectairsim.types import WeatherParameter
+
+
+def test_the_constructor_accepts_the_arguments_the_registry_passes():
+    """``registry.build_session`` is the only caller; its kwargs must fit here.
+
+    ``detector``, ``planner`` and ``geometry`` used to be required keyword
+    arguments. The assembly moved to ``application/mission_assembly.py`` and
+    stopped passing them, so every UE5 session build raised TypeError before
+    touching the simulator. Required parameters are now the config and nothing
+    else; the rest arrive through ``attach_arms``.
+    """
+    signature = inspect.signature(ProjectAirSimMissionSession.__init__)
+    signature.bind(object(), object(), log=None, frame_sink=None, trajectory=None)
+    required = [
+        name
+        for name, parameter in signature.parameters.items()
+        if parameter.default is inspect.Parameter.empty
+        and parameter.kind
+        not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+    ]
+    assert required == ["self", "config"]
+
+
+def test_build_session_forwards_the_sinks_the_console_reads(monkeypatch):
+    """The session needs the frame and trajectory sinks; the assembly owns them.
+
+    They reach the session as constructor arguments, like before the assembly was
+    moved out. Dropping one is invisible until a task runs: the remaining-path
+    panel, or the initial frame, simply stops updating.
+    """
+    from planner.config import load_config
+    from planner.simulators.projectairsim import runtime as simulator_runtime
+    from planner.simulators.projectairsim import session as session_module
+
+    seen = {}
+
+    class StubSession:
+        def __init__(self, config, **kwargs):
+            seen["config"] = config
+            seen.update(kwargs)
+
+    monkeypatch.setattr(
+        session_module, "ProjectAirSimMissionSession", StubSession
+    )
+    config = load_config("config/base.yaml")
+    entry = config.maps.entry("cityenviron")
+    sinks = SimpleNamespace(frame_sink=object(), trajectory=object())
+
+    simulator_runtime.build_session(
+        config=config,
+        map_entry=entry,
+        family=config.families.require("projectairsim"),
+        resources=sinks,
+        log=lambda *args: None,
+    )
+
+    assert seen["frame_sink"] is sinks.frame_sink
+    assert seen["trajectory"] is sinks.trajectory
 
 class FakeApplication:
     def __init__(self, *, error=None):
