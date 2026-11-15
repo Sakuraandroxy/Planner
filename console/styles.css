@@ -18,6 +18,10 @@
 
 html, body { height: 100%; }
 
+/* One layout for every screen: below this width the page scrolls instead of
+   reflowing, so a phone shows the desktop arrangement scaled down. */
+body { min-width: 1180px; }
+
 body {
   margin: 0;
   background:
@@ -487,23 +491,3 @@ button.ghost { background: transparent; }
   font-size: 11.5px;
 }
 .foot a { color: var(--muted); }
-
-@media (max-width: 920px) {
-  /* One column: no box in the side has a scrollable height any more, and
-     ``.side { overflow: hidden }`` used to clip every card below the first -- which
-     hid 世界设置 entirely on a narrow window, leaving no way to pick a map. Give the
-     page back its normal document scroll instead. */
-  .layout {
-    grid-template-columns: 1fr;
-    overflow-y: auto;
-  }
-  .side {
-    overflow: visible;
-  }
-  .settings-card {
-    flex: none;
-  }
-  .tab-panels { overflow: visible; }
-  .viewport { min-height: 260px; }
-  .trajectory-list { max-height: 30vh; }
-}
