@@ -93,7 +93,19 @@ h1 { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: 0.2px; }
   flex-direction: column;
   gap: 12px;
   overflow-y: auto;
+  /* The theme is dark enough that the platform scrollbar can be invisible, and this
+     column is the only way to reach the controls below the first card. */
+  scrollbar-width: thin;
+  scrollbar-color: #33464c transparent;
 }
+.side-scroll::-webkit-scrollbar { width: 10px; }
+.side-scroll::-webkit-scrollbar-thumb {
+  background: #33464c;
+  border-radius: 8px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+.side-scroll::-webkit-scrollbar-thumb:hover { background: #4a636a; }
 
 .card {
   background: linear-gradient(180deg, var(--panel) 0%, #131a1d 100%);
@@ -450,7 +462,21 @@ button.ghost { background: transparent; }
 .foot a { color: var(--muted); }
 
 @media (max-width: 920px) {
-  .layout { grid-template-columns: 1fr; }
+  /* One column: no box in the side has a scrollable height any more, and
+     ``.side { overflow: hidden }`` used to clip every card below the first -- which
+     hid 世界设置 entirely on a narrow window, leaving no way to pick a map. Give the
+     page back its normal document scroll instead. */
+  .layout {
+    grid-template-columns: 1fr;
+    overflow-y: auto;
+  }
+  .side {
+    overflow: visible;
+  }
+  .side-scroll {
+    overflow: visible;
+    flex: 0 0 auto;
+  }
   .viewport { min-height: 260px; }
   .trajectory-list { max-height: 30vh; }
 }
