@@ -8,6 +8,15 @@ never asks which simulator is running.
 deliberate: a config file that lists capabilities can drift from what the code
 implements, and the drift only shows up as a broken button on a machine with a
 simulator attached.
+
+The bundle answers exactly one question: *can this engine perform this action?*
+Anything the service or the shared planner provides on its own -- trajectory
+telemetry, logs, the task list, the instruction card -- must not be modelled
+here, because then a generic feature becomes a per-simulator permission and a
+simulator that never implemented the flag silently loses functionality it was
+never missing. ``trajectory`` used to be gated this way: the port held the
+service's own hub, the endpoint read that hub directly, and nothing consulted
+the port except the gate.
 """
 
 from __future__ import annotations
@@ -21,7 +30,6 @@ from ..ports.capabilities import (
     FramePublisher,
     ReturnHome,
     StreamingViews,
-    TrajectoryTelemetry,
     WeatherControl,
 )
 from ..ports.observation_source import (
@@ -41,12 +49,12 @@ TASK_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "visual_goal_above": ("vehicle", "observation", "camera_view"),
 }
 
-#: Port slot -> the ``actions`` flag it unlocks.
+#: Port slot -> the ``actions`` flag it unlocks. Only engine-dependent controls
+#: belong here; see the module docstring for why generic features stay out.
 ACTION_PORTS: dict[str, str] = {
     "home": "home",
     "models": "models",
     "video": "frames",
-    "trajectory": "telemetry",
     "weather": "weather",
 }
 
@@ -65,7 +73,6 @@ class SimulatorPorts:
     views: StreamingViews | None = None
     models: AppearanceModelControl | None = None
     frames: FramePublisher | None = None
-    telemetry: TrajectoryTelemetry | None = None
     home: ReturnHome | None = None
     vehicles: tuple[str, ...] = ("drone",)
     #: Task kinds the shared layer may offer even when every port is present.
@@ -149,7 +156,6 @@ class SimulatorPorts:
             views=views,
             models=_Slot("models") if "models" in present else None,
             frames=_Slot("frames") if "frames" in present else None,
-            telemetry=_Slot("telemetry") if "telemetry" in present else None,
             home=_Slot("home") if "home" in present else None,
             vehicles=vehicles,
             enabled_tasks=enabled_tasks,

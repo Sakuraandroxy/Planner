@@ -10,8 +10,10 @@ from __future__ import annotations
 from ...simulator.ports import SimulatorPorts
 
 #: Slots AirSim implements. Absent slots are capabilities UE4 does not offer:
-#: no streaming camera cycle, no appearance models, no frame stream, no
-#: trajectory telemetry, and no return-home (the old planner had no such route).
+#: no streaming camera cycle, no appearance models, no frame stream, and no
+#: return-home route implemented here. Trajectory telemetry is not in this list
+#: at all -- the remaining-path read is a service feature, not a simulator
+#: permission, so it is offered to every family.
 PORT_SLOTS: tuple[str, ...] = (
     "vehicle",
     "observation",
@@ -21,9 +23,11 @@ PORT_SLOTS: tuple[str, ...] = (
     "weather",
 )
 
-#: AirSim was only ever flown on these tasks. ``free_navigation`` is technically
-#: reachable (the vehicle streams velocity), but the planner behind it is new in
-#: main and has never run against AirSim depth, so it stays off the offer list.
+#: AirSim was only ever flown on these tasks. This list is a **verification
+#: status**, not an engine limit: ``free_navigation`` is technically reachable
+#: (the vehicle streams velocity and AirSim has the depth), but the planner
+#: behind it is new in main and has never been flown against AirSim depth, so it
+#: stays off the offer list until that run happens.
 ENABLED_TASKS: tuple[str, ...] = (
     "basic_motion",
     "visual_goal_navigation",
@@ -46,8 +50,10 @@ def build_ports(
     Called by :class:`planner.simulators.airsim.session.AirSimMissionSession`, which
     is also what makes ``describe()`` honest: the slots advertised before a
     simulator is running are the slots this function can fill once it is running.
-    ``views``, ``models``, ``frames``, ``telemetry`` and ``home`` stay empty because
-    UE4 does not implement them, and the console hides those controls from that fact.
+    ``views``, ``models``, ``frames`` and ``home`` stay empty because UE4 does not
+    implement them, and the console hides those controls from that fact. The
+    trajectory read is not a port: ``/api/trajectory`` serves the service's own
+    hub for every family.
     """
     return SimulatorPorts(
         vehicle=vehicle,

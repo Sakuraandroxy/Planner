@@ -177,7 +177,10 @@ function applyCapabilities() {
   // world panel and there was no way to start a scene. A helper that resolves its
   // target with closest("section") breaks again the moment anyone moves a control.
   show($("models-card"), hasAction("models"));
-  show($("trajectory-card"), hasAction("trajectory"));
+  // The remaining-trajectory card is not gated. It shows what the shared
+  // planning layer recorded for this service, so every simulator has it; a
+  // numeric basic-motion task simply reports no pending waypoints, which is
+  // true on both families and not a missing feature.
   const views =
     caps && Array.isArray(caps.view_modes) ? caps.view_modes.length > 0 : true;
   show($("view-modes"), views);

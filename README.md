@@ -299,7 +299,7 @@ worker 并在**同一个仿真器进程**里重新加载场景（不重启 UE / 
 | POST | `/api/tasks` | `{"instruction": "...", "vehicle": "rover"\|"drone"}`；仅 idle 接受，返回 202 |
 | GET | `/api/status` | 状态、当前指令、最近结果、当前/可用载具、`map/maps/view_mode/view_pending/weather/map_switching/sim_error/models/models_switching` |
 | GET | `/api/logs?cursor=N` | 增量读取内存日志环形缓冲 |
-| GET | `/api/trajectory` | 当前剩余世界航点、队列占用、里程、位姿 |
+| GET | `/api/trajectory` | 当前剩余世界航点、队列占用、里程、位姿。**不设能力门**：这些数据由共享工作流写进本服务的 hub，两族都有。根基础动作任务报“无剩余航点”，两族行为一致，不是缺功能 |
 | POST | `/api/stop` | 请求停止；执行中返回 202，空闲返回 200 |
 | POST | `/api/home` | `{"vehicle": "rover"\|"drone"}`（可省略，缺省当前载具）；仅 idle，202 |
 | POST | `/api/vehicle` | `{"vehicle": "rover"\|"drone"}`；停放另一台并移出画面、选中载具回出生点、切到它的尾视角；仅 idle，202 `{state, vehicle, view_mode}`（`view_mode` 为 `*_chase`） |
@@ -312,7 +312,7 @@ worker 并在**同一个仿真器进程**里重新加载场景（不重启 UE / 
 | POST | `/api/view` | `{"mode": "rover_front"\|"rover_chase"\|"drone_front"\|"drone_chase"}`；200 `{view_mode, deferred}`，未知机位 422 |
 | GET | `/api/video` | MJPEG 流（`multipart/x-mixed-replace`）。服务启动时没给出帧枢纽则不注册该路径；
 当前家族没有 `video` 端口时返回 **501**，详情里带 `unsupported` 与 `simulator`，不会返回一个空流 |
-| GET | `/api/status` 中的 `capabilities` | 由已实现的端口推导，不是配置项；前端按它决定控件可用性 |
+| GET | `/api/status` 中的 `capabilities` | 由已实现的端口推导，不是配置项；前端按它决定控件可用性。**判定原则**：端口只回答“这台引擎能不能做这个动作”。服务/规划层共有的东西（遥测、日志、任务列表、指令卡）不得进端口包，否则通用功能会变成按仿真器授权的开关 |
 
 状态码：提交/回起点在连接中返回 503、运行/停止中返回 409；未知载具返回
 400；请求体校验失败返回 422。`POST /api/stop` 在解析、采集、模型调用、

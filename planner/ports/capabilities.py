@@ -91,12 +91,6 @@ class FramePublisher(Protocol):
     def publish(self, name: str, jpeg: bytes, timestamp_ns: int) -> None: ...
 
 
-class TrajectoryTelemetry(Protocol):
-    """Report the remaining world waypoints the control loop is following."""
-
-    def snapshot(self) -> object: ...
-
-
 class VehicleRoster(Protocol):
     """Which vehicles this simulator actually spawns and can control."""
 

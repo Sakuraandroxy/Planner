@@ -83,7 +83,6 @@ def test_world_options_map_every_scene_to_a_simulator(client):
         ("GET", "/api/models", None),
         # A body that would pass validation, so 501 proves the gate ran.
         ("POST", "/api/models", {"models": {"drone": "quadrotor"}}),
-        ("GET", "/api/trajectory", None),
         ("GET", "/api/video", None),
     ],
 )
@@ -102,6 +101,21 @@ def test_projectairsim_still_offers_those_controls(client):
     assert live.post("/api/home").status_code == 202
     assert live.get("/api/models").status_code == 200
     assert live.get("/api/trajectory").status_code == 200
+
+
+def test_trajectory_read_is_not_a_simulator_capability(client):
+    """The remaining path is a service feature, so no family may lose it.
+
+    The shared workflows write the hub and the endpoint reads it; the port
+    bundle used to hold the same hub only so a flag could hide the card. UE4
+    answered 501 for a trajectory it was already producing.
+    """
+    live, controller = client
+    assert live.get("/api/trajectory").status_code == 200
+    controller.map = AIRSIM_MAP
+    response = live.get("/api/trajectory")
+    assert response.status_code == 200, response.text
+    assert "points" in response.json()
 
 
 def test_weather_is_offered_by_both_simulators(client):

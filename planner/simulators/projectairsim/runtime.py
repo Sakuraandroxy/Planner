@@ -23,7 +23,6 @@ PORT_SLOTS: tuple[str, ...] = (
     "views",
     "models",
     "frames",
-    "telemetry",
     "home",
 )
 

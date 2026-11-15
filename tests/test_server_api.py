@@ -313,7 +313,7 @@ def test_status_and_logs():
         }
         assert simulator == "projectairsim"
         assert caps["vehicles"] == ["rover", "drone"]
-        assert caps["actions"] == ["home", "models", "video", "trajectory", "weather"]
+        assert caps["actions"] == ["home", "models", "video", "weather"]
         assert caps["task_kinds"] == ["basic_motion", "visual_goal_navigation", "free_navigation"]
         assert status.headers["cache-control"] == "no-store"
 

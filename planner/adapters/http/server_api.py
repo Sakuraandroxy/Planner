@@ -233,7 +233,8 @@ def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAP
 
     @app.get("/api/trajectory")
     def trajectory():
-        require("trajectory")
+        # No capability gate: the remaining path is produced by the shared
+        # workflows into this service's hub, for every simulator family.
         snapshot = (
             TrajectorySnapshot()
             if trajectory_hub is None

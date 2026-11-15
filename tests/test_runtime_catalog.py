@@ -71,7 +71,7 @@ def test_derived_projectairsim_capabilities():
     caps = registry.capabilities_for("projectairsim")
     assert caps.vehicles == ("rover", "drone")
     assert len(caps.view_modes) == 4
-    assert set(caps.actions) == {"home", "models", "video", "trajectory", "weather"}
+    assert set(caps.actions) == {"home", "models", "video", "weather"}
     assert "free_navigation" in caps.task_kinds
     # No camera_view port means no look-down task, with nothing to configure.
     assert "visual_goal_above" not in caps.task_kinds
