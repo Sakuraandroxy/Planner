@@ -16,11 +16,10 @@ from planner.domain.mission import MissionPlan, MissionStage, TaskKind
 from planner.domain.pose import WorldPose
 from planner.domain.result import MissionResult
 from planner.domain.server import TaskSubmission
-from planner.domain.view import INITIAL_STREAM_INDEX, VIEW_MODES
+from planner.domain.view import VIEW_MODES
 from planner.domain.weather import WEATHER_FIELDS, default_weather
 from planner.errors import ExecutionError, ProtocolError
 from projectairsim.types import WeatherParameter
-
 
 class FakeApplication:
     def __init__(self, *, error=None):
@@ -42,14 +41,12 @@ class FakeApplication:
             raise self.error
         return MissionResult(True, ())
 
-
 class FakeExecution:
     def __init__(self):
         self.checkpoints = []
 
     def bind_hold_checkpoint(self, checkpoint):
         self.checkpoints.append(checkpoint)
-
 
 class FakeTrajectory:
     def __init__(self):
@@ -62,7 +59,6 @@ class FakeTrajectory:
     def clear(self):
         self.cleared += 1
 
-
 class FakeWorkflow:
     def __init__(self, name, order):
         self._name = name
@@ -71,7 +67,6 @@ class FakeWorkflow:
     def close(self):
         self._order.append(self._name)
 
-
 class FakeModelCalls:
     def __init__(self, name, order):
         self._name = name
@@ -79,7 +74,6 @@ class FakeModelCalls:
 
     def close(self):
         self._order.append(self._name)
-
 
 class FakeVehicle:
     def __init__(self, name, order=None):
@@ -115,12 +109,10 @@ class FakeVehicle:
         if self._order is not None:
             self._order.append(f"{self.name}-close")
 
-
 class FakeRover(FakeVehicle):
     def return_home(self):
         self.calls.append("return_home")
         return WorldPose(62.26, 0.0, 0.85, 12.5)
-
 
 class FakeDrone(FakeVehicle):
     def __init__(self, name, order=None):
@@ -139,7 +131,6 @@ class FakeDrone(FakeVehicle):
         if self._order is not None:
             self._order.append("land")
         return self.land_ok
-
 
 class FakeConnection:
     def __init__(self, order=None):
@@ -193,7 +184,6 @@ class FakeConnection:
         if self._order is not None:
             self._order.append("connection-close")
 
-
 def make_session(*, active="rover", order=None, error=None):
     order = [] if order is None else order
     messages = []
@@ -216,7 +206,6 @@ def make_session(*, active="rover", order=None, error=None):
         simulator=SimpleNamespace(display=":104"),
     )
     session._trajectory = FakeTrajectory()
-    session._view_cache = None
     session._log = lambda message, *args: messages.append(message)
     session._frame_sink = None
     session._publish_frames = False
@@ -231,8 +220,9 @@ def make_session(*, active="rover", order=None, error=None):
     session._pin_hook = session._pin_hidden
     session._connection.add_advance_hook(session._pin_hook)
     session._view_positions = VIEW_MODES
-    session._view_index = INITIAL_STREAM_INDEX
-    session._view_mode = VIEW_MODES[INITIAL_STREAM_INDEX]
+    # The runtime seeds this from projectairsim.view_cycle_start.
+    session._view_index = VIEW_MODES.index("drone_front")
+    session._view_mode = "drone_front"
     session._view_verified = False
     session._weather = None
     applications = {
@@ -263,7 +253,6 @@ def make_session(*, active="rover", order=None, error=None):
     session.messages = messages
     return session
 
-
 def test_run_prepares_and_settles_the_rover():
     session = make_session()
     application = session.applications["rover"]
@@ -282,7 +271,6 @@ def test_run_prepares_and_settles_the_rover():
         for message in session.messages
     )
 
-
 def test_run_takes_off_for_the_drone_and_parks_the_rover():
     session = make_session()
     application = session.applications["drone"]
@@ -300,7 +288,6 @@ def test_run_takes_off_for_the_drone_and_parks_the_rover():
         for message in session.messages
     )
 
-
 def test_run_lands_the_drone_before_switching_to_the_rover():
     session = make_session(active="drone")
     session._drone.landed = False
@@ -312,13 +299,11 @@ def test_run_lands_the_drone_before_switching_to_the_rover():
     assert session._hidden_poses["drone"] == WorldPose(10.0, 20.0, 1.0, 0.0)
     assert session._rover.calls == ["hover", "hover"]
 
-
 def test_run_rejects_an_unknown_vehicle():
     session = make_session()
     with pytest.raises(ProtocolError, match="unknown vehicle"):
         session.run(TaskSubmission("task_1", "fly", "boat"))
     assert session._rover.calls == []
-
 
 def test_run_rejects_a_session_without_a_task_parser():
     session = make_session()
@@ -327,7 +312,6 @@ def test_run_rejects_a_session_without_a_task_parser():
         session.run(TaskSubmission("task_1", "drive", "rover"))
     assert session._trajectory.started == []
 
-
 def test_run_maps_a_stop_to_a_cancelled_result():
     session = make_session(error=KeyboardInterrupt())
     result = session.run(TaskSubmission("task_1", "drive", "rover"))
@@ -335,7 +319,6 @@ def test_run_maps_a_stop_to_a_cancelled_result():
     assert result.error == "cancelled: task was cancelled"
     assert session._trajectory.cleared == 1
     assert session._rover.calls[-1] == "hover"
-
 
 def test_run_binds_the_stop_event_to_the_hold_checkpoint():
     session = make_session()
@@ -349,7 +332,6 @@ def test_run_binds_the_stop_event_to_the_hold_checkpoint():
     stop_event.set()
     with pytest.raises(KeyboardInterrupt):
         checkpoint()
-
 
 def test_idle_tick_follows_the_active_vehicle():
     session = make_session(active="rover")
@@ -365,7 +347,6 @@ def test_idle_tick_follows_the_active_vehicle():
     session._rover = None
     session.idle_tick()
     assert session._connection.advances == [DEFAULT_CONTROL_PERIOD_S]
-
 
 def test_return_home_routes_to_the_active_vehicle():
     session = make_session(active="rover")
@@ -397,7 +378,6 @@ def test_return_home_routes_to_the_active_vehicle():
     with pytest.raises(ProtocolError, match="unknown vehicle"):
         session.return_home("boat")
 
-
 def test_activate_vehicle_parks_the_rover_and_homes_the_drone():
     session = make_session(active="rover")
     assert session.active_vehicle == "rover"
@@ -408,13 +388,14 @@ def test_activate_vehicle_parks_the_rover_and_homes_the_drone():
     assert session._rover.calls[1][0] == "teleport"
     assert session._hidden_poses["rover"] == WorldPose(10.0, 20.0, 1.0, 0.0)
     assert session._drone.calls == ["return_home"]
-    assert session._connection.switch_calls == 3
+    # The view walks from the declared start (drone_front) to the drone's chase
+    # camera: one step forward.
+    assert session._connection.switch_calls == 1
     assert session.view_mode == "drone_chase"
     assert any(
         "Vehicle activated: drone (parked rover" in message
         for message in session.messages
     )
-
 
 def test_activate_vehicle_restores_a_hidden_target_before_homing_it():
     session = make_session(active="rover")
@@ -430,7 +411,6 @@ def test_activate_vehicle_restores_a_hidden_target_before_homing_it():
     assert "drone" not in session._hidden_poses
     assert "drone" not in session._hidden_teleports
 
-
 def test_activate_vehicle_lands_the_drone_before_activating_the_rover():
     session = make_session(active="drone")
     session._view_index = 2
@@ -445,7 +425,6 @@ def test_activate_vehicle_lands_the_drone_before_activating_the_rover():
     assert session._rover.calls == ["return_home"]
     assert session._connection.switch_calls == 3
     assert session.view_mode == "rover_chase"
-
 
 def test_activate_vehicle_fails_when_the_drone_landing_is_unconfirmed():
     session = make_session(active="drone")
@@ -464,7 +443,6 @@ def test_activate_vehicle_fails_when_the_drone_landing_is_unconfirmed():
         for message in session.messages
     )
 
-
 def test_activate_vehicle_can_repeat_the_active_vehicle():
     session = make_session(active="drone")
     session._view_index = 2
@@ -479,14 +457,12 @@ def test_activate_vehicle_can_repeat_the_active_vehicle():
     assert session._connection.switch_calls == 1
     assert session.view_mode == "drone_chase"
 
-
 def test_activate_vehicle_rejects_an_unknown_vehicle():
     session = make_session()
     with pytest.raises(ProtocolError, match="unknown vehicle"):
         session.activate_vehicle("boat")
     assert session._rover.calls == []
     assert session._drone.calls == []
-
 
 def test_hide_lifts_the_vehicle_and_unhide_restores_it():
     session = make_session(active="rover")
@@ -515,7 +491,6 @@ def test_hide_lifts_the_vehicle_and_unhide_restores_it():
         for message in session.messages
     )
 
-
 def test_hidden_vehicle_is_pinned_at_altitude_while_the_world_steps():
     session = make_session(active="rover")
     session._hide("drone")
@@ -542,7 +517,6 @@ def test_hidden_vehicle_is_pinned_at_altitude_while_the_world_steps():
     session._connection.advance_for_sim_time(HIDE_PIN_PERIOD_S)
     assert session._drone.pose == moved
 
-
 def test_pin_failure_is_logged_once_and_recovered():
     session = make_session(active="rover")
     session._hide("drone")
@@ -568,7 +542,6 @@ def test_pin_failure_is_logged_once_and_recovered():
     assert session._drone.pose == hidden
     assert "drone" not in session._pin_failures
 
-
 def test_startup_hide_parks_the_inactive_vehicle_from_its_spawn():
     session = make_session(active="rover")
     spawn = session._drone.pose
@@ -580,7 +553,6 @@ def test_startup_hide_parks_the_inactive_vehicle_from_its_spawn():
         spawn.x, spawn.y, spawn.z - HIDE_ALTITUDE_GAIN_M, spawn.yaw_deg
     )
     assert session._drone.pose == session._hidden_teleports["drone"]
-
 
 def test_activate_vehicle_fails_when_the_other_vehicle_cannot_be_hidden():
     session = make_session(active="rover")
@@ -596,7 +568,6 @@ def test_activate_vehicle_fails_when_the_other_vehicle_cannot_be_hidden():
     assert session._drone.calls == []
     assert session._connection.switch_calls == 0
 
-
 def test_run_unhides_a_hidden_target_vehicle():
     session = make_session(active="rover")
     parked = WorldPose(0.0, 0.0, 5.0, 90.0)
@@ -609,13 +580,11 @@ def test_run_unhides_a_hidden_target_vehicle():
     assert "drone" not in session._hidden_poses
     assert session.active_vehicle == "drone"
 
-
 def test_return_home_clears_a_stale_hidden_record():
     session = make_session(active="rover")
     session._hidden_poses["rover"] = WorldPose(1.0, 2.0, 3.0, 0.0)
     session.return_home("rover")
     assert "rover" not in session._hidden_poses
-
 
 def test_startup_hiding_failure_is_only_a_warning():
     session = make_session(active="rover")
@@ -631,7 +600,6 @@ def test_startup_hiding_failure_is_only_a_warning():
         "could not move the drone out of view" in message
         for message in session.messages
     )
-
 
 def test_close_closes_workflows_before_vehicles_and_the_connection():
     order = []
@@ -655,7 +623,6 @@ def test_close_closes_workflows_before_vehicles_and_the_connection():
     with pytest.raises(RuntimeError):
         session.return_home()
 
-
 def test_close_skips_drone_landing_when_the_scene_is_replaced():
     order = []
     session = make_session(order=order)
@@ -667,7 +634,6 @@ def test_close_skips_drone_landing_when_the_scene_is_replaced():
     )
     assert session._drone is None
     assert session._connection is None
-
 
 class UnreadableLandedDrone:
     """A drone whose state can no longer be read from a torn-down simulator."""
@@ -681,7 +647,6 @@ class UnreadableLandedDrone:
 
     def close(self):
         self._order.append("drone-close")
-
 
 def test_close_releases_the_connection_when_the_landing_state_raises():
     order = []
@@ -699,14 +664,12 @@ def test_close_releases_the_connection_when_the_landing_state_raises():
         for message in session.messages
     )
 
-
 def test_weather_catalog_is_static_and_complete():
     session = make_session()
     catalog = session.weather_catalog()
     assert [field.id for field in catalog.fields] == list(WEATHER_FIELDS)
     assert session.weather is None
     assert session._connection.reset_weather_calls == 0
-
 
 def test_set_weather_enables_effects_and_maps_each_nonzero_field():
     session = make_session()
@@ -727,7 +690,6 @@ def test_set_weather_enables_effects_and_maps_each_nonzero_field():
     }
     assert any("Weather applied:" in message for message in session.messages)
 
-
 def test_set_weather_all_zero_disables_effects():
     session = make_session()
     values = default_weather()
@@ -741,66 +703,52 @@ def test_set_weather_all_zero_disables_effects():
         "Weather cleared;" in message for message in session.messages
     )
 
-
 def test_set_weather_requires_all_eight_fields():
     session = make_session()
     with pytest.raises(ValueError, match="missing weather fields"):
         session.set_weather({"rain": 0.5})
     assert session._connection.weather_params == []
 
+def test_set_view_mode_counts_switches_from_the_declared_start():
+    """The ring position is bookkeeping, not a question to ask the engine.
 
-def test_set_view_mode_cycles_forward_to_the_target():
+    ``switch_streaming_view`` walks the cameras forward and reports nothing, so
+    the position is tracked from ``projectairsim.view_cycle_start``: the camera
+    the engine is on right after a scene load.
+    """
     session = make_session()
-    assert session.view_mode == "rover_front"
-    assert session.set_view_mode("drone_front") == "drone_front"
-    assert session._connection.switch_calls == 2
     assert session.view_mode == "drone_front"
+    assert session.set_view_mode("drone_front") == "drone_front"
+    assert session._connection.switch_calls == 0
 
     session._connection.switch_calls = 0
     assert session.set_view_mode("rover_chase") == "rover_chase"
+    # drone_front is position 2, rover_chase is 1: three steps forward.
     assert session._connection.switch_calls == 3
 
     session._connection.switch_calls = 0
-    assert session.set_view_mode("rover_chase") == "rover_chase"
-    assert session._connection.switch_calls == 0
+    assert session.set_view_mode("rover_front") == "rover_front"
+    assert session._connection.switch_calls == 3
 
+    # Naming the start is what makes a wrong view_cycle_start diagnosable: the
+    # buttons would all be off by the same number of steps.
+    assert any(
+        "from drone_front" in message for message in session.messages
+    ), session.messages
 
 def test_set_view_mode_reports_a_simulator_refusal():
     session = make_session()
     session._connection.switch_ok = False
     with pytest.raises(ProtocolError, match="refused to switch"):
         session.set_view_mode("rover_chase")
-    assert session.view_mode == "rover_front"
-
+    # Nothing was applied, so the console is still on the declared start.
+    assert session.view_mode == "drone_front"
 
 def test_set_view_mode_rejects_an_unknown_mode():
     session = make_session()
     with pytest.raises(ValueError, match="unknown view mode"):
         session.set_view_mode("moon")
     assert session._connection.switch_calls == 0
-
-
-def test_set_view_mode_uses_the_calibrated_cycle_order():
-    session = make_session()
-    # The live server may cycle in a different order than the built-in list.
-    session._view_positions = (
-        "rover_chase",
-        "rover_front",
-        "drone_front",
-        "drone_chase",
-    )
-    session._view_index = 0
-    session._view_mode = "rover_chase"
-
-    assert session.set_view_mode("drone_front") == "drone_front"
-    assert session._connection.switch_calls == 2
-    assert session.view_mode == "drone_front"
-
-    session._connection.switch_calls = 0
-    assert session.set_view_mode("rover_chase") == "rover_chase"
-    assert session._connection.switch_calls == 2
-    assert session.view_mode == "rover_chase"
-
 
 class FakeSight:
     """Stand in for reading the camera off the desktop."""
@@ -813,275 +761,4 @@ class FakeSight:
         value = self._observed[min(self.calls, len(self._observed) - 1)]
         self.calls += 1
         return value
-
-
-def test_unverified_view_reads_the_cycle_position_from_the_screen():
-    """The cycle position is a guess until the screen confirms it.
-
-    Counting switches from a guessed position is what left the console showing
-    the hidden vehicle a kilometre above the map under a rover label. One look
-    pins the ring; the distance to the request is then arithmetic.
-    """
-    session = make_session()
-    session._confirm_view = FakeSight(["drone_front"])
-
-    assert session.set_view_mode("rover_chase") == "rover_chase"
-    # drone_front is cycle position 2, rover_chase is 1: three steps forward.
-    assert session._connection.switch_calls == 3
-    assert session._view_verified is True
-    assert session._view_index == VIEW_MODES.index("rover_chase")
-    assert any(
-        "read from the screen" in message for message in session.messages
-    ), session.messages
-
-
-def test_confirmed_position_switches_without_looking():
-    session = make_session()
-    session._view_verified = True
-
-    def no_look():
-        raise AssertionError("a confirmed position should not need a screenshot")
-
-    session._confirm_view = no_look
-    assert session.set_view_mode("drone_front") == "drone_front"
-    assert session._connection.switch_calls == 2
-
-
-def test_unreadable_desktop_falls_back_to_counting_switches():
-    """With nothing to look at the console does what it always did, quietly."""
-    session = make_session()
-    session._confirm_view = FakeSight([None])
-
-    assert session.set_view_mode("drone_chase") == "drone_chase"
-    assert session._view_verified is False
-    assert session._connection.switch_calls == 3
-    assert not any(
-        "read from the screen" in message for message in session.messages
-    ), session.messages
-
-
-def test_identification_is_attempted_once_per_request():
-    """Looking at the screen costs seconds, so it must not happen per step."""
-    session = make_session()
-    sight = FakeSight(["drone_front", "rover_front", "rover_chase"])
-    session._confirm_view = sight
-
-    assert session.set_view_mode("rover_chase") == "rover_chase"
-    assert session.set_view_mode("drone_chase") == "drone_chase"
-    # The first request looks; the confirmed position makes the second arithmetic.
-    assert sight.calls == 1
-
-
-def test_calibrate_views_stores_the_measured_order(monkeypatch):
-    from planner.simulators.projectairsim import session as module
-
-    session = make_session()
-    session._connection.world = SimpleNamespace(
-        parent_topic="/Sim/SceneTest"
-    )
-    measured = (
-        "rover_chase",
-        "rover_front",
-        "drone_front",
-        "drone_chase",
-    )
-
-    class Fetcher:
-        def __init__(self):
-            self.closed = 0
-
-        def __call__(self, robot, camera):
-            return None
-
-        def close(self):
-            self.closed += 1
-
-    fetcher = Fetcher()
-    monkeypatch.setattr(
-        module, "service_frame_fetcher", lambda **kwargs: fetcher
-    )
-    monkeypatch.setattr(
-        module,
-        "calibrate_streaming_views",
-        lambda **kwargs: measured,
-    )
-    monkeypatch.setattr(module, "xpra_screenshot", lambda display: object())
-
-    session._calibrate_views()
-
-    assert session._view_positions == measured
-    # Calibration leaves the server at the measured anchor (rover_chase),
-    # which is also the default vehicle's chase view: no extra switch.
-    assert session._view_index == 0
-    assert session._view_mode == "rover_chase"
-    assert session._connection.switch_calls == 0
-    assert fetcher.closed == 1
-    assert any(
-        "Streaming views calibrated" in message
-        for message in session.messages
-    )
-
-
-def test_calibrate_views_keeps_the_builtin_order_when_measurement_fails(
-    monkeypatch,
-):
-    from planner.simulators.projectairsim import session as module
-
-    session = make_session()
-    session._connection.world = SimpleNamespace(
-        parent_topic="/Sim/SceneTest"
-    )
-    monkeypatch.setattr(
-        module, "service_frame_fetcher", lambda **kwargs: (lambda robot, camera: None)
-    )
-    monkeypatch.setattr(
-        module, "calibrate_streaming_views", lambda **kwargs: None
-    )
-    monkeypatch.setattr(module, "xpra_screenshot", lambda display: object())
-
-    session._calibrate_views()
-
-    assert session._view_positions == VIEW_MODES
-    # The fallback still parks the console on the default vehicle's chase
-    # (tail) camera, matching what the initial console state promises.
-    assert session._view_mode == "rover_chase"
-    assert any(
-        "falling back to the built-in view order" in message
-        for message in session.messages
-    )
-
-
-def test_calibrate_views_reuses_a_cached_order_after_the_anchor_check(
-    monkeypatch,
-):
-    from planner.simulators.projectairsim import session as module
-
-    session = make_session()
-    session._connection.world = SimpleNamespace(
-        parent_topic="/Sim/SceneTest"
-    )
-    cached = (
-        "rover_front",
-        "drone_front",
-        "rover_chase",
-        "drone_chase",
-    )
-    session._view_cache = {"scene_city_dual.jsonc": cached}
-    calls = {}
-
-    class Fetcher:
-        def __call__(self, robot, camera):
-            return None
-
-        def close(self):
-            pass
-
-    monkeypatch.setattr(
-        module, "service_frame_fetcher", lambda **kwargs: Fetcher()
-    )
-    monkeypatch.setattr(module, "xpra_screenshot", lambda display: object())
-
-    def verify(**kwargs):
-        calls["verify"] = kwargs
-        return "drone_front"
-
-    monkeypatch.setattr(module, "verify_streaming_views", verify)
-    monkeypatch.setattr(
-        module,
-        "calibrate_streaming_views",
-        lambda **kwargs: (_ for _ in ()).throw(
-            AssertionError("full calibration should not run")
-        ),
-    )
-
-    session._calibrate_views()
-
-    assert session._view_positions == cached
-    # The cached order is anchored at drone_front, then the default vehicle's
-    # chase view is applied (index 2).
-    assert session._view_index == 2
-    assert session._view_mode == "rover_chase"
-    assert calls["verify"]["uncapturable"] == ("rover_chase",)
-    assert any("reused from cache" in message for message in session.messages)
-
-
-def test_calibrate_views_caches_a_fresh_measurement(monkeypatch):
-    from planner.simulators.projectairsim import session as module
-
-    session = make_session()
-    session._connection.world = SimpleNamespace(
-        parent_topic="/Sim/SceneTest"
-    )
-    session._view_cache = {}
-    measured = (
-        "rover_chase",
-        "rover_front",
-        "drone_front",
-        "drone_chase",
-    )
-    monkeypatch.setattr(
-        module, "service_frame_fetcher", lambda **kwargs: (lambda r, c: None)
-    )
-    monkeypatch.setattr(
-        module, "calibrate_streaming_views", lambda **kwargs: measured
-    )
-    monkeypatch.setattr(module, "xpra_screenshot", lambda display: object())
-
-    session._calibrate_views()
-
-    assert session._view_cache == {"scene_city_dual.jsonc": measured}
-
-
-def test_calibrate_views_recalibrates_when_the_cache_does_not_verify(
-    monkeypatch,
-):
-    from planner.simulators.projectairsim import session as module
-
-    session = make_session()
-    session._connection.world = SimpleNamespace(
-        parent_topic="/Sim/SceneTest"
-    )
-    stale = (
-        "rover_front",
-        "drone_front",
-        "rover_chase",
-        "drone_chase",
-    )
-    session._view_cache = {"scene_city_dual.jsonc": stale}
-    measured = (
-        "drone_front",
-        "rover_chase",
-        "drone_chase",
-        "rover_front",
-    )
-    monkeypatch.setattr(
-        module, "service_frame_fetcher", lambda **kwargs: (lambda r, c: None)
-    )
-    monkeypatch.setattr(
-        module, "verify_streaming_views", lambda **kwargs: None
-    )
-    monkeypatch.setattr(
-        module, "calibrate_streaming_views", lambda **kwargs: measured
-    )
-    monkeypatch.setattr(module, "xpra_screenshot", lambda display: object())
-
-    session._calibrate_views()
-
-    assert session._view_positions == measured
-    assert session._view_cache == {"scene_city_dual.jsonc": measured}
-    assert any(
-        "did not verify" in message for message in session.messages
-    )
-
-
-def test_calibrate_views_skips_without_a_scene_topic():
-    session = make_session()
-    session._connection.world = SimpleNamespace()
-
-    session._calibrate_views()
-
-    assert session._view_positions == VIEW_MODES
-    assert any(
-        "no scene topic" in message for message in session.messages
-    )
 

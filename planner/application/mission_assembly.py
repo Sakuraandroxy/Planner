@@ -58,7 +58,6 @@ class MissionResources:
     planner: object
     geometry: object
     trajectory: object | None = None
-    view_cache: dict | None = None
     frame_sink: Callable | None = None
 
 

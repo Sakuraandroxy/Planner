@@ -26,7 +26,7 @@ streaming view.
 
 from __future__ import annotations
 
-from typing import Callable, MutableMapping
+from typing import Callable
 
 import numpy as np
 
@@ -38,7 +38,6 @@ from ...domain.pose import WorldPose
 from ...domain.result import MissionResult
 from ...domain.server import TaskSubmission
 from ...domain.view import (
-    INITIAL_STREAM_INDEX,
     VIEW_MODES,
     cycle_delta,
     default_view_for,
@@ -63,12 +62,6 @@ from ...application.mission_assembly import (
     build_mission_common,
     build_vehicle_arm,
     require_application,
-)
-from .streaming_views import (
-    calibrate_streaming_views,
-    service_frame_fetcher,
-    verify_streaming_views,
-    xpra_screenshot,
 )
 
 DEFAULT_CONTROL_PERIOD_S = 1.0 / 20.0
@@ -101,14 +94,12 @@ class ProjectAirSimMissionSession:
         log: Callable[[str], None] | None = None,
         frame_sink: Callable[[np.ndarray, float], None] | None = None,
         trajectory=None,
-        view_cache: MutableMapping[str, tuple[str, ...]] | None = None,
     ):
         self._config = config
         self._detector = detector
         self._planner = planner
         self._geometry = geometry
         self._trajectory = trajectory
-        self._view_cache = view_cache
         self._log = log or (lambda message: None)
         self._connection: ProjectAirSimConnection | None = None
         self._drone: ProjectAirSimDrone | None = None
@@ -126,23 +117,15 @@ class ProjectAirSimMissionSession:
         self._frame_sink = frame_sink
         self._publish_frames = False
         # Streaming-view cycle position; the console only ever sees the ids in
-        # ``planner.domain.view``. ``_view_positions`` maps a cycle position to
-        # a view mode and is measured at runtime because the server's cycle
-        # order is not stable across builds or scene loads.
+        # ``planner.domain.view``. The server never reports where the ring is,
+        # and measuring it costs more than the simulator takes to boot, so the
+        # position is tracked here from the declared start in
+        # ``projectairsim.view_cycle_start``.
         self._view_positions: tuple[str, ...] = VIEW_MODES
-        self._view_index = INITIAL_STREAM_INDEX
-        self._view_mode = VIEW_MODES[INITIAL_STREAM_INDEX]
-        # ``_view_index`` only means something once a picture has confirmed it.
-        # Boot calibration regularly cannot confirm anything: the engine restarts
-        # and the viewer reconnects afterwards, so while the calibration walks
-        # the cycle the desktop does not advance and every sampled frame is the
-        # same frame. The order then falls back to the built-in guess, and
-        # counting switches from a guessed position leaves the console showing
-        # whichever camera the engine happens to be on -- often the vehicle that
-        # ``_hide`` lifted a kilometre above the map, so the operator sees the
-        # world edge under a label that names the rover. Until the picture
-        # agrees, ``set_view_mode`` identifies the camera after each switch.
-        self._view_verified = False
+        self._view_index = VIEW_MODES.index(
+            config.projectairsim.view_cycle_start
+        )
+        self._view_mode = VIEW_MODES[self._view_index]
         self._weather: dict[str, float] | None = None
         try:
             self._connection = ProjectAirSimConnection(
@@ -250,7 +233,7 @@ class ProjectAirSimMissionSession:
                     )
             finally:
                 self._publish_frames = False
-            self._calibrate_views()
+            self._apply_initial_view()
         except Exception:
             self.close()
             raise
@@ -495,49 +478,25 @@ class ProjectAirSimMissionSession:
         return dict(values)
 
     def set_view_mode(self, mode: str) -> str:
-        """Cycle the streaming view to the requested camera.
+        """Cycle the streaming view forward to the requested camera.
 
-        With a confirmed cycle position this is arithmetic: walk the ring the
-        measured number of steps. Without one, switching ``cycle_delta`` times
-        from a guessed position is a guess too, so the ring is walked while the
-        camera on screen is identified after each step, and the position is
-        taken from what was seen rather than from the count.
+        The position is arithmetic from the declared cycle start, because the
+        server cannot say where the ring is and measuring it costs more than
+        the simulator takes to boot.
         """
         mode = validate_view_mode(mode)
         if self._connection is None or self._connection.world is None:
             raise RuntimeError("the ProjectAirSim session is closed")
         positions = self._view_positions
         target = positions.index(mode)
-        if self._view_verified:
-            for _ in range(cycle_delta(self._view_index, target)):
-                self._switch_view_once()
-            self._view_index = target
-            self._view_mode = mode
-            self._log(f"Streaming view: {mode}.")
-            return mode
-
-        observed = self._confirm_view()
-        if observed is None:
-            # Nothing to read the cycle position from, so count switches -- what
-            # the console did before it could look at the screen.
-            for _ in range(cycle_delta(self._view_index, target)):
-                self._switch_view_once()
-            self._view_index = target
-            self._view_mode = mode
-            self._log(f"Streaming view: {mode}.")
-            return mode
-        # One look is enough: it pins the ring, and the distance to the request
-        # is then arithmetic. Re-identifying at every step would cost seconds
-        # per switch for no additional certainty.
-        self._view_index = positions.index(observed)
-        self._view_verified = True
-        for _ in range(cycle_delta(self._view_index, target)):
+        start = positions[self._view_index]
+        steps = cycle_delta(self._view_index, target)
+        for _ in range(steps):
             self._switch_view_once()
         self._view_index = target
         self._view_mode = mode
         self._log(
-            f"Streaming view: {mode} (cycle position read from the screen as "
-            f"{observed})."
+            f"Streaming view: {mode} ({steps} switch(es) from {start})."
         )
         return mode
 
@@ -547,58 +506,6 @@ class ProjectAirSimMissionSession:
             raise RuntimeError("the ProjectAirSim session is closed")
         if not self._connection.switch_streaming_view():
             raise ProtocolError("simulator refused to switch the streaming view")
-
-    def _confirm_view(self) -> str | None:
-        """Return the view mode on screen, or ``None`` when it cannot be told.
-
-        ``switch_streaming_view`` reports nothing about where the cycle is, so
-        the only way to know which camera the console is showing is to compare
-        the desktop against the frames the cameras themselves return. ``None``
-        has to stay ``None``: reading the screen as if it had answered is what
-        let a wrong label survive here.
-        """
-        if self._connection is None or self._connection.world is None:
-            return None
-        settings = self._config.projectairsim
-        parent_topic = getattr(self._connection.world, "parent_topic", None)
-        if not parent_topic:
-            return None
-        display = self._config.simulator.display
-        cameras = {
-            "rover_front": (settings.rover_name, settings.front_camera),
-            "rover_chase": (settings.rover_name, settings.chase_camera),
-            "drone_front": (settings.drone_name, settings.front_camera),
-            "drone_chase": (settings.drone_name, settings.chase_camera),
-        }
-        fetch_frame = service_frame_fetcher(
-            address=settings.address,
-            port_topics=settings.port_topics,
-            port_services=settings.port_services,
-            parent_topic=parent_topic,
-            advance=self._connection.advance_for_sim_time,
-        )
-        try:
-            return verify_streaming_views(
-                cameras=cameras,
-                screenshot=lambda: xpra_screenshot(display),
-                fetch_frame=fetch_frame,
-                switch_view=self._connection.switch_streaming_view,
-                advance=self._connection.advance_for_sim_time,
-                expected=self._view_positions,
-                uncapturable=tuple(getattr(settings, "uncapturable_views", ())),
-                log=self._log,
-            )
-        except Exception as error:  # noqa: BLE001
-            self._log(
-                "could not identify the streaming view: "
-                f"{type(error).__name__}: {error}",
-                "WARNING",
-            )
-            return None
-        finally:
-            close = getattr(fetch_frame, "close", None)
-            if close is not None:
-                close()
 
     # -- internals ---------------------------------------------------------
     def _prepare_vehicle(self, arm: _VehicleArm, log) -> None:
@@ -615,154 +522,12 @@ class ProjectAirSimMissionSession:
             raise RuntimeError("the ProjectAirSim session is closed")
         return vehicle
 
-    def _calibrate_views(self) -> None:
-        """Measure the streaming-view cycle order against the live scene.
-
-        The server cycles through the streaming cameras in an order that is
-        not stable across builds or scene loads, so the static ``VIEW_MODES``
-        order cannot be trusted for the console views. Calibration walks one
-        full cycle, matches xpra screenshots against camera frames fetched
-        with ``GetImages`` and stores the measured order. Any failure keeps
-        the built-in order and only logs a warning.
-
-        The measured order is cached per scene file; a later session reuses it
-        after one screenshot confirms which camera the cycle is currently on.
-        """
-        if self._connection is None or self._connection.world is None:
-            return
-        settings = self._config.projectairsim
-        parent_topic = getattr(self._connection.world, "parent_topic", None)
-        if not parent_topic:
-            self._log(
-                "streaming-view calibration skipped: no scene topic",
-                "WARNING",
-            )
-            self._apply_initial_view()
-            return
-        cameras = {
-            "rover_front": (settings.rover_name, settings.front_camera),
-            "rover_chase": (settings.rover_name, settings.chase_camera),
-            "drone_front": (settings.drone_name, settings.front_camera),
-            "drone_chase": (settings.drone_name, settings.chase_camera),
-        }
-        display = self._config.simulator.display
-        uncapturable = tuple(
-            getattr(settings, "uncapturable_views", ())
-        )
-        fetch_frame = service_frame_fetcher(
-            address=settings.address,
-            port_topics=settings.port_topics,
-            port_services=settings.port_services,
-            parent_topic=parent_topic,
-            advance=self._connection.advance_for_sim_time,
-        )
-        try:
-            if self._reuse_cached_views(
-                cameras, display, uncapturable, fetch_frame
-            ):
-                return
-            positions = calibrate_streaming_views(
-                cameras=cameras,
-                screenshot=lambda: xpra_screenshot(display),
-                fetch_frame=fetch_frame,
-                switch_view=self._connection.switch_streaming_view,
-                advance=self._connection.advance_for_sim_time,
-                uncapturable=uncapturable,
-                log=self._log,
-            )
-        except Exception as error:  # noqa: BLE001
-            self._log(
-                "streaming-view calibration failed: "
-                f"{type(error).__name__}: {error}",
-                "WARNING",
-            )
-            self._apply_initial_view()
-            return
-        finally:
-            close = getattr(fetch_frame, "close", None)
-            if close is not None:
-                close()
-        if positions is None:
-            self._log(
-                "streaming-view calibration could not identify the cycle; "
-                "falling back to the built-in view order",
-                "WARNING",
-            )
-            self._apply_initial_view()
-            return
-        self._view_positions = positions
-        self._view_index = 0
-        self._view_mode = positions[0]
-        self._view_verified = True
-        self._cache_view_order(positions)
-        self._log(
-            "Streaming views calibrated: "
-            + " -> ".join(
-                f"{index}:{mode}" for index, mode in enumerate(positions)
-            )
-        )
-        # Start on the default vehicle's chase (tail) camera so the console's
-        # initial view state matches what the simulator is actually showing.
-        self._apply_initial_view()
-
-    def _reuse_cached_views(
-        self, cameras, display: str, uncapturable, fetch_frame
-    ) -> bool:
-        """Reuse the last measured cycle order after a cheap anchor check.
-
-        The cycle is a ring, so one confidently identified camera at the
-        current position is enough to index the cached order; a screenshot
-        that is not a confident match (usually the uncapturable chase camera)
-        falls back to the full calibration.
-        """
-        cache = getattr(self, "_view_cache", None)
-        if not cache or self._connection is None:
-            return False
-        key = self._config.projectairsim.scene_file
-        expected = cache.get(key)
-        if expected is None:
-            return False
-        anchor = verify_streaming_views(
-            cameras=cameras,
-            screenshot=lambda: xpra_screenshot(display),
-            fetch_frame=fetch_frame,
-            switch_view=self._connection.switch_streaming_view,
-            advance=self._connection.advance_for_sim_time,
-            expected=expected,
-            uncapturable=uncapturable,
-            log=self._log,
-        )
-        if anchor is None:
-            self._log(
-                "Cached streaming-view order did not verify; calibrating again.",
-                "WARNING",
-            )
-            return False
-        positions = tuple(expected)
-        self._view_positions = positions
-        self._view_index = positions.index(anchor)
-        self._view_mode = anchor
-        self._view_verified = True
-        self._log(
-            "Streaming views reused from cache (current "
-            f"{anchor}): "
-            + " -> ".join(
-                f"{index}:{mode}" for index, mode in enumerate(positions)
-            )
-        )
-        self._apply_initial_view()
-        return True
-
-    def _cache_view_order(self, positions: tuple[str, ...]) -> None:
-        cache = getattr(self, "_view_cache", None)
-        if cache is not None:
-            cache[self._config.projectairsim.scene_file] = tuple(positions)
-
     def _apply_initial_view(self) -> None:
         """Park the streaming view on the active vehicle's chase (tail) camera.
 
-        Runs on both calibration outcomes: a failed calibration must not leave
-        the console on whatever camera the calibration loop stopped at.
+        Runs once the scene is loaded, so the console does not open on whichever
+        camera the engine happened to pick -- regularly the vehicle that
+        ``_hide_inactive_at_startup`` lifted out of view.
         """
         try:
             self.set_view_mode(default_view_for(self._active_vehicle))

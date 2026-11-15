@@ -12,12 +12,12 @@ The four streaming cameras are:
     2 Drone1 FrontCamera   -> ``drone_front``
     3 Drone1 Chase         -> ``drone_chase``
 
-``VIEW_MODES`` is the *fallback* order only. The server's real cycle order and
-its starting position are not stable across builds, maps or scene loads, so
-``planner/simulators/projectairsim/streaming_views.py`` measures them at session
-startup by matching xpra screenshots against camera frames and the session
-uses that measured order. ``INITIAL_STREAM_INDEX`` applies only when that
-calibration fails.
+``VIEW_MODES`` is the cycle order the console assumes. The server reports
+nothing about where in the ring it is, so the runtime tracks the position from
+the start declared in ``projectairsim.view_cycle_start`` and counts switches
+from there. ``planner/simulators/projectairsim/streaming_views.py`` can measure
+the real cycle, but only as a manual tool (``scripts/calibrate_streaming_views.py``):
+measuring at every startup costs more than the simulator itself.
 """
 
 from __future__ import annotations
@@ -49,9 +49,6 @@ VEHICLE_DEFAULT_VIEW: dict[str, str] = {
     "rover": "rover_chase",
     "drone": "drone_chase",
 }
-
-INITIAL_STREAM_INDEX = 0
-
 
 def front_view_for(vehicle: object) -> str:
     """Return the streaming view that faces ``vehicle`` forward."""

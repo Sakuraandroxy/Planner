@@ -1,7 +1,6 @@
 import pytest
 
 from planner.domain.view import (
-    INITIAL_STREAM_INDEX,
     VEHICLE_DEFAULT_VIEW,
     VEHICLE_FRONT_VIEW,
     VIEW_LABELS,
@@ -18,8 +17,6 @@ def test_view_modes_are_unique_and_labelled():
     assert len(VIEW_MODES) == 4
     assert len(set(VIEW_MODES)) == len(VIEW_MODES)
     assert set(VIEW_LABELS) == set(VIEW_MODES)
-    assert INITIAL_STREAM_INDEX == 0
-    assert VIEW_MODES[INITIAL_STREAM_INDEX] == "rover_front"
 
 
 def test_validate_view_mode_accepts_known_modes():

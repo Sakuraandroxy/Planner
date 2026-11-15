@@ -61,7 +61,7 @@ def _session():
     family = config.families.require("airsim")
     resources = MissionResources(
         detector=object(), planner=object(), geometry=object(),
-        trajectory=None, view_cache=None, frame_sink=None,
+        trajectory=None, frame_sink=None,
     )
     return AirSimMissionSession(
         config,

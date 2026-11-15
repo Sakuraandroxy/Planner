@@ -44,6 +44,15 @@ class ProjectAirSimSettings:
     # Streaming views whose camera sets capture-enabled: false. Calibration
     # locates them by elimination instead of waiting for a frame timeout.
     uncapturable_views: tuple[str, ...] = ()
+    # Which camera the engine is showing right after a scene loads. The server
+    # cycles cameras with ``switch_streaming_view`` and never says which one is
+    # current, so the position has to be known some other way. Measuring it at
+    # startup costs 60-90 s (screenshots plus a second connection for reference
+    # frames) against a 7.8 s simulator, so it is declared here instead. Four
+    # cold boots on this machine all came up on ``drone_front``. If a new map or
+    # build starts somewhere else, every view button is off by the same number
+    # of steps -- run scripts/calibrate_streaming_views.py and change this line.
+    view_cycle_start: str = "drone_front"
 
     def __post_init__(self) -> None:
         if not str(self.address).strip():
@@ -79,6 +88,11 @@ class ProjectAirSimSettings:
             raise ValueError(
                 "projectairsim.uncapturable_views has unknown views: "
                 + ", ".join(unknown)
+            )
+        if self.view_cycle_start not in VIEW_MODES:
+            raise ValueError(
+                f"projectairsim.view_cycle_start must be one of "
+                f"{', '.join(VIEW_MODES)}, got {self.view_cycle_start!r}"
             )
 
 
@@ -961,6 +975,9 @@ def load_config(path: str | Path) -> AppConfig:
         down_camera=str(pas_raw.get("down_camera", "DownCamera")),
         uncapturable_views=tuple(
             str(view) for view in pas_raw.get("uncapturable_views", ())
+        ),
+        view_cycle_start=str(
+            pas_raw.get("view_cycle_start", "drone_front")
         ),
     )
 

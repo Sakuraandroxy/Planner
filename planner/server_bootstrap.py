@@ -33,17 +33,12 @@ def build_server(config: AppConfig):
     geometry = build_geometry(config)
     frames = FrameHub(max_fps=config.server.video_fps)
     trajectory = TrajectoryHub()
-    # Measured streaming-view cycle orders, keyed by scene file. Shared across
-    # worker rebuilds so a repeated map/model switch only pays for a cheap
-    # one-screenshot anchor check instead of the full calibration walk.
-    view_cache: dict[str, tuple[str, ...]] = {}
 
     resources = MissionResources(
         detector=detector,
         planner=planner,
         geometry=geometry,
         trajectory=trajectory,
-        view_cache=view_cache,
         frame_sink=frames.publish,
     )
 

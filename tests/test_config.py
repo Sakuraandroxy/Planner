@@ -208,6 +208,16 @@ def test_projectairsim_defaults(tmp_path):
     assert config.projectairsim.scene_file == "scene_city_dual.jsonc"
     assert config.projectairsim.rover_name == "Rover1"
     assert config.projectairsim.drone_name == "Drone1"
+    # Measured on this machine: four cold boots all came up on this camera.
+    assert config.projectairsim.view_cycle_start == "drone_front"
+
+
+def test_view_cycle_start_must_name_a_known_view(tmp_path):
+    """A typo here silently shifts every view button by the same amount."""
+    with pytest.raises(ValueError, match="view_cycle_start"):
+        load_config(_write(tmp_path, {"projectairsim": {
+            "view_cycle_start": "rover_top",
+        }}))
 
 
 def test_projectairsim_section_is_parsed(tmp_path):

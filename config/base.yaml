@@ -17,8 +17,17 @@ projectairsim:
   delay_after_load_s: 2.0
   # 机位标定时不尝试 GetImages 的机位（对应 robot JSONC 里
   # capture-enabled: false）。无人车 Chase 相机从不采集帧，提前标记可省掉
-  # 每次 8 秒的取帧超时；该机位由排除法定位。
+  # 每次 8 秒的取帧超时；该机位由排除法定位。运行时不再标定，这一项
+  # 只给 scripts/calibrate_streaming_views.py 这个手动工具用。
   uncapturable_views: [rover_chase]
+  # 场景加载完成后，引擎正把哪个摄像头推到画面上。
+  # switch_streaming_view 只会把四个摄像头往后挪一格，不回答“现在是第几格”，
+  # 所以这个位置必须靠别的方式知道。开机实测一遍要 60-90 秒（截图 + 再开一条
+  # 连接取参考图），而仿真栈本身只要 7.8 秒，因此写成配置而不是每次去测。
+  # 本机四次冷启动都停在 drone_front。换了图或换了包如果起图停在别的摄像头，
+  # 四个视角按钮会整体错同样多的格：跑一次 scripts/calibrate_streaming_views.py
+  # 测出正确值，改这一行即可。
+  view_cycle_start: drone_front
   rover_name: Rover1
   drone_name: Drone1
   # 传感器 id，须与 robot_rover.jsonc / robot_drone_cameras.jsonc 一致。
