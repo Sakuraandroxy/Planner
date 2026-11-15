@@ -169,14 +169,39 @@ function show(node, visible) {
   if (node) node.hidden = !visible;
 }
 
+// ---- settings tabs -----------------------------------------------------
+// 世界、天气、模型共用一张卡和一条 tab 栏。选中项记在这里，能力刷新后重新应用，
+// 以免当前 tab 被隐藏时留下空白面板。
+let settingsTab = "world";
+
+function settingsTabs() {
+  return Array.from(document.querySelectorAll("#settings-card .tab"));
+}
+
+function selectSettingsTab(name) {
+  const tabs = settingsTabs();
+  const target =
+    tabs.find((tab) => tab.dataset.tab === name && !tab.hidden) ||
+    tabs.find((tab) => !tab.hidden) ||
+    tabs[0];
+  for (const tab of tabs) {
+    const on = tab === target;
+    tab.setAttribute("aria-selected", String(on));
+    tab.classList.toggle("active", on);
+    const panel = $(`panel-${tab.dataset.tab}`);
+    if (panel) panel.hidden = !on;
+  }
+  settingsTab = target.dataset.tab;
+}
+
 function applyCapabilities() {
   show($("home"), hasAction("home"));
-  // Gate by the card's own id, never by DOM nesting. The models block used to be
-  // markup *inside* the world card, so hiding it for a simulator without model
-  // control also hid the map selector: a second after load the console lost its whole
-  // world panel and there was no way to start a scene. A helper that resolves its
-  // target with closest("section") breaks again the moment anyone moves a control.
-  show($("models-card"), hasAction("models"));
+  // Gate the tab, never the card. Hiding the models block used to hide the whole
+  // world card with it, because the two shared markup: a second after load the
+  // console had no map selector left. Each panel now owns its controls, so only the
+  // tab that leads to a missing capability goes away.
+  show($("tab-models"), hasAction("models"));
+  selectSettingsTab(settingsTab);
   // The remaining-trajectory card is not gated. It shows what the shared
   // planning layer recorded for this service, so every simulator has it; a
   // numeric basic-motion task simply reports no pending waypoints, which is
@@ -1221,6 +1246,9 @@ function init() {
     button.addEventListener("click", () => requestView(button.dataset.mode));
   });
   $("world-apply").addEventListener("click", applyWorld);
+  settingsTabs().forEach((tab) => {
+    tab.addEventListener("click", () => selectSettingsTab(tab.dataset.tab));
+  });
   $("world-reload").addEventListener("click", () => {
     loadWorldOptions();
     loadWeatherOptions();

@@ -86,26 +86,53 @@ h1 { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: 0.2px; }
   min-height: 0;
   overflow: hidden;
 }
-.side-scroll {
+
+/* The three setup panels share one box, which takes whatever height the command
+   console and the trajectory card leave over. */
+.settings-card {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
+}
+.tabs {
+  display: flex;
+  gap: 6px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+.tab {
+  flex: 1;
+  padding: 6px 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+}
+.tab[aria-selected="true"] {
+  color: var(--accent);
+  background: var(--accent-weak);
+  border-color: rgba(76, 194, 165, 0.35);
+}
+.tab-panels {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  /* The theme is dark enough that the platform scrollbar can be invisible, and this
-     column is the only way to reach the controls below the first card. */
   scrollbar-width: thin;
   scrollbar-color: #33464c transparent;
 }
-.side-scroll::-webkit-scrollbar { width: 10px; }
-.side-scroll::-webkit-scrollbar-thumb {
+.tab-panels::-webkit-scrollbar { width: 10px; }
+.tab-panels::-webkit-scrollbar-thumb {
   background: #33464c;
   border-radius: 8px;
   border: 3px solid transparent;
   background-clip: content-box;
 }
-.side-scroll::-webkit-scrollbar-thumb:hover { background: #4a636a; }
+.tab-panels::-webkit-scrollbar-thumb:hover { background: #4a636a; }
+.tab-panel { display: flex; flex-direction: column; gap: 6px; }
+.panel-status { margin: 0; font-size: 11.5px; text-align: right; }
 
 .card {
   background: linear-gradient(180deg, var(--panel) 0%, #131a1d 100%);
@@ -355,7 +382,7 @@ button.ghost { background: transparent; }
 }
 
 .side > .card { flex: none; }
-.side-scroll > .card { flex: none; }
+.side > .settings-card { flex: 1; }
 .side > .trajectory-card { flex: none; }
 .trajectory-card {
   display: flex;
@@ -473,10 +500,10 @@ button.ghost { background: transparent; }
   .side {
     overflow: visible;
   }
-  .side-scroll {
-    overflow: visible;
-    flex: 0 0 auto;
+  .settings-card {
+    flex: none;
   }
+  .tab-panels { overflow: visible; }
   .viewport { min-height: 260px; }
   .trajectory-list { max-height: 30vh; }
 }

@@ -92,59 +92,62 @@
         </dl>
       </section>
 
-      <div class="side-scroll">
-        <section class="card">
-          <div class="card-head">
-            <h2>世界设置</h2>
-            <span class="muted" id="world-current">选项未加载</span>
-          </div>
-          <div class="stack">
-            <label for="world-map">地图</label>
-            <select id="world-map" disabled></select>
-            <div class="toolbar">
-              <button type="button" id="world-apply" class="primary" disabled>应用世界设置</button>
-              <button type="button" id="world-reload" class="ghost" disabled>刷新选项</button>
+      <section class="card settings-card" id="settings-card">
+        <div class="tabs" role="tablist" aria-label="设置">
+          <button type="button" class="tab active" id="tab-world" data-tab="world"
+            role="tab" aria-selected="true" aria-controls="panel-world">世界设置</button>
+          <button type="button" class="tab" id="tab-weather" data-tab="weather"
+            role="tab" aria-selected="false" aria-controls="panel-weather">天气设置</button>
+          <button type="button" class="tab" id="tab-models" data-tab="models"
+            role="tab" aria-selected="false" aria-controls="panel-models">模型设置</button>
+        </div>
+        <div class="tab-panels">
+          <div class="tab-panel" id="panel-world" role="tabpanel" aria-labelledby="tab-world">
+            <p class="panel-status muted" id="world-current">选项未加载</p>
+            <div class="stack">
+              <label for="world-map">地图</label>
+              <select id="world-map" disabled></select>
+              <div class="toolbar">
+                <button type="button" id="world-apply" class="primary" disabled>应用世界设置</button>
+                <button type="button" id="world-reload" class="ghost" disabled>刷新选项</button>
+              </div>
             </div>
+            <p class="feedback" id="world-feedback" role="status"></p>
           </div>
-          <p class="feedback" id="world-feedback" role="status"></p>
-        </section>
 
-        <section class="card" id="weather-card">
-          <div class="card-head">
-            <h2>天气设置</h2>
-            <span class="hint" id="weather-current">—</span>
-          </div>
-          <div class="stack">
-            <label for="weather-preset">预设</label>
-            <select id="weather-preset" disabled></select>
-            <details class="weather-details" id="weather-details">
-              <summary>全部天气参数</summary>
-              <div class="weather-grid" id="weather-fields"></div>
-            </details>
-            <div class="toolbar">
-              <button type="button" id="weather-apply" class="primary" disabled>应用天气</button>
+          <div class="tab-panel" id="panel-weather" role="tabpanel"
+            aria-labelledby="tab-weather" hidden>
+            <p class="panel-status hint" id="weather-current">—</p>
+            <div class="stack">
+              <label for="weather-preset">预设</label>
+              <select id="weather-preset" disabled></select>
+              <details class="weather-details" id="weather-details">
+                <summary>全部天气参数</summary>
+                <div class="weather-grid" id="weather-fields"></div>
+              </details>
+              <div class="toolbar">
+                <button type="button" id="weather-apply" class="primary" disabled>应用天气</button>
+              </div>
             </div>
+            <p class="feedback" id="weather-feedback" role="status"></p>
           </div>
-          <p class="feedback" id="weather-feedback" role="status"></p>
-        </section>
 
-        <section class="card" id="models-card">
-          <div class="card-head">
-            <h2>模型设置</h2>
-            <span class="hint" id="models-current">—</span>
-          </div>
-          <div class="stack">
-            <label for="model-rover">无人车模型</label>
-            <select id="model-rover" disabled></select>
-            <label for="model-drone">无人机模型</label>
-            <select id="model-drone" disabled></select>
-            <div class="toolbar">
-              <button type="button" id="models-apply" class="primary" disabled>应用载具模型</button>
+          <div class="tab-panel" id="panel-models" role="tabpanel"
+            aria-labelledby="tab-models" hidden>
+            <p class="panel-status hint" id="models-current">—</p>
+            <div class="stack">
+              <label for="model-rover">无人车模型</label>
+              <select id="model-rover" disabled></select>
+              <label for="model-drone">无人机模型</label>
+              <select id="model-drone" disabled></select>
+              <div class="toolbar">
+                <button type="button" id="models-apply" class="primary" disabled>应用载具模型</button>
+              </div>
             </div>
+            <p class="feedback" id="models-feedback" role="status"></p>
           </div>
-          <p class="feedback" id="models-feedback" role="status"></p>
-        </section>
-      </div>
+        </div>
+      </section>
 
       <section class="card trajectory-card" id="trajectory-card">
         <div class="card-head">

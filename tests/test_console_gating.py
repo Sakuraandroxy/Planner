@@ -1,11 +1,10 @@
-"""Capability gating may not hide the card the operator needs first.
+"""Capability gating may not hide the panel the operator needs first.
 
-``applyCapabilities`` used to resolve its target with ``node.closest("section")``, and
-the models markup sat *inside* the world card. AirSim advertises
-``actions: ["weather"]`` with no model control, so hiding "models" hid the whole world
-card -- every map selector vanished a second after page load and there was no way to
-start a scene. ProjectAirSim offered model control, which is why this only broke on
-UE4 and survived every earlier look at the console.
+The models markup once sat *inside* the world card, so ``applyCapabilities`` hid the
+whole world card on AirSim -- every map selector vanished a second after page load and
+there was no way to start a scene. The three setup panels now share one card behind a
+tab strip, which makes that mistake easy to repeat: gating has to hide a tab, and the
+map picker has to keep its own panel.
 """
 
 import re
@@ -18,10 +17,6 @@ def _html() -> str:
     return (CONSOLE / "index.html").read_text(encoding="utf-8")
 
 
-def _sections() -> list[str]:
-    return re.findall(r"<section\b.*?</section>", _html(), flags=re.S)
-
-
 def test_gated_ids_exist_in_the_markup():
     """A gate that names a missing element silently does nothing."""
     app = (CONSOLE / "app.js").read_text(encoding="utf-8")
@@ -32,17 +27,26 @@ def test_gated_ids_exist_in_the_markup():
     assert gated <= have, f"gating references unknown ids: {sorted(gated - have)}"
 
 
-def test_the_world_card_does_not_own_other_capabilities():
-    for section in _sections():
-        if 'id="world-map"' not in section:
-            continue
-        for foreign in ("models-apply", "models-card", "weather-apply", "weather-card"):
-            assert foreign not in section, (
-                f"the world card contains {foreign!r}; a capability gate that hides it "
-                "would hide the map selector with it"
-            )
-        return
-    raise AssertionError("no card contains id=\"world-map\"")
+def test_capability_gating_hides_a_tab_not_the_settings_card():
+    app = _code((CONSOLE / "app.js").read_text(encoding="utf-8"))
+    body = re.search(r"function applyCapabilities\(\).*?\n}", app, flags=re.S).group(0)
+    assert 'show($("tab-models")' in body, body
+    assert "models-card" not in body, "the card is gone; hide the tab instead"
+    assert "settings-card" not in body, "the settings card must stay visible"
+
+
+def test_each_panel_owns_its_own_controls():
+    """A gate on one panel must not be able to take another panel's controls."""
+    html = _html()
+    world = html[html.index('id="panel-world"') : html.index('id="panel-weather"')]
+    weather = html[html.index('id="panel-weather"') : html.index('id="panel-models"')]
+    models = html[html.index('id="panel-models"') :]
+
+    assert 'id="world-map"' in world
+    assert 'id="weather-preset"' in weather
+    assert 'id="model-rover"' in models
+    for foreign in ('id="model-rover"', 'id="weather-preset"'):
+        assert foreign not in world
 
 
 def _code(text: str) -> str:
