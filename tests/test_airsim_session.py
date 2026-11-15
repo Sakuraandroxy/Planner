@@ -228,3 +228,20 @@ def test_a_session_without_its_arm_is_refused_at_wiring_time():
     )
     with pytest.raises(ProtocolError, match="no drone arm"):
         session.attach_arms({"rover": object()})
+
+
+def test_moving_capture_does_not_share_the_control_transport():
+    """Frame requests run on a worker thread; the control loop must not wait on them.
+
+    ``simGetImages`` holds the connection's lock for 0.4-0.5 s on this build. When
+    moving capture shared the control connection, sixteen of 66 s of control ticks
+    in a planner-driven flight waited that long, the velocity command expired in
+    the gap, and the aircraft braked and re-accelerated through every planning
+    round -- visible as a rolling, pitching wobble that only UE4 showed, because
+    ProjectAirSim's stepped clock does not advance while the loop is blocked.
+    """
+    session = _session()
+    moving = session.mission_inputs().moving_source_factory(None)
+    assert moving is not session.observation
+    assert moving.connection is not session.connection
+    assert moving.connection in session._capture_connections

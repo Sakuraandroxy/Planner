@@ -140,6 +140,8 @@ class AirSimMissionSession:
                 camera_mount_rpy_deg=config.drone.camera_mount_rpy_deg,
             )
 
+        #: One read-only transport per capture worker, including moving capture.
+        self.build_capture_source = build_capture_source
         self.observation.capture_worker_factory = build_capture_source
 
         self.camera_view = AirSimCameraView(self.connection, family.camera_id)
@@ -167,7 +169,16 @@ class AirSimMissionSession:
             # control connection, and the observation source owns a second one
             # for pixels.
             observation_source=self.observation,
-            moving_source_factory=lambda vehicle: self.observation,
+            # Moving observations run on a worker thread. Handing them the
+            # control connection put every frame request behind its lock, and
+            # ``simGetImages`` on this build holds it for 0.4-0.5 s: measured in
+            # a planner-driven flight, sixteen control ticks of 66 s waited that
+            # long, the 0.2 s velocity command expired in the gap, and the drone
+            # braked and re-accelerated through every planning round. AirSim's
+            # clock keeps running during that wait; ProjectAirSim's stepped clock
+            # does not, which is why only UE4 shook. A read-only transport per
+            # capture worker keeps pixels off the control lock.
+            moving_source_factory=lambda vehicle: self.build_capture_source(),
             enabled_tasks=ENABLED_TASKS,
         )
 
