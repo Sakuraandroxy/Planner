@@ -6,6 +6,7 @@ planner mode always resolves to the same adapter.
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Collection
 
@@ -32,11 +33,28 @@ from ..domain.mission import TaskKind
 from ..domain.target_detection import NormalizedBoundingBox
 
 
-def _api_key(settings) -> str:
-    """Prefer the key written in the config; fall back to its env var."""
-    return settings.api_key or (
+logger = logging.getLogger(__name__)
+
+
+def _api_key(settings, label: str = "") -> str:
+    """Prefer the key written in the config; fall back to its env var.
+
+    A missing key used to surface only as a rejected instruction naming no cause, which
+    sent an operator looking at prompts and schemas when the whole problem was the
+    environment the service was started in. Saying it once here, while the session is
+    still being assembled, points at the actual fix.
+    """
+    key = settings.api_key or (
         os.environ.get(settings.api_key_env, "") if settings.api_key_env else ""
     )
+    if not key and label:
+        logger.warning(
+            "%s: %s is configured but no credential was found (api_key is empty and "
+            "%s is unset); requests will be rejected unless this endpoint needs no "
+            "auth", label, getattr(settings, "url", "endpoint"),
+            "$" + (settings.api_key_env or "api_key_env"),
+        )
+    return key
 
 
 def build_detector(
@@ -65,7 +83,7 @@ def build_detector(
             raise ValueError(
                 "vlm detection requires target_detection.url/model in the config"
             )
-        api_key = _api_key(settings)
+        api_key = _api_key(settings, 'target_detection')
         transport = MultimodalChatClient(
             settings.url,
             settings.model,
@@ -88,7 +106,7 @@ def _build_trajectory_planner(config: AppConfig, prompt_builder) -> QwenVLPlanne
         raise ValueError(
             "vlm planning requires trajectory_planner.url/model in the config"
         )
-    api_key = _api_key(settings)
+    api_key = _api_key(settings, 'trajectory_planner')
     transport = MultimodalChatClient(
         settings.url,
         settings.model,
@@ -136,7 +154,7 @@ def build_completion_checker(config: AppConfig):
         raise ValueError(
             "visual goal requires task_completion.url/model in the config"
         )
-    api_key = _api_key(settings)
+    api_key = _api_key(settings, 'task_completion')
     return OpenAICompatibleTaskCompletionChecker(
         settings.url,
         settings.model,
@@ -164,7 +182,7 @@ def build_task_parser(
     settings = config.task_parser
     if not settings.url or not settings.model:
         return None
-    api_key = _api_key(settings)
+    api_key = _api_key(settings, 'task_parser')
     codecs = builtin_task_codecs(aerial=aerial)
     if kinds is not None:
         allowed = set(kinds)

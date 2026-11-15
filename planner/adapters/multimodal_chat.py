@@ -11,6 +11,7 @@ import httpx
 from planner.adapters.image_encoding import encoded_image_payload, image_url
 from planner.errors import ProtocolError
 from planner.adapters.chat_request_options import generation_options
+from planner.adapters.http_errors import describe_http_error
 
 ANTHROPIC_VERSION = "2023-06-01"
 
@@ -103,7 +104,9 @@ class MultimodalChatClient:
                                   json=body, timeout=timeout)
             response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise ProtocolError(f"{operation} request failed ({type(exc).__name__})") from exc
+            raise ProtocolError(
+                f"{operation} request failed: {describe_http_error(exc)}"
+            ) from exc
         try:
             data = response.json()
             usage = data.get("usage", {})

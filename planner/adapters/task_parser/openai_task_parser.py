@@ -6,6 +6,7 @@ import time
 import httpx
 
 from planner.adapters.chat_request_options import generation_options
+from planner.adapters.http_errors import describe_http_error
 from planner.adapters.multimodal_chat import (
     anthropic_headers,
     anthropic_messages_url,
@@ -93,8 +94,11 @@ class OpenAITaskParser:
         try:
             return self._request(instruction, headers, started)
         except httpx.HTTPError as exc:
+            # A status is not a detail here, it is the whole diagnosis: without the code
+            # and the URL, "task parser request failed (HTTPStatusError)" is what a
+            # missing $VLN_API_KEY looked like, for every instruction, forever.
             raise ProtocolError(
-                f"task parser request failed ({type(exc).__name__})"
+                f"task parser request failed: {describe_http_error(exc)}"
             ) from exc
 
     def _request(
