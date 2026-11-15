@@ -6,12 +6,12 @@ BASIC_MOTION_RULES = """basic_motion: execute relative ground translation or yaw
 explicit action, direction and distance/angle. Examples: drive forward 5m; reverse 2m;
 turn left 90deg. Classify by explicit motion quantity; object ordinals are not motion quantities.
 An object-relative goal such as 'drive to the first car' is not a numeric relative action.
-Parameters: instruction, forward_m, yaw_right_deg, up_m; return all four fields.
+Parameters: instruction, forward_m, yaw_right_deg; return all three fields.
 Positive forward_m = forward, negative = backward (reverse).
 Positive yaw_right_deg = right turn, negative = left turn; meters/degrees only.
 The controlled car cannot fly, ascend/descend, strafe sideways, or drive to an absolute
-position/altitude: up_m must always be 0 for this vehicle, and a request for a height
-change is rejected instead of converted.
+position/altitude; reject those actions instead of converting them. There is no vertical
+field in this format: a height change cannot be expressed, only rejected.
 Unrequested components must be 0. Extract requested values; never guess a missing magnitude.
 Relative translation uses the ground-vehicle heading at the beginning of that stage.
 Preserve the requested numeric rotation, including full turns. Reject vague moves.
@@ -23,7 +23,7 @@ Use another allowed kind only if its rules explicitly support the action; otherw
 Sequential actions ('move then turn') require separate stages. Explicit simultaneous actions may share
 one basic_motion stage (forward translation and yaw change completed together).
 Example stage: {"stage_id":"stage_1","kind":"basic_motion","parameters":{
-"instruction":"Turn left 90 degrees. 左转90度。","forward_m":0,"yaw_right_deg":-90,"up_m":0}}.
+"instruction":"Turn left 90 degrees. 左转90度。","forward_m":0,"yaw_right_deg":-90}}.
 Examples: 'reverse 2m' => forward_m=-2; 'left turn 90deg' => yaw_right_deg=-90;
 'drive forward 5m and turn right 45deg' => forward_m=5, yaw_right_deg=45.
 Do not invent distances, directions, targets, or completion conditions.
@@ -65,12 +65,44 @@ Do not invent distances, directions, targets, or completion conditions.
 """
 
 
-def decode_basic_motion(raw: dict[str, object]) -> BasicMotionParameters:
+def decode_ground_basic_motion(
+    raw: dict[str, object],
+) -> BasicMotionParameters:
+    """Decode a numeric action for a ground vehicle.
+
+    The ground wire format has no vertical field at all. A car cannot climb, so
+    a height change is not something this parser is allowed to express; a
+    payload that carries ``up_m`` is rejected here rather than quietly decoded
+    and turned into a target floating above the road.
+    """
+    allowed = {"instruction", "forward_m", "yaw_right_deg"}
+    if set(raw) != allowed:
+        raise ProtocolError(
+            "ground basic motion requires instruction, forward_m and "
+            "yaw_right_deg"
+        )
+    return _build_parameters(raw)
+
+
+def decode_aerial_basic_motion(
+    raw: dict[str, object],
+) -> BasicMotionParameters:
+    """Decode a numeric action for a UAV, which may change altitude.
+
+    ``up_m`` is required like the other quantities: a missing field must not be
+    guessed into a value.
+    """
     allowed = {"instruction", "forward_m", "yaw_right_deg", "up_m"}
     if set(raw) != allowed:
         raise ProtocolError(
-            "basic motion requires instruction, forward_m, yaw_right_deg and up_m"
+            "aerial basic motion requires instruction, forward_m, "
+            "yaw_right_deg and up_m"
         )
+    return _build_parameters(raw)
+
+
+def _build_parameters(raw: dict[str, object]) -> BasicMotionParameters:
+    """Both vehicles produce the same domain object; only the wire format """
     try:
         return BasicMotionParameters(**raw)
     except (ValueError, TypeError) as exc:

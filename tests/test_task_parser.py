@@ -33,12 +33,24 @@ ALL_KINDS = {
 }
 
 
-def _basic(stage_id="stage_1", forward_m=5.0, up_m=0.0):
+def _basic(stage_id="stage_1", forward_m=5.0):
     return {
         "stage_id": stage_id,
         "kind": "basic_motion",
         "parameters": {
             "instruction": "Drive forward 5 metres. 向前直行 5 米。",
+            "forward_m": forward_m,
+            "yaw_right_deg": 0,
+        },
+    }
+
+
+def _aerial_basic(stage_id="stage_1", forward_m=0.0, up_m=10.0):
+    return {
+        "stage_id": stage_id,
+        "kind": "basic_motion",
+        "parameters": {
+            "instruction": "Climb 10 metres. 上升 10 米。",
             "forward_m": forward_m,
             "yaw_right_deg": 0,
             "up_m": up_m,
@@ -80,14 +92,43 @@ def test_system_prompt_lists_allowed_kinds_and_rules():
     assert "basic_motion" in prompt
     assert "visual_goal_navigation" in prompt
     assert "free_navigation" in prompt
-    assert "Parameters: instruction, forward_m, yaw_right_deg, up_m" in prompt
+    assert "Parameters: instruction, forward_m, yaw_right_deg;" in prompt
+    # The car's wire format has no vertical field at all.
+    assert "up_m" not in prompt
     assert "Parameters: instruction only" in prompt
     assert "must be the final stage" in prompt
     assert "forward-facing ground-vehicle camera" in prompt
     assert "ground-vehicle mission parser" in prompt
-    # The car still has no way to change height: the field exists in the wire
-    # format, so the ground rules have to say it must stay zero.
-    assert "up_m must always be 0 for this vehicle" in prompt
+
+
+def test_ground_wire_cannot_express_a_climb():
+    """A car payload is rejected when it carries a height change.
+
+    This is checked where model output becomes our data, not where a trajectory
+    is handed to the simulator: the ground decoder has no vertical field, so
+    the action cannot be expressed to it at all.
+    """
+    from planner.adapters.task_parser.tasks.basic_motion import (
+        decode_ground_basic_motion,
+    )
+
+    ok = decode_ground_basic_motion(_basic()["parameters"])
+    assert ok.up_m == 0.0
+    with pytest.raises(ProtocolError, match="ground basic motion"):
+        decode_ground_basic_motion(_aerial_basic()["parameters"])
+
+
+def test_aerial_wire_requires_the_vertical_field():
+    from planner.adapters.task_parser.tasks.basic_motion import (
+        decode_aerial_basic_motion,
+    )
+
+    params = decode_aerial_basic_motion(_aerial_basic()["parameters"])
+    assert params.up_m == 10.0
+    missing = dict(_aerial_basic()["parameters"])
+    del missing["up_m"]
+    with pytest.raises(ProtocolError, match="up_m"):
+        decode_aerial_basic_motion(missing)
 
 
 def test_aerial_rules_allow_an_altitude_change():
@@ -104,18 +145,21 @@ def test_aerial_rules_allow_an_altitude_change():
     assert "cannot strafe sideways or change altitude" not in prompt
 
 
-def test_basic_motion_wire_requires_all_four_fields():
+def test_basic_motion_wire_rejects_an_unknown_field():
     from planner.adapters.task_parser.tasks.basic_motion import (
-        decode_basic_motion,
+        decode_ground_basic_motion,
     )
 
-    stage = _basic(up_m=10.0)
-    params = decode_basic_motion(stage["parameters"])
-    assert params.up_m == 10.0
-    missing = dict(stage["parameters"])
-    del missing["up_m"]
-    with pytest.raises(ProtocolError, match="up_m"):
-        decode_basic_motion(missing)
+    strafe = {
+        "instruction": "turn",
+        "forward_m": 0,
+        "yaw_right_deg": 90,
+        # Strafe is not supported by either vehicle; an unknown field must be
+        # rejected, not ignored.
+        "right_m": 5,
+    }
+    with pytest.raises(ProtocolError):
+        decode_ground_basic_motion(strafe)
 
 
 def test_aerial_system_prompt_uses_the_uav_rules():

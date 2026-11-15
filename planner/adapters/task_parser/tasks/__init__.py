@@ -6,7 +6,8 @@ from planner.domain.mission import TaskKind, TaskParameters
 from .basic_motion import (
     AERIAL_BASIC_MOTION_RULES,
     BASIC_MOTION_RULES,
-    decode_basic_motion,
+    decode_aerial_basic_motion,
+    decode_ground_basic_motion,
 )
 from .free_navigation import (
     AERIAL_FREE_NAVIGATION_RULES,
@@ -40,12 +41,22 @@ class TaskCodec:
 
 
 def builtin_task_codecs(*, aerial: bool = False) -> tuple[TaskCodec, ...]:
-    """Decoders shared by both vehicles; only the prompt rules differ."""
+    """Return the codec set for one vehicle.
+
+    Both vehicles decode into the same domain objects, but the wire format is
+    per vehicle: a ground payload has no vertical field, so a climb cannot even
+    be expressed to the car's decoder. That check belongs here, at the edge
+    where model output becomes our data, rather than in the code that hands a
+    trajectory to the simulator.
+    """
+    basic_motion_decode = (
+        decode_aerial_basic_motion if aerial else decode_ground_basic_motion
+    )
     return (
         TaskCodec(
             TaskKind.BASIC_MOTION,
             AERIAL_BASIC_MOTION_RULES if aerial else BASIC_MOTION_RULES,
-            decode_basic_motion,
+            basic_motion_decode,
         ),
         TaskCodec(
             TaskKind.VISUAL_GOAL_NAVIGATION,
