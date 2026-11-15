@@ -351,6 +351,58 @@ def test_start_leaves_an_unowned_stack_alone():
     controller.close()
 
 
+# -- shutdown takes the stack with it -------------------------------------
+def test_closing_the_service_stops_the_stack_it_started():
+    """Ctrl-C used to stop the service and leave UE rendering on the GPU.
+
+    The next boot cleaned it up, which reads as a leak from the console. The flight
+    console owns what it launched, and so does this service.
+    """
+    workers = []
+    supervisor = FakeSupervisor(running=False)
+    controller = _controller(workers, simulator=supervisor, autostart_session=False)
+    controller.start()
+    controller.request_world("city")
+    _wait(lambda: controller.state is ServerState.IDLE)
+    supervisor.stops.clear()          # only the shutdown stop is under test here
+
+    controller.close()
+
+    assert supervisor.stops == [True]
+    messages = "\n".join(item.message for item in controller.logs.read(0).items)
+    assert "Shutting down: stopping the simulator" in messages
+
+
+def test_closing_without_a_stack_stops_nothing():
+    workers = []
+    supervisor = FakeSupervisor(running=False)
+    controller = _controller(workers, simulator=supervisor, autostart_session=False)
+    controller.start()
+    supervisor.stops.clear()
+
+    controller.close()
+
+    assert supervisor.stops == []
+
+
+def test_closing_does_not_kill_a_stack_it_cannot_prove_it_started():
+    workers = []
+
+    class Foreign(FakeSupervisor):
+        def stop(self):
+            raise SimulatorNotOwned("port 20010 belongs to unmanaged PID 42")
+
+    supervisor = Foreign(running=True)
+    controller = _controller(workers, simulator=supervisor, autostart_session=False)
+    controller.start()
+    supervisor.stops.clear()
+
+    controller.close()                # must not raise out of the shutdown hook
+
+    messages = "\n".join(item.message for item in controller.logs.read(0).items)
+    assert "Leaving a simulator this service did not start" in messages
+
+
 def test_scene_start_attaches_to_an_unowned_running_stack():
     workers = []
     supervisor = FakeSupervisor(

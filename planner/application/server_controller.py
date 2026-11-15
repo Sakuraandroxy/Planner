@@ -899,7 +899,55 @@ class ServerController:
             self._view_pending = False
             self._state = ServerState.STOPPING
             self._closing.set()
-        if self._thread is not None:
-            self._thread.join(timeout=self.settings.startup_timeout_s + 8.0)
-            if self._thread.is_alive():
-                raise RuntimeError("planner supervisor did not finish shutdown")
+        try:
+            if self._thread is not None:
+                self._thread.join(timeout=self.settings.startup_timeout_s + 8.0)
+                if self._thread.is_alive():
+                    raise RuntimeError("planner supervisor did not finish shutdown")
+        finally:
+            # Even when the monitor thread is wedged: at this point nothing is left to
+            # interrupt, and leaving a UE process holding the GPU is the worse failure.
+            self._stop_simulator()
+
+    def _stop_simulator(self) -> None:
+        """Take the simulator stack down when the service goes.
+
+        The stack used to outlive the service, cleaned up only by the next startup. From
+        the operator's side that is a leak: Ctrl-C ends the console while UE keeps
+        rendering on the xpra port and holding a GPU. The flight console treats this
+        differently -- ``cli.py`` turns a signal into ``SystemExit`` and its ``finally``
+        shuts the scene manager down -- because the service owns the processes it
+        launched. Stopping here goes through the same ladder a map switch uses: xpra
+        stop, a verified tree kill if the ports survive, then the display lock.
+
+        A stack this project cannot prove it started is left alone with a warning; the
+        ownership rules are the ones that already refuse a map switch.
+        """
+        simulator = self._simulator
+        if simulator is None:
+            return
+        try:
+            if not simulator.running():
+                return
+        except Exception as error:
+            self._log(
+                f"Cannot tell whether a simulator is running; leaving it alone "
+                f"({type(error).__name__}: {error})",
+                "WARNING",
+            )
+            return
+        self._log("Shutting down: stopping the simulator this service started.")
+        try:
+            simulator.stop()
+        except SimulatorNotOwned as error:
+            self._log(
+                "Leaving a simulator this service did not start running. "
+                f"{error}",
+                "WARNING",
+            )
+        except Exception as error:
+            self._log(
+                f"Stopping the simulator on shutdown failed: "
+                f"{type(error).__name__}: {error}",
+                "ERROR",
+            )
