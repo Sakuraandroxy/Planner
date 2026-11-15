@@ -3,8 +3,10 @@
 Adding a simulator means adding one block to ``config/simulators.yaml``. No
 module in the HTTP, controller or console layer may branch on a family name;
 they read the flags below instead. ``actions`` is the single gate for the
-optional controls (home, appearance models, trajectory, video), and
+optional engine controls (home, appearance models, video, weather), and
 ``task_kinds`` is what the task parser is allowed to produce for a map.
+Remaining-trajectory telemetry is not an action: the service produces it for
+every family.
 """
 
 from __future__ import annotations

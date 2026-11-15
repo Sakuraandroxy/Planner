@@ -19,7 +19,7 @@ Endpoints (see README):
     GET  /api/trajectory
     GET  /api/video     MJPEG stream (live while running, frozen at idle)
     POST /api/stop
-    POST /api/home      rover only, idle only
+    POST /api/home      {"vehicle": "rover"|"drone"}; idle only, default current vehicle
 
 The worker connects to ProjectAirSim on its own thread; the HTTP process
 stays responsive while it waits or while a task runs.
