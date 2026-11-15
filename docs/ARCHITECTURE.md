@@ -1,21 +1,20 @@
 # 架构
 
-一个 HTTP 服务，通过统一端口驱动两个仿真器，把自然语言指令变成载具动作。
-本文讲清谁负责什么、边界在哪、能力从哪来。
+一个 HTTP 服务，通过统一端口驱动两个仿真器，把自然语言指令变成载具动作。本文讲清谁负责什么、边界在哪、能力从哪来。
 
 ## 1 三条不变量
 
 设计只有三条规则，其余都是它们的推论。每条都有测试守着。
 
-1. **并列件不构造并列件。** 规划器（模型端点适配）与仿真器是并列中间件。仿真器会话只交出
-   端口，不接收检测器、规划器或遥测汇。它报 `mission_inputs()`，装配层还它 `attach_arms()`。
-2. **只有装配层知道全部。** `application/mission_assembly.py` 是唯一同时认识仿真器与任务管线
-   的地方。少接一根线在构造期报错，不静默降级。
-3. **能力门只描述引擎能不能做这个动作。** 遥测、日志、任务列表、指令卡是服务自己提供的，
-   不进端口包。否则一个通用功能会变成按仿真器授权的开关。
+1. **并列件不构造并列件。** 规划器（模型端点适配）与仿真器是并列中间件。仿真器会话只交出端口，不接收检测器、
+   规划器或遥测汇。它报 `mission_inputs()`，装配层还它 `attach_arms()`。
+2. **只有装配层知道全部。** `application/mission_assembly.py` 是唯一同时认识仿真器与任务管线的地方。
+   少接一根线在构造期报错，不静默降级。
+3. **能力门只描述引擎能不能做这个动作。** 遥测、日志、任务列表、指令卡是服务自己提供的，不进端口包。
+   否则一个通用功能会变成按仿真器授权的开关。
 
-进程边界不是功能归属：UE4 的任务循环跑在子进程里，是因为它的客户端库不能在服务进程里
-加载，不是因为 UE4 只能做更少的事。
+进程边界不是功能归属：UE4 的任务循环跑在子进程里，是因为它的客户端库不能在服务进程里加载，
+不是因为 UE4 只能做更少的事。
 
 ## 2 分层
 
@@ -63,8 +62,7 @@
 | `config/` | 服务配置、地图目录、家族配置、场景、任务规则 |
 | `scripts/` | 启动、自检、机位标定、实机冒烟 |
 
-`planner/simulator/` 与 `planner/simulators/` 是两个不同的东西：前者是进程与协议，
-后者是每个引擎的适配层。
+`planner/simulator/` 与 `planner/simulators/` 是两个不同的东西：前者是进程与协议，后者是每个引擎的适配层。
 
 ## 4 端口与能力推导
 
@@ -87,8 +85,8 @@
 | `FramePublisher` | 往帧汇发帧，`/api/video` 的门 | 否 |
 | `ReturnHome` | 回出生点 | 否 |
 
-`SimulatorPorts` 里还有两个非端口字段：`vehicles`（这台引擎真的生成哪些载具）与
-`enabled_tasks`（实测跑过哪些任务）。
+`SimulatorPorts` 里还有两个非端口字段：
+`vehicles`（这台引擎真的生成哪些载具）与 `enabled_tasks`（实测跑过哪些任务）。
 
 ### 4.2 任务需求与控件映射
 
@@ -124,8 +122,8 @@ ACTION_PORTS = {"home": "home", "models": "models", "video": "frames", "weather"
 | `vehicles` | `rover`, `drone` | `drone` |
 | `enabled_tasks` | 空（全部可跑） | `basic_motion`、`visual_goal_navigation`、`visual_goal_above` |
 
-`enabled_tasks` 是验证状态，不是引擎上限。UE4 的 `free_navigation` 技术上是通的，
-但从没飞过，所以不在名单里。空表示"不需要额外限制"。
+`enabled_tasks` 是验证状态，不是引擎上限。UE4 的 `free_navigation` 技术上是通的，但从没飞过，所以不在名单里。
+空表示"不需要额外限制"。
 
 ### 4.4 能力矩阵
 
@@ -142,8 +140,8 @@ ACTION_PORTS = {"home": "home", "models": "models", "video": "frames", "weather"
 两点代码事实：
 
 - UE5 的 `visual_goal_above` 因缺 `camera_view` 自动消失，不需要开关。
-- UE4 的能力位宣告了 `visual_goal_above`，但共享层还没有这个 `TaskKind`，也没有对应工作流
-  与解码器，所以它当前不可执行。`basic_motion` 与 `visual_goal_navigation` 已实测跑通。
+- UE4 的能力位宣告了 `visual_goal_above`，但共享层还没有这个 `TaskKind`，也没有对应工作流与解码器，
+  所以它当前不可执行。`basic_motion` 与 `visual_goal_navigation` 已实测跑通。
 
 ## 5 任务管线
 
@@ -166,8 +164,9 @@ POST /api/tasks
 
 解析是严格的：解析失败整单拒绝，不执行部分阶段。没有确定性回退。
 
-工作流内部通过服务访问设备：`ExecutionService` 管运动段与停止检查点，`SynchronizedMotionPlanner`
-生成五次多项式段，滑窗服务管队列续规划，`TrajectoryHub` 管剩余航点快照，`FrameHub` 管 MJPEG。
+工作流内部通过服务访问设备：`ExecutionService` 管运动段与停止检查点，
+`SynchronizedMotionPlanner` 生成五次多项式段，滑窗服务管队列续规划，`TrajectoryHub` 管剩余航点快照，
+`FrameHub` 管 MJPEG。
 
 ## 6 进程与生命周期
 
@@ -177,8 +176,8 @@ POST /api/tasks
 disconnected → connecting → idle ⇄ running → stopping
 ```
 
-`disconnected` 是启动状态：没有场景、没有画面，任务返回 503。换图、换模型、退出都会经过
-`connecting` 或 `stopping`，期间的提交按状态返回 503 或 409。
+`disconnected` 是启动状态：没有场景、没有画面，任务返回 503。换图、换模型、
+退出都会经过 `connecting` 或 `stopping`，期间的提交按状态返回 503 或 409。
 
 ### 6.2 worker 两种形态
 
@@ -195,8 +194,9 @@ disconnected → connecting → idle ⇄ running → stopping
 
 ### 6.3 仿真栈
 
-两族共用一个驱动 `simulator/xpra_start.py`，它渲染 `config/simulators.yaml` 里的 argv 并执行
-`xpra start --start-child`：引擎是 xpra 的子进程，Xvfb 由 xpra 自己拉起。
+两族共用一个驱动 `simulator/xpra_start.py`，
+它渲染 `config/simulators.yaml` 里的 argv 并执行 `xpra start --start-child`：引擎是 xpra 的子进程，
+Xvfb 由 xpra 自己拉起。
 
 | 环节 | 判据 |
 |---|---|
@@ -206,13 +206,11 @@ disconnected → connecting → idle ⇄ running → stopping
 | 显示 | 启动前回收持有者已死的 X 锁；别人的显示号拒绝 |
 | 记录 | 拉起成功后写 `current_map`，服务重启据此恢复 |
 
-`FamilyRouter` 决定"哪一族负责停、哪一族负责起"：按 marker 找到在跑的那一族先 stop，
-再交给目标家族 launch。
+`FamilyRouter` 决定"哪一族负责停、哪一族负责起"：按 marker 找到在跑的那一族先 stop，再交给目标家族 launch。
 
 ### 6.4 会话握手
 
-`registry.build_session(simulator, ...)` 是唯一造会话的入口，它按地图的 `simulator` 字段
-解析包。流程：
+`registry.build_session(simulator, ...)` 是唯一造会话的入口，它按地图的 `simulator` 字段解析包。流程：
 
 1. 会话建立连接、加载场景、起载具
 2. 会话报 `mission_inputs()`：载具字典、执行服务、观测源、移动取帧工厂、`enabled_tasks`
@@ -273,10 +271,10 @@ disconnected → connecting → idle ⇄ running → stopping
 | 服务进程不加载 AirSim 客户端栈 | 新解释器里导入主进程模块，看 `sys.modules` |
 | 声明的端口槽有真实实现 | 比对 `PORT_SLOTS` 与 `build_ports`、协议成员 |
 
-另有几条针对性测试：`test_family_router.py`（哪一族负责停）、`test_airsim_port_names.py`
-（属性名与真实成员一致，不用整机启动才发现）、`test_console_gating.py`（前端门控）、
-`test_scene_spawns.py`（场景出生点）、`test_runtime_catalog.py` 与 `test_airsim_session.py`
-（声明的端口槽与实际填的槽一致）。
+另有几条针对性测试：`test_family_router.py`（哪一族负责停）、
+`test_airsim_port_names.py` （属性名与真实成员一致，不用整机启动才发现）、
+`test_console_gating.py`（前端门控）、`test_scene_spawns.py`（场景出生点）、
+`test_runtime_catalog.py` 与 `test_airsim_session.py` （声明的端口槽与实际填的槽一致）。
 
 ## 10 能力边界
 

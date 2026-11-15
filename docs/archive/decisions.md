@@ -27,8 +27,7 @@ v2 被推翻的两条 v1 结论：
 | 两边同名文件 | 137 个，70 个只差格式、导入写法与 docstring |
 | 真正 import 客户端库的文件 | 11 个 |
 
-结论：仿真器差异集中在 11 个文件，不在 206 个文件。删除复制树后 `git` 记为重命名，
-旧分支仍可按文件取回。
+结论：仿真器差异集中在 11 个文件，不在 206 个文件。删除复制树后 `git` 记为重命名，旧分支仍可按文件取回。
 
 顺带修正了工作量口径：早期估"48 个共享文件要逐个读"，改成按"UE4 会失去什么"重测后是 7 个。
 
@@ -39,8 +38,8 @@ v2 被推翻的两条 v1 结论：
 问题：配置文件能对现实说谎。仿真器包加了端口而配置没改，控制台就多一个点不动的按钮；
 反过来少了端口而配置写着有，接口返回成功但什么也没发生。
 
-现在：`SimulatorPorts` 与 `TASK_REQUIREMENTS` / `ACTION_PORTS` 推导，写 `capabilities`
-会被配置校验拒绝。仿真器包自报 `PORT_SLOTS`，测试断言它等于 `build_ports` 真实填的槽。
+现在：`SimulatorPorts` 与 `TASK_REQUIREMENTS` / `ACTION_PORTS` 推导，写 `capabilities` 会被配置校验拒绝。
+仿真器包自报 `PORT_SLOTS`，测试断言它等于 `build_ports` 真实填的槽。
 
 ## 4 进程驱动从三个版本收敛到一个
 
@@ -61,9 +60,9 @@ v2 被推翻的两条 v1 结论：
 
 ## 5 装配从会话构造函数搬到装配层
 
-原状：`ProjectAirSimMissionSession` 在构造函数里建立检测器、规划器、几何与遥测汇，
-再把它们交给工作流。UE4 的子进程自己建 resources 时漏了 `trajectory`，工作流遇到 `None`
-就静默不发，控制台的剩余轨迹面板在 UE4 上直接消失，没有任何报错。
+原状：`ProjectAirSimMissionSession` 在构造函数里建立检测器、规划器、几何与遥测汇，再把它们交给工作流。
+UE4 的子进程自己建 resources 时漏了 `trajectory`，工作流遇到 `None` 就静默不发，
+控制台的剩余轨迹面板在 UE4 上直接消失，没有任何报错。
 
 现在：
 
@@ -77,8 +76,8 @@ v2 被推翻的两条 v1 结论：
 
 `action` 里曾有 `trajectory`，`SimulatorPorts` 里曾有 `telemetry` 槽，UE4 因此被判定不支持。
 
-问题：那个槽里装的是服务自己的 `TrajectoryHub`，端点直接读 hub，除了门之外没有任何生产代码
-读这个端口。门是空转的，UE4 的 `/api/trajectory` 却返回 501。
+问题：那个槽里装的是服务自己的 `TrajectoryHub`，端点直接读 hub，除了门之外没有任何生产代码读这个端口。
+门是空转的，UE4 的 `/api/trajectory` 却返回 501。
 
 现在：删掉 `ACTION_PORTS["trajectory"]`、`telemetry` 槽、`TrajectoryTelemetry` 协议与前端门控。
 两个家族都返回剩余航点。
@@ -87,12 +86,10 @@ v2 被推翻的两条 v1 结论：
 
 原状：一个解码器，无人机提示词明写 "cannot change altitude in this runtime"，所以升降被拒。
 
-事实：底层一直支持。轨迹插值带 dz，UE5 用 `move_to_position_async`，UE4 用
-`moveToPositionAsync(x, y, z)`。
+事实：底层一直支持。轨迹插值带 dz，UE5 用 `move_to_position_async`，UE4 用 `moveToPositionAsync(x, y, z)`。
 
-现在：两族各一个解码器，解码结果仍是同一个领域对象。车的线上格式里没有竖直字段，
-带 `up_m` 的包在解码期即被拒。合理性判断落在"模型输出变成我们的数据"这个边界上，
-不在送仿真器那一层事后发现。
+现在：两族各一个解码器，解码结果仍是同一个领域对象。车的线上格式里没有竖直字段，带 `up_m` 的包在解码期即被拒。
+合理性判断落在"模型输出变成我们的数据"这个边界上，不在送仿真器那一层事后发现。
 
 ## 8 机位的三版做法
 
@@ -102,9 +99,8 @@ v2 被推翻的两条 v1 结论：
 | 2 | 运行时标定（截图与参考帧相关匹配） | 起图从 13.6 s 拖到 60 到 90 s |
 | 现在 | 起点写进 `projectairsim.view_cycle_start`，按"起点 + 切换次数"记账 | 换包或换图后需要手动重测 |
 
-标定代码没有删，留在 `streaming_views.py` 与 `scripts/calibrate_streaming_views.py`，
-作为手动确认工具。它解出的整圈排列、影子帧稳定等待、不可取帧的排除法，仍然是这方面的
-最佳可用方案，俯视接线时可能还要用。
+标定代码没有删，留在 `streaming_views.py` 与 `scripts/calibrate_streaming_views.py`，作为手动确认工具。
+它解出的整圈排列、影子帧稳定等待、不可取帧的排除法，仍然是这方面的最佳可用方案，俯视接线时可能还要用。
 
 ## 9 隐藏非活动载具的三次调整
 
@@ -121,21 +117,20 @@ v2 被推翻的两条 v1 结论：
 时间线：
 
 1. 早期查 API 文档，结论是"UE5 没有相机位姿读写"，于是 UE5 不做俯视，UE4 保留。
-2. 装好 `projectairsim` 后实测 `dir()`，发现 `Drone.set_camera_pose` / `reset_camera_pose` /
-   `camera_look_at_object` 都存在，`World` 另有 `spawn_object` / `set_object_pose`。
-   前提不成立，文档里因此写了"建议重开这条边界"。
+2. 装好 `projectairsim` 后实测 `dir()`，
+   发现 `Drone.set_camera_pose` / `reset_camera_pose` / `camera_look_at_object` 都存在，
+   `World` 另有 `spawn_object` / `set_object_pose`。前提不成立，文档里因此写了"建议重开这条边界"。
 3. 用户 2026-11-15 明确：先不做俯视，先把整体程序跑起来。`PORT_SLOTS` 保持现状。
 
-所以现在的事实是：UE5 有 API，但能力位没有宣告俯视；UE4 的能力位宣告了俯视，
-但共享层还没接线，实际不可执行。两族都跑不了俯视任务。
+所以现在的事实是：UE5 有 API，但能力位没有宣告俯视；UE4 的能力位宣告了俯视，但共享层还没接线，实际不可执行。
+两族都跑不了俯视任务。
 
 ### 接线顺序（要做时按这个来）
 
-1. `planner/domain/mission.py`：`TaskKind` 加 `VISUAL_GOAL_ABOVE`，`TaskParameters` 并上
-   `visual_goal_above` 的参数类型。
+1. `planner/domain/mission.py`：`TaskKind` 加 `VISUAL_GOAL_ABOVE`，
+   `TaskParameters` 并上 `visual_goal_above` 的参数类型。
 2. `planner/adapters/task_parser/tasks/` 加解码器并注册；规则文本加进提示词。
-3. `planner/workflows/visual_goal_above/` 从旧分支取回（共享层，不放进仿真器目录），
-   导入指向共享层。
+3. `planner/workflows/visual_goal_above/` 从旧分支取回（共享层，不放进仿真器目录），导入指向共享层。
 4. `planner/application/workflow_router.py` 与 `mission_assembly.py` 注册工作流与阶段校验器。
 5. `planner/simulators/projectairsim/runtime.py` 实现 `camera_view` 端口后加进 `PORT_SLOTS`。
 6. 两侧都实机验证，因为第 1、2 步改的是共享层。
@@ -148,8 +143,8 @@ v2 被推翻的两条 v1 结论：
 | `HANDOVER-2026-11-15.md` | 换机前快照，被本套文档取代 |
 | `README` + `DEPLOYMENT` + `ARCHITECTURE` + `AGENT` + 本文档目录 | 当前 |
 
-期间历史被 `filter-branch` 重写过一次：删除误提交的 696 KB bundle。旧哈希（`fed3373` 到
-`0ebd534`）作为悬挂对象仍在库里，树与重写后逐条一致。文档里若出现旧哈希，指的就是同一批提交。
+期间历史被 `filter-branch` 重写过一次：删除误提交的 696 KB bundle。
+旧哈希（`fed3373` 到 `0ebd534`）作为悬挂对象仍在库里，树与重写后逐条一致。文档里若出现旧哈希，指的就是同一批提交。
 
 `PLAN.md` 记录过 M1 到 M8 与十五条补充。它被本文件取代，因为它按时间追加，读起来像流水账；
 真正的结论已经按主题归到 `pitfalls.md`、`measurements.md` 与本文。
@@ -164,5 +159,6 @@ v2 被推翻的两条 v1 结论：
 | UE5 进程 | 留在服务进程内，不搬进子进程 |
 | 进程驱动 | 只有一个 `xpra_start`，命令在 YAML 里 |
 | 桩 | 不写无人调用的桩与开关，未实现的路径显式报错 |
+| 前端门控 | 按卡片 id 点名，不按 DOM 嵌套查找；拆卡不拆门 |
 | 复制 | `planner/ue4` 不复活 |
 | 兼容层 | 不为"某个引擎的怪癖"在共享层加 if；怪癖留在适配层，并写进该层文档字符串 |

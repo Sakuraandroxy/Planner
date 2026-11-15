@@ -1,7 +1,6 @@
 # 部署
 
-本文覆盖从零把服务跑起来、以及换一台机器后要动哪些东西。README 里的快速开始是它的摘要，
-细节以本文为准。
+本文覆盖从零把服务跑起来、以及换一台机器后要动哪些东西。README 里的快速开始是它的摘要，细节以本文为准。
 
 ## 1 前置条件
 
@@ -13,8 +12,8 @@
 | 显示与画面 | `Xvfb`、`xpra`、`xdpyinfo` | xpra 负责把引擎窗口搬到浏览器 |
 | 引擎 | 两族的打包产物，不编译 | 只用 Shipping / NoEditor 二进制，不碰引擎源码 |
 
-服务进程不加载任何仿真器客户端。UE4 的客户端库在独立解释器、独立子进程里跑，这一条由
-`tests/test_architecture.py` 守着。
+服务进程不加载任何仿真器客户端。UE4 的客户端库在独立解释器、独立子进程里跑，
+这一条由 `tests/test_architecture.py` 守着。
 
 ## 2 两个解释器环境
 
@@ -23,9 +22,9 @@
 - `airsim` 依赖 `msgpack-rpc-python`，后者依赖 `msgpack-python`，提供的模块名是 `msgpack`
 - `projectairsim` 依赖 `msgpack>=1.0.5`，模块名同样是 `msgpack`
 
-两个发行版往同一个 `site-packages/msgpack/` 写文件，后装的覆盖前一个。`msgpackrpc` 用
-`msgpack.Packer(encoding=...)` 构造打包器，而 `encoding` 参数在 msgpack 1.0 已删除。结果是
-`import airsim` 成功、`MultirotorClient()` 成功，第一次发包才炸：
+两个发行版往同一个 `site-packages/msgpack/` 写文件，后装的覆盖前一个。
+`msgpackrpc` 用 `msgpack.Packer(encoding=...)` 构造打包器，而 `encoding` 参数在 msgpack 1.0 已删除。
+结果是 `import airsim` 成功、`MultirotorClient()` 成功，第一次发包才炸：
 
 ```
 TypeError: __init__() got an unexpected keyword argument 'encoding'
@@ -67,8 +66,9 @@ pip install pynng "msgpack>=1.0.5" matplotlib commentjson "jsonschema>=4.4.0" \
 - **`projectairsim` 用 `--no-deps`，基础依赖手工补齐。** 它声明依赖 `opencv-python`（GUI 版），
   会把第二份 `cv2/` 写进 `site-packages`，和 `opencv-python-headless` 抢同一个目录。
   上面第三条命令就是它 wheel 元数据里的基础依赖，去掉了 `opencv-python`。
-- **`Pillow` 是主环境的硬需求。** `planner/simulators/airsim/observation_source.py` 在模块顶层
-  `from PIL import Image`，缺它会有测试失败，失败点看着与 UE4 无关。
+- **`Pillow` 是主环境的硬需求。**
+  `planner/simulators/airsim/observation_source.py` 在模块顶层 `from PIL import Image`，缺它会有测试失败，
+  失败点看着与 UE4 无关。
 - **`pip check` 会报 `opencv-python is not installed`。** 满足它的是 headless 变体，属预期噪音。
 
 ### 3.2 运行时环境
@@ -80,9 +80,8 @@ pip install numpy requests Pillow pyyaml pydantic \
 pip install --no-deps --no-build-isolation airsim==1.8.1
 ```
 
-- **先装 numpy 再装 airsim。** `airsim` 只有 sdist，`setup.py` 开头就 `import numpy`，
-  构建隔离环境里没有它，报 `Getting requirements to build wheel did not run successfully`。
-  `--no-build-isolation` 让它用当前解释器。
+- **先装 numpy 再装 airsim。** `airsim` 只有 sdist，`setup.py` 开头就 `import numpy`，构建隔离环境里没有它，
+  报 `Getting requirements to build wheel did not run successfully`。`--no-build-isolation` 让它用当前解释器。
 - `airsim` 声明的是 `opencv-contrib-python`（GUI 版），用 headless 变体替代，同样有 `pip check` 噪音。
 - `msgpack-python` 在这个 Python 上没有 C 扩展，打包走纯 Python 实现。功能正确，取图慢；
   换 msgpack 1.x 会破坏 `msgpackrpc`，不要在依赖上动它。深度分辨率因此是配置项（见 7 节）。
@@ -172,8 +171,7 @@ maps:
 ```
 
 - `binary` 同时是进程归属判据：停止时按 `/proc/<pid>/exe` 的真路径判断"这是不是我们的进程"。
-- `map_name` 不一定等于目录名。Neighborhood 的目录叫 `Neighborhood`，交给引擎的地图名是
-  `AirSimNH`，这是引擎自己的命名。
+- `map_name` 不一定等于目录名。Neighborhood 的目录叫 `Neighborhood`，交给引擎的地图名是 `AirSimNH`，这是引擎自己的命名。
 - 地图引用的 `simulator` 必须在 `simulators.yaml` 里存在，否则配置加载报错。
 - UE5 的图还带 `scene_file` 与 `sim_config_path`；UE4 的图只带 `binary` 与 `map_name`。
 
@@ -191,11 +189,10 @@ UE4 引擎读取的设置，规划器自己保存一份，不动引擎目录里�
 | `ImageType: 2` | 深度，允许独立分辨率；几何用同一 FOV |
 
 深度分辨率取 256×144 的原因是传输：`pixels_as_float=True` 把深度当 float 数组发回，
-纯 Python 的 msgpack 解包 36 864 个 float 约 0.24 秒，921 600 个要 25 秒以上。
-两个 ImageType 用同一个 FOV，深度几何才能直接用 `depth_intrinsics` 反投射。
+纯 Python 的 msgpack 解包 36 864 个 float 约 0.24 秒，921 600 个要 25 秒以上。两个 ImageType 用同一个 FOV，
+深度几何才能直接用 `depth_intrinsics` 反投射。
 
-相机级覆盖写在 `Vehicles.<名字>.Cameras.<相机>.CaptureSettings`；写在 `CameraDefaults`
-不会生效。
+相机级覆盖写在 `Vehicles.<名字>.Cameras.<相机>.CaptureSettings`；写在 `CameraDefaults` 不会生效。
 
 ## 9 UE5 场景与机器人文件
 
@@ -228,8 +225,8 @@ UE4 引擎读取的设置，规划器自己保存一份，不动引擎目录里�
   `anthropic` 只接受 `reasoning_effort: none`。
 - `api_key` 直接写在配置里时优先于 `api_key_env`；留空则读环境变量，默认 `VLN_API_KEY`。
   填了真实密钥的配置文件不要提交到版本库。
-- 端点不可用时任务被明确拒绝，服务本身照常启动、画面照常可看。拒绝信息里带状态码、
-  URL、该改哪个字段与 provider 原话。
+- 端点不可用时任务被明确拒绝，服务本身照常启动、画面照常可看。拒绝信息里带状态码、 URL、
+  该改哪个字段与 provider 原话。
 
 ## 11 启动、验证、关闭
 
@@ -240,8 +237,7 @@ python scripts/serve_planner.py --host 0.0.0.0 --port 8000
 ```
 
 - 服务启动时状态是 `disconnected`：不加载场景，不连仿真器，控制台没有画面。
-- 启动时若发现上一轮由本项目拉起的仿真栈还在跑，会先停掉它。别人手工起的栈不动，
-  这时画面可能还显示旧场景。
+- 启动时若发现上一轮由本项目拉起的仿真栈还在跑，会先停掉它。别人手工起的栈不动，这时画面可能还显示旧场景。
 - 场景由控制台「启动场景」或 `POST /api/world` 拉起。
 
 ### 验证
@@ -277,13 +273,11 @@ print('running:', router.running())
 "
 ```
 
-停止把 `restart` 换成 `stop()`。已有图在跑时 `start` 会拒绝，这是有意的。
-画面地址是 `http://<主机>:10010/`。
+停止把 `restart` 换成 `stop()`。已有图在跑时 `start` 会拒绝，这是有意的。画面地址是 `http://<主机>:10010/`。
 
 ### 关闭
 
-`Ctrl-C` 停服务会带走本服务拉起的仿真栈：引擎、xpra 会话与 Xvfb 一起停。
-不属于本服务的栈只告警不动。
+`Ctrl-C` 停服务会带走本服务拉起的仿真栈：引擎、xpra 会话与 Xvfb 一起停。不属于本服务的栈只告警不动。
 
 ## 12 换机器要改什么
 
@@ -342,5 +336,5 @@ binary: /data/airsim/Blocks/LinuxNoEditor/Blocks/Binaries/Linux/Blocks
 服务日志进内存环形缓冲，通过 `GET /api/logs?cursor=N` 增量读取，进程退出即丢失。
 Python 日志与 uvicorn 输出走 stderr。
 
-`current_map` 只在拉起成功后写入。服务重启时读它恢复地图；内容不在目录里才回退到
-`default_map`，避免把城市地图的配置加载进郊区引擎。
+`current_map` 只在拉起成功后写入。服务重启时读它恢复地图；内容不在目录里才回退到 `default_map`，
+避免把城市地图的配置加载进郊区引擎。
