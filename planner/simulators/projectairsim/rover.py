@@ -24,8 +24,6 @@ from .collision import CollisionEvent, CollisionMonitor
 from .connection import ProjectAirSimConnection
 from .coordinates import (
     pose_from_kinematics,
-    velocity_from_kinematics,
-    yaw_rate_deg_from_kinematics,
 )
 from .drive import (
     RoverDriveModel,
@@ -93,6 +91,10 @@ class ProjectAirSimRover:
             ignored_names=(robot.name,),
         )
         self._collisions.start()
+        # The car's reported twist is a placeholder, so the streaming state
+        # differencing poses: a constant zero would blind the speed PID.
+        self._stream_pose: WorldPose | None = None
+        self._stream_ns = 0
         self._last_collision: CollisionEvent | None = None
         # Home pose used by ``return_home``. The raw spawn pose read here can
         # be above the rendered resting pose, so the session replaces it with
@@ -173,13 +175,20 @@ class ProjectAirSimRover:
         kinematics = self._kinematics()
         pose = pose_from_kinematics(kinematics)
         timestamp_ns = int(kinematics["time_stamp"])
-        velocity = velocity_from_kinematics(kinematics)
+        previous, previous_ns = self._stream_pose, self._stream_ns
+        velocity = (0.0, 0.0, 0.0)
+        yaw_rate = 0.0
+        if previous is not None and timestamp_ns > previous_ns:
+            dt = (timestamp_ns - previous_ns) / 1e9
+            velocity = (
+                (pose.x - previous.x) / dt,
+                (pose.y - previous.y) / dt,
+                (pose.z - previous.z) / dt,
+            )
+            yaw_rate = (pose.yaw_deg - previous.yaw_deg) / dt
+        self._stream_pose, self._stream_ns = pose, timestamp_ns
         return TimedVehicleState(
-            pose,
-            timestamp_ns,
-            time.monotonic(),
-            velocity,
-            yaw_rate_deg_s=yaw_rate_deg_from_kinematics(kinematics),
+            pose, timestamp_ns, time.monotonic(), velocity, yaw_rate_deg_s=yaw_rate
         )
 
     def stream_velocity(

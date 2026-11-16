@@ -177,6 +177,20 @@ def test_stream_velocity_maps_the_reference_and_advances_one_step():
     rover.close()
 
 
+def test_stream_state_measures_speed_from_the_pose_because_the_twist_is_a_placeholder():
+    rover, connection, _ = make_rover()
+    rover.start()
+    connection.time_ns += 100_000_000
+    connection.pose = (50.4, 0.0, 0.94, 0.0)
+    first = rover.stream_state()
+    assert first.velocity_world == pytest.approx((0.0, 0.0, 0.0))
+    connection.time_ns += 200_000_000
+    connection.pose = (51.0, 0.3, 0.94, 10.0)
+    second = rover.stream_state()
+    assert second.velocity_world == pytest.approx((3.0, 1.5, 0.0))
+    assert second.yaw_rate_deg_s == pytest.approx(50.0)
+
+
 def test_stream_velocity_requires_api_control():
     rover, _, _ = make_rover()
     with pytest.raises(ExecutionError, match="start"):
