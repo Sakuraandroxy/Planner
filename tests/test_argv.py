@@ -44,10 +44,10 @@ def test_projectairsim_ports_come_from_the_family_block_not_the_settings():
 
 def test_airsim_template_carries_settings_and_the_binary_map_name():
     entry = MapEntry("blocks", "Blocks", simulator="airsim",
-                     binary="/data/airsim/Blocks/Binaries/Linux/Blocks", map_name="Blocks")
+                     binary="/sim/Blocks/Binaries/Linux/Blocks", map_name="Blocks")
     simulator = SimulatorFamily(
         id="airsim", label="AirSim", driver="xpra_start",
-        ports={"xpra": 10010, "rpc": 41451}, settings_file="/data/airsim/settings.json",
+        ports={"xpra": 10010, "rpc": 41451}, settings_file="/sim/settings.json",
         res_x=1280, res_y=720, argv=("xpra", "start"),
         stop_argv=("xpra", "stop"),
     )
@@ -56,9 +56,9 @@ def test_airsim_template_carries_settings_and_the_binary_map_name():
         values(entry, simulator),
     )
     assert got == [
-        "/data/airsim/Blocks/Binaries/Linux/Blocks",
+        "/sim/Blocks/Binaries/Linux/Blocks",
         "Blocks",
-        "-settings=/data/airsim/settings.json",
+        "-settings=/sim/settings.json",
         "-abslog=output/xpra/logs/blocks.log",
     ]
 

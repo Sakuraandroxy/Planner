@@ -39,7 +39,7 @@ class AirSimObservationSource:
         depth_horizontal_fov_deg: float | None = None,
         verify_image_pair: bool = False,
         depth_mapping: str = "log_inverse_gray_v1",
-        maximum_pair_time_gap_s: float = 0.05,
+        maximum_pair_time_gap_s: float = 0.15,
         camera_mount_position_body_m=(1.0, 0.0, 0.0),
         camera_mount_rpy_deg=(0.0, 0.0, 0.0),
         clock=time.monotonic,
@@ -218,7 +218,7 @@ class AirSimObservationSource:
         )
 
     @staticmethod
-    def _validate_pair(rgb_response, depth_response, maximum_pair_time_gap_s=0.05):
+    def _validate_pair(rgb_response, depth_response, maximum_pair_time_gap_s=0.15):
         times = [getattr(r, "time_stamp", 0) for r in (rgb_response, depth_response)]
         if (any(type(t) is not int or t <= 0 for t in times) or
                 abs(times[0]-times[1]) > maximum_pair_time_gap_s*1e9):

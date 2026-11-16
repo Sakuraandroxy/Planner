@@ -44,7 +44,7 @@ def _router(tmp_path, marker_map=None):
         default_map="blocks",
         maps=(
             MapEntry(id="blocks", label="Blocks", simulator="airsim",
-                     binary="/data/airsim/Blocks/Binaries/Linux/Blocks",
+                     binary="/sim/Blocks/Binaries/Linux/Blocks",
                      map_name="Blocks"),
             MapEntry(id="cityenviron", label="City", simulator="projectairsim",
                      launch_map="cityenviron", scene_file="scene_city_dual.jsonc",

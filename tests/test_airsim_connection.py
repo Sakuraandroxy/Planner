@@ -1,6 +1,6 @@
 """Every AirSim call must reach the vehicle the settings file actually names.
 
-``/data/airsim/settings.json`` registers ``Drone_1``. With a blank ``vehicle_name``
+``config/airsim_settings.json`` registers ``Drone_1``. With a blank ``vehicle_name``
 the server still answers state reads, so a smoke test looks healthy right up to the
 first control call: ``moveToPositionAsync`` returns ``False``, ``landAsync`` raises an
 RPC exception, and the vehicle does not move. The adapter used to send the blank name

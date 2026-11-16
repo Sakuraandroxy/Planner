@@ -9,9 +9,12 @@ The ownership rules are the point of this file. They are copied from
 a map switch and ``SIGKILL``ing somebody else's process.
 """
 
+import atexit
 import os
 from pathlib import Path
+import shutil
 from types import SimpleNamespace
+import tempfile
 
 import pytest
 import yaml
@@ -29,9 +32,25 @@ from planner.simulator.xpra_start import (
 DISPLAY = ":199"
 RPC_PORT = 41451
 XPRA_PORT = 20010
-SETTINGS = "/data/airsim/settings.json"
-BLOCKS = "/data/airsim/Blocks/LinuxNoEditor/Blocks/Binaries/Linux/Blocks"
 REPO = Path(__file__).resolve().parents[1]
+
+#: The driver refuses to launch a map whose binary is absent, so these point at real
+#: executable stubs instead of a hardcoded install path: the same test then passes on
+#: a machine that has no AirSim binaries at all.
+STUBS = Path(tempfile.mkdtemp(prefix="xpra-start-driver-"))
+atexit.register(shutil.rmtree, STUBS, True)
+
+
+def stub_binary(name):
+    path = STUBS/name
+    path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    path.chmod(0o755)
+    return str(path)
+
+
+SETTINGS = str(STUBS/"settings.json")
+BLOCKS = stub_binary("Blocks")
+CAMPUS = stub_binary("Campus")
 
 
 def _family(**overrides):
@@ -76,8 +95,7 @@ def _maps():
             MapEntry(id="blocks", label="Blocks", simulator="airsim",
                      binary=BLOCKS, map_name="Blocks"),
             MapEntry(id="campus", label="Campus", simulator="airsim",
-                     binary="/data/airsim/Campus/LinuxNoEditor/Campus/Binaries/Linux/Campus",
-                     map_name="Campus"),
+                     binary=CAMPUS, map_name="Campus"),
             MapEntry(id="cityenviron", label="City", simulator="projectairsim",
                      launch_map="cityenviron", scene_file="scene_city_dual.jsonc",
                      sim_config_path="config/scenes/city"),
