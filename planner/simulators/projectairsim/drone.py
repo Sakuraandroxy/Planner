@@ -1,9 +1,9 @@
 """ProjectAirSim Drone adapter: pose, takeoff/land, velocity flight, observations.
 
 The drone is a ``fast-physics`` SimpleFlight quadrotor. ``position_hold`` is
-the reference owner-thread hold service: every command is a
-``MoveByVelocity`` followed by exactly one control-period clock advance, so the
-paused steppable world stays in lockstep with the shared execution stack.
+the reference owner-thread hold service: every command is a ``MoveByVelocity``
+for one control period. The simulator clock runs free after scene load, so a
+command does not have to wait for the planner to step the world.
 Native takeoff is verified by measured climb and landed state because
 ProjectAirSim returns ``False`` for a takeoff that actually lifted off (the
 reference Planner tolerates the same quirk). A completed land also leaves
@@ -461,11 +461,12 @@ class ProjectAirSimDrone:
         self._holding.tick()
 
     def idle_tick(self) -> None:
-        """Owner-thread idle step: keep a live hold, else advance the clock.
+        """Owner-thread idle step: keep a live hold, else pace the poll.
 
-        The paused world only moves when the owner advances it, so an idle
-        viewer still needs one control period per poll. A landed vehicle has
-        no hold to tick and the bare clock advance keeps the scene rendering.
+        A live hold owns the yaw and position commands, so ticking it is the
+        whole step. Without a hold the call only paces the owner loop: the
+        engine advances the clock itself, and the wait costs one control
+        period per poll.
         """
         if self._holding.active:
             self._holding.tick()

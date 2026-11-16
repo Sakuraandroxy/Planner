@@ -233,6 +233,22 @@ class ProjectAirSimMissionSession:
             finally:
                 self._publish_frames = False
             self._apply_initial_view()
+            # Everything above ran against a paused clock, which is what keeps
+            # the load transient out: physics during scene load dropped the
+            # drone from 38 m and broke the four-camera calibration. With the
+            # vehicles spawned, hidden, settled and measured, hand the clock
+            # back to the engine so a slow caller cannot freeze the picture.
+            if self._connection.resume_clock():
+                self._log(
+                    "Simulator clock runs free; the picture keeps moving while "
+                    "the planner is busy"
+                )
+            else:
+                self._log(
+                    "Simulator clock stays stepped; each control period is one "
+                    "explicit advance",
+                    "WARNING",
+                )
         except Exception:
             self.close()
             raise
@@ -324,7 +340,7 @@ class ProjectAirSimMissionSession:
             self._settle(arm, event_sink)
 
     def idle_tick(self) -> None:
-        """Advance the paused world one control period on the owner thread."""
+        """Give the world one control period on the owner thread."""
         if self._active_vehicle == "drone" and self._drone is not None:
             self._drone.idle_tick()
         elif self._rover is not None:

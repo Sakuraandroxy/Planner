@@ -204,6 +204,12 @@ class FakeConnection:
         self.switch_ok = True
         self.now_ns = 0
         self.advance_hooks = []
+        self.resume_clock_calls = 0
+        self.free_running = True
+
+    def resume_clock(self):
+        self.resume_clock_calls += 1
+        return self.free_running
 
     def add_advance_hook(self, hook):
         self.advance_hooks.append(hook)

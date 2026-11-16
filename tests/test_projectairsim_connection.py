@@ -1,7 +1,11 @@
 """Simulator-time advance hooks on the ProjectAirSim connection."""
 
 import threading
+import time
 
+import pytest
+
+from planner.errors import SimulatorConnectionError
 from planner.simulators.projectairsim.connection import ProjectAirSimConnection
 
 
@@ -62,3 +66,75 @@ def test_removed_hook_no_longer_runs():
     connection.advance_for_sim_time(0.1)
 
     assert seen == []
+
+
+class RunningWorld(FakeWorld):
+    """A world whose clock moves with wall time, like a resumed engine."""
+
+    def __init__(self):
+        super().__init__()
+        self._started = time.monotonic()
+        self.continue_calls = 0
+        self.resume_calls = 0
+        self.pause_calls = 0
+
+    def continue_for_sim_time(self, nanoseconds, wait_until_complete=True):
+        self.continue_calls += 1
+        return super().continue_for_sim_time(nanoseconds, wait_until_complete)
+
+    def get_sim_time(self):
+        return int((time.monotonic() - self._started) * 1e9)
+
+    def resume(self):
+        self.resume_calls += 1
+        return "resumed"
+
+    def pause(self):
+        self.pause_calls += 1
+        return "paused"
+
+
+class StalledWorld(RunningWorld):
+    """A world that ignores resume and keeps reporting one instant."""
+
+    def get_sim_time(self):
+        return 0
+
+
+def test_free_running_advance_waits_for_the_clock_instead_of_stepping():
+    connection = make_connection()
+    world = connection.world = RunningWorld()
+    seen = []
+    connection.add_advance_hook(seen.append)
+    assert connection.resume_clock() is True
+
+    before = world.get_sim_time()
+    returned = connection.advance_for_sim_time(0.05)
+
+    assert world.continue_calls == 0
+    assert returned >= before + 50_000_000
+    assert seen == [returned]
+
+
+def test_stalled_clock_fails_instead_of_waiting_forever(monkeypatch):
+    monkeypatch.setattr(
+        "planner.simulators.projectairsim.connection._CLOCK_STALL_TIMEOUT_S", 0.05
+    )
+    connection = make_connection()
+    connection.world = StalledWorld()
+    connection._free_running = True
+
+    with pytest.raises(SimulatorConnectionError, match="did not advance"):
+        connection.advance_for_sim_time(0.05)
+
+
+def test_resume_clock_falls_back_when_the_engine_ignores_it(caplog):
+    connection = make_connection()
+    world = connection.world = StalledWorld()
+
+    assert connection.resume_clock(verify_s=0.05) is False
+    assert world.pause_calls == 1
+
+    # The fallback keeps the stepped behaviour, one request per period.
+    assert connection.advance_for_sim_time(0.05) == 50_000_000
+    assert world.continue_calls == 1
