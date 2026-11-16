@@ -39,7 +39,8 @@ class VisualGoalFlightPhase:
             self.limits.model_retry_count, checkpoint, self.clock)
         checkpoint()
         if not session.policy.anchor_valid(observation, self.execution.current_pose(), self.clock()):
-            self._event(trace, "completion_discarded", reason="observation anchor changed")
+            self._event(trace, "completion_discarded", reason="observation anchor changed",
+                        detail=session.policy.anchor_violation(observation, self.execution.current_pose(), self.clock()))
             return None
         self._event(trace, "completion_check", completed=verdict, check_count=session.completion_checks,
                     retained_points=len(session.pending_motion.segments), radius_m=self.trigger_rules.radius_m,

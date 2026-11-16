@@ -748,3 +748,38 @@ def test_prepare_does_not_climb_again_when_the_vehicle_is_already_airborne():
     drone.prepare(takeoff_if_landed=True)
     assert GROUND_Z - robot.z == pytest.approx(5.0, abs=0.3)
     drone.close()
+
+
+def test_stopped_capture_waits_for_the_hold_to_settle(monkeypatch):
+    """A pause that fires mid-flight leaves coasting; the image must wait for it."""
+    drone, _, _, _ = make_drone()
+    order = []
+    monkeypatch.setattr(drone._holding, "wait", lambda **kwargs: order.append("hold"))
+    monkeypatch.setattr(
+        drone._observations,
+        "capture",
+        lambda **kwargs: order.append("frame") or object(),
+    )
+    drone._holding.active = True
+
+    drone.capture()
+
+    assert order == ["hold", "frame"]
+    drone.close()
+
+
+def test_stopped_capture_does_not_wait_without_an_active_hold(monkeypatch):
+    drone, _, _, _ = make_drone()
+    order = []
+    monkeypatch.setattr(drone._holding, "wait", lambda **kwargs: order.append("hold"))
+    monkeypatch.setattr(
+        drone._observations,
+        "capture",
+        lambda **kwargs: order.append("frame") or object(),
+    )
+    drone._holding.active = False
+
+    drone.capture()
+
+    assert order == ["frame"]
+    drone.close()

@@ -40,13 +40,24 @@ class VisualGoalExitPolicy:
             raise VisualGoalFailure(VisualGoalStatus.TARGET_AMBIGUOUS if ambiguous else
                                     VisualGoalStatus.PERCEPTION_UNRELIABLE, "target/depth evidence remains unreliable")
 
-    def anchor_valid(self, observation, actual, now):
+    def anchor_violation(self, observation, actual, now):
+        """Name the bound a stale anchor breaks, or return ``None``."""
         original = observation.pose
-        valid = (observation.captured_monotonic > 0 and
-                 0 <= now-observation.captured_monotonic <= self.limits.maximum_observation_age_s and
-                 math.dist((actual.x, actual.y, actual.z), (original.x, original.y, original.z)) <=
-                 self.limits.maximum_anchor_translation_m and
-                 abs(wrap_yaw_deg(actual.yaw_deg-original.yaw_deg)) <= self.limits.maximum_anchor_yaw_deg)
+        if observation.captured_monotonic <= 0:
+            return "observation has no capture time"
+        age = now-observation.captured_monotonic
+        if not 0 <= age <= self.limits.maximum_observation_age_s:
+            return (f"age {age:.1f}s over {self.limits.maximum_observation_age_s:.0f}s")
+        drift = math.dist((actual.x, actual.y, actual.z), (original.x, original.y, original.z))
+        if drift > self.limits.maximum_anchor_translation_m:
+            return (f"moved {drift:.2f}m over {self.limits.maximum_anchor_translation_m:.2f}m")
+        turned = abs(wrap_yaw_deg(actual.yaw_deg-original.yaw_deg))
+        if turned > self.limits.maximum_anchor_yaw_deg:
+            return (f"turned {turned:.1f}deg over {self.limits.maximum_anchor_yaw_deg:.1f}deg")
+        return None
+
+    def anchor_valid(self, observation, actual, now):
+        valid = self.anchor_violation(observation, actual, now) is None
         # A fresh capture being stable must not erase repeated drift during
         # subsequent model inference. Reset only after an accepted execution.
         if not valid:

@@ -584,6 +584,17 @@ class ProjectAirSimDrone:
 
     # -- observation -------------------------------------------------------
     def capture(self, *, budget=None, timeout_s: float = 2.0) -> Observation:
+        """Take a stopped observation, after the vehicle has settled.
+
+        ``stopped`` has to be true at image time, not at request time. A pause
+        that fires mid-flight leaves several metres of coasting: the frame
+        source would hand out an image whose pose no longer matches the vehicle
+        a second later, and the caller discards it as a changed anchor. The
+        UE4 adapter gets this guarantee from its observation gate; here the
+        position hold is the gate.
+        """
+        if self._holding.active:
+            self._holding.wait(budget=budget)
         return self._observations.capture(budget=budget, timeout_s=timeout_s)
 
     def capture_moving(self, *, budget=None) -> Observation:
