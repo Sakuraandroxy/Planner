@@ -9,7 +9,6 @@ class VisualGoalLimits:
     distance_uncertainty_margin_m: float = 0.3
     confirmation_count: int = 2
     confirmation_interval_s: float = 0.5
-    maximum_pitch_abs_deg: float = 5.0
     maximum_vertical_offset_m: float | None = None
     search_step_deg: float = 30.0
     search_half_span_deg: float = 90.0

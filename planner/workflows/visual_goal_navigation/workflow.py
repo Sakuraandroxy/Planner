@@ -1,13 +1,10 @@
 """Static visual-goal observe/approach/verify workflow; dependencies are injected."""
 import logging
-import math
 import time
 import threading
 from typing import Callable
 from functools import partial
 from dataclasses import replace
-
-import numpy as np
 
 from planner.capabilities.targeting.association import bound_target_geometry, bound_target_goal
 from planner.capabilities.targeting.visual_goal_refresh import VisualGoalRefresh
@@ -223,10 +220,6 @@ class VisualGoalNavigationWorkflow:
         self.geometry.validate(observation)
         if session.initial is None:
             session.initial = observation.pose
-            rotation = np.asarray(observation.rotation_camera_to_world)
-            pitch = math.degrees(math.asin(float(np.clip(-rotation[2, 0], -1, 1))))
-            if abs(pitch) > self.limits.maximum_pitch_abs_deg:
-                raise VisualGoalFailure(VisualGoalStatus.BLOCKED, "camera is outside level-view pitch envelope")
         return observation
 
     def _publish_trajectory(self, parameters, session, observation):
