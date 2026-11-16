@@ -938,11 +938,6 @@ async function applyWeather() {
 }
 
 
-function formatAngle(value) {
-  const number = Number(value);
-  return Number.isFinite(number) ? `${number.toFixed(1)}°` : "—";
-}
-
 function wrapYawDelta(deg) {
   const value = Number(deg);
   if (!Number.isFinite(value)) return 0;
@@ -952,18 +947,38 @@ function wrapYawDelta(deg) {
 function relativeIncrement(previous, point) {
   const worldDx = Number(point.x) - Number(previous.x);
   const worldDy = Number(point.y) - Number(previous.y);
+  const worldDz = Number(point.z) - Number(previous.z);
   const angle = (Number(previous.yaw_deg) * Math.PI) / 180;
   return {
     dx: Math.cos(angle) * worldDx + Math.sin(angle) * worldDy,
     dy: -Math.sin(angle) * worldDx + Math.cos(angle) * worldDy,
+    dz: worldDz,
     dyaw: wrapYawDelta(Number(point.yaw_deg) - Number(previous.yaw_deg)),
   };
 }
 
-function formatSigned(value, digits) {
+const INCREMENTS = [
+  // 每一分量一对箭头：正方向在前，负方向在后。
+  { key: "dx", arrows: ["▲", "▼"], digits: 2, suffix: "" },
+  { key: "dy", arrows: ["▶", "◀"], digits: 2, suffix: "" },
+  { key: "dz", arrows: ["↑", "↓"], digits: 2, suffix: "" },
+  { key: "dyaw", arrows: ["↻", "↺"], digits: 2, suffix: "°" },
+];
+
+function formatIncrement(value, arrows, digits, suffix) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "—";
-  return `${number >= 0 ? "+" : ""}${number.toFixed(digits)}`;
+  if (Math.abs(number) < 0.005) return `· 0.00${suffix}`;
+  return `${number > 0 ? arrows[0] : arrows[1]} ${Math.abs(number).toFixed(digits)}${suffix}`;
+}
+
+function incrementParts(delta, showDz) {
+  if (!delta) return ["—"];
+  // dz 按引擎 NED 向下为正，这里取反成人的直觉：向上为正。
+  const values = { ...delta, dz: -delta.dz };
+  return INCREMENTS.filter((axis) => showDz || axis.key !== "dz").map((axis) =>
+    formatIncrement(values[axis.key], axis.arrows, axis.digits, axis.suffix),
+  );
 }
 
 function renderTrajectory(snapshot) {
@@ -993,6 +1008,7 @@ function renderTrajectory(snapshot) {
   const scrollTop = list.scrollTop;
   list.hidden = visible.length === 0;
   list.replaceChildren();
+  const showDz = !snapshot || snapshot.vertical_motion !== false;
   for (const point of visible) {
     const item = document.createElement("li");
     item.className = "trajectory-point";
@@ -1006,14 +1022,14 @@ function renderTrajectory(snapshot) {
     const delta = previous ? relativeIncrement(previous, point) : null;
     const coords = document.createElement("span");
     coords.className = "point-coords";
-    coords.textContent = delta
-      ? `dx ${formatSigned(delta.dx, 2)} · dy ${formatSigned(delta.dy, 2)}`
-      : "dx — · dy —";
+    const parts = incrementParts(delta, showDz);
+    coords.textContent = parts.join(" · ");
+    coords.title = showDz
+      ? "▲前进 ▼后退 · ▶右移 ◀左移 · ↑上升 ↓下降 · ↻右转 ↺左转"
+      : "▲前进 ▼后退 · ▶右移 ◀左移 · ↻右转 ↺左转";
     const meta = document.createElement("span");
     meta.className = "point-meta";
-    meta.textContent = delta
-      ? `#${point.waypoint_id} · dyaw ${formatSigned(delta.dyaw, 1)}°`
-      : `#${point.waypoint_id} · 航向 ${formatAngle(point.yaw_deg)}`;
+    meta.textContent = `#${point.waypoint_id}`;
     main.append(coords, meta);
 
     item.append(marker, main);

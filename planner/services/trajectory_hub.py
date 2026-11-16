@@ -100,6 +100,7 @@ class TrajectoryHub:
         items,
         planning_calls: int,
         path_length_m: float,
+        vertical_motion: bool = True,
     ) -> TrajectorySnapshot:
         return self.publish(
             build_queue_snapshot(
@@ -112,5 +113,6 @@ class TrajectoryHub:
                 planning_calls=planning_calls,
                 path_length_m=path_length_m,
                 clock=self._clock,
+                vertical_motion=vertical_motion,
             )
         )

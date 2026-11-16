@@ -53,6 +53,7 @@ class FreeNavigationContinuous:
         tracking_settings: ContinuousTrackingSettings = ContinuousTrackingSettings(),
         lane_reference_provider=None,
         telemetry=None,
+        vertical_motion: bool = True,
     ):
         for name, value in (
             ("model request timeout", model_request_timeout_s),
@@ -85,6 +86,7 @@ class FreeNavigationContinuous:
         self.execution = execution
         self.clock, self.sleep = clock, sleep
         self.telemetry = telemetry
+        self.vertical_motion = bool(vertical_motion)
         self.motion = motion
         self.lane_reference_provider = lane_reference_provider
         self.collision_backoff_m = float(collision_backoff_m)
@@ -243,6 +245,7 @@ class FreeNavigationContinuous:
             items=window.queue.items,
             planning_calls=self.planning_calls,
             path_length_m=self.path_length_m,
+            vertical_motion=self.vertical_motion,
         )
 
     def _check_progress(self, window, progress_m, progress_at):

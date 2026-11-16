@@ -255,6 +255,7 @@ def build_vehicle_arm(
         stream_waypoint_timeout_s=60.0,
         continuous_tracking=config.continuous,
         telemetry=telemetry,
+        vertical_motion=is_drone,
     )
     basic = BasicMotionWorkflow(
         vehicle,
@@ -302,6 +303,7 @@ def build_vehicle_arm(
             continuous_tracking=config.continuous,
             lane_reference_provider=None,
             telemetry=telemetry,
+            vertical_motion=is_drone,
         )
         workflows[TaskKind.FREE_NAVIGATION] = free
         stage_validators[TaskKind.FREE_NAVIGATION] = FreeNavigationStageValidator()

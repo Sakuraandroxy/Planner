@@ -1,5 +1,6 @@
 import json
 import math
+from dataclasses import asdict
 
 import pytest
 
@@ -13,6 +14,8 @@ from planner.domain.trajectory_telemetry import (
     MODE_PENDING,
     QueueSnapshot,
     TrajectorySnapshot,
+    snapshot_from_payload,
+    snapshot_to_payload,
 )
 from planner.services.trajectory_hub import TrajectoryHub
 
@@ -25,6 +28,50 @@ def _items():
             5, WorldPose(3.0, 4.0, 0.0, 90.0), WorldPose(6.0, 4.0, 0.0, 90.0), 0.0
         ),
     )
+
+
+def test_publish_queue_reports_whether_the_vehicle_can_change_height():
+    hub = TrajectoryHub(clock=lambda: 1.0)
+    ground = hub.publish_queue(
+        instruction="drive to the car",
+        stage_id="stage_1",
+        mode=MODE_CONTINUOUS,
+        capacity=10,
+        pose=WorldPose(0.0, 0.0, 0.0, 0.0),
+        items=_items(),
+        planning_calls=1,
+        path_length_m=5.0,
+        vertical_motion=False,
+    )
+    assert ground.vertical_motion is False
+    assert json.loads(json.dumps(asdict(ground)))["vertical_motion"] is False
+    airborne = hub.publish_queue(
+        instruction="fly to the car",
+        stage_id="stage_1",
+        mode=MODE_CONTINUOUS,
+        capacity=10,
+        pose=WorldPose(0.0, 0.0, 0.0, 0.0),
+        items=_items(),
+        planning_calls=2,
+        path_length_m=5.0,
+    )
+    assert airborne.vertical_motion is True
+
+
+def test_snapshot_payload_carries_the_height_flag_across_the_worker_channel():
+    hub = TrajectoryHub(clock=lambda: 2.0)
+    snapshot = hub.publish_queue(
+        instruction="drive to the car",
+        stage_id="stage_1",
+        mode=MODE_CONTINUOUS,
+        capacity=10,
+        pose=WorldPose(0.0, 0.0, 0.0, 0.0),
+        items=_items(),
+        planning_calls=1,
+        path_length_m=5.0,
+        vertical_motion=False,
+    )
+    assert snapshot_from_payload(snapshot_to_payload(snapshot)).vertical_motion is False
 
 
 def test_publish_queue_describes_remaining_points_without_owner_access():

@@ -21,7 +21,8 @@ from .termination import VisualGoalFailure
 class VisualGoalContinuous:
     def __init__(self, execution, moving_source, limits, motion_limits, speed_mps, observer, geometry,
                  completion, flight, capture_stopped, search, clock, sleep, event, waypoint_timeout_s=60., *,
-                 target_updates=None, tracking_settings=ContinuousTrackingSettings(), telemetry=None):
+                 target_updates=None, tracking_settings=ContinuousTrackingSettings(), telemetry=None,
+                 vertical_motion: bool = True):
         self.execution, self.limits, self.completion = execution, limits, completion
         self.flight, self.capture_stopped, self.search = flight, capture_stopped, search
         self.clock, self.sleep, self.event = clock, sleep, event
@@ -32,6 +33,7 @@ class VisualGoalContinuous:
         self.targets = target_updates if target_updates is not None else VisualGoalRefresh(observer, geometry, limits, clock, event)
         self.owns_targets = target_updates is None
         self.telemetry = telemetry
+        self.vertical_motion = bool(vertical_motion)
 
     def prepare(self):
         if not all(callable(getattr(self.execution.vehicle, name, None))
@@ -109,6 +111,7 @@ class VisualGoalContinuous:
             items=session.window.queue.items,
             planning_calls=session.policy.planning_calls,
             path_length_m=session.path_length_m,
+            vertical_motion=self.vertical_motion,
         )
 
     def _pause_reason(self, session, pose):

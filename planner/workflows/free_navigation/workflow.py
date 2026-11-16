@@ -74,6 +74,7 @@ class FreeNavigationWorkflow:
         continuous_tracking: ContinuousTrackingSettings = ContinuousTrackingSettings(),
         lane_reference_provider=None,
         telemetry=None,
+        vertical_motion: bool = True,
     ):
         if (
             isinstance(model_request_timeout_s, bool)
@@ -119,6 +120,7 @@ class FreeNavigationWorkflow:
         self.model_request_timeout_s = float(model_request_timeout_s)
         self.max_consecutive_stalls = max_consecutive_stalls
         self.telemetry = telemetry
+        self.vertical_motion = bool(vertical_motion)
         self.lane_reference_provider = lane_reference_provider
         self.model_calls = ModelCallService(clock)
         self._closed = False
@@ -160,6 +162,7 @@ class FreeNavigationWorkflow:
                 tracking_settings=continuous_tracking,
                 lane_reference_provider=lane_reference_provider,
                 telemetry=telemetry,
+                vertical_motion=self.vertical_motion,
             )
 
     def prepare(self) -> None:

@@ -68,7 +68,7 @@ class VisualGoalNavigationWorkflow:
                  moving_observation_source: MovingObservationSource | None = None, stream_speed_mps: float = 2.0,
                  stream_waypoint_timeout_s: float = 60.0,
                  continuous_tracking: ContinuousTrackingSettings = ContinuousTrackingSettings(),
-                 telemetry=None):
+                 telemetry=None, vertical_motion: bool = True):
         self.source, self.goal_observer, self.planner = observation_source, goal_observer, trajectory_planner
         self.validator, self.motion, self.execution = validator, motion_planner, execution
         self.geometry, self.completion, self.limits = geometry, completion, limits
@@ -79,6 +79,7 @@ class VisualGoalNavigationWorkflow:
         self.target_updates = VisualGoalRefresh(goal_observer, geometry, limits, clock, self._event)
         self._closed = False
         self.telemetry = telemetry
+        self.vertical_motion = bool(vertical_motion)
         self.window = (PlanningWindow(trajectory_planner, validator, sliding_window, motion_limits, clock)
                        if sliding_window.enabled else None)
         self.verification = VisualGoalVerification(completion_checker, clock) if completion_checker is not None else None
@@ -95,7 +96,7 @@ class VisualGoalNavigationWorkflow:
                 motion_limits, stream_speed_mps, goal_observer, geometry, completion, self.flight,
                 self._capture, self._search, clock, sleep, self._event, stream_waypoint_timeout_s,
                 target_updates=self.target_updates, tracking_settings=continuous_tracking,
-                telemetry=telemetry)
+                telemetry=telemetry, vertical_motion=self.vertical_motion)
 
     def prepare(self) -> None:
         if self._closed:
@@ -244,6 +245,7 @@ class VisualGoalNavigationWorkflow:
             items=session.window.queue.items,
             planning_calls=session.policy.planning_calls,
             path_length_m=session.path_length_m,
+            vertical_motion=self.vertical_motion,
         )
 
     def _settle_completed_calls(self, session):

@@ -53,6 +53,8 @@ class TrajectorySnapshot:
     instruction: str = ""
     stage_id: str | None = None
     mode: str = MODE_IDLE
+    #: 载具能否改变高度。前端据此隐藏 dz：车只能在地面上走。
+    vertical_motion: bool = True
     queue: QueueSnapshot = QueueSnapshot(0, 0)
     vehicle: VehicleSnapshot | None = None
     planning_calls: int = 0
@@ -79,6 +81,7 @@ def snapshot_to_payload(snapshot: TrajectorySnapshot) -> dict:
         "instruction": snapshot.instruction,
         "stage_id": snapshot.stage_id,
         "mode": snapshot.mode,
+        "vertical_motion": bool(snapshot.vertical_motion),
         "queue": {"count": snapshot.queue.count, "capacity": snapshot.queue.capacity},
         "vehicle": (
             None
@@ -123,6 +126,7 @@ def snapshot_from_payload(payload: dict) -> TrajectorySnapshot:
             instruction=str(payload["instruction"]),
             stage_id=payload.get("stage_id"),
             mode=str(payload["mode"]),
+            vertical_motion=bool(payload.get("vertical_motion", True)),
             queue=QueueSnapshot(
                 int(payload["queue"]["count"]), int(payload["queue"]["capacity"])
             ),
@@ -169,6 +173,7 @@ def build_queue_snapshot(
     planning_calls: int,
     path_length_m: float,
     clock,
+    vertical_motion: bool = True,
 ) -> TrajectorySnapshot:
     """Describe the remaining queue in world coordinates.
 
@@ -199,6 +204,7 @@ def build_queue_snapshot(
         instruction=instruction,
         stage_id=stage_id,
         mode=mode,
+        vertical_motion=vertical_motion,
         queue=QueueSnapshot(len(points), int(capacity)),
         vehicle=vehicle_snapshot(pose),
         planning_calls=int(planning_calls),
