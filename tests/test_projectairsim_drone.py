@@ -296,7 +296,7 @@ class FakeConnection:
         self.robot.advance(float(delta_s))
 
 
-def make_drone(**robot_settings):
+def make_drone(*, drone_climb_m=0.0, **robot_settings):
     robot = FakeRobot()
     for name, value in robot_settings.items():
         setattr(robot, name, value)
@@ -308,6 +308,7 @@ def make_drone(**robot_settings):
         camera=CAMERA,
         depth=DepthSettings(),
         camera_id="FrontCamera",
+        takeoff_climb_m=drone_climb_m,
         clock=clock,
         sleep=clock.sleep,
     )
@@ -727,4 +728,23 @@ def test_teleport_moves_the_drone_without_a_touchdown_sequence():
     assert actor_payload["object_name"] == "Drone1"
     assert actor_payload["pose"] == payload["pose"]
     assert actor_payload["teleport"] is True
+    drone.close()
+
+
+def test_prepare_climbs_the_configured_height_after_the_native_takeoff():
+    drone, _, robot, _ = make_drone(drone_climb_m=2.0)
+    drone.start()
+    drone.prepare(takeoff_if_landed=True)
+    # Native takeoff frees the vehicle from the ground; the extra climb is ours.
+    assert GROUND_Z - robot.z == pytest.approx(robot.takeoff_climb_m + 2.0, abs=0.3)
+    drone.close()
+
+
+def test_prepare_does_not_climb_again_when_the_vehicle_is_already_airborne():
+    drone, _, robot, _ = make_drone(
+        drone_climb_m=2.0, landed=int(LandedState.FLYING), z=GROUND_Z - 5.0
+    )
+    drone.start()
+    drone.prepare(takeoff_if_landed=True)
+    assert GROUND_Z - robot.z == pytest.approx(5.0, abs=0.3)
     drone.close()

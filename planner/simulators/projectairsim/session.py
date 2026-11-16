@@ -182,6 +182,7 @@ class ProjectAirSimMissionSession:
                 readiness_poll_interval_s=(
                     config.drone.readiness_poll_interval_s
                 ),
+                takeoff_climb_m=config.drone.takeoff_climb_m,
                 motion=config.motion,
                 tracking=config.continuous,
                 frame_sink=self._sink,

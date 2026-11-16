@@ -578,3 +578,10 @@ def test_heading_settings_fall_back_to_the_values_the_flight_was_tuned_with(tmp_
     assert motion.heading_hold_gain == pytest.approx(0.4)
     assert motion.heading_rate_damping == pytest.approx(0.0)
 
+
+def test_drone_takeoff_climb_is_configured_and_cannot_be_negative(tmp_path):
+    path = _write(tmp_path, {"drone": {"takeoff_climb_m": 3.5}})
+    assert load_config(path).drone.takeoff_climb_m == pytest.approx(3.5)
+    assert load_config(_write(tmp_path, {})).drone.takeoff_climb_m == pytest.approx(1.0)
+    with pytest.raises(ValueError, match="takeoff_climb_m"):
+        load_config(_write(tmp_path, {"drone": {"takeoff_climb_m": -1.0}}))

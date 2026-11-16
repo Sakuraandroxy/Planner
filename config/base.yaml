@@ -106,6 +106,9 @@ drone:
   # 起飞前等待状态稳定（时间戳推进且静止）的持续时间与轮询间隔，单位秒。
   readiness_stable_s: 2.0
   readiness_poll_interval_s: 0.25
+  # 原生 takeoff 只把飞机抬离地面一点，这里补上到作业高度的差额，单位米。
+  # 两边仿真器都在起飞后用它做一次定高爬升；取零表示不补。
+  takeoff_climb_m: 1.0
   # 前视相机相对机体原点的安装位置（前、右、下，米）与姿态（度）。
   # 与 robot_drone_flight.jsonc 的 FrontCamera origin/rpy 一致。
   camera_offset_m: [1.0, 0.0, 0.0]

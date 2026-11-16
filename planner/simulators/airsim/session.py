@@ -90,6 +90,7 @@ class AirSimMissionSession:
             readiness_poll_interval_s=config.drone.readiness_poll_interval_s,
             speed_mps=config.drone.speed_mps,
             tracking=config.continuous,
+            takeoff_climb_m=config.drone.takeoff_climb_m,
         )
         control = self.server.control
 

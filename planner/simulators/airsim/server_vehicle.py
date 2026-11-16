@@ -22,9 +22,10 @@ class ServerVehicle:
     def __init__(self, connection, limits, timeout_s, *, readiness_stable_s=2.,
                  readiness_poll_interval_s=.25,
                  speed_mps=2., tracking=ContinuousTrackingSettings(),
-                 velocity_command_duration_s=.2,
+                 velocity_command_duration_s=.2, takeoff_climb_m=0.,
                  clock=time.monotonic, sleep=time.sleep):
         self.connection, self.limits, self.timeout_s = connection, limits, timeout_s
+        self._takeoff_climb_m = float(takeoff_climb_m)
         self.readiness_stable_s = readiness_stable_s
         self.readiness_poll_interval_s = readiness_poll_interval_s
         self.clock, self.sleep = clock, sleep
@@ -106,12 +107,26 @@ class ServerVehicle:
                 if takeoff_error is not None:
                     logger.warning("Native takeoff was not confirmed; measured climb exists. Position hold must confirm readiness.")
             self.hold(require_airborne=True)
+            if landed:
+                self.climb_after_takeoff()
         else:
             self._ping()
             # Reusing enabled API control must not reset the SimpleFlight goal.
             # Airborne stop/cleanup never arms or initiates another takeoff.
             self.connection.prepare_vehicle(arm=False)
             self.hold(require_airborne=require_airborne)
+
+    def climb_after_takeoff(self):
+        """Climb the configured extra metres above the native takeoff height."""
+        extra = self._takeoff_climb_m
+        if extra <= 0:
+            return
+        pose = self.control.current_pose()
+        # NED z grows downward: a higher operating height is a smaller z.
+        self.holding.start(WorldPose(pose.x, pose.y, pose.z - extra, pose.yaw_deg))
+        self.holding.wait()
+        logger.info("Takeoff climb complete: extra=%.2fm z=%.2f",
+                    extra, self.control.current_pose().z)
 
     def hold(self, *, require_airborne: bool = True):
         import airsim

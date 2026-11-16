@@ -69,6 +69,7 @@ class ProjectAirSimDrone:
         land_timeout_s: float = 30.0,
         readiness_stable_s: float = 2.0,
         readiness_poll_interval_s: float = 0.25,
+        takeoff_climb_m: float = 0.0,
         motion: MotionLimits | None = None,
         tracking=None,
         frame_sink=None,
@@ -86,6 +87,7 @@ class ProjectAirSimDrone:
         self._land_settle_timeout_s = 5.0
         self._readiness_stable_s = float(readiness_stable_s)
         self._readiness_poll_interval_s = float(readiness_poll_interval_s)
+        self._takeoff_climb_m = float(takeoff_climb_m)
         self._clock = clock
         self._sleep = sleep
         self._tracking = tracking_limits(motion or MotionLimits())
@@ -191,6 +193,8 @@ class ProjectAirSimDrone:
                         "exists. Position hold must confirm readiness."
                     )
             self.hold(require_airborne=True)
+            if landed:
+                self._holding.climb_by(self._takeoff_climb_m)
         else:
             self.cancel()
             self.hold(require_airborne=require_airborne)

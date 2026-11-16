@@ -106,6 +106,9 @@ class DroneSettings:
     land_timeout_s: float = 30.0
     readiness_stable_s: float = 2.0
     readiness_poll_interval_s: float = 0.25
+    #: 原生起飞结束后再爬升的高度，米。原生 takeoff 只把飞机抬离地面一点，
+    #: 视觉任务需要更高的作业高度，这一项补上差额；取零表示不补。
+    takeoff_climb_m: float = 1.0
     # FrontCamera mount in the body frame (forward, right, down; metres) and
     # its NED roll/pitch/yaw orientation. The reference UAV mount is level and
     # one metre ahead of the body origin.
@@ -128,15 +131,15 @@ class DroneSettings:
                 or value <= 0
             ):
                 raise ValueError(f"drone.{name} must be finite and positive")
-        if (
-            isinstance(self.readiness_stable_s, bool)
-            or not isinstance(self.readiness_stable_s, (int, float))
-            or not math.isfinite(self.readiness_stable_s)
-            or self.readiness_stable_s < 0
-        ):
-            raise ValueError(
-                "drone.readiness_stable_s must be finite and non-negative"
-            )
+        for name in ("readiness_stable_s", "takeoff_climb_m"):
+            value = getattr(self, name)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value < 0
+            ):
+                raise ValueError(f"drone.{name} must be finite and non-negative")
         for name in ("camera_offset_m", "camera_mount_rpy_deg"):
             values = getattr(self, name)
             if len(values) != 3 or not all(
@@ -1062,6 +1065,7 @@ def load_config(path: str | Path) -> AppConfig:
         readiness_poll_interval_s=float(
             drone_raw.get("readiness_poll_interval_s", 0.25)
         ),
+        takeoff_climb_m=float(drone_raw.get("takeoff_climb_m", 1.0)),
         camera_offset_m=drone_offset,
         camera_mount_rpy_deg=drone_mount,
     )

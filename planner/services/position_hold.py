@@ -155,3 +155,18 @@ class PositionHold:
                 return
             self.sleep(max(.001,1/self.limits.control_hz-(self.clock()-tick_started)))
         raise ExecutionError("position hold did not stabilize before the motion timeout")
+
+    def climb_by(self, metres: float) -> None:
+        """Hold the current position shifted up by ``metres``.
+
+        The native takeoff only frees the vehicle from the ground; the operating
+        height comes from this climb, under the same hold the rest of the flight
+        uses. NED z grows downward, so a higher hold is a smaller z.
+        """
+        extra = float(metres)
+        if extra <= 0:
+            return
+        pose = self.vehicle.stream_state().pose
+        self.start(WorldPose(pose.x, pose.y, pose.z-extra, pose.yaw_deg))
+        self.wait()
+        logger.info("Takeoff climb complete: extra=%.2fm z=%.2f", extra, self.state.pose.z)
