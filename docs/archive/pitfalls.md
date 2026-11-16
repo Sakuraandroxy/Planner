@@ -136,22 +136,21 @@ CityEnviron 与 AirSimNH 两个打包产物不写日志文件，`-log` 也不往
 换成 `visual_goal_navigation`（连续跟踪）后飞行中横滚 ±7°、俯仰峰峰 27.6°，画面明显晃。
 
 根因：运动取帧走的是控制回路那条连接。`capture_moving` 跑在 worker 线程上，
-而 `AirSimConnection.call` 全程持锁，这台机器上 `simGetImages`（1280×720 PNG + 256×144 深度浮点）
-持锁 0.4~0.5 秒。控制拍被拖长后，0.2 秒的速度指令在空档里过期，AirSim 让飞机自己刹车，
-下一拍再加速——每个规划轮一次。
+而 `AirSimConnection.call` 全程持锁，
+这台机器上 `simGetImages`（1280×720 PNG + 256×144 深度浮点）持锁 0.4~0.5 秒。控制拍被拖长后，
+0.2 秒的速度指令在空档里过期，AirSim 让飞机自己刹车，下一拍再加速——每个规划轮一次。
 
-量化证据（一次 66 秒的规划器飞行，`control_samples.csv`）：控制拍 16 次达到 0.41~0.54 秒
-（正常 0.05 秒），roll 峰峰 16.9°、pitch 峰峰 27.6°，命令速度在 0.6~3.6 m/s 之间摆动；
+量化证据（一次 66 秒的规划器飞行，`control_samples.csv`）：控制拍 16 次达到 0.41~0.54 秒（正常 0.05 秒），
+roll 峰峰 16.9°、pitch 峰峰 27.6°，命令速度在 0.6~3.6 m/s 之间摆动；
 同一份数据里 `basic_motion` 那一段 roll 恒为 0。
 
-为什么只有 UE4：UE5 的画面走 msgpack 主题订阅，不占控制 RPC；而且它的时钟是暂停的，
-回路被挡住时仿真不前进，指令不会过期。
+为什么只有 UE4：UE5 的画面走 msgpack 主题订阅，不占控制 RPC；而且它的时钟是暂停的，回路被挡住时仿真不前进，
+指令不会过期。
 
-处理：运动取帧改用独立只读传输，照 `origin/low-altitude-level-view-visual-goal-navigation`
-里 `visual_goal_bootstrap.py` 的接法（那里写着 "Dedicated read-only transport: it receives no
-controller or gate"）。`tests/test_airsim_session.py` 的
-`test_moving_capture_does_not_share_the_control_transport` 守住。
-诊断口径：新一次飞行后看 `dt_s` 是否还有 0.4 秒尖峰。
+处理：运动取帧改用独立只读传输，
+照 `origin/low-altitude-level-view-visual-goal-navigation` 里 `visual_goal_bootstrap.py` 的接法（那里写着 "Dedicated read-only transport: it receives no controller or gate"）。
+`tests/test_airsim_session.py` 的 `test_moving_capture_does_not_share_the_control_transport` 守住。诊断口径：
+新一次飞行后看 `dt_s` 是否还有 0.4 秒尖峰。
 
 ### 路面与自身接触被当成碰撞
 
@@ -176,10 +175,29 @@ controller or gate"）。`tests/test_airsim_session.py` 的
 同一进程里连第二张图前必须先 `connection.close()`；只调 `client.disconnect()` 会留下活动连接，
 下一张图报 `another ProjectAirSim connection is active`。
 
-### 场景时钟暂停，不推进就没有新帧
+### 加载阶段必须暂停时钟
 
-双载具场景 `pause-on-start: true`，`World` 是可步进的。`switch_streaming_view` 只在渲染帧上生效，
-任何"等画面"的循环都要继续推进时钟，否则画面停在切换前。
+双载具场景 `pause-on-start: true`：不暂停的话，加载期间物理就在跑，无人机从 38 m 掉下来，
+四机位标定也会错乱（`docs/PLAN.md` M8 补充 11 记录了现象）。
+
+早期版本把暂停一路延续到整个会话，靠 `advance_for_sim_time` 一步一步推时钟。后果是画面刷新率等于推时钟的频率：
+业务线程一忙（模型请求约 1 秒、日志、编码）画面就冻；引擎每步还要渲染 3 帧再交还控制权，
+GPU 一忙就掉到 10 帧左右。现在只在加载阶段暂停，载具就位后交给引擎自己跑，
+`advance_for_sim_time` 变成"等时钟走够"。`resume_clock()` 会实测时钟是否真的自己走，不走就回落到步进模式。
+
+### 停稳观测在滑行途中就拍了
+
+现象：飞到目标附近后报 `Mission failed: perception_unreliable: observation anchor repeatedly stale/drifting`。
+
+根因：急停触发时无人机还在 5 m/s 飞，位置保持的参考点是触发那一刻的位姿，机身还要滑几米；
+而 UE5 的观测源把 `stopped=True` 写死返回，从不校验机身是否真的停稳。拍照后跑模型判定约 1 秒，
+这一秒里机身还在动，锚点校验（位移 0.3 m、偏航 2°）自然不过。
+
+以前没暴露是因为世界是暂停的：判定那一秒时钟不动，机身也就不动，锚点恒定通过。
+时序改成自由跑之后，这个假象没了。
+
+改法：UE5 的 `capture()` 在取帧前先让位置保持确认 `observable`，与 UE4 观测闸门对齐。
+另外锚点失败的事件现在带 `detail`，直接写清是位移、偏航还是时长超界，差多少。
 
 ### 隐藏载具的横向传送把无人机嵌进墙里
 

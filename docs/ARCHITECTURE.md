@@ -289,4 +289,30 @@ Xvfb 由 xpra 自己拉起。
 | 非活动载具被抬到 1 km 并钉住 | 客户端没有运行时删除机器人的接口 |
 | UE5 不做自由观察者、UE4 不做帧流 | 端口不同，能力位自动反映 |
 | `free_navigation` 没有完成条件 | 任务定义就是无界的 |
+
+## 11 运动与航向控制
+
+航向律只有一份：`planner/services/motion/heading_servo.py`。输入是偏航误差、实测偏航角速度与几个参数，
+输出一个角速度。它不限幅到具体载具，也不认识仿真器。
+
+三处调用对应三种运动阶段：
+
+| 阶段 | 调用点 | 前馈 |
+|---|---|---|
+| 连续跟进 | `services/motion/continuous.py` | 路径给出的参考角速度 |
+| 段式运动 | `simulators/projectairsim/motion.py`、`simulators/airsim/motion_tracker.py` | 参考轨迹自带的角速度 |
+| 位置保持 | `services/position_hold.py` | 无 |
+
+误差大时用刹车曲线收缩上限，误差与角速度同时小于死区时输出零。阻尼项乘的是**实测**角速度，不是位姿差分：
+差分噪声会被负反馈直接放大成指令（见 `archive/measurements.md`）。
+
+载具差异只在参数，而参数现在只有一份：`config/base.yaml` 的 `motion` 段。
+`heading_hold_gain` 只作用于位置保持，与飞行路径的 `yaw_gain` 分开：执行链延迟越大，保持环的增益就必须越低，
+两者对应的对象不同。
+
+实测角速度取自引擎真值：UE5 读 `twist.angular.z`，UE4 读 `KinematicsState.angular_velocity`，
+都经 `TimedVehicleState.yaw_rate_deg_s` 进入服务层。字段缺失时为 `None`，伺服退回只依赖刹车曲线。
+
+停稳观测也要等真的停稳。UE5 的 `capture()` 在取帧前先让位置保持确认 `observable`，UE4 用观测闸门做同一件事；
+没有这一步，滑行途中拍的图片会被锚点校验判为过期。
 | 模型端点是硬依赖 | 解析、检测、规划、完成判定都没有确定性回退 |
