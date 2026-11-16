@@ -19,6 +19,7 @@ class _Connection:
         self.z, self.landed_state = z, landed_state
         self.calls: list[str] = []
         self.timestamp = 0
+        self.angular_velocity_z = 0.0
 
     def call(self, name, *args, **kwargs):
         self.calls.append(name)
@@ -33,7 +34,9 @@ class _Connection:
                     position=types.SimpleNamespace(x_val=0.0, y_val=0.0, z_val=self.z),
                     orientation=quat,
                     linear_velocity=zero,
-                    angular_velocity=zero,
+                    angular_velocity=types.SimpleNamespace(
+                        x_val=0.0, y_val=0.0, z_val=self.angular_velocity_z
+                    ),
                 ),
             )
         return True
@@ -120,3 +123,15 @@ def test_without_a_ground_reference_the_old_behaviour_stands():
     connection, vehicle = _vehicle(z=0.68, landed_state=1)
     vehicle.prepare(takeoff_if_landed=True)
     assert "takeoff" not in connection.calls, connection.calls
+
+
+def test_stream_state_reports_the_measured_yaw_rate():
+    """AirSim answers body-frame angular velocity in rad/s; the hold needs deg/s."""
+    import math
+
+    connection, vehicle = _vehicle(z=0.68, landed_state=1)
+    state = vehicle.control.stream_state()
+    assert state.yaw_rate_deg_s == pytest.approx(0.0)
+    connection.angular_velocity_z = 0.5
+    state = vehicle.control.stream_state()
+    assert state.yaw_rate_deg_s == pytest.approx(math.degrees(0.5))

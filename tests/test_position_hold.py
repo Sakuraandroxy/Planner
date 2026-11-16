@@ -1,4 +1,5 @@
 import threading
+from dataclasses import replace
 
 import pytest
 
@@ -19,6 +20,10 @@ LIMITS = MotionLimits(
     stopped_yaw_rate_deg_s=2.0,
     settle_time_s=0.1,
     min_duration_s=0.2,
+    heading_hold_gain=2.0,
+    heading_rate_damping=0.6,
+    heading_deadband_deg=0.5,
+    heading_rate_deadband_dps=1.5,
 )
 TRACKING = ContinuousTrackingSettings()
 
@@ -37,18 +42,20 @@ class FakeClock:
 class HoldVehicle:
     """Apply each hold command for its duration and advance the sim clock."""
 
-    def __init__(self, pose, clock, *, apply=True):
+    def __init__(self, pose, clock, *, apply=True, yaw_rate_deg_s=0.0):
         self.pose = pose
         self.clock = clock
         self.apply = apply
         self.timestamp_ns = 1_000_000
         self.velocity = (0.0, 0.0, 0.0)
+        self.yaw_rate_deg_s = yaw_rate_deg_s
         self.commands = []
         self.cancels = 0
 
     def stream_state(self):
         return TimedVehicleState(
-            self.pose, self.timestamp_ns, self.clock(), self.velocity
+            self.pose, self.timestamp_ns, self.clock(), self.velocity,
+            yaw_rate_deg_s=self.yaw_rate_deg_s,
         )
 
     def cancel(self):
@@ -155,3 +162,46 @@ def test_approach_target_reserves_braking_distance():
     handoff = hold.approach_target(start, WorldPose(100.0, 0.0, 0.0, 0.0))
     assert handoff is not None
     assert 0.0 < handoff.x < 100.0
+
+def _settled_yaw_command(yaw_rate_deg_s, ticks=200):
+    """Yaw command after the smoother settles, with the pose held still."""
+    clock = FakeClock()
+    vehicle = HoldVehicle(
+        WorldPose(0.0, 0.0, -3.0, 10.0), clock, apply=False, yaw_rate_deg_s=yaw_rate_deg_s
+    )
+    hold = build(vehicle, clock)
+    # 目标固定比当前朝向多 10°；车身不动，误差因此一直存在。
+    hold.start(WorldPose(0.0, 0.0, -3.0, 20.0))
+    for _ in range(ticks):
+        clock.sleep(1 / LIMITS.control_hz)
+        hold.tick()
+    return vehicle.commands[-1][1]
+
+
+def test_hold_damps_the_yaw_command_with_the_measured_rate():
+    still = _settled_yaw_command(0.0)
+    turning = _settled_yaw_command(5.0)
+    assert still > 10.0
+    assert turning == pytest.approx(still - 0.6 * 5.0, abs=0.1)
+
+
+def test_hold_stops_correcting_inside_the_heading_deadband():
+    clock = FakeClock()
+    vehicle = HoldVehicle(WorldPose(0.0, 0.0, -3.0, 0.2), clock)
+    hold = build(vehicle, clock)
+    hold.start()
+    hold.tick()
+    assert vehicle.commands[0][1] == 0.0
+
+
+def test_hold_uses_its_own_gain_not_the_flight_path_gain():
+    """The hold faces a fixed angle, so its gain is tuned apart from ``yaw_gain``."""
+    clock = FakeClock()
+    vehicle = HoldVehicle(WorldPose(0.0, 0.0, -3.0, 10.0), clock, apply=False)
+    limits = replace(LIMITS, yaw_gain=2.0, heading_hold_gain=0.4, heading_rate_damping=0.0)
+    hold = PositionHold(vehicle, limits, TRACKING, 2.0, 5.0, clock=clock, sleep=clock.sleep)
+    hold.start(WorldPose(0.0, 0.0, -3.0, 20.0))
+    for _ in range(200):
+        clock.sleep(1 / limits.control_hz)
+        hold.tick()
+    assert vehicle.commands[-1][1] == pytest.approx(0.4 * 10.0, abs=0.1)

@@ -174,3 +174,33 @@ def attitude_deg_from_kinematics(
     pitch = math.degrees(math.asin(max(-1.0, min(1.0, -rotation[2, 0]))))
     roll = math.degrees(math.atan2(rotation[2, 1], rotation[2, 2]))
     return roll, pitch, rotation_yaw_deg(rotation)
+
+def yaw_rate_deg_from_kinematics(kinematics: dict) -> float:
+    """Measured yaw rate in degrees per second.
+
+    ``GetGroundTruthKinematics`` returns ``twist.angular`` in rad/s. The z
+    component is the yaw rate for a vehicle whose body z-axis points down: a
+    level robot's body frame and the world frame share that axis, and a
+    roll/pitch tilt only leaks the other two components into it.
+    """
+    try:
+        rate = float(kinematics["twist"]["angular"]["z"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(
+            "kinematics response has no usable angular velocity"
+        ) from exc
+    return math.degrees(rate)
+
+
+def velocity_from_kinematics(kinematics: dict) -> tuple[float, float, float]:
+    """World-frame velocity in metres per second.
+
+    The response carries ``twist.linear`` in the same NED frame as the pose.
+    Differencing consecutive poses gave a noisy velocity, and the position hold
+    multiplies that noise into every command it sends.
+    """
+    try:
+        linear = kinematics["twist"]["linear"]
+        return (float(linear["x"]), float(linear["y"]), float(linear["z"]))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("kinematics response has no usable linear velocity") from exc

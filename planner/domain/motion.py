@@ -50,12 +50,35 @@ class MotionLimits:
     stopped_yaw_rate_deg_s: float = 2.0
     settle_time_s: float = 0.3
     min_duration_s: float = 1.0
+    #: 位置保持的航向比例增益。与 ``yaw_gain`` 分开是因为两者面对的对象不同：
+    #: 飞行路径跟踪一个有前馈的参考，保持环只对着一个固定角度，后者对执行链
+    #: 延迟更敏感（执行链实测见 ``docs/archive/measurements.md`` 的「偏航执行链」）。
+    heading_hold_gain: float = 0.4
+    #: 航向阻尼系数，乘以实测偏航角速度后从指令中扣除，抵消执行器滞后。
+    #: 执行链延迟超过 90° 相位时它会变成助推，那种情况下应当取零。
+    heading_rate_damping: float = 0.0
+    #: 航向死区，误差与实测角速度都小于阈值时不再输出指令。
+    heading_deadband_deg: float = 0.5
+    heading_rate_deadband_dps: float = 1.5
+
+    #: 允许取零的参数：零表示关掉该项，其余参数必须为正。
+    OPTIONAL = frozenset(
+        {"heading_rate_damping", "heading_deadband_deg", "heading_rate_deadband_dps"}
+    )
 
     def __post_init__(self):
         for field in fields(self):
             value = getattr(self, field.name)
-            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
-                raise ValueError(f"motion.{field.name} must be finite and positive")
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+            ):
+                raise ValueError(f"motion.{field.name} must be finite numeric")
+            if value < 0:
+                raise ValueError(f"motion.{field.name} must be non-negative")
+            if value == 0 and field.name not in self.OPTIONAL:
+                raise ValueError(f"motion.{field.name} must be positive")
         if not 1 <= self.control_hz <= 50:
             raise ValueError("motion.control_hz must be between 1 and 50")
 

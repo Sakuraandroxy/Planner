@@ -22,7 +22,11 @@ from ...errors import ExecutionError
 from ...services.segment_motion import MotionLimits
 from .collision import CollisionEvent, CollisionMonitor
 from .connection import ProjectAirSimConnection
-from .coordinates import pose_from_kinematics
+from .coordinates import (
+    pose_from_kinematics,
+    velocity_from_kinematics,
+    yaw_rate_deg_from_kinematics,
+)
 from .drive import (
     RoverDriveModel,
     RoverControls,
@@ -61,11 +65,15 @@ class ProjectAirSimRover:
         motion_timeout_s: float = 60.0,
         drive_model: RoverDriveModel = RoverDriveModel(),
         frame_sink=None,
+        tracking=None,
     ):
+        from ...domain.motion import ContinuousTrackingSettings
+
         self._connection = connection
         self._robot = robot
         self._motion = motion or MotionLimits()
         self._tracking = tracking_limits(self._motion)
+        self._hold_tracking = tracking or ContinuousTrackingSettings()
         self._drive_model = drive_model
         self._pid = SpeedPid(drive_model)
         self._period = 1.0 / self._tracking.control_hz
@@ -85,8 +93,6 @@ class ProjectAirSimRover:
             ignored_names=(robot.name,),
         )
         self._collisions.start()
-        self._stream_pose: WorldPose | None = None
-        self._stream_ns = 0
         self._last_collision: CollisionEvent | None = None
         # Home pose used by ``return_home``. The raw spawn pose read here can
         # be above the rendered resting pose, so the session replaces it with
@@ -98,6 +104,7 @@ class ProjectAirSimRover:
             self._tracking,
             motion_timeout_s,
             cancelled=self._cancel.is_set,
+            tracking=self._hold_tracking,
         )
 
     # -- lifecycle ---------------------------------------------------------
@@ -166,17 +173,14 @@ class ProjectAirSimRover:
         kinematics = self._kinematics()
         pose = pose_from_kinematics(kinematics)
         timestamp_ns = int(kinematics["time_stamp"])
-        previous, previous_ns = self._stream_pose, self._stream_ns
-        velocity = (0.0, 0.0, 0.0)
-        if previous is not None and timestamp_ns > previous_ns:
-            dt = (timestamp_ns - previous_ns) / 1e9
-            velocity = (
-                (pose.x - previous.x) / dt,
-                (pose.y - previous.y) / dt,
-                (pose.z - previous.z) / dt,
-            )
-        self._stream_pose, self._stream_ns = pose, timestamp_ns
-        return TimedVehicleState(pose, timestamp_ns, time.monotonic(), velocity)
+        velocity = velocity_from_kinematics(kinematics)
+        return TimedVehicleState(
+            pose,
+            timestamp_ns,
+            time.monotonic(),
+            velocity,
+            yaw_rate_deg_s=yaw_rate_deg_from_kinematics(kinematics),
+        )
 
     def stream_velocity(
         self,
@@ -287,7 +291,6 @@ class ProjectAirSimRover:
                     "teleport": True,
                 },
             )
-        self._stream_pose, self._stream_ns = None, 0
         self._pid.reset()
         self._collisions.clear()
 

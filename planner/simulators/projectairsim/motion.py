@@ -17,10 +17,11 @@ from dataclasses import replace
 from typing import Callable
 
 from ...domain.execution import ExecutionBudget, PoseCheckpoint
-from ...domain.motion import MotionLimits
+from ...domain.motion import ContinuousTrackingSettings, MotionLimits
 from ...domain.pose import WorldPose, resolve_yaw_delta_deg, wrap_yaw_deg
 from ...domain.trajectory import MotionSegment
 from ...errors import BudgetExceeded, ExecutionError, MotionPaused
+from ...services.motion.heading_servo import tracked_heading_rate_deg_s
 from ...services.motion.synchronized import duration_for, sample_segment
 
 #: ``drive(velocity_world, yaw_rate_deg_s, measured_velocity_world,
@@ -52,6 +53,7 @@ class SteppedMotionTracker:
         timeout_s: float,
         clock=time.monotonic,
         cancelled: Callable[[], bool] | None = None,
+        tracking: ContinuousTrackingSettings | None = None,
     ):
         self.drive = drive
         self.current_pose = current_pose
@@ -59,6 +61,7 @@ class SteppedMotionTracker:
         self.timeout_s = timeout_s
         self.clock = clock
         self.cancelled = cancelled or (lambda: False)
+        self.tracking = tracking or ContinuousTrackingSettings()
         self.period = 1 / limits.control_hz
 
     def execute(
@@ -186,18 +189,17 @@ class SteppedMotionTracker:
                 limits.max_acceleration_mps2 * period,
             )
             velocity = tuple(p + d for p, d in zip(last_velocity, change))
-            yaw_rate = reference.yaw_rate_deg_s + limits.yaw_gain * wrap_yaw_deg(
-                reference.pose.yaw_deg - actual.yaw_deg
-            )
-            if not math.isfinite(yaw_rate):
-                raise ExecutionError("non-finite yaw control command")
-            yaw_rate = max(
-                -limits.max_yaw_rate_deg_s,
-                min(limits.max_yaw_rate_deg_s, yaw_rate),
-            )
-            yaw_change = limits.max_yaw_acceleration_deg_s2 * period
-            yaw_rate = max(
-                last_yaw_rate - yaw_change, min(last_yaw_rate + yaw_change, yaw_rate)
+            # 这条路径拿不到实测偏航角速度（只读位姿），因此关闭阻尼项：
+            # 用位姿差分做阻尼会把抖动放大成指令。大误差的超调交给刹车曲线。
+            yaw_rate = tracked_heading_rate_deg_s(
+                reference.yaw_rate_deg_s,
+                wrap_yaw_deg(reference.pose.yaw_deg - actual.yaw_deg),
+                last_rate_dps=last_yaw_rate,
+                period_s=period,
+                gain=limits.yaw_gain,
+                maximum_rate_dps=limits.max_yaw_rate_deg_s,
+                acceleration_dps2=limits.max_yaw_acceleration_deg_s2,
+                jerk_dps3=self.tracking.max_yaw_jerk_deg_s3,
             )
             if not all(
                 math.isfinite(v) for v in (*velocity, yaw_rate, period)

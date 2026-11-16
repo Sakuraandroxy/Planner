@@ -554,3 +554,27 @@ def test_vehicle_models_are_parsed_with_scene_variants(tmp_path):
 def test_invalid_vehicle_models_are_rejected(tmp_path, section):
     with pytest.raises(ValueError):
         load_config(_write(tmp_path, {"vehicle_models": section}))
+
+
+def test_heading_settings_are_read_from_the_config_file(tmp_path):
+    path = _write(tmp_path, {
+        "motion": {
+            "max_speed_mps": 4.0,
+            "heading_hold_gain": 0.8,
+            "heading_deadband_deg": 0.7,
+        }
+    })
+    config = load_config(path)
+    assert config.motion.heading_hold_gain == pytest.approx(0.8)
+    assert config.motion.heading_deadband_deg == pytest.approx(0.7)
+    tracking = config.motion.to_tracking_limits()
+    assert tracking.heading_hold_gain == pytest.approx(0.8)
+
+
+def test_heading_settings_fall_back_to_the_values_the_flight_was_tuned_with(tmp_path):
+    """A config that omits the heading keys must get the validated pair."""
+    motion = load_config(_write(tmp_path, {})).motion
+
+    assert motion.heading_hold_gain == pytest.approx(0.4)
+    assert motion.heading_rate_damping == pytest.approx(0.0)
+

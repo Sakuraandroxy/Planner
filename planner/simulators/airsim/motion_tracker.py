@@ -6,11 +6,12 @@ from contextlib import nullcontext
 from dataclasses import replace
 from typing import Callable
 
-from planner.domain.motion import MotionLimits
+from planner.domain.motion import ContinuousTrackingSettings, MotionLimits
 from planner.domain.execution import ExecutionBudget, PoseCheckpoint
 from planner.domain.pose import WorldPose, wrap_yaw_deg, resolve_yaw_delta_deg
 from planner.domain.trajectory import MotionSegment
 from planner.errors import BudgetExceeded, ExecutionError, MotionPaused
+from planner.services.motion.heading_servo import tracked_heading_rate_deg_s
 from planner.services.motion.synchronized import duration_for, sample_segment
 
 logger = logging.getLogger(__name__)
@@ -28,13 +29,14 @@ def limit_vector(values, maximum):
 
 class AirSimMotionTracker:
     def __init__(self, connection, current_pose: Callable[[], WorldPose], limits: MotionLimits,
-                 timeout_s: float, clock=time.monotonic, sleep=time.sleep):
+                 timeout_s: float, clock=time.monotonic, sleep=time.sleep, tracking=None):
         self.connection = connection
         self.current_pose = current_pose
         self.limits = limits
         self.timeout_s = timeout_s
         self.clock = clock
         self.sleep = sleep
+        self.tracking = tracking or ContinuousTrackingSettings()
         self.observation_gate = None
 
     def execute(self, segment: MotionSegment, *, budget: ExecutionBudget | None = None,
@@ -127,12 +129,17 @@ class AirSimMotionTracker:
                 change = limit_vector(tuple(v-p for v, p in zip(desired, last_velocity)),
                                       limits.max_acceleration_mps2 * period)
                 velocity = tuple(p+d for p, d in zip(last_velocity, change))
-                yaw_rate = reference.yaw_rate_deg_s + limits.yaw_gain*wrap_yaw_deg(reference.pose.yaw_deg-actual.yaw_deg)
-                if not math.isfinite(yaw_rate):
-                    raise ExecutionError("non-finite yaw control command")
-                yaw_rate = max(-limits.max_yaw_rate_deg_s, min(limits.max_yaw_rate_deg_s, yaw_rate))
-                yaw_change = limits.max_yaw_acceleration_deg_s2 * period
-                yaw_rate = max(last_yaw_rate-yaw_change, min(last_yaw_rate+yaw_change, yaw_rate))
+                # 与 UE5 同一条律：刹车曲线压大误差，阻尼留待拿到实测角速度再接。
+                yaw_rate = tracked_heading_rate_deg_s(
+                    reference.yaw_rate_deg_s,
+                    wrap_yaw_deg(reference.pose.yaw_deg-actual.yaw_deg),
+                    last_rate_dps=last_yaw_rate,
+                    period_s=period,
+                    gain=limits.yaw_gain,
+                    maximum_rate_dps=limits.max_yaw_rate_deg_s,
+                    acceleration_dps2=limits.max_yaw_acceleration_deg_s2,
+                    jerk_dps3=self.tracking.max_yaw_jerk_deg_s3,
+                )
                 # World NED velocity + yaw RATE, not body-frame velocity or ForwardOnly.
                 # Serialize and drain each short RPC future; no cross-thread pending calls.
                 if not all(math.isfinite(v) for v in (*velocity, yaw_rate, period)):

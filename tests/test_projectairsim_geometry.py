@@ -223,3 +223,22 @@ def test_missing_depth_capture_setting_is_rejected():
             offset_m=(1.8, 0.0, 0.2),
             mount_rpy_deg=(0.0, -3.0, 0.0),
         )
+
+def test_yaw_rate_is_read_from_the_angular_twist_in_degrees():
+    import math
+
+    from planner.simulators.projectairsim.coordinates import yaw_rate_deg_from_kinematics
+
+    kinematics = {"twist": {"angular": {"x": 0.0, "y": 0.0, "z": -0.5}}}
+    assert yaw_rate_deg_from_kinematics(kinematics) == pytest.approx(math.degrees(-0.5))
+    with pytest.raises(ValueError, match="angular velocity"):
+        yaw_rate_deg_from_kinematics({"pose": {}})
+
+
+def test_velocity_is_read_from_the_linear_twist():
+    from planner.simulators.projectairsim.coordinates import velocity_from_kinematics
+
+    kinematics = {"twist": {"linear": {"x": 1.5, "y": -0.5, "z": 0.25}}}
+    assert velocity_from_kinematics(kinematics) == pytest.approx((1.5, -0.5, 0.25))
+    with pytest.raises(ValueError, match="linear velocity"):
+        velocity_from_kinematics({"pose": {}})

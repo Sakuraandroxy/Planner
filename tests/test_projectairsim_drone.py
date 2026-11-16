@@ -103,6 +103,8 @@ class FakeRobot:
         self.calls = []
         self.x, self.y, self.z = 10.0, 5.0, GROUND_Z
         self.roll_deg, self.pitch_deg, self.yaw_deg = 0.0, 0.0, 0.0
+        self.yaw_rate_deg_s = 0.0
+        self.velocity_world = (0.0, 0.0, 0.0)
         self.landed = int(LandedState.LANDED)
         self.takeoff_result = False
         self.takeoff_lands = False
@@ -241,6 +243,18 @@ class FakeRobot:
                     "x": sr * cp * cy - cr * sp * sy,
                     "y": cr * sp * cy + sr * cp * sy,
                     "z": cr * cp * sy - sr * sp * cy,
+                },
+            },
+            "twist": {
+                "linear": {
+                    "x": self.velocity_world[0],
+                    "y": self.velocity_world[1],
+                    "z": self.velocity_world[2],
+                },
+                "angular": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": math.radians(self.yaw_rate_deg_s),
                 },
             },
         }
@@ -523,19 +537,25 @@ def test_execute_segment_requires_api_control():
     drone.close()
 
 
-def test_stream_state_reports_attitude_and_finite_difference_velocity():
+def test_stream_state_reports_attitude_and_measured_velocity():
     drone, connection, robot, _ = make_drone()
     drone.start()
     robot.roll_deg, robot.pitch_deg, robot.yaw_deg = 10.0, -5.0, 45.0
+    robot.yaw_rate_deg_s = -12.5
+    robot.velocity_world = (1.5, -0.5, 0.25)
     state = drone.stream_state()
     assert state.pose.yaw_deg == pytest.approx(45.0)
     assert state.pitch_deg == pytest.approx(-5.0)
     assert state.roll_deg == pytest.approx(10.0)
-    assert state.velocity_world == (0.0, 0.0, 0.0)
+    # twist.angular.z is rad/s in the engine response and degrees/s here.
+    assert state.yaw_rate_deg_s == pytest.approx(-12.5)
+    # twist.linear is the measured world velocity, not a pose difference.
+    assert state.velocity_world == pytest.approx((1.5, -0.5, 0.25))
     connection.advance_for_sim_time(1.0)
     robot.x += 1.0
+    robot.velocity_world = (0.0, 0.0, 0.0)
     state = drone.stream_state()
-    assert state.velocity_world[0] == pytest.approx(1.0)
+    assert state.velocity_world == pytest.approx((0.0, 0.0, 0.0))
     drone.close()
 
 

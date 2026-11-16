@@ -25,7 +25,8 @@ ARRIVAL_TOLERANCE_DEG = 15.0
 
 class AirSimVehicle:
     def __init__(self, connection: AirSimConnection, speed_mps: float, timeout_s: float,
-                 motion_limits: MotionLimits | None = None, *, velocity_command_duration_s: float = .2):
+                 motion_limits: MotionLimits | None = None, *, velocity_command_duration_s: float = .2,
+                 tracking=None):
         self.connection = connection
         self.speed_mps = speed_mps
         self.timeout_s = timeout_s
@@ -33,6 +34,7 @@ class AirSimVehicle:
         self.velocity_command_duration_s = velocity_command_duration_s
         self.motion_tracker = AirSimMotionTracker(
             connection, self.current_pose, motion_limits or MotionLimits(), timeout_s,
+            tracking=tracking,
         )
 
     @property
@@ -199,7 +201,8 @@ class AirSimVehicle:
             int(state.timestamp), time.monotonic(), (v.x_val, v.y_val, v.z_val),
             math.degrees(math.asin(max(-1., min(1., 2*(q.w_val*q.y_val-q.z_val*q.x_val))))),
             math.degrees(math.atan2(2*(q.w_val*q.x_val+q.y_val*q.z_val),
-                                   1-2*(q.x_val*q.x_val+q.y_val*q.y_val))))
+                                   1-2*(q.x_val*q.x_val+q.y_val*q.y_val))),
+            yaw_rate_deg_s=math.degrees(k.angular_velocity.z_val))
 
     def stream_velocity(self, velocity_world, yaw_rate_deg_s, duration_s):
         if self.holding is not None:

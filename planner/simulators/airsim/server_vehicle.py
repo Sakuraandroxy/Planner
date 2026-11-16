@@ -29,7 +29,8 @@ class ServerVehicle:
         self.readiness_poll_interval_s = readiness_poll_interval_s
         self.clock, self.sleep = clock, sleep
         self.control = AirSimVehicle(connection, speed_mps, timeout_s, limits,
-                                    velocity_command_duration_s=velocity_command_duration_s)
+                                    velocity_command_duration_s=velocity_command_duration_s,
+                                    tracking=tracking)
         self.holding = PositionHold(self.control, limits, tracking, speed_mps, timeout_s, clock=clock, sleep=sleep)
         self.control.holding = self.holding
 

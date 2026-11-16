@@ -16,6 +16,9 @@ class TimedVehicleState:
     velocity_world: tuple[float, float, float] = (0.0, 0.0, 0.0)
     pitch_deg: float | None = None
     roll_deg: float | None = None
+    #: 实测偏航角速度（度/秒）。航向伺服用它做阻尼，不再用位姿差分。
+    #: 引擎不提供时保持 None，伺服会退回无阻尼。
+    yaw_rate_deg_s: float | None = None
 
     def __post_init__(self) -> None:
         if type(self.timestamp_ns) is not int or self.timestamp_ns <= 0:
@@ -32,7 +35,7 @@ class TimedVehicleState:
             )
         ):
             raise ValueError("stream state requires finite measurements")
-        for value in (self.pitch_deg, self.roll_deg):
+        for value in (self.pitch_deg, self.roll_deg, self.yaw_rate_deg_s):
             if value is not None and (
                 isinstance(value, bool) or not math.isfinite(value)
             ):

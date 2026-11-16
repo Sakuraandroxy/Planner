@@ -25,6 +25,18 @@ class MotionLimits:
     max_yaw_accel_dps2: float = 60.0
     control_hz: float = 20.0
     min_duration_s: float = 1.0
+    #: 航向伺服的四个参数，含义见 planner/services/motion/heading_servo.py。
+    heading_hold_gain: float = 0.4
+    heading_rate_damping: float = 0.0
+    heading_deadband_deg: float = 0.5
+    heading_rate_deadband_dps: float = 1.5
+
+    #: 允许取零的参数：零表示关掉该项。
+    OPTIONAL = frozenset(
+        {"heading_rate_damping", "heading_deadband_deg", "heading_rate_deadband_dps"}
+    )
+    #: 必须为正的参数，单独列出以便校验时区分。
+    POSITIVE = frozenset({"heading_hold_gain"})
 
     def __post_init__(self) -> None:
         for name in (
@@ -38,6 +50,18 @@ class MotionLimits:
                 raise ValueError(f"{name} must be positive")
         if self.min_duration_s < 0:
             raise ValueError("min_duration_s must be non-negative")
+        for name in self.OPTIONAL:
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"{name} must be numeric")
+            if value < 0:
+                raise ValueError(f"{name} must be non-negative")
+        for name in self.POSITIVE:
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"{name} must be numeric")
+            if value <= 0:
+                raise ValueError(f"{name} must be positive")
 
     def to_tracking_limits(self):
         """Convert this configured envelope into the domain tracking limits.
@@ -57,6 +81,10 @@ class MotionLimits:
             max_yaw_acceleration_deg_s2=self.max_yaw_accel_dps2,
             control_hz=self.control_hz,
             min_duration_s=max(self.min_duration_s, 1e-3),
+            heading_hold_gain=self.heading_hold_gain,
+            heading_rate_damping=self.heading_rate_damping,
+            heading_deadband_deg=self.heading_deadband_deg,
+            heading_rate_deadband_dps=self.heading_rate_deadband_dps,
         )
 
 

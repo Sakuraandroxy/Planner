@@ -12,6 +12,7 @@ from planner.domain.streaming import TimedVehicleState
 from planner.ports.position_hold_vehicle import PositionHoldVehicle
 from planner.errors import BudgetExceeded, ExecutionError
 from planner.services.motion.command_smoothing import CommandSmoother, bounded
+from planner.services.motion.heading_servo import heading_rate_deg_s
 from planner.services.motion.hold_handoff import translation_handoff
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,7 @@ class PositionHold:
                  *, clock=time.monotonic, sleep=time.sleep):
         self.vehicle, self.limits = vehicle, limits
         self.speed, self.timeout_s, self.clock, self.sleep = speed_mps, timeout_s, clock, sleep
+        self.tracking = tracking
         self.translation = CommandSmoother(limits.max_acceleration_mps2, tracking.max_jerk_mps3)
         self.rotation = CommandSmoother(limits.max_yaw_acceleration_deg_s2, tracking.max_yaw_jerk_deg_s3)
         self.owner = threading.get_ident()
@@ -89,8 +91,16 @@ class PositionHold:
         desired = bounded(tuple(self.limits.position_gain*e-v for e,v in zip(error,state.velocity_world)), self.speed)
         velocity = self.translation.step(desired, dt)
         yaw_error = wrap_yaw_deg(t.yaw_deg-p.yaw_deg)
-        yaw_rate = max(-self.limits.max_yaw_rate_deg_s,
-                       min(self.limits.max_yaw_rate_deg_s, self.limits.yaw_gain*yaw_error))
+        yaw_rate = heading_rate_deg_s(
+            yaw_error, state.yaw_rate_deg_s,
+            gain=self.limits.heading_hold_gain,
+            maximum_rate_dps=self.limits.max_yaw_rate_deg_s,
+            acceleration_dps2=self.limits.max_yaw_acceleration_deg_s2,
+            jerk_dps3=self.tracking.max_yaw_jerk_deg_s3,
+            damping=self.limits.heading_rate_damping,
+            deadband_deg=self.limits.heading_deadband_deg,
+            rate_deadband_dps=self.limits.heading_rate_deadband_dps,
+        )
         rate = self.rotation.step((yaw_rate,), dt)[0]
         self.vehicle.hold_velocity(velocity, rate, 1/self.limits.control_hz)
         if frozen:
@@ -100,8 +110,11 @@ class PositionHold:
         while len(self.samples) > 2 and self.samples[1][0] <= state.timestamp_ns-window_ns:
             self.samples.popleft()
         if now-self.last_diagnostic >= 1:
-            logger.debug("Hold sample: position_error=%.3fm speed=%.3fm/s yaw_error=%.3fdeg observable=%s",
-                        math.hypot(*error), math.hypot(*state.velocity_world), abs(yaw_error), self.observable)
+            logger.debug("Hold sample: position_error=%.3fm speed=%.3fm/s yaw_error=%.3fdeg "
+                         "yaw_rate=%.3fdeg/s yaw_cmd=%.3fdeg/s observable=%s",
+                        math.hypot(*error), math.hypot(*state.velocity_world), abs(yaw_error),
+                        state.yaw_rate_deg_s if state.yaw_rate_deg_s is not None else float('nan'),
+                        rate, self.observable)
             self.last_diagnostic = now
 
     @property

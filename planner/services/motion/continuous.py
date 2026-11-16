@@ -5,6 +5,7 @@ from planner.domain.motion import ContinuousTrackingSettings
 from .continuous_reference import ContinuousPathReference, segment_length, xyz
 from .continuous_speed import braking_speed, planned_speed, corner_speed
 from .command_smoothing import CommandSmoother
+from .heading_servo import heading_rate_deg_s
 
 
 def reached(waypoint, pose, unwrapped_yaw, goal_yaw, position_tolerance, yaw_tolerance):
@@ -84,8 +85,15 @@ class ContinuousFollower:
             speed = 0.
         desired = tuple(v/norm*speed for v in error) if norm else (0.0, 0.0, 0.0)
         self.translation.step(desired, dt)
-        yaw_speed = min(limits.yaw_gain*abs(yaw_error), braking_speed(abs(yaw_error), 0.,
-            limits.max_yaw_rate_deg_s, limits.max_yaw_acceleration_deg_s2,
-            settings.max_yaw_jerk_deg_s3, self.rotation.acceleration[0], 2/self.rotation.bandwidth))
-        self.rotation.step((math.copysign(yaw_speed, yaw_error),), dt)
+        # 这条路径已有刹车曲线；阻尼与死区在这里不启用，因为它拿不到实测角速度。
+        yaw_rate = heading_rate_deg_s(
+            yaw_error,
+            gain=limits.yaw_gain,
+            maximum_rate_dps=limits.max_yaw_rate_deg_s,
+            acceleration_dps2=limits.max_yaw_acceleration_deg_s2,
+            jerk_dps3=settings.max_yaw_jerk_deg_s3,
+            current_acceleration_dps2=self.rotation.acceleration[0],
+            response_time_s=2/self.rotation.bandwidth,
+        )
+        self.rotation.step((yaw_rate,), dt)
         return self.velocity, self.yaw_rate

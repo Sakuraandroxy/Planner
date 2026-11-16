@@ -36,6 +36,8 @@ from .connection import ProjectAirSimConnection
 from .coordinates import (
     attitude_deg_from_kinematics,
     pose_from_kinematics,
+    velocity_from_kinematics,
+    yaw_rate_deg_from_kinematics,
 )
 from .motion import SteppedMotionTracker, tracking_limits
 from .observation import ProjectAirSimObservationSource
@@ -106,8 +108,6 @@ class ProjectAirSimDrone:
             ignored_names=(robot.name,),
         )
         self._collisions.start()
-        self._stream_pose: WorldPose | None = None
-        self._stream_ns = 0
         self._ground_z: float | None = None
         # First settled pose captured before the first takeoff; ``return_home``
         # teleports here (instant, matching the rover home semantics).
@@ -129,6 +129,7 @@ class ProjectAirSimDrone:
             self._motion_timeout_s,
             clock=clock,
             cancelled=self._cancel.is_set,
+            tracking=self._hold_tracking,
         )
 
     # -- lifecycle ---------------------------------------------------------
@@ -333,7 +334,6 @@ class ProjectAirSimDrone:
                     self._connection.advance_for_sim_time(0.5)
                     settled += 0.5
                 pose = self.current_pose()
-                self._stream_pose, self._stream_ns = None, 0
                 self._collisions.clear()
                 if self._ground_z is None:
                     self._ground_z = pose.z
@@ -376,7 +376,6 @@ class ProjectAirSimDrone:
         self._holding.release()
         self.cancel()
         self._set_pose(pose)
-        self._stream_pose, self._stream_ns = None, 0
         self._collisions.clear()
 
     def _set_pose(self, pose: WorldPose) -> None:
@@ -505,16 +504,7 @@ class ProjectAirSimDrone:
         kinematics = self._kinematics()
         pose = pose_from_kinematics(kinematics)
         timestamp_ns = int(kinematics["time_stamp"])
-        previous, previous_ns = self._stream_pose, self._stream_ns
-        velocity = (0.0, 0.0, 0.0)
-        if previous is not None and timestamp_ns > previous_ns:
-            dt = (timestamp_ns - previous_ns) / 1e9
-            velocity = (
-                (pose.x - previous.x) / dt,
-                (pose.y - previous.y) / dt,
-                (pose.z - previous.z) / dt,
-            )
-        self._stream_pose, self._stream_ns = pose, timestamp_ns
+        velocity = velocity_from_kinematics(kinematics)
         roll, pitch, _ = attitude_deg_from_kinematics(kinematics)
         return TimedVehicleState(
             pose,
@@ -523,6 +513,7 @@ class ProjectAirSimDrone:
             velocity,
             pitch_deg=pitch,
             roll_deg=roll,
+            yaw_rate_deg_s=yaw_rate_deg_from_kinematics(kinematics),
         )
 
     def stream_velocity(
