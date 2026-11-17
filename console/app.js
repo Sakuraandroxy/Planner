@@ -12,6 +12,7 @@ const STATE_LABELS = {
 };
 const POLL_MS = 1000;
 const XPRA_PORT = 10010;
+const WORLD_MODEL_PORT = 8765;
 const VEHICLE_LABELS = {
   rover: "无人车",
   drone: "无人机",
@@ -1273,6 +1274,11 @@ function retryView() {
 }
 
 function init() {
+  // Browser-level jump to the world-model service on this same host; the
+  // console does not call it. Scheme follows the page, host follows the
+  // address bar.
+  $("world-model").href =
+    `${location.protocol}//${location.hostname}:${WORLD_MODEL_PORT}/`;
   $("task-form").addEventListener("submit", submitTask);
   $("stop").addEventListener("click", stopTask);
   $("clear-instruction").addEventListener("click", () => {
