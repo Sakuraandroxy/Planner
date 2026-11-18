@@ -5,6 +5,7 @@ import time
 
 from planner.errors import ExecutionError, SimulatorConnectionError
 from planner.domain.motion import ContinuousTrackingSettings
+from planner.domain.pose import WorldPose
 from planner.simulators.airsim.vehicle import AirSimVehicle
 from planner.services.position_hold import PositionHold
 

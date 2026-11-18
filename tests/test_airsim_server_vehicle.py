@@ -39,6 +39,13 @@ class _Connection:
                     ),
                 ),
             )
+        if name == "simGetVehiclePose":
+            return types.SimpleNamespace(
+                position=types.SimpleNamespace(x_val=0.0, y_val=0.0, z_val=self.z),
+                orientation=types.SimpleNamespace(
+                    x_val=0.0, y_val=0.0, z_val=0.0, w_val=1.0
+                ),
+            )
         return True
 
     def call_async_and_wait(self, name, *args, **kwargs):
@@ -78,10 +85,12 @@ class _FakeHold:
 
     def __init__(self):
         self.started = 0
+        self.targets: list[object] = []
         self.waited = 0
 
     def start(self, target=None):
         self.started += 1
+        self.targets.append(target)
 
     def wait(self, **kwargs):
         self.waited += 1
@@ -96,11 +105,11 @@ class _FakeHold:
         pass
 
 
-def _vehicle(z, landed_state):
+def _vehicle(z, landed_state, climb_m=0.):
     from planner.domain.motion import MotionLimits
 
     connection = _Connection(z, landed_state)
-    vehicle = ServerVehicle(connection, MotionLimits(), 5.0)
+    vehicle = ServerVehicle(connection, MotionLimits(), 5.0, takeoff_climb_m=climb_m)
     vehicle._wait_ready = lambda: connection.call("getMultirotorState")
     vehicle.holding = _FakeHold()
     return connection, vehicle
@@ -123,6 +132,20 @@ def test_without_a_ground_reference_the_old_behaviour_stands():
     connection, vehicle = _vehicle(z=0.68, landed_state=1)
     vehicle.prepare(takeoff_if_landed=True)
     assert "takeoff" not in connection.calls, connection.calls
+
+
+def test_the_climb_after_takeoff_holds_the_configured_height():
+    """The climb runs only after a takeoff, and only with a configured height above
+    zero -- which both profiles set, so this is the first task after the vehicle has
+    been on the ground.
+    """
+    connection, vehicle = _vehicle(z=0.68, landed_state=1, climb_m=1.0)
+    vehicle.prepare(takeoff_if_landed=True, ground_z=0.68)
+
+    assert "takeoff" in connection.calls, connection.calls
+    target = vehicle.holding.targets[-1]
+    # The fake takeoff lifts 1.5 m; NED z grows downward, so a climb subtracts.
+    assert target.z == pytest.approx(connection.z - 1.0), vars(target)
 
 
 def test_stream_state_reports_the_measured_yaw_rate():
