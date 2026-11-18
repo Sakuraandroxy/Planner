@@ -40,7 +40,15 @@ class AirSimWeather:
         return self._presets
 
     def apply(self, values: dict[str, float]) -> dict[str, float]:
-        """Send every parameter the caller named, in the engine's own spelling."""
+        """Send every parameter the caller named, in the engine's own spelling.
+
+        AirSim leaves its weather effects switched off, so
+        ``simEnableWeather`` must run before ``simSetWeatherParameter`` has any
+        effect. An all-zero state switches them back off.
+        """
+        self._connection.call(
+            "simEnableWeather", any(value > 0.0 for value in values.values())
+        )
         applied: dict[str, float] = {}
         for name, value in values.items():
             spelling = self._fields.get(name)

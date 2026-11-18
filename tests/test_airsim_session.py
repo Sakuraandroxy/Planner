@@ -17,6 +17,7 @@ import pytest
 
 from planner.application.mission_assembly import MissionResources
 from planner.config import default_config_path, load_config
+from planner.domain.weather import WEATHER_FIELDS
 from planner.errors import ProtocolError
 from planner.simulators.airsim import runtime as airsim_runtime
 
@@ -130,6 +131,32 @@ def test_weather_reaches_air_sim_in_the_engine_spelling():
     assert (1, 0.2) in sent, "road_wetness must be sent as the engine's roadwetness"
     assert len(sent) == 8, sent
     assert applied["road_wetness"] == 0.2, "the caller keeps the canonical name it sent"
+
+
+def _weather(**overrides):
+    """A complete eight-field state; ``set_weather`` always sends all of them."""
+    values = {name: 0.0 for name in WEATHER_FIELDS}
+    values.update(overrides)
+    return values
+
+
+def test_weather_switches_the_effects_on_before_it_sets_parameters():
+    """AirSim ignores every weather parameter until ``simEnableWeather`` has run."""
+    session = _session()
+    session.set_weather(_weather(rain=0.5, fog=0.1))
+
+    calls = session.connection.client.calls
+    assert calls[0][:2] == ("simEnableWeather", (True,)), calls[0]
+    assert "simSetWeatherParameter" in [name for name, _, _ in calls[1:]]
+
+
+def test_a_clear_sky_switches_the_effects_back_off():
+    session = _session()
+    session.set_weather(_weather())
+
+    calls = session.connection.client.calls
+    assert calls[0][:2] == ("simEnableWeather", (False,)), calls[0]
+    assert len(calls) == 9, "the eight zero parameters still go out"
 
 
 def test_a_session_that_never_flew_releases_transports_without_landing():
