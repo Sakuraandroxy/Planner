@@ -98,6 +98,10 @@ def build_server(config: AppConfig):
         restart_attempts=config.simulator.restart_attempts,
         worker_shutdown_timeout_s=config.drone.land_timeout_s + 10.0,
         autostart_session=False,
+        # The consoles outlive the session they were filled by: switching map,
+        # appearance model or configuration puts the vehicles back at spawn while
+        # the remaining-trajectory panel still draws the previous run.
+        session_reset=trajectory.clear,
     )
     return create_api(
         controller,

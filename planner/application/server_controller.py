@@ -53,6 +53,7 @@ class ServerController:
         restart_attempts: int = 2,
         worker_shutdown_timeout_s: float = 60.0,
         autostart_session: bool = True,
+        session_reset: Callable[[], None] | None = None,
         clock=time.monotonic,
     ):
         self.worker_factory = worker_factory
@@ -65,6 +66,12 @@ class ServerController:
         # is opened until the console asks for a map. autostart_session keeps
         # the immediate-connect behavior for tests and headless runs.
         self._session_started = bool(autostart_session)
+        # The shared consoles (remaining trajectory, frames) outlive a session, and
+        # the simulator processes do not: after a map, appearance-model or
+        # configuration switch the vehicles are back at spawn while the console is
+        # still drawing the path a previous run was given. Whoever owns those
+        # consoles plugs it in here; it runs once the old session is confirmed closed.
+        self._session_reset = session_reset
         self._restart_attempts = max(1, int(restart_attempts))
         self._worker_shutdown_timeout_s = float(worker_shutdown_timeout_s)
         self._state = (
@@ -720,6 +727,13 @@ class ServerController:
         )
         self._connect()
 
+    def _reset_session_state(self) -> None:
+        if self._session_reset is not None:
+            try:
+                self._session_reset()
+            except Exception as error:  # a display reset must never stall a restart
+                self._log(f"Session reset failed: {error}", "WARNING")
+
     def _close_worker(self, *, skip_landing: bool = False) -> bool:
         """Shut the worker down and wait for CLOSED before a restart."""
         with self._lock:
@@ -727,6 +741,7 @@ class ServerController:
         if worker is None:
             with self._lock:
                 self._worker_ready = False
+            self._reset_session_state()
             return True
         try:
             worker.shutdown(skip_landing=skip_landing)
@@ -742,6 +757,7 @@ class ServerController:
             if self._worker is worker:
                 self._worker = None
             self._worker_ready = False
+        self._reset_session_state()
         return True
 
     def _wait_closed(self, worker) -> bool:

@@ -19,6 +19,10 @@ from planner.domain.server import (
     WorkerEvent,
     WorkerEventKind,
 )
+from planner.domain.pose import WorldPose
+from planner.domain.sliding_window import QueuedWaypoint
+from planner.domain.trajectory_telemetry import MODE_CONTINUOUS
+from planner.services.trajectory_hub import TrajectoryHub
 from planner.domain.weather import WEATHER_FIELDS
 from planner.errors import SimulatorNotOwned
 
@@ -210,6 +214,7 @@ def _controller(workers, *, worker_class=FakeWorker, **overrides):
     shutdown_timeout = overrides.pop("worker_shutdown_timeout_s", 60.0)
     vehicle_models = overrides.pop("vehicle_models", None)
     autostart_session = overrides.pop("autostart_session", True)
+    session_reset = overrides.pop("session_reset", None)
 
     def factory(selection):
         selections.append(selection)
@@ -227,6 +232,7 @@ def _controller(workers, *, worker_class=FakeWorker, **overrides):
         restart_attempts=restart_attempts,
         worker_shutdown_timeout_s=shutdown_timeout,
         autostart_session=autostart_session,
+        session_reset=session_reset,
     )
     controller._test_selections = selections
     return controller
@@ -984,6 +990,71 @@ def test_world_failure_returns_to_disconnected_with_sim_error():
     assert len(workers) == 1
     assert controller.status.map_switching is False
     assert "restart" in controller.status.sim_error
+    controller.close()
+
+
+def _stale_hub():
+    """A console still holding the path the previous run was given."""
+    hub = TrajectoryHub()
+    start = WorldPose(0.0, 0.0, 0.0, 0.0)
+    hub.publish_queue(
+        instruction="drive to the red car",
+        stage_id="stage_1",
+        mode=MODE_CONTINUOUS,
+        capacity=10,
+        pose=start,
+        items=(
+            QueuedWaypoint(4, start, WorldPose(3.0, 4.0, 0.0, 90.0), 90.0),
+            QueuedWaypoint(
+                5,
+                WorldPose(3.0, 4.0, 0.0, 90.0),
+                WorldPose(6.0, 4.0, 0.0, 90.0),
+                0.0,
+            ),
+        ),
+        planning_calls=1,
+        path_length_m=7.0,
+    )
+    return hub
+
+
+def test_a_session_switch_clears_the_path_the_previous_run_left_on_the_console():
+    """The vehicles go back to spawn; the drawn path has to go with them.
+
+    A map, appearance-model or configuration switch rebuilds the session, and the
+    simulator forgets the plan it was executing. The console does not: it kept
+    publishing the old queue until the next task started, which is what made a
+    switched session look like it was still on its way to the previous goal.
+    """
+    hub = _stale_hub()
+    workers = []
+    controller = _ready_controller(
+        workers, vehicle_models=_models(), session_reset=hub.clear
+    )
+    assert len(hub.read().points) == 2
+
+    controller.request_models({"drone": "hexarotor"})
+    _wait(lambda: controller.state is ServerState.IDLE and len(workers) == 2)
+
+    snapshot = hub.read()
+    assert snapshot.active is False
+    assert snapshot.points == ()
+    controller.close()
+
+
+def test_a_session_reset_that_raises_does_not_stall_the_restart():
+    def explode():
+        raise RuntimeError("console unreachable")
+
+    workers = []
+    controller = _ready_controller(
+        workers, vehicle_models=_models(), session_reset=explode
+    )
+    controller.request_models({"drone": "hexarotor"})
+    _wait(lambda: controller.state is ServerState.IDLE and len(workers) == 2)
+
+    messages = "\n".join(item.message for item in controller.logs.read(0).items)
+    assert "Session reset failed" in messages
     controller.close()
 
 
