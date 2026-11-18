@@ -537,11 +537,14 @@ class ServerController:
         return ServerState.CONNECTING
 
     def request_profile(self, profile: str) -> ServerState:
-        """Select a navigation profile and rebuild the session from its config (idle only).
+        """Select a navigation profile.
 
-        The profile carries the planner endpoint and the navigation decisions, so the
-        task pipelines are assembled again. Reloading the scene puts every vehicle
-        back at its spawn, which is what makes two profiles comparable.
+        With a session running, it is rebuilt from the new file: the profile's values
+        are constructor arguments of that session's vehicles and task pipelines, so
+        reloading the scene is the only way in. Reloading also puts every vehicle back
+        at its spawn, which is what makes two profiles comparable.
+
+        With no session, only the name is recorded; the next scene start reads it.
         """
         if not self._profiles:
             raise ValueError("this deployment does not list any navigation profiles")
@@ -552,15 +555,23 @@ class ServerController:
                 f"{[info.id for info in self._profiles]}"
             )
         with self._lock:
+            if self._closing.is_set():
+                raise BackendUnavailable(self._state)
+            if chosen == self._profile:
+                return self._state
+            if self._state is ServerState.DISCONNECTED:
+                self._profile = chosen
+                self._log(
+                    f"Navigation profile '{chosen}' is selected; it is used when a "
+                    "scene starts."
+                )
+                return self._state
             if (
-                self._closing.is_set()
-                or self._state is not ServerState.IDLE
+                self._state is not ServerState.IDLE
                 or self._worker is None
                 or not self._worker_ready
             ):
                 raise BackendUnavailable(self._state)
-            if chosen == self._profile:
-                return self._state
             self._profile = chosen
             self._profile_switching = True
             self._sim_error = None

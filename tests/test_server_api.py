@@ -198,8 +198,6 @@ class FakeController:
     def request_profile(self, profile):
         if not self.profiles:
             raise ValueError("this deployment does not list any navigation profiles")
-        if self.state_value is not ServerState.IDLE:
-            raise BackendUnavailable(self.state_value)
         chosen = str(profile).strip()
         if chosen not in [info.id for info in self.profiles]:
             raise ValueError(
@@ -207,7 +205,14 @@ class FakeController:
                 f"{[info.id for info in self.profiles]}"
             )
         if chosen == self.profile:
-            return ServerState.IDLE
+            return self.state_value
+        if self.state_value is ServerState.DISCONNECTED:
+            # No session to rebuild: the choice waits for the next scene start.
+            self.profile = chosen
+            self.profile_calls.append(chosen)
+            return ServerState.DISCONNECTED
+        if self.state_value is not ServerState.IDLE:
+            raise BackendUnavailable(self.state_value)
         self.profile = chosen
         self.profile_calls.append(chosen)
         self.state_value = ServerState.CONNECTING
@@ -660,6 +665,17 @@ def test_profile_options_list_what_a_switch_would_change():
     assert body["profiles"][1]["note"] == "通用导航参数"
     assert body["profiles"][0]["model"] == "deepseek-flash"
     assert body["switching"] is False
+
+
+def test_a_profile_can_be_chosen_before_a_scene_starts():
+    controller = FakeController(ServerState.DISCONNECTED)
+    with _client(controller) as client:
+        response = client.post("/api/profile", json={"profile": "vlm"})
+        assert response.status_code == 200
+        assert response.json() == {"state": "disconnected", "profile": "vlm"}
+        assert client.get("/api/profile").json()["current"] == "vlm"
+    assert controller.profile_calls == ["vlm"]
+    assert controller.profile_switching is False
 
 
 def test_profile_switch_returns_202_and_shows_the_new_profile():

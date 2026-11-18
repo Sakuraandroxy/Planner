@@ -222,10 +222,12 @@ Xvfb 由 xpra 自己拉起。
 `config/core/<profile>/` 下每个目录都是一份完整配置：`base.yaml` 加它引用的 `tasks/` 判定规则。
 选哪一档就决定读哪个目录。
 
-切档走 `ServerController.request_profile(name)`：仅 idle，走 `request_models` 那条关闭—重连路径。
+切档走 `ServerController.request_profile(name)`。已有会话时，它走 `request_models` 那条关闭—重连路径：
 `server_bootstrap` 的 `worker_factory` 从 `controller.profile` 取当前档，重读该档的 `base.yaml`、
 重造 `build_resources(config)`（规划器端点、目标检测、深度几何），再重建会话或 UE4 子进程：
 子进程拿到的 `config_path` 本身就是档目录里的那份，所以两边天然一致。载具回出生点，仿真器进程不动。
+
+没有会话时切档不重建任何东西：配置在建会话那一刻才被消费，所以此刻只记下档名，启动场景就按新档装配。
 
 因此档与档只能差在导航与模型相关段上，`scripts/check_profiles.py` 守着这条。
 
@@ -248,7 +250,7 @@ Xvfb 由 xpra 自己拉起。
 | GET | `/api/models` | 每台载具当前模型、可选模型、切换中 |
 | POST | `/api/models` | 提交部分模型变更；仅 idle，202 / 200 |
 | GET | `/api/profile` | 当前配置档、已安装档位（`id`/`label`/`note`/模型名）、切换中；不设能力门 |
-| POST | `/api/profile` | `{"profile"}` 切档；仅 idle，202 重建会话 / 200 无变化 |
+| POST | `/api/profile` | `{"profile"}` 切档；空闲 202 重建会话，未启动 200 只记档名，连接中 503，运行中 409 |
 | GET | `/api/weather` | 8 个字段定义与预设 |
 | POST | `/api/weather` | 任意子集，值 0–1；202 返回合并结果 |
 | POST | `/api/view` | 切机位；运行中接受但 `deferred=true` |

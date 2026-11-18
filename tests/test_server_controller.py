@@ -1109,6 +1109,34 @@ def test_profile_switch_requires_idle():
     controller.close()
 
 
+def test_a_profile_can_be_selected_before_a_scene_is_loaded():
+    """With no session there is nothing to rebuild, so the choice waits."""
+    workers = []
+    controller = _controller(
+        workers,
+        simulator=FakeSupervisor(),
+        autostart_session=False,
+        profiles=_profiles(),
+        initial_profile="default",
+    )
+    assert controller.state is ServerState.DISCONNECTED
+
+    assert controller.request_profile("vlm") is ServerState.DISCONNECTED
+    assert controller.profile == "vlm"
+    assert controller.status.profile_switching is False
+    assert workers == [], "selecting a profile must not build a session"
+    assert controller._test_selections == []
+
+    messages = "\n".join(item.message for item in controller.logs.read(0).items)
+    assert "scene starts" in messages
+
+    controller.start()
+    assert controller.request_world("city") is ServerState.CONNECTING
+    _wait(lambda: controller.state is ServerState.IDLE)
+    assert controller.profile == "vlm", "the scene starts from the chosen profile"
+    controller.close()
+
+
 def test_profile_switch_rejects_a_name_that_is_not_installed():
     workers = []
     controller = _ready_controller(workers, profiles=_profiles())

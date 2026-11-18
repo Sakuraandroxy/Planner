@@ -125,6 +125,16 @@ def test_the_profile_panel_shows_only_which_profile_is_running():
         "the profile panel must not quote the backend's message"
     )
     assert 'id="profile-choice"' in html, "the panel uses the same select as the other tabs"
+    enabled = re.search(
+        r"function renderProfiles\(\).*?const enabled =(.*?);\n", app, flags=re.S
+    ).group(1)
+    assert '"disconnected"' in enabled, (
+        "a profile can be chosen before any scene is loaded"
+    )
+    assert '"disconnected"' in switch, "applying must work in that state too"
+    assert 'setProfileFeedback("已切换", "ok")' in switch, (
+        "a choice made before a scene starts must not stay on 切换中…"
+    )
     assert 'id="profile-current"' in html, "the panel keeps the status line the other tabs have"
     status = re.search(
         r'\$\("profile-current"\)\.textContent =.*?;', app, flags=re.S

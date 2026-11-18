@@ -821,7 +821,7 @@ function fillProfileOptions() {
 
 function renderProfiles() {
   const enabled =
-    currentState === "idle" &&
+    (currentState === "idle" || currentState === "disconnected") &&
     !profilePending &&
     !profileRebuilding &&
     !profileSwitching &&
@@ -838,7 +838,8 @@ function renderProfiles() {
   $("profile-current").textContent =
     profileRebuilding || profileSwitching
       ? "切换中…"
-      : profileName(profileSelection || profileCurrent);
+      : (currentState === "disconnected" ? "未启动 · " : "") +
+        profileName(profileSelection || profileCurrent);
 }
 
 async function loadProfileOptions() {
@@ -859,7 +860,9 @@ async function loadProfileOptions() {
 }
 
 async function applyProfile() {
-  if (profilePending || currentState !== "idle" || !profileCatalog) return;
+  if (profilePending) return;
+  if (currentState !== "idle" && currentState !== "disconnected") return;
+  if (!profileCatalog) return;
   if (!profileSelection || profileSelection === profileCurrent) return;
   const wanted = profileSelection;
   profilePending = true;
@@ -875,7 +878,11 @@ async function applyProfile() {
       profileRebuilding = true;
       profileSwitching = true;
     } else {
+      // Nothing was rebuilt, so this choice is already the current one. Waiting for a
+      // rebuild that never comes would leave the panel stuck on 切换中….
+      profileCurrent = (body && body.profile) || profileCurrent;
       profileSelection = profileCurrent;
+      setProfileFeedback("已切换", "ok");
     }
   } catch (error) {
     profileSelection = profileCurrent;
