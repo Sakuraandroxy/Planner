@@ -115,6 +115,19 @@
 - 执行侧检查在解码器里：地面载荷没有竖直字段，带 `up_m` 的包在解码期即拒。不要在送仿真器那一层事后发现。
 - 改完跑 `tests/test_trajectory_prompts.py` 与 `tests/test_task_parser.py`。
 
+### 3.7 新增一个配置档
+
+- 一个档 = `config/core/<目录名>/`，里面放完整的 `base.yaml` 和它自己的 `tasks/`；
+  档位由目录枚举得到，加一档就是新建目录。
+- `base.yaml` 顶部的 `profile` 段只有 `id`、`label`、`note`：`id` 等于目录名，`label` 是前端文案，
+  `note` 给运维与日志用。
+- 档与档只允许在导航与模型段上不同。`projectairsim`、`simulator`、`camera`、`vehicle_models`、`server`
+  这些段写不一样，`python scripts/check_profiles.py` 会报错，测试里也有同一条断言。
+  理由：切档只重建 worker、只重载场景，仿真器进程不动。
+- 共享的 `maps.yaml`、`simulators.yaml`、`scenes/` 只写一份在 `config/`；某个档需要自己的副本时，
+  放进它自己的目录里就优先。
+- 新功能和新参数先进 `default`，演示对照档只按需跟随。
+
 ## 4 测试与验收
 
 ```bash

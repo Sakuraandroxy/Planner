@@ -98,9 +98,18 @@ pip install --no-deps --no-build-isolation airsim==1.8.1
 | `config/airsim_settings.json` | UE4 引擎设置：载具名、相机名、分辨率、RPC 端口 | 载具名、相机名、分辨率 |
 
 一个档（profile）是一份完整的运行时配置：`config/core/<profile>/` 目录里放 `base.yaml` 和它引用的
-判定规则，启动读 `config/core/default/base.yaml`。`maps.yaml`、`simulators.yaml`、`scenes/`、
-`airsim_settings.json` 属于部署，所有档共用一份；
-某个档需要自己的副本时，放进它自己的目录里就优先于共享的那份。
+判定规则。启动默认读 `config/core/default`，也可以 `python scripts/serve_planner.py --profile vlm`
+从另一个档起来。`maps.yaml`、`simulators.yaml`、`scenes/`、`airsim_settings.json` 属于部署，
+所有档共用一份；某个档需要自己的副本时，放进它自己的目录里就优先于共享的那份。
+
+装好的档可以列出来，同时检查它们有没有在不该不同的段上写歪：
+
+```bash
+python scripts/check_profiles.py
+```
+
+切档在控制台的「规划器」标签页，仅空闲时可切：会话重建、场景重载、载具回出生点，约 8 到 10 秒。
+切档不动仿真器进程，所以两档只能在导航与模型相关段上不同，上面那条检查就是守这一点的。
 
 场景与任务规则：
 
