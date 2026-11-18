@@ -179,6 +179,9 @@ class FakeDrone(FakeVehicle):
         self.landed = True
         self.land_ok = True
 
+    def park(self):
+        self.calls.append("park")
+
     def return_home(self):
         self.calls.append("return_home")
         return WorldPose(0.0, 0.0, 5.0, 90.0)
@@ -353,14 +356,13 @@ def test_run_takes_off_for_the_drone_and_parks_the_rover():
         for message in session.messages
     )
 
-def test_run_lands_the_drone_before_switching_to_the_rover():
+def test_run_stops_the_drone_before_switching_to_the_rover():
     session = make_session(active="drone")
-    session._drone.landed = False
     result = session.run(TaskSubmission("task_1", "drive ahead", "rover"))
     assert result.success is True
     assert session._active_vehicle == "rover"
-    assert "cancel" in session._drone.calls
-    assert "land" in session._drone.calls
+    assert "park" in session._drone.calls
+    assert "land" not in session._drone.calls
     assert session._hidden_poses["drone"] == WorldPose(10.0, 20.0, 1.0, 0.0)
     assert session._rover.calls == ["hover", "hover"]
 
@@ -462,51 +464,43 @@ def test_activate_vehicle_parks_the_rover_and_homes_the_drone():
         for message in session.messages
     )
 
-def test_activate_vehicle_restores_a_hidden_target_before_homing_it():
+def test_activate_vehicle_drops_the_parking_pin_before_homing_the_target():
     session = make_session(active="rover")
     parked = WorldPose(3.0, 4.0, 5.0, 0.0)
+    hidden = WorldPose(3.0, 4.0, 1005.0, 0.0)
     session._hidden_poses["drone"] = parked
-    session._hidden_teleports["drone"] = WorldPose(3.0, 4.0, 1005.0, 0.0)
+    session._hidden_teleports["drone"] = hidden
+    session._drone.pose = hidden
 
     assert session.activate_vehicle("drone") == "drone"
-    # The target must leave the hidden record first: the altitude pin would
-    # otherwise fight the home teleport on every clock advance.
-    assert session._drone.calls[0] == ("teleport", parked)
-    assert session._drone.calls[1] == "return_home"
+    # One move, not two: the home teleport is the only thing sent, so the
+    # altitude pin cannot drag the vehicle back to 1000 m.
+    assert session._drone.calls == ["return_home"]
     assert "drone" not in session._hidden_poses
     assert "drone" not in session._hidden_teleports
 
-def test_activate_vehicle_lands_the_drone_before_activating_the_rover():
+def test_activate_vehicle_stops_an_airborne_drone_without_landing_it():
+    # A native Land only replies at touchdown. It once outran the RPC timeout,
+    # ProjectAirSim's client closed the connection, and the console got a scene
+    # reload onto the default vehicle. So a switch must not ask for a landing,
+    # and land_ok=False below must not be able to fail one.
     session = make_session(active="drone")
     session._view_index = 2
     session._view_mode = "drone_front"
-    session._drone.landed = False
+    session._drone.land_ok = False
 
     assert session.activate_vehicle("rover") == "rover"
     assert session.active_vehicle == "rover"
-    assert session._drone.calls[:2] == ["cancel", "land"]
-    assert session._drone.calls[2][0] == "teleport"
+    assert session._drone.calls[0] == "park"
+    assert session._drone.calls[1] == (
+        "teleport",
+        WorldPose(10.0, 20.0, 1.0 - HIDE_ALTITUDE_GAIN_M, 0.0),
+    )
+    assert "land" not in session._drone.calls
     assert session._hidden_poses["drone"] == WorldPose(10.0, 20.0, 1.0, 0.0)
     assert session._rover.calls == ["return_home"]
     assert session._connection.switch_calls == 3
     assert session.view_mode == "rover_chase"
-
-def test_activate_vehicle_fails_when_the_drone_landing_is_unconfirmed():
-    session = make_session(active="drone")
-    session._view_index = 2
-    session._view_mode = "drone_front"
-    session._drone.landed = False
-    session._drone.land_ok = False
-
-    with pytest.raises(ExecutionError, match="could not park the drone"):
-        session.activate_vehicle("rover")
-    assert session.active_vehicle == "drone"
-    assert session._rover.calls == []
-    assert session._connection.switch_calls == 0
-    assert any(
-        "landing was not confirmed" in message
-        for message in session.messages
-    )
 
 def test_activate_vehicle_can_repeat_the_active_vehicle():
     session = make_session(active="drone")

@@ -1,27 +1,30 @@
 """A ProjectAirSim-backed dual-vehicle mission session.
 
-One session owns the ProjectAirSim connection, the paused ``World`` and both
+One session owns the ProjectAirSim connection, the loaded ``World`` and both
 actors (Rover1 and Drone1). It lives on the worker thread; nothing else may
-tick the world while a task runs. Tasks name a vehicle id and are routed to
-that vehicle's own workflow stack:
+command the vehicles while a task runs. Tasks name a vehicle id and are routed
+to that vehicle's own workflow stack:
 
 * ``BASIC_MOTION`` (drive/fly/reverse) executes directly,
 * ``VISUAL_GOAL_NAVIGATION`` uses the visual-goal planner, and
 * ``FREE_NAVIGATION`` follows the scene target-free until the user stops it.
 
-The rover is armed and braked at session startup. The drone is armed but stays
-landed until a task targets it; ``prepare`` then performs the reference
+The rover is armed and braked at session startup. The drone is armed and stays
+at its spawn until a task targets it; ``prepare`` then performs the reference
 tolerant takeoff and position hold. Between tasks the active vehicle keeps its
 safe idle behaviour (drone position hold, rover brake) while ``idle_tick``
-advances the paused world. Switching vehicles parks the previous one, which
-lands the drone before another vehicle's task starts moving the world, and
-teleports it high above the map: ProjectAirSim has no runtime robot despawn
-API, so "hiding" the inactive vehicle is a far-away teleport. A horizontal
+paces the loop by one control period per poll -- after scene load the engine
+runs the clock itself, so this waits for it rather than stepping it.
+Switching vehicles parks the previous one: it stops its position hold and
+cancels its last native command, and is then teleported high above the map --
+ProjectAirSim has no runtime robot despawn API, so "hiding" the inactive
+vehicle is a far-away teleport. Parking deliberately does not land the
+drone: a native land holds one RPC open until touchdown, and the client closes
+the whole connection when that reply outruns the request timeout. A horizontal
 teleport used to drop the drone inside the Neighbourhood wall mesh, where it
-generated thousands of contacts per minute, so the hide spot is straight up
-and the vehicle is pinned there while the world is stepped (gravity would
-otherwise pull it back down). Only the active vehicle is visible in the
-streaming view.
+generated thousands of contacts per minute, so the hide spot is straight up and
+the vehicle is pinned there as the clock runs, since gravity would otherwise
+pull it back down. Only the active vehicle is visible in the streaming view.
 """
 
 from __future__ import annotations
@@ -192,10 +195,13 @@ class ProjectAirSimMissionSession:
             # The arms are assembled by the registry once this session has
             # handed over its ports; the boot below only needs the vehicles.
             # The scene starts paused with both robots on the same ground
-            # point. Move the inactive one out of view before the first clock
-            # advance so the two colliders never touch and every streaming
-            # camera looks at a different part of the map during calibration.
-            self._hide_inactive_at_startup()
+            # point, so one of them has to leave before the first clock advance
+            # or the two colliders shove each other off the spawn.
+            #
+            # For the rover's home measurement below that vehicle is the drone,
+            # not "the inactive one": the measurement is only meaningful with
+            # the car on the road, whatever the default vehicle is.
+            self._hide_quiet("drone")
             self._publish_frames = True
             try:
                 try:
@@ -208,31 +214,30 @@ class ProjectAirSimMissionSession:
                         f"initial preview frame unavailable: {error}", "WARNING"
                     )
                 try:
-                    # The authored spawn sits above the rendered road surface
-                    # and the first frame is captured before the car has
-                    # fallen onto it. Brake through the drop and measure the
-                    # settled pose so ``return_home`` does not leave the car
-                    # in the air.
-                    self._rover.settle()
-                    observation = self._rover.capture(
-                        timeout_s=min(8.0, config.projectairsim.timeout_s)
-                    )
+                    # The authored spawn sits above the road, so ``return_home``
+                    # needs the height the car actually rests at.
+                    pose = self._rover.measure_resting_pose()
                 except Exception as error:
                     self._log(
                         f"could not measure the rover home pose: {error}",
                         "WARNING",
                     )
                 else:
-                    self._rover.set_home_pose(observation.pose)
+                    self._rover.set_home_pose(pose)
                     self._log(
                         "Rover home pose measured: "
-                        f"x={observation.pose.x:.2f} "
-                        f"y={observation.pose.y:.2f} "
-                        f"z={observation.pose.z:.2f} "
-                        f"yaw={observation.pose.yaw_deg:.1f}"
+                        f"x={pose.x:.2f} y={pose.y:.2f} z={pose.z:.2f} "
+                        f"yaw={pose.yaw_deg:.1f}"
                     )
             finally:
                 self._publish_frames = False
+            # Back to the shape the default vehicle expects. The vehicle that
+            # leaves goes up before the vehicle that arrives comes down: they
+            # share one spawn point, so the other order parks one robot on top
+            # of the other.
+            self._hide_inactive_at_startup()
+            if self._active_vehicle != "rover":
+                self._unhide_quiet("drone")
             self._apply_initial_view()
             # Everything above ran against a paused clock, which is what keeps
             # the load transient out: physics during scene load dropped the
@@ -380,13 +385,13 @@ class ProjectAirSimMissionSession:
         return vehicle_id
 
     def activate_vehicle(self, vehicle: str | None = None) -> str:
-        """Console switch: park the other vehicle and home + show this one.
+        """Console switch: stop the other vehicle, home and show this one.
 
         This is the one atomic operation behind clicking a vehicle in the
-        console. Parking is intentionally not modelled as homing the other
-        vehicle: the drone is landed where it is, the rover is braked where it
-        is, then the other vehicle is teleported out of view so only one
-        vehicle is visible. The requested vehicle is teleported to its spawn.
+        console. Each side moves once: the outgoing vehicle stops flying or
+        holds its brake and is teleported out of view and pinned there, and the
+        requested vehicle is teleported straight onto its spawn. No step awaits
+        a native flight command.
         """
         if self._rover is None or self._drone is None:
             raise RuntimeError("the ProjectAirSim session is closed")
@@ -404,18 +409,9 @@ class ProjectAirSimMissionSession:
             raise ExecutionError(
                 f"could not hide the {other}; {vehicle_id} was not activated"
             ) from error
-        try:
-            # The requested vehicle is usually still parked above the map
-            # (hidden when the other vehicle was active). Restore it before
-            # homing: the altitude pin would otherwise drag it back on every
-            # clock advance and the drone's home convergence check fails at
-            # about 1000 m, landing the vehicle far above the map.
-            self._unhide(vehicle_id)
-        except Exception as error:
-            raise ExecutionError(
-                f"could not restore the {vehicle_id}; "
-                f"{vehicle_id} was not activated"
-            ) from error
+        # The parked pose is not restored first: a console switch homes the
+        # vehicle anyway.
+        self._recover(vehicle_id)
         previous_active = self._active_vehicle
         # Mark the target active before homing it so ``return_home`` does not
         # immediately hide it again as an inactive vehicle.
@@ -550,17 +546,31 @@ class ProjectAirSimMissionSession:
                 "WARNING",
             )
 
-    def _hide_inactive_at_startup(self) -> None:
-        """Move the non-default vehicle out of view right after loading."""
-        other = "drone" if self._active_vehicle == "rover" else "rover"
+    def _hide_quiet(self, vehicle_id: str) -> None:
+        """Move one vehicle out of view; a refused teleport is a boot warning."""
         try:
-            self._hide(other)
+            self._hide(vehicle_id)
         except Exception as error:
             self._log(
-                f"could not move the {other} out of view: "
+                f"could not move the {vehicle_id} out of view: "
                 f"{type(error).__name__}: {error}",
                 "WARNING",
             )
+
+    def _unhide_quiet(self, vehicle_id: str) -> None:
+        """Restore one vehicle; a refused teleport is a boot warning."""
+        try:
+            self._unhide(vehicle_id)
+        except Exception as error:
+            self._log(
+                f"could not bring the {vehicle_id} back into view: "
+                f"{type(error).__name__}: {error}",
+                "WARNING",
+            )
+
+    def _hide_inactive_at_startup(self) -> None:
+        """Move the non-default vehicle out of view right after loading."""
+        self._hide_quiet("drone" if self._active_vehicle == "rover" else "rover")
 
     def _hide(self, vehicle_id: str) -> None:
         """Teleport an inactive vehicle high above the map, out of view.
@@ -571,7 +581,7 @@ class ProjectAirSimMissionSession:
         while a hidden actor overlaps a wall the physics solver emits
         contacts continuously. The parked pose is remembered so ``_unhide``
         can put the vehicle back exactly where a task left it, and
-        ``_pin_hidden`` keeps it at altitude while the world is stepped.
+        ``_pin_hidden`` keeps it at altitude as the clock runs.
         """
         if vehicle_id in self._hidden_poses:
             return
@@ -635,19 +645,28 @@ class ProjectAirSimMissionSession:
             f"{vehicle_id.capitalize()} restored to its previous position."
         )
 
-    def _park(self, vehicle_id: str, log) -> bool:
-        """Put an inactive vehicle into a safe, motionless state.
+    def _recover(self, vehicle_id: str) -> None:
+        """Forget where a vehicle was parked, so the altitude pin lets it move.
 
-        Returns False only when a landing was required but not confirmed.
+        The switch homes the vehicle right after this, so the pose a task would
+        resume from is discarded rather than restored; ``_unhide`` is what puts
+        it back for a task submission.
+        """
+        self._hidden_poses.pop(vehicle_id, None)
+        self._hidden_teleports.pop(vehicle_id, None)
+        self._pin_failures.discard(vehicle_id)
+
+    def _park(self, vehicle_id: str, log) -> bool:
+        """Make an inactive vehicle inert so it can be moved out of view.
+
+        Parking is not landing: the drone stops flying, the rover holds its
+        brake, and the caller teleports that vehicle above the map right after
+        this returns. Returns False only when the vehicle could not be stopped.
         """
         try:
             if vehicle_id == "drone" and self._drone is not None:
-                if not self._drone.landed:
-                    self._drone.cancel()
-                    if not self._drone.land():
-                        log("Drone landing was not confirmed before switching.")
-                        return False
-                log("Drone parked on the ground.")
+                self._drone.park()
+                log("Drone parked: flight stopped.")
             elif self._rover is not None:
                 self._rover.hover()
             return True

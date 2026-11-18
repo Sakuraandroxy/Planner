@@ -200,14 +200,19 @@ class ProjectAirSimDrone:
             self.hold(require_airborne=require_airborne)
 
     def hold(self, *, require_airborne: bool = True) -> None:
+        """Hold the pose the aircraft is at now, and wait until it is steady.
+
+        The target is always re-taken from the current state: a hold left over
+        from an earlier home move would otherwise keep defending that pose and
+        drag the aircraft back down.
+        """
         if self._is_landed():
             if require_airborne:
                 raise ExecutionError(
                     "Cannot confirm airborne hold: vehicle is landed"
                 )
             return
-        if not self._holding.active:
-            self._holding.start()
+        self._holding.start()
         self._holding.wait()
 
     def takeoff(self, *, timeout_s: float | None = None) -> None:
@@ -216,6 +221,8 @@ class ProjectAirSimDrone:
             self._takeoff_timeout_s if timeout_s is None else float(timeout_s)
         )
         self.cancel()
+        # From here the native takeoff owns the aircraft.
+        self._holding.release()
         try:
             result = self._bridge.run(
                 self._timed_task(
@@ -273,8 +280,8 @@ class ProjectAirSimDrone:
             )
             raise ExecutionError("ProjectAirSim land did not complete")
         # The native task completes at touchdown order, but ``landed_state``
-        # only flips after the fast-physics contact settles. Keep stepping the
-        # paused world so the measured state is meaningful.
+        # only flips after the fast-physics contact settles. Keep letting the
+        # clock advance so the measured state is meaningful.
         pose = self.current_pose()
         landed = self._is_landed()
         settled_s = 0.0
@@ -298,10 +305,12 @@ class ProjectAirSimDrone:
 
         The reference rover home semantics apply to the drone as an instant
         teleport (``SetPose`` with ``reset_kinematics``), not ``go_home``: the
-        spawn altitude is on the ground, so the vehicle ends parked. If the
-        pose does not converge within tolerance, land and retry once. Touchdown
-        is confirmed from ``_is_landed`` because the native ``landed_state``
-        can stay FLYING after a real landing (see the module docstring).
+        pose is applied at once and touchdown is confirmed rather than flown to.
+        If the pose does not converge, the teleport is repeated once. Touchdown
+        is confirmed from ``_is_landed`` because the native ``landed_state`` can
+        stay FLYING after a real landing (see the module docstring). The move
+        ends with the position hold armed at the spawn, so the aircraft is
+        commanded here rather than by whatever goal the engine was last given.
         """
         self._require_started()
         self._holding.release()
@@ -341,6 +350,12 @@ class ProjectAirSimDrone:
                 self._collisions.clear()
                 if self._ground_z is None:
                     self._ground_z = pose.z
+                # The engine keeps flying the goal it was last given, and a
+                # teleport does not change that goal. The hold commands a
+                # velocity every control period, so arming it here takes that
+                # goal away from the previous task's climb; ``idle_tick`` keeps
+                # ticking it afterwards.
+                self._holding.start(target=home)
                 logger.info(
                     "Drone returned home: pose=(%.2f,%.2f,%.2f) yaw=%.1f "
                     "landed=%s ground_z=%.2f settle=%.1fs",
@@ -354,17 +369,13 @@ class ProjectAirSimDrone:
                 )
                 return pose
             except Exception as error:
+                # A pose that did not arrive means the teleport did not take.
+                # Landing as a recovery would aim at the ground under wherever
+                # the drone is, not at its spawn.
                 last_error = error
                 logger.warning(
                     "Drone home attempt %d failed: %s", attempt + 1, error
                 )
-                if attempt == 0:
-                    try:
-                        self.land()
-                    except Exception as land_error:
-                        logger.warning(
-                            "Drone home recovery land failed: %s", land_error
-                        )
         raise ExecutionError(
             f"drone could not return home: {last_error}"
         ) from last_error
@@ -451,6 +462,18 @@ class ProjectAirSimDrone:
         )
         self._holding.start(segment.end)
         self._holding.wait(budget=budget)
+
+    def park(self) -> None:
+        """Stop flying without waiting for a touchdown.
+
+        Releases the position hold and cancels the last native command, which
+        leaves the aircraft inert. The session calls this just before moving
+        the drone out of view: the hide teleport and its altitude pin are what
+        keep it in place.
+        """
+        self._require_started()
+        self._holding.release()
+        self.cancel()
 
     def cancel(self) -> None:
         self._cancel.set()
@@ -679,9 +702,9 @@ class ProjectAirSimDrone:
                 and landed == previous_landed
             )
             if advancing and quiet:
-                # The stepped clock, not wall time, defines the stable window:
-                # advancing the paused world may be faster or slower than real
-                # time, exactly like PositionHold's observable window.
+                # Simulator time, not wall time, defines the stable window: the
+                # engine's clock may run faster or slower than real time,
+                # exactly like PositionHold's observable window.
                 if stable_since_ns is None:
                     stable_since_ns = state.timestamp_ns
                 if (

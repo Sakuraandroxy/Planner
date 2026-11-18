@@ -19,7 +19,7 @@ This module measures the mapping at runtime instead:
 A normalized zero-mean grayscale signature at 160x90 is enough: the correct
 camera scores above ~0.9 and every other camera below ~0.3. The world must be
 advanced for the server to capture frames, so ``GetImages`` runs on a
-service-only client while the caller keeps stepping the paused world through
+service-only client while the caller keeps advancing the world through
 its primary connection.
 """
 
@@ -141,7 +141,7 @@ def service_frame_fetcher(
     """Build ``fetch_frame(robot, camera) -> ndarray | None``.
 
     The request blocks until the server captures a frame at or after the
-    request time, so the paused world is advanced in this thread while a
+    request time, so the world is advanced in this thread while a
     helper thread waits on a service-only client. The returned callable owns
     that client; call ``fetch_frame.close()`` when done.
     """

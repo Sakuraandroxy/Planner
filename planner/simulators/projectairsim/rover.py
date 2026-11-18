@@ -13,6 +13,7 @@ from __future__ import annotations
 import math
 import threading
 import time
+from collections import deque
 
 from ...config import CameraSettings, DepthSettings
 from ...domain.observation import Observation
@@ -48,6 +49,15 @@ SETTLE_DURATION_S = 2.0
 # rover already is can skip the actor move instead of failing.
 TELEPORT_TOLERANCE_M = 0.01
 TELEPORT_TOLERANCE_DEG = 0.5
+
+# The car still rides its suspension when the spawn drop ends, so one snapshot
+# of the resting pose lands anywhere inside that bounce: two runs on
+# Neighborhood put it 0.41 m apart, and homing to the low one buries the car in
+# the road. ``measure_resting_pose`` therefore samples until a trailing window
+# stops moving.
+RESTING_TOLERANCE_M = 0.02
+RESTING_WINDOW_S = 0.5
+RESTING_TIMEOUT_S = 6.0
 
 
 class ProjectAirSimRover:
@@ -96,9 +106,9 @@ class ProjectAirSimRover:
         self._stream_pose: WorldPose | None = None
         self._stream_ns = 0
         self._last_collision: CollisionEvent | None = None
-        # Home pose used by ``return_home``. The raw spawn pose read here can
-        # be above the rendered resting pose, so the session replaces it with
-        # the measured pose from the first captured frame.
+        # Home pose used by ``return_home``. The raw spawn pose read here sits
+        # above the road, so the session replaces it with the resting pose
+        # measured by ``measure_resting_pose``.
         self._home_pose = self.current_pose()
         self._tracker = SteppedMotionTracker(
             self._apply_reference,
@@ -147,16 +157,47 @@ class ProjectAirSimRover:
     def settle(self, duration_s: float = SETTLE_DURATION_S) -> None:
         """Hold the brake while the spawned car falls onto the road.
 
-        The scene starts paused with the authored spawn pose, which sits above
-        the rendered road surface; the first camera frame is captured before
-        that initial drop finishes. Stepping the clock with the brake held
-        yields the height the car actually rests at, which is the pose
-        ``return_home`` must teleport to.
+        The scene starts paused at the authored spawn pose, which sits above
+        the road, so the car has to drop before its resting height means
+        anything. ``measure_resting_pose`` is what reads that height.
         """
         self._require_started()
         self._apply_controls(0.0, 0.0, 1.0)
         self._connection.advance_for_sim_time(duration_s)
         self._pid.reset()
+
+    def measure_resting_pose(
+        self,
+        *,
+        settle_s: float = SETTLE_DURATION_S,
+        timeout_s: float = RESTING_TIMEOUT_S,
+        step_s: float = 0.1,
+        window_s: float = RESTING_WINDOW_S,
+    ) -> WorldPose:
+        """Brake through the spawn drop and return the pose the car rests at.
+
+        The pose comes from the fast-physics state rather than a camera frame,
+        because that state is exactly what a later teleport writes back. It is
+        sampled until every reading in ``window_s`` agrees within
+        ``RESTING_TOLERANCE_M``; if the car never quiets down inside
+        ``timeout_s`` the newest reading is returned.
+        """
+        self.settle(settle_s)
+        waited = settle_s
+        window: deque = deque(maxlen=max(2, int(round(window_s / step_s))))
+        pose = self.current_pose()
+        while True:
+            window.append((pose.x, pose.y, pose.z))
+            spread = max(
+                max(axis) - min(axis) for axis in zip(*window, strict=True)
+            )
+            if len(window) == window.maxlen and spread <= RESTING_TOLERANCE_M:
+                return pose
+            if waited >= timeout_s:
+                return pose
+            self._connection.advance_for_sim_time(step_s)
+            waited += step_s
+            pose = self.current_pose()
 
     def collision_state(self) -> bool:
         """Consume the latched non-ground contact, if any."""
@@ -241,13 +282,12 @@ class ProjectAirSimRover:
         return pose
 
     def set_home_pose(self, pose: WorldPose) -> None:
-        """Replace the home pose with a measured (rendered) spawn pose.
+        """Replace the home pose with the measured resting pose.
 
-        The constructor captures the spawn while the scene is still paused;
-        on fast-physics rovers that pose can sit above the rendered resting
-        pose, which makes ``return_home`` leave the car floating. The session
-        measures the rendered pose from the first camera frame and records it
-        here.
+        The constructor captures the spawn while the scene is still paused,
+        which sits above the rendered road surface, so ``return_home`` would
+        leave the car in the air. The session measures where the car actually
+        comes to rest and records it here.
         """
         self._home_pose = WorldPose(pose.x, pose.y, pose.z, pose.yaw_deg)
 
