@@ -94,19 +94,24 @@ pip install --no-deps --no-build-isolation airsim==1.8.1
 |---|---|---|
 | `config/maps.yaml` | 有哪些地图、每张图的二进制与地图名、属于哪个仿真器 | 每条的 `binary` |
 | `config/simulators.yaml` | 每个仿真器怎么起停、监听哪些端口、用哪个解释器跑子进程 | `runtime_python`、`ports`、`argv` 里的 xpra 路径 |
-| `config/base.yaml` | 服务、相机、运动、滑窗、四个模型端点、显示号、超时 | 模型端点与密钥来源、`simulator.display` |
+| `config/core/<profile>/base.yaml` | 服务、相机、运动、滑窗、四个模型端点、显示号、超时 | 模型端点与密钥来源、`simulator.display` |
 | `config/airsim_settings.json` | UE4 引擎设置：载具名、相机名、分辨率、RPC 端口 | 载具名、相机名、分辨率 |
+
+一个档（profile）是一份完整的运行时配置：`config/core/<profile>/` 目录里放 `base.yaml` 和它引用的
+判定规则，启动读 `config/core/default/base.yaml`。`maps.yaml`、`simulators.yaml`、`scenes/`、
+`airsim_settings.json` 属于部署，所有档共用一份；
+某个档需要自己的副本时，放进它自己的目录里就优先于共享的那份。
 
 场景与任务规则：
 
 | 路径 | 内容 |
 |---|---|
 | `config/scenes/<map>/*.jsonc` | UE5 场景与机器人文件（双载具、相机、流式开关） |
-| `config/tasks/*.yaml` | 视觉目标的完成判定规则 |
+| `config/core/<profile>/tasks/*.yaml` | 视觉目标的完成判定规则，跟着档走 |
 
 `config/simulators.yaml` 缺失时配置加载直接报错，没有内置回落。
 
-## 5 `config/base.yaml`
+## 5 `config/core/default/base.yaml`
 
 `simulator` 段只放与进程无关的东西：
 
@@ -265,7 +270,7 @@ PYTHONPATH=. python -c "
 from pathlib import Path
 from planner.config import load_config
 from planner.simulator.router import FamilyRouter
-cfg = load_config('config/base.yaml')
+cfg = load_config('config/core/default/base.yaml')
 router = FamilyRouter(cfg.families, cfg.simulator, Path('.').resolve(), cfg.maps)
 router.restart(cfg.maps.entry('cityenviron'))
 print('running:', router.running())
@@ -285,12 +290,12 @@ print('running:', router.running())
 | 引擎二进制路径 | `config/maps.yaml` 每条的 `binary` | 逃不掉的一项；`binary` 也是所有权判据 |
 | UE4 子进程解释器 | `config/simulators.yaml` 的 `airsim.runtime_python` | 指向装了 `airsim` 的环境 |
 | 引擎 settings | `config/simulators.yaml` 的 `airsim.settings_file` | 相对路径以仓库根为基准 |
-| 显示号 | `config/base.yaml` 的 `simulator.display` | 形如 `:104` |
+| 显示号 | `config/core/<profile>/base.yaml` 的 `simulator.display` | 形如 `:104` |
 | 端口 | `config/simulators.yaml` 各族的 `ports` | 改 UE4 的 `rpc` 时要同步改引擎 settings |
 | xpra 路径 | `config/simulators.yaml` 的 `argv` / `stop_argv` | 发行版装在别处才需要改 |
-| 模型端点与密钥 | `config/base.yaml` 的四段 | 换 provider 时改 `request_format` |
+| 模型端点与密钥 | `config/core/<profile>/base.yaml` 的四段 | 换 provider 时改 `request_format` |
 | UE4 载具名与相机名 | `airsim_settings.json` 与 `simulators.yaml` | 两处必须一致 |
-| UE5 机位起点 | `config/base.yaml` 的 `projectairsim.view_cycle_start` | 换了包或图之后需要重新确认 |
+| UE5 机位起点 | `config/core/<profile>/base.yaml` 的 `projectairsim.view_cycle_start` | 换了包或图之后需要重新确认 |
 | GPU 选择 | 环境变量或引擎启动参数 | 有坏卡时显式绑定健康卡 |
 
 `config/maps.yaml` 至少有 `default_map` 一张图；`default_map` 必须在列表里。

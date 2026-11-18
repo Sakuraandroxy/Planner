@@ -306,7 +306,7 @@ Xvfb 由 xpra 自己拉起。
 误差大时用刹车曲线收缩上限，误差与角速度同时小于死区时输出零。阻尼项乘的是**实测**角速度，不是位姿差分：
 差分噪声会被负反馈直接放大成指令（见 `archive/measurements.md`）。
 
-载具差异只在参数，而参数现在只有一份：`config/base.yaml` 的 `motion` 段。
+载具差异只在参数，而参数现在只有一份：`config/core/<profile>/base.yaml` 的 `motion` 段。
 `heading_hold_gain` 只作用于位置保持，与飞行路径的 `yaw_gain` 分开：执行链延迟越大，保持环的增益就必须越低，
 两者对应的对象不同。
 

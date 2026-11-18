@@ -12,7 +12,7 @@ from __future__ import annotations
 import httpx
 
 #: What a status means for a configuration this project owns. Keys are the field names
-#: in ``config/base.yaml``, so the reader can go fix the file instead of guessing.
+#: in the profile's ``base.yaml``, so the reader can go fix the file instead of guessing.
 _HINTS: dict[int, str] = {
     401: "no credential or an invalid one: set api_key, or export the variable named "
          "by api_key_env (VLN_API_KEY by default)",

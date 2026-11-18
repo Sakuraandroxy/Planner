@@ -37,7 +37,7 @@ sys.path.insert(0, str(ROOT))
 
 import uvicorn  # noqa: E402
 
-from planner.config import load_config  # noqa: E402
+from planner.config import default_config_path, load_config  # noqa: E402
 from planner.server_bootstrap import build_server  # noqa: E402
 
 
@@ -56,7 +56,7 @@ class PlannerServer(uvicorn.Server):
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default=str(ROOT / "config" / "base.yaml"))
+    parser.add_argument("--config", default=str(default_config_path()))
     parser.add_argument("--host", help="override server.host")
     parser.add_argument("--port", type=int, help="override server.port")
     args = parser.parse_args()

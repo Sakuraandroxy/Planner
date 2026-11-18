@@ -134,8 +134,13 @@ def load_yaml(path: Path):
 
 
 def check_repo_layout() -> None:
-    for rel in ("config/base.yaml", "config/maps.yaml", "config/simulators.yaml",
-                "config/tasks/visual_goal_above.yaml"):
+    profiles = sorted((ROOT / "config" / "core").glob("*/base.yaml"))
+    if profiles:
+        ok("config/core/*/base.yaml: "
+           + ", ".join(path.parent.name for path in profiles))
+    else:
+        fail("config/core/*/base.yaml", "no profile directory")
+    for rel in ("config/maps.yaml", "config/simulators.yaml"):
         path = ROOT / rel
         ok(rel) if path.is_file() else fail(rel, "file is missing")
     for simulator in ("airsim", "projectairsim"):

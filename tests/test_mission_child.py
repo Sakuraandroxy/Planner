@@ -29,8 +29,10 @@ class _SilentEmitter:
 
 
 def _child(monkeypatch):
+    from planner.config import default_config_path
+
     monkeypatch.setattr("planner.simulator.mission_child.Emitter", _SilentEmitter)
-    child = MissionChild("config/base.yaml", "blocks")
+    child = MissionChild(str(default_config_path()), "blocks")
     return child
 
 

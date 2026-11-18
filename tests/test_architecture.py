@@ -165,4 +165,4 @@ def test_look_down_support_lives_in_the_shared_layer():
         "planner.capabilities.completion.visual_goal_above",
     ):
         __import__(module)
-    assert (ROOT / "config/tasks/visual_goal_above.yaml").is_file()
+    assert (ROOT / "config" / "core" / "default" / "tasks" / "visual_goal_above.yaml").is_file()

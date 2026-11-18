@@ -55,7 +55,7 @@ from planner.capabilities.completion.visual_goal import (  # noqa: E402
 from planner.capabilities.targeting.bbox_goal_observation import (  # noqa: E402
     BBoxGoalObserver,
 )
-from planner.config import load_config  # noqa: E402
+from planner.config import default_config_path, load_config  # noqa: E402
 from planner.domain.basic_motion import BasicMotionParameters  # noqa: E402
 from planner.domain.depth_visualization import render_depth  # noqa: E402
 from planner.domain.mission import MissionStage, TaskKind  # noqa: E402
@@ -153,7 +153,7 @@ def _build_visual_goal(config, drone, execution, motion, detector, planner):
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default=str(ROOT / "config" / "base.yaml"))
+    parser.add_argument("--config", default=str(default_config_path()))
     parser.add_argument("--forward-m", type=float, default=3.0)
     parser.add_argument(
         "--up-m",

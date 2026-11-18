@@ -32,7 +32,7 @@ from planner.simulators.projectairsim.connection import (  # noqa: E402
     ProjectAirSimConnectionConfig,
 )
 from planner.simulators.projectairsim.rover import ProjectAirSimRover  # noqa: E402
-from planner.config import load_config  # noqa: E402
+from planner.config import default_config_path, load_config  # noqa: E402
 from planner.errors import ObservationError  # noqa: E402
 from projectairsim import Rover  # noqa: E402
 
@@ -73,7 +73,7 @@ def print_observation(label, observation):
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default=str(ROOT / "config" / "base.yaml"))
+    parser.add_argument("--config", default=str(default_config_path()))
     parser.add_argument("--drive-s", type=float, default=3.0)
     parser.add_argument("--turn-s", type=float, default=4.0)
     parser.add_argument("--no-reset", action="store_true")

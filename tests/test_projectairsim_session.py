@@ -51,7 +51,7 @@ def test_build_session_forwards_the_sinks_the_console_reads(monkeypatch):
     moved out. Dropping one is invisible until a task runs: the remaining-path
     panel, or the initial frame, simply stops updating.
     """
-    from planner.config import load_config
+    from planner.config import default_config_path, load_config
     from planner.simulators.projectairsim import runtime as simulator_runtime
     from planner.simulators.projectairsim import session as session_module
 
@@ -65,7 +65,7 @@ def test_build_session_forwards_the_sinks_the_console_reads(monkeypatch):
     monkeypatch.setattr(
         session_module, "ProjectAirSimMissionSession", StubSession
     )
-    config = load_config("config/base.yaml")
+    config = load_config(default_config_path())
     entry = config.maps.entry("cityenviron")
     sinks = SimpleNamespace(frame_sink=object(), trajectory=object())
 

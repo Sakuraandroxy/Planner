@@ -46,7 +46,7 @@
    pip install --no-deps projectairsim==1.0.2
    ```
 2. **登记地图。** 打开 `config/maps.yaml`，把每张地图的引擎可执行文件路径和地图名填上。
-3. **配置模型。** `config/base.yaml` 里有四个模型端点：拆解指令、找目标、规划路线、确认到达。
+3. **配置模型。** `config/core/default/base.yaml` 里有四个模型端点：拆解指令、找目标、规划路线、确认到达。
    它们都指向一个兼容 OpenAI 协议的服务，密钥放环境变量 `VLN_API_KEY`。
 4. **启动服务。** 服务启动时是空的：没有场景，也没有画面。
    ```bash

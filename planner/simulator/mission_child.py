@@ -378,7 +378,11 @@ class MissionChild:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", required=True, help="path to config/base.yaml")
+    parser.add_argument(
+        "--config",
+        required=True,
+        help="path to a profile's base.yaml, e.g. config/core/default/base.yaml",
+    )
     parser.add_argument("--map", required=True, help="map id from config/maps.yaml")
     args = parser.parse_args(argv)
     return MissionChild(args.config, args.map).run()

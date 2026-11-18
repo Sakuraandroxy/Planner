@@ -67,7 +67,7 @@ class MotionLimits:
         """Convert this configured envelope into the domain tracking limits.
 
         Two classes are named ``MotionLimits`` here: this one carries what
-        ``config/base.yaml`` states (``max_accel_mps2``, ``max_yaw_rate_dps``), and
+        ``config/core/<profile>/base.yaml`` states (``max_accel_mps2``, ``max_yaw_rate_dps``), and
         ``planner/domain/motion.py`` carries what the motion trackers and the
         position hold read (``max_acceleration_mps2``, ``max_yaw_rate_deg_s``, plus
         the tolerances). Every simulator needs the second, so the mapping lives with

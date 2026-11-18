@@ -25,7 +25,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from planner.config import load_config  # noqa: E402
+from planner.config import default_config_path, load_config  # noqa: E402
 from projectairsim import Drone, ProjectAirSimClient, Rover, World  # noqa: E402
 from projectairsim.utils import unpack_image  # noqa: E402
 
@@ -44,7 +44,7 @@ def depth_preview(depth_m: np.ndarray, far_m: float = 50.0) -> np.ndarray:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default=str(ROOT / "config" / "base.yaml"))
+    parser.add_argument("--config", default=str(default_config_path()))
     parser.add_argument("--out", default=str(ROOT / "output" / "smoke_projectairsim"))
     parser.add_argument("--timeout", type=float, default=20.0)
     args = parser.parse_args()

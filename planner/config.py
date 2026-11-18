@@ -771,6 +771,74 @@ def _project_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+#: Every directory under ``config/core`` is one complete runtime configuration:
+#: a ``base.yaml`` plus the task rules it points at. Switching behaviour means
+#: switching directory, not merging a patch onto a file.
+def profiles_root() -> Path:
+    return _project_root() / "config" / "core"
+
+
+def default_profile() -> str:
+    return "default"
+
+
+def default_config_path() -> Path:
+    return profile_config_path(default_profile())
+
+
+def profile_of(path: str | Path) -> str:
+    """The profile directory a config file belongs to, or '' when it is outside."""
+    try:
+        return Path(path).resolve().parent.relative_to(profiles_root().resolve()).parts[0]
+    except (IndexError, ValueError):
+        return ""
+
+
+def profile_config_path(profile: str) -> Path:
+    name = str(profile).strip()
+    if not name or "/" in name or "\\" in name or name in {".", ".."}:
+        raise ValueError(f"invalid profile name '{profile}'")
+    return profiles_root() / name / "base.yaml"
+
+
+def available_profiles() -> tuple[str, ...]:
+    """Profile names, in directory order; a directory without a base is not one."""
+    root = profiles_root()
+    if not root.is_dir():
+        return ()
+    return tuple(
+        sorted(
+            entry.name
+            for entry in root.iterdir()
+            if entry.is_dir() and (entry / "base.yaml").is_file()
+        )
+    )
+
+
+def shared_or_profile(path: str | Path, rel: str | Path) -> Path:
+    """Resolve a referenced file inside the profile directory, else the shared one.
+
+    A profile carries only what differs per profile. ``maps.yaml``,
+    ``simulators.yaml``, ``scenes/`` and the AirSim settings belong to the
+    deployment and are written once under ``config/``. A profile that needs its
+    own copy drops it next to its ``base.yaml`` and this finds that first.
+
+    Only a file under ``config/core`` may borrow the deployment copy: a synthetic
+    config written into a temp directory by a test must keep resolving against
+    that directory, or the repository's own ``maps.yaml`` would leak into it.
+    """
+    parent = Path(path).parent
+    candidate = parent / rel
+    if candidate.is_file() or candidate.is_dir():
+        return candidate
+    root = profiles_root()
+    try:
+        parent.resolve().relative_to(root.resolve())
+    except ValueError:
+        return candidate
+    return _project_root() / "config" / rel
+
+
 def load_map_catalog(
     path: str | Path,
     *,
@@ -1001,13 +1069,13 @@ def load_config(path: str | Path) -> AppConfig:
         ),
         restart_attempts=int(simulator_raw.get("restart_attempts", 2)),
     )
-    families_path = Path(path).parent / "simulators.yaml"
+    families_path = shared_or_profile(path, "simulators.yaml")
     families_raw = _section(raw, "simulator_families")
     if not families_raw and families_path.is_file():
         families_raw = yaml.safe_load(families_path.read_text(encoding="utf-8")) or {}
     families = parse_family_catalog(families_raw)
     maps = load_map_catalog(
-        Path(path).parent / simulator.map_catalog_file,
+        shared_or_profile(path, simulator.map_catalog_file),
         default_simulator=families.default_family,
         fallback=MapEntry(
             id="default",
@@ -1321,15 +1389,15 @@ def load_completion_rules(
 ) -> VisualGoalTriggerRules:
     """Load the reference visual-goal completion rules.
 
-    With an explicit filename the path is resolved relative to the main config
-    file; otherwise it falls back to this project's
-    ``config/tasks/visual_goal_navigation.yaml``.
+    With an explicit filename the path resolves inside the profile directory that
+    owns ``config_path``, falling back to the deployment's ``config/`` when that
+    directory has no copy. With no filename it reads the default profile's
+    ``tasks/visual_goal_navigation.yaml``.
     """
     path = (
-        Path(config_path).parent / filename
+        shared_or_profile(config_path, filename)
         if filename is not None
-        else Path(__file__).resolve().parent.parent
-        / "config"
+        else default_config_path().parent
         / "tasks"
         / "visual_goal_navigation.yaml"
     )

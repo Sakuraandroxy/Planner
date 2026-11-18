@@ -16,7 +16,7 @@ import types
 import pytest
 
 from planner.application.mission_assembly import MissionResources
-from planner.config import load_config
+from planner.config import default_config_path, load_config
 from planner.errors import ProtocolError
 from planner.simulators.airsim import runtime as airsim_runtime
 
@@ -67,7 +67,7 @@ def _session():
     from planner.services.trajectory_hub import TrajectoryHub
     from planner.simulators.airsim.session import AirSimMissionSession
 
-    config = load_config("config/base.yaml")
+    config = load_config(default_config_path())
     family = config.families.require("airsim")
     quiet = lambda message, level="INFO": None
     resources = MissionResources(
@@ -204,7 +204,7 @@ def test_assembly_refuses_to_run_without_a_trajectory_sink():
         assemble_missions,
     )
 
-    config = load_config("config/base.yaml")
+    config = load_config(default_config_path())
     resources = MissionResources(
         detector=object(), planner=object(), geometry=object(),
         trajectory=None, frame_sink=None,
@@ -221,7 +221,7 @@ def test_assembly_refuses_to_run_without_a_trajectory_sink():
 def test_a_session_without_its_arm_is_refused_at_wiring_time():
     from planner.simulators.airsim.session import AirSimMissionSession
 
-    config = load_config("config/base.yaml")
+    config = load_config(default_config_path())
     family = config.families.require("airsim")
     session = AirSimMissionSession(
         config, family, log=lambda message, level="INFO": None

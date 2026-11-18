@@ -33,7 +33,7 @@ from planner.simulators.projectairsim.rover import ProjectAirSimRover  # noqa: E
 from planner.application.factories import (  # noqa: E402
     build_free_navigation_planner,
 )
-from planner.config import load_config  # noqa: E402
+from planner.config import default_config_path, load_config  # noqa: E402
 from planner.domain.basic_motion import BasicMotionParameters  # noqa: E402
 from planner.domain.free_navigation import FreeNavigationParameters  # noqa: E402
 from planner.domain.mission import MissionStage, TaskKind  # noqa: E402
@@ -77,7 +77,7 @@ def run_basic(workflow, rover, parameters, label):
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default=str(ROOT / "config" / "base.yaml"))
+    parser.add_argument("--config", default=str(default_config_path()))
     parser.add_argument("--forward-m", type=float, default=5.0)
     parser.add_argument("--reverse-m", type=float, default=2.0)
     parser.add_argument("--free-navigation-seconds", type=float, default=0.0)

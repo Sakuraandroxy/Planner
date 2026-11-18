@@ -64,7 +64,8 @@
 2. 场景约束：两台载具出生点完全相同、`clock.pause-on-start: true`、恰好四个相机 `streaming-enabled`、
    无人车追尾相机 `capture-enabled: false`。
 3. `config/maps.yaml` 加一条：`simulator: projectairsim`、`binary`、`map_name`、`scene_file`、`sim_config_path`。
-4. 六旋翼等外观模型需要场景变体时，在 `config/base.yaml` 的 `vehicle_models` 里为这张图指定 `scene_files`，
+4. 六旋翼等外观模型需要场景变体时，
+   在 `config/core/<profile>/base.yaml` 的 `vehicle_models` 里为这张图指定 `scene_files`，
    否则换模型会失败。
 5. 换包后跑一次 `scripts/calibrate_streaming_views.py`，把 `projectairsim.view_cycle_start` 改成实测值。
 

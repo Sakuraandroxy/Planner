@@ -307,7 +307,7 @@ UE4 没有 `models` 能力，整张世界卡被藏。
 处理：
 
 ```python
-with TestClient(build_server(load_config("config/base.yaml"))) as client:
+with TestClient(build_server(load_config("config/core/default/base.yaml"))) as client:
     ...
 ```
 

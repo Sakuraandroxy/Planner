@@ -202,7 +202,7 @@ def reclaim_stale_display(display: str) -> str | None:
     if pid_alive(pid):
         raise SimulatorRestartError(
             f"display {display} is still held by PID {pid}; stop it first or pick "
-            "another simulator.display in config/base.yaml"
+            "another simulator.display in the profile's base.yaml"
         )
     if lock.stat().st_uid != os.getuid():
         raise SimulatorRestartError(

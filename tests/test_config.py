@@ -1,13 +1,12 @@
 import pytest
 import yaml
 
-from pathlib import Path
-
 from planner.config import (
     MapCatalog,
     MapEntry,
     ServerSettings,
     SimulatorSettings,
+    default_config_path,
     load_completion_rules,
     load_config,
     load_map_catalog,
@@ -440,8 +439,7 @@ def test_map_catalog_without_a_fallback_requires_the_file(tmp_path):
 
 
 def test_repository_catalog_lists_the_supported_maps():
-    root = Path(__file__).resolve().parents[1]
-    config = load_config(root / "config/base.yaml")
+    config = load_config(default_config_path())
     pas = tuple(e.id for e in config.maps.maps if e.simulator == "projectairsim")
     air = tuple(e.id for e in config.maps.maps if e.simulator == "airsim")
     assert pas == ("cityenviron", "neighborhood")
@@ -470,8 +468,7 @@ def test_vehicle_models_default_to_the_packaged_look(tmp_path):
 
 
 def test_repository_vehicle_models_offer_the_hexarotor(tmp_path):
-    root = Path(__file__).resolve().parents[1]
-    config = load_config(root / "config/base.yaml")
+    config = load_config(default_config_path())
     drone = config.vehicle_models.group("drone")
     assert drone.ids == ("quadrotor", "hexarotor")
     assert drone.option("hexarotor").scene_for(

@@ -55,9 +55,11 @@ def test_a_non_protocol_line_is_an_error_not_a_skip():
 
 
 def test_submit_encodes_the_submission_fields_the_child_needs():
+    from planner.config import default_config_path
+
     worker = SubprocessMissionWorker(
         python=sys.executable, module="planner.simulator.mission_child",
-        config_path="config/base.yaml", map_id="blocks", project_dir=".",
+        config_path=str(default_config_path()), map_id="blocks", project_dir=".",
     )
     sent = []
     worker._stdin = type("W", (), {"write": staticmethod(lambda text: sent.append(text)),
@@ -247,9 +249,9 @@ def test_the_child_reports_its_own_setup_failure_over_the_pipe():
     """
     from pathlib import Path
 
-    from planner.config import load_config
+    from planner.config import default_config_path, load_config
 
-    config_path = Path("config/base.yaml").resolve()
+    config_path = default_config_path().resolve()
     config = load_config(config_path)
     family = config.families.require("airsim")
     assert family.runtime_python, (
@@ -263,7 +265,10 @@ def test_the_child_reports_its_own_setup_failure_over_the_pipe():
         config_path=str(config_path),
         map_id="blocks",
         # The repository root is what holds ``planner/``; the child imports from there.
-        project_dir=str(config_path.parents[1]),
+        # It comes from this file's own location, not from the config path: a profile
+        # directory sits an arbitrary depth below the root, so counting parents would
+        # break the moment a profile is added deeper.
+        project_dir=str(Path(__file__).resolve().parents[1]),
     )
     worker.start()
     deadline = time.time() + 90
