@@ -1,4 +1,4 @@
-// 轨迹三维视图：把剩余航点与每段方向向量画在世界坐标系里，只占档位行右侧一小块。
+// 轨迹三维视图：把剩余航点与每段方向向量画在世界坐标系里，占状态行右侧一小块。
 // three.js 从 CDN 动态 import：库取不到或没有 WebGL 时，只有这一块降级，控制台其余照常。
 
 const CDN = "https://cdn.jsdelivr.net/npm/three@0.187.0/build/three.module.js";
@@ -91,6 +91,9 @@ function draw(snapshot) {
   );
 
   const span = Math.max(12, ...stops.map((node) => node.distanceTo(home)));
+  // 相机距离取航点跨度的一半，轨迹在屏幕上比原来长一倍。
+  // 代价是更远的航点会出画，载具走近了才进来。
+  view.radius = span * 1.1;
 
   const line = new THREE.Line(
     new THREE.BufferGeometry().setFromPoints([home, ...stops]),
@@ -101,17 +104,17 @@ function draw(snapshot) {
   let previous = home;
   stops.forEach((node, index) => {
     drawLeg(previous, node, 0x9fd8cf);
-    if (index === 0) drawPoint(node, 1.0, 0xffc14d);
+    // 取景拉近了一倍，点的世界尺寸就取原来的一半，屏幕上回到原大小。
+    if (index === 0) drawPoint(node, 0.5, 0xffc14d);
     previous = node;
   });
 
-  drawPoint(home, 1.1, 0xffffff);
+  drawPoint(home, 0.55, 0xffffff);
   // 机头箭头：从载具出发指向前方，与路线箭头同一方向约定。
   path.add(
     new THREE.ArrowHelper(headingVector(vehicle.yaw_deg), home, 6, 0xe0685f, 1.8, 0.9)
   );
 
-  view.radius = span * 2.2;
   // 视图以机头为上方：载具转向或移动时，整条路线在屏幕里跟着转。
   view.theta = -(Number(vehicle.yaw_deg) * Math.PI) / 180;
 }

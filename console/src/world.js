@@ -1,7 +1,7 @@
 "use strict";
 
 // 场景侧设置：地图（启动、切换、停止）与天气。两者都作用于仿真器世界，
-// 所以同在一个文件；档位与载具外观在 settings.js。
+// 所以同在一个文件；规划器与载具外观在 settings.js。
 
 function fillSelect(node, values, selected, labels = null) {
   const chosen = selected || node.value;

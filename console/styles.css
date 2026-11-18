@@ -360,7 +360,7 @@ button.ghost { background: transparent; }
   text-overflow: ellipsis;
 }
 
-/* 三维视图与档位行并排，高度对齐那四行文字。*/
+/* 三维视图在四行文字右侧，高度用满控制台卡底部这一块。*/
 .facts-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 168px;
@@ -371,10 +371,14 @@ button.ghost { background: transparent; }
   border-top: 1px dashed var(--line);
 }
 .scene { min-width: 0; }
+.scene .hint {
+  margin: 4px 0 0;
+  text-align: center;
+}
 #scene-canvas {
   display: block;
   width: 168px;
-  height: 90px;
+  height: 116px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #12171d;
