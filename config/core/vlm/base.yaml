@@ -316,4 +316,4 @@ server:
   # 会话内可接任务的载具；任务提交时必须指定其中之一。
   vehicles: ["rover", "drone"]
   # 控制台默认选中的载具。
-  default_vehicle: rover
+  default_vehicle: drone
