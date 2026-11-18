@@ -94,6 +94,7 @@
           <div><dt>当前载具</dt><dd id="current-vehicle">—</dd></div>
           <div><dt>当前指令</dt><dd id="current-instruction">—</dd></div>
           <div><dt>最近结果</dt><dd id="last-result">—</dd></div>
+          <div><dt>当前档位</dt><dd id="current-profile">—</dd></div>
         </dl>
       </section>
 
@@ -105,6 +106,8 @@
             role="tab" aria-selected="false" aria-controls="panel-weather">天气设置</button>
           <button type="button" class="tab" id="tab-models" data-tab="models"
             role="tab" aria-selected="false" aria-controls="panel-models">模型设置</button>
+          <button type="button" class="tab" id="tab-profile" data-tab="profile"
+            role="tab" aria-selected="false" aria-controls="panel-profile">规划设置</button>
         </div>
         <div class="tab-panels">
           <div class="tab-panel" id="panel-world" role="tabpanel" aria-labelledby="tab-world">
@@ -151,6 +154,19 @@
               </div>
             </div>
             <p class="feedback" id="models-feedback" role="status"></p>
+          </div>
+
+          <div class="tab-panel" id="panel-profile" role="tabpanel"
+            aria-labelledby="tab-profile" hidden>
+            <p class="panel-status hint" id="profile-current">—</p>
+            <div class="stack">
+              <label for="profile-choice">当前档位</label>
+              <select id="profile-choice" disabled></select>
+              <div class="toolbar">
+                <button type="button" id="profile-apply" class="primary" disabled>切换</button>
+              </div>
+            </div>
+            <p class="feedback" id="profile-feedback" role="status"></p>
           </div>
         </div>
       </section>

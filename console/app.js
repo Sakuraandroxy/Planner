@@ -69,6 +69,13 @@ let modelsPending = false;
 let modelsRebuilding = false;
 let modelsSwitching = false;
 let modelsOptionsPending = false;
+let profileCatalog = null;
+let profileCurrent = "";
+let profileSelection = "";
+let profilePending = false;
+let profileRebuilding = false;
+let profileSwitching = false;
+let profileOptionsPending = false;
 
 function setModelFeedback(text, kind = "") {
   const node = $("models-feedback");
@@ -154,6 +161,7 @@ function renderControls() {
   renderVehicles();
   renderWorld();
   renderModels();
+  renderProfiles();
   renderWeather();
   renderViewButtons();
 }
@@ -359,6 +367,9 @@ async function pollStatus() {
       if (!modelsTouched) syncModelSelects();
     }
     modelsSwitching = Boolean(body && body.models_switching);
+    profileCurrent = (body && body.profile) || "";
+    profileSwitching = Boolean(body && body.profile_switching);
+    $("current-profile").textContent = profileName(profileCurrent);
     if (body && body.view_mode) taskView = body.view_mode;
     if (body && body.weather) {
       weatherStatus = body.weather;
@@ -372,7 +383,16 @@ async function pollStatus() {
       ? body.instruction || "—"
       : "—";
     $("last-result").textContent = body.last_result || "—";
-    if (state === "idle" && modelsRebuilding) {
+    if (state === "idle" && profileRebuilding) {
+      profileRebuilding = false;
+      setProfileFeedback("已切换", "ok");
+      loadProfileOptions();
+      if (viewMode === "xpra") resetXpra();
+      else {
+        stopVideo();
+        startVideo();
+      }
+    } else if (state === "idle" && modelsRebuilding) {
       modelsRebuilding = false;
       modelsTouched = false;
       setModelFeedback("载具模型已切换，载具已回到出生点。", "ok");
@@ -394,11 +414,15 @@ async function pollStatus() {
       }
     } else if (
       state === "idle" &&
-      (worldCatalog === null || weatherCatalog === null || modelsCatalog === null)
+      (worldCatalog === null ||
+        weatherCatalog === null ||
+        modelsCatalog === null ||
+        profileCatalog === null)
     ) {
       if (worldCatalog === null) loadWorldOptions();
       if (weatherCatalog === null) loadWeatherOptions();
       if (modelsCatalog === null) loadModelOptions();
+      if (profileCatalog === null) loadProfileOptions();
     }
     if (body && body.sim_error && worldRebuilding) {
       setWorldFeedback("切换失败：" + body.sim_error, "error");
@@ -767,6 +791,99 @@ async function applyModels() {
     setModelFeedback("切换失败：" + error.message, "error");
   } finally {
     modelsPending = false;
+    renderControls();
+  }
+}
+
+function setProfileFeedback(text, kind = "") {
+  const node = $("profile-feedback");
+  node.textContent = text;
+  if (kind) node.dataset.kind = kind;
+  else delete node.dataset.kind;
+}
+
+function profileName(id) {
+  const list = (profileCatalog && profileCatalog.profiles) || [];
+  const info = list.find((item) => item.id === id) || null;
+  return (info && info.label) || id || "—";
+}
+
+function fillProfileOptions() {
+  const select = $("profile-choice");
+  select.replaceChildren();
+  for (const info of (profileCatalog && profileCatalog.profiles) || []) {
+    const node = document.createElement("option");
+    node.value = info.id;
+    node.textContent = info.label || info.id;
+    select.appendChild(node);
+  }
+}
+
+function renderProfiles() {
+  const enabled =
+    currentState === "idle" &&
+    !profilePending &&
+    !profileRebuilding &&
+    !profileSwitching &&
+    !modelsRebuilding &&
+    !modelsSwitching &&
+    !worldRebuilding &&
+    !mapSwitching &&
+    profileCatalog !== null;
+  const select = $("profile-choice");
+  select.disabled = !enabled;
+  if (profileSelection) select.value = profileSelection;
+  $("profile-apply").disabled =
+    !enabled || !profileSelection || profileSelection === profileCurrent;
+  $("profile-current").textContent =
+    profileRebuilding || profileSwitching
+      ? "切换中…"
+      : profileName(profileSelection || profileCurrent);
+}
+
+async function loadProfileOptions() {
+  if (profileOptionsPending) return;
+  profileOptionsPending = true;
+  try {
+    const body = await request("/api/profile");
+    profileCatalog = body;
+    profileCurrent = (body && body.current) || "";
+    profileSelection = profileCurrent;
+    fillProfileOptions();
+  } catch (_) {
+    profileCatalog = null;
+  } finally {
+    profileOptionsPending = false;
+    renderProfiles();
+  }
+}
+
+async function applyProfile() {
+  if (profilePending || currentState !== "idle" || !profileCatalog) return;
+  if (!profileSelection || profileSelection === profileCurrent) return;
+  const wanted = profileSelection;
+  profilePending = true;
+  renderControls();
+  setProfileFeedback("切换中…");
+  try {
+    const body = await request("/api/profile", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ profile: wanted }),
+    });
+    if (body && body.state === "connecting") {
+      profileRebuilding = true;
+      profileSwitching = true;
+    } else {
+      profileSelection = profileCurrent;
+    }
+  } catch (error) {
+    profileSelection = profileCurrent;
+    // The reason goes to the browser console; the panel shows one word.
+    console.warn("profile switch failed", error);
+    setProfileFeedback("切换失败", "error");
+  } finally {
+    profilePending = false;
     renderControls();
   }
 }
@@ -1319,8 +1436,14 @@ function init() {
     loadWorldOptions();
     loadWeatherOptions();
     loadModelOptions();
+    loadProfileOptions();
   });
   $("models-apply").addEventListener("click", applyModels);
+  $("profile-apply").addEventListener("click", applyProfile);
+  $("profile-choice").addEventListener("change", () => {
+    profileSelection = $("profile-choice").value;
+    renderProfiles();
+  });
   for (const id of ["model-rover", "model-drone"]) {
     $(id).addEventListener("change", () => {
       modelsTouched = true;
@@ -1364,6 +1487,7 @@ function init() {
   loadWorldOptions();
   loadWeatherOptions();
   loadModelOptions();
+  loadProfileOptions();
   startXpra();
   pollStatus();
   pollTrajectory();

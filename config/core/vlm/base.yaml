@@ -1,3 +1,8 @@
+profile:
+  id: vlm
+  label: 普通 VLM
+  note: DeepSeek 直连，通用导航参数
+
 # ProjectAirSim（UE5）仿真连接配置。
 # CityEnviron 使用双端口协议：8991 主题（msgpack 订阅）、8992 服务（同步请求），
 # 与经典 AirSim 的 41451 RPC 不兼容。
@@ -124,8 +129,9 @@ depth:
   max_m: 200.0
 
 motion:
-  max_speed_mps: 5.0
-  max_accel_mps2: 1.5
+  # 演示对照组：这一档的每个改动都是故意调差的，不是推荐参数。
+  max_speed_mps: 3.0
+  max_accel_mps2: 1.0
   max_yaw_rate_dps: 30.0
   max_yaw_accel_dps2: 60.0
   control_hz: 20.0
@@ -135,7 +141,7 @@ motion:
   # 实测 UE5 的偏航执行链：等效增益约 0.3、纯延迟约 3 秒（见
   # docs/archive/measurements.md「偏航执行链」）。延迟这么长时增益超过 1 会自激，
   # 取 0.4 在 4 秒延迟下仍有裕度。
-  heading_hold_gain: 0.4
+  heading_hold_gain: 0.25
   # heading_rate_damping 乘以实测偏航角速度后从指令中扣除。延迟超过 90° 相位后
   # 它变成助推，所以无人机的共享值取零；执行链变快时可以再打开（0.3~0.6）。
   heading_rate_damping: 0.0
@@ -145,7 +151,7 @@ motion:
   # 参考连续跟踪协议（滑窗续规划与连续执行使用）。
   continuous:
     # 路径参考点的前瞻时间，单位秒，随当前速度调整前瞻距离。
-    lookahead_time_s: 0.6
+    lookahead_time_s: 0.3
     # 路径参考点的最小前瞻距离，单位米。
     min_lookahead_m: 0.3
     # 路径参考点的最大前瞻距离，单位米。
@@ -186,14 +192,14 @@ trajectory_planner:
   # 优先使用此处的 key；留空则读取 api_key_env。
   api_key: ""
   api_key_env: VLN_API_KEY
-  timeout_s: 60.0
+  timeout_s: 25.0
   max_tokens: 256
   # 与其它三段一致：openai / deepseek / anthropic。
   # anthropic 使用 Messages API，只接受 reasoning_effort: none。
   request_format: anthropic
   reasoning_effort: none
   # 地面车 VLM 实测输出约 4 m 步长；参考 UAV 默认上限为 30 m。
-  max_step_m: 10.0
+  max_step_m: 6.0
 
 # 独立任务完成判断模型：本地到达条件满足后调用，只接受 true 或 false。
 task_completion:
@@ -202,7 +208,7 @@ task_completion:
   # 优先使用此处的 key；留空则读取 api_key_env。
   api_key: ""
   api_key_env: VLN_API_KEY
-  timeout_s: 20.0
+  timeout_s: 8.0
   max_completion_tokens: 2048
   reasoning_effort: none
   request_format: anthropic
@@ -226,17 +232,17 @@ sliding_window:
   # true 启用支持滑窗的工作流续规划。
   enabled: true
   # 已授权世界航点的队列容量；每次新增仍为 5 点。
-  max_buffer_points: 10
+  max_buffer_points: 6
   # 剩余航点数不超过此值时触发补点，范围 1 至 5。
-  refill_pending_count: 3
+  refill_pending_count: 1
   # 提前补点的时间余量，单位秒。
   latency_margin_s: 1.5
   # 连续执行以时间触发续规划，单位秒。
-  planning_interval_s: 5.0
+  planning_interval_s: 9.0
   # 单次滑窗阶段的总时长上限，单位秒。
   max_task_duration_s: 600.0
   # 连续规划失败达到此次数时终止滑窗续规划；留出余量吸收端点偶发超时。
-  max_consecutive_plan_failures: 4
+  max_consecutive_plan_failures: 2
   # 滑窗规划观测的最大有效年龄，单位秒。
   max_observation_age_s: 120.0
 
@@ -259,7 +265,7 @@ visual_goal_navigation:
   # 本工作流是否读取仿真器碰撞事件并中断。
   collision_check_enabled: false
   # 视觉任务诊断日志和观测图像的输出根目录。
-  output_root: output/visual_goal
+  output_root: output/visual_goal/vlm
   # 完成判定规则文件；相对路径以主配置所在目录为基准。
   completion_rules_file: tasks/visual_goal_navigation.yaml
   # 本地表面点深度筛选：不增加模型请求，只删除明显远背景层的原有点。
@@ -274,11 +280,11 @@ visual_goal_navigation:
     # 相对阶段起点允许的最大高度变化，单位米；null 不限制。
     maximum_vertical_offset_m: null
     # 本地到达条件需要的连续合格观测次数，至少 2。
-    confirmation_count: 2
+    confirmation_count: 3
     # 连续到达确认观测之间的最小时间间隔，单位秒。
-    confirmation_interval_s: 0.5
+    confirmation_interval_s: 1.0
     # 单个视觉任务阶段允许的最大规划轮数。
-    maximum_planning_rounds: 30
+    maximum_planning_rounds: 18
     # 单个视觉任务阶段总时长上限，单位秒。
     maximum_task_duration_s: 600.0
     # true 允许目标不可见时按本地策略分步转向搜索。

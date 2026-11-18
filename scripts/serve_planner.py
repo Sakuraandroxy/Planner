@@ -37,7 +37,7 @@ sys.path.insert(0, str(ROOT))
 
 import uvicorn  # noqa: E402
 
-from planner.config import default_config_path, load_config  # noqa: E402
+from planner.config import default_profile, load_config, profile_config_path  # noqa: E402
 from planner.server_bootstrap import build_server  # noqa: E402
 
 
@@ -56,7 +56,14 @@ class PlannerServer(uvicorn.Server):
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default=str(default_config_path()))
+    parser.add_argument(
+        "--config",
+        help="path to a profile's base.yaml; defaults to the --profile directory",
+    )
+    parser.add_argument(
+        "--profile",
+        help=f"installed profile to start on (default: {default_profile()})",
+    )
     parser.add_argument("--host", help="override server.host")
     parser.add_argument("--port", type=int, help="override server.port")
     args = parser.parse_args()
@@ -66,7 +73,9 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     try:
-        config = load_config(args.config)
+        config = load_config(
+            args.config or str(profile_config_path(args.profile or default_profile()))
+        )
         app = build_server(config)
     except (ValueError, OSError) as error:
         raise SystemExit(f"cannot start the planner: {error}") from error
@@ -76,6 +85,7 @@ def main() -> int:
     print(
         f"ProjectAirSim VLN planner on http://{host}:{port} "
         f"(console http://{host}:{port}/, "
+        f"profile={config.profile.id}, "
         f"detector={config.server.detector}, "
         f"planner={config.server.planner}, "
         f"scene={config.projectairsim.scene_file})"

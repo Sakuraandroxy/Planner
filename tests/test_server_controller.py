@@ -7,6 +7,7 @@ from planner.application.server_controller import ServerController
 from planner.config import (
     MapCatalog,
     MapEntry,
+    ProfileInfo,
     ServerSettings,
     VehicleModelCatalog,
     VehicleModelGroup,
@@ -215,6 +216,8 @@ def _controller(workers, *, worker_class=FakeWorker, **overrides):
     vehicle_models = overrides.pop("vehicle_models", None)
     autostart_session = overrides.pop("autostart_session", True)
     session_reset = overrides.pop("session_reset", None)
+    profiles = overrides.pop("profiles", ())
+    initial_profile = overrides.pop("initial_profile", "")
 
     def factory(selection):
         selections.append(selection)
@@ -233,6 +236,8 @@ def _controller(workers, *, worker_class=FakeWorker, **overrides):
         worker_shutdown_timeout_s=shutdown_timeout,
         autostart_session=autostart_session,
         session_reset=session_reset,
+        profiles=profiles,
+        initial_profile=initial_profile,
     )
     controller._test_selections = selections
     return controller
@@ -1055,6 +1060,62 @@ def test_a_session_reset_that_raises_does_not_stall_the_restart():
 
     messages = "\n".join(item.message for item in controller.logs.read(0).items)
     assert "Session reset failed" in messages
+    controller.close()
+
+
+def _profiles():
+    return (
+        ProfileInfo("default", "世界模型规划器", "实机调校参数", "deepseek-flash"),
+        ProfileInfo("vlm", "普通 VLM 基线", "通用导航参数", "deepseek-flash"),
+    )
+
+
+def test_profile_switch_rebuilds_the_session_without_touching_the_map():
+    """Selecting a profile is a session rebuild, not a simulator restart."""
+    workers = []
+    controller = _ready_controller(
+        workers, profiles=_profiles(), initial_profile="default"
+    )
+    assert controller.profile == "default"
+
+    state = controller.request_profile("vlm")
+    assert state is ServerState.CONNECTING
+    _wait(lambda: controller.state is ServerState.IDLE and len(workers) == 2)
+
+    assert controller.profile == "vlm"
+    assert controller.status.profile == "vlm"
+    assert controller.status.profiles == ("default", "vlm")
+    assert controller.status.profile_switching is False
+    # Same map and same scene file: only the session was assembled again.
+    assert controller._test_selections[0] == controller._test_selections[1]
+    controller.close()
+
+
+def test_selecting_a_profile_twice_does_not_restart_anything():
+    workers = []
+    controller = _ready_controller(workers, profiles=_profiles())
+    assert controller.request_profile("default") is ServerState.IDLE
+    assert len(workers) == 1
+    controller.close()
+
+
+def test_profile_switch_requires_idle():
+    workers = []
+    controller = _ready_controller(workers, profiles=_profiles())
+    controller.submit("fly")
+    _wait(lambda: workers[0].tasks)
+    with pytest.raises(BackendUnavailable):
+        controller.request_profile("vlm")
+    controller.close()
+
+
+def test_profile_switch_rejects_a_name_that_is_not_installed():
+    workers = []
+    controller = _ready_controller(workers, profiles=_profiles())
+    with pytest.raises(ValueError, match="expected one of"):
+        controller.request_profile("nope")
+    assert controller.state is ServerState.IDLE
+    assert len(workers) == 1
     controller.close()
 
 

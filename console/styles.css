@@ -113,8 +113,13 @@ h1 { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: 0.2px; }
   border-bottom: 1px solid var(--line);
 }
 .tab {
-  flex: 1;
-  padding: 6px 8px;
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 6px 4px;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: 12.5px;
   color: var(--muted);
   background: transparent;
@@ -343,6 +348,12 @@ button.ghost { background: transparent; }
 .facts div { display: grid; grid-template-columns: 84px 1fr; gap: 10px; }
 .facts dt { color: var(--muted); font-size: 12px; }
 .facts dd { margin: 0; font-size: 12.5px; overflow-wrap: anywhere; }
+/* 规划器这行是「档位名 · 模型名」，长了截断比换行好读。*/
+#current-profile {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 .weather-block, .model-block {
   margin-top: 12px;

@@ -72,6 +72,12 @@ class ServerStatus:
     models: dict[str, str] | None = None
     # True while the worker is restarting to load a model's scene variant.
     models_switching: bool = False
+    #: Selected navigation profile ("" when the deployment lists none).
+    profile: str = ""
+    #: Profile ids the console may switch to.
+    profiles: tuple[str, ...] = ()
+    # True while the worker is being rebuilt from another profile's config.
+    profile_switching: bool = False
     # Last simulator restart failure, surfaced by /api/status and /api/logs.
     sim_error: str | None = None
 

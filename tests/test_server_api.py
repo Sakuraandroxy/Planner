@@ -5,6 +5,7 @@ from planner.adapters.http.server_api import create_api
 from planner.config import (
     MapCatalog,
     MapEntry,
+    ProfileInfo,
     ServerSettings,
     VehicleModelCatalog,
     VehicleModelGroup,
@@ -70,6 +71,13 @@ class FakeController:
         self.models = {"rover": "offroad", "drone": "quadrotor"}
         self.models_switching = False
         self.model_calls = []
+        self.profiles = (
+            ProfileInfo("default", "世界模型规划器", "实机调校参数", "deepseek-flash"),
+            ProfileInfo("vlm", "普通 VLM 基线", "通用导航参数", "deepseek-flash"),
+        )
+        self.profile = "default"
+        self.profile_switching = False
+        self.profile_calls = []
         self.map = "cityenviron"
         self.view_mode = "rover_chase"
         self.view_pending = False
@@ -187,6 +195,25 @@ class FakeController:
         self.models_switching = True
         return ServerState.CONNECTING
 
+    def request_profile(self, profile):
+        if not self.profiles:
+            raise ValueError("this deployment does not list any navigation profiles")
+        if self.state_value is not ServerState.IDLE:
+            raise BackendUnavailable(self.state_value)
+        chosen = str(profile).strip()
+        if chosen not in [info.id for info in self.profiles]:
+            raise ValueError(
+                f"unknown profile '{chosen}'; expected one of "
+                f"{[info.id for info in self.profiles]}"
+            )
+        if chosen == self.profile:
+            return ServerState.IDLE
+        self.profile = chosen
+        self.profile_calls.append(chosen)
+        self.state_value = ServerState.CONNECTING
+        self.profile_switching = True
+        return ServerState.CONNECTING
+
     def request_view(self, mode):
         if self.state_value in (
             ServerState.CONNECTING,
@@ -216,6 +243,9 @@ class FakeController:
             sim_error=self.sim_error,
             models=dict(self.models) if self.vehicle_models is not None else None,
             models_switching=self.models_switching,
+            profile=self.profile,
+            profiles=tuple(info.id for info in self.profiles),
+            profile_switching=self.profile_switching,
         )
 
 
@@ -321,6 +351,9 @@ def test_status_and_logs():
             "sim_error": None,
             "models": {"rover": "offroad", "drone": "quadrotor"},
             "models_switching": False,
+            "profile": "default",
+            "profiles": ["default", "vlm"],
+            "profile_switching": False,
         }
         assert simulator == "projectairsim"
         assert caps["vehicles"] == ["rover", "drone"]
@@ -615,6 +648,58 @@ def test_world_request_validates_the_body():
             ).status_code
             == 422
         )
+
+
+def test_profile_options_list_what_a_switch_would_change():
+    controller = FakeController()
+    with _client(controller) as client:
+        body = client.get("/api/profile").json()
+    assert body["current"] == "default"
+    assert [profile["id"] for profile in body["profiles"]] == ["default", "vlm"]
+    assert body["profiles"][0]["label"] == "世界模型规划器"
+    assert body["profiles"][1]["note"] == "通用导航参数"
+    assert body["profiles"][0]["model"] == "deepseek-flash"
+    assert body["switching"] is False
+
+
+def test_profile_switch_returns_202_and_shows_the_new_profile():
+    controller = FakeController()
+    with _client(controller) as client:
+        response = client.post("/api/profile", json={"profile": "vlm"})
+        assert response.status_code == 202
+        assert response.json() == {"state": "connecting", "profile": "vlm"}
+        status = client.get("/api/status").json()
+        options = client.get("/api/profile").json()
+    assert status["profile"] == "vlm"
+    assert status["profiles"] == ["default", "vlm"]
+    assert status["profile_switching"] is True
+    assert options["switching"] is True
+    assert controller.profile_calls == ["vlm"]
+
+
+def test_selecting_the_running_profile_is_a_no_op():
+    controller = FakeController()
+    with _client(controller) as client:
+        response = client.post("/api/profile", json={"profile": "default"})
+        assert response.status_code == 200
+        assert response.json() == {"state": "idle", "profile": "default"}
+    assert controller.profile_calls == []
+
+
+def test_profile_switch_rejects_an_unknown_profile():
+    controller = FakeController()
+    with _client(controller) as client:
+        response = client.post("/api/profile", json={"profile": "nope"})
+    assert response.status_code == 400
+    assert "expected one of" in response.json()["detail"]["message"]
+
+
+def test_profile_switch_is_refused_while_a_task_is_running():
+    controller = FakeController(ServerState.RUNNING)
+    with _client(controller) as client:
+        response = client.post("/api/profile", json={"profile": "vlm"})
+    assert response.status_code == 409
+    assert controller.profile_calls == []
 
 
 def test_model_options_return_the_catalog_and_selection():

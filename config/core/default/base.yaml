@@ -1,3 +1,8 @@
+profile:
+  id: default
+  label: 世界模型
+  note: 世界模型主导的导航核心，实机调校参数
+
 # ProjectAirSim（UE5）仿真连接配置。
 # CityEnviron 使用双端口协议：8991 主题（msgpack 订阅）、8992 服务（同步请求），
 # 与经典 AirSim 的 41451 RPC 不兼容。
@@ -259,7 +264,7 @@ visual_goal_navigation:
   # 本工作流是否读取仿真器碰撞事件并中断。
   collision_check_enabled: false
   # 视觉任务诊断日志和观测图像的输出根目录。
-  output_root: output/visual_goal
+  output_root: output/visual_goal/default
   # 完成判定规则文件；相对路径以主配置所在目录为基准。
   completion_rules_file: tasks/visual_goal_navigation.yaml
   # 本地表面点深度筛选：不增加模型请求，只删除明显远背景层的原有点。

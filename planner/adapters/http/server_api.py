@@ -85,6 +85,18 @@ class WorldRequest(BaseModel):
         return value.strip()
 
 
+class ProfileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    profile: str
+
+    @field_validator("profile")
+    @classmethod
+    def nonempty(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("profile must be non-empty text")
+        return value.strip()
+
+
 class ViewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     mode: ViewMode
@@ -384,6 +396,41 @@ def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAP
                 "models": dict(controller.status.models or {}),
             },
             status_code=code,
+        )
+
+    @app.get("/api/profile")
+    def profile_options():
+        # Service-level, like stopping the world: a profile picks the planner and the
+        # navigation decisions, not what a simulator can do inside the scene, so no
+        # capability gate stands in front of it.
+        catalog = getattr(controller, "profiles", ())
+        return {
+            "current": controller.profile,
+            "profiles": [
+                {
+                    "id": info.id,
+                    "label": info.label,
+                    "note": info.note,
+                    "model": info.model,
+                }
+                for info in catalog
+            ],
+            "switching": bool(controller.status.profile_switching),
+        }
+
+    @app.post("/api/profile")
+    def switch_profile(request: ProfileRequest):
+        try:
+            state = controller.request_profile(request.profile)
+        except BackendUnavailable as exc:
+            raise _unavailable(exc) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                400, detail={"message": str(exc)}
+            ) from exc
+        code = 202 if state is ServerState.CONNECTING else 200
+        return JSONResponse(
+            {"state": state.value, "profile": request.profile}, status_code=code
         )
 
     @app.get("/api/weather")

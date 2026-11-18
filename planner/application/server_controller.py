@@ -19,7 +19,7 @@ import threading
 import time
 from typing import Callable
 
-from ..config import MapCatalog, MapEntry, VehicleModelCatalog
+from ..config import MapCatalog, MapEntry, ProfileInfo, VehicleModelCatalog
 from ..domain.server import (
     BackendUnavailable,
     MapSelection,
@@ -53,6 +53,8 @@ class ServerController:
         restart_attempts: int = 2,
         worker_shutdown_timeout_s: float = 60.0,
         autostart_session: bool = True,
+        profiles: tuple[ProfileInfo, ...] = (),
+        initial_profile: str = "",
         session_reset: Callable[[], None] | None = None,
         clock=time.monotonic,
     ):
@@ -102,6 +104,13 @@ class ServerController:
             dict(vehicle_models.defaults) if vehicle_models is not None else {}
         )
         self._models_switching = False
+        # Navigation profile: the selected one decides which config the next
+        # session is assembled from. The simulator process keeps running.
+        self._profiles = tuple(profiles)
+        self._profile = initial_profile or (
+            self._profiles[0].id if self._profiles else ""
+        )
+        self._profile_switching = False
         # Map lifecycle.
         map_id = initial_map if self._maps.entry(initial_map or "") else (
             self._maps.default_map
@@ -160,11 +169,28 @@ class ServerController:
                     else None
                 ),
                 models_switching=self._models_switching,
+                profile=self._profile,
+                profiles=tuple(profile.id for profile in self._profiles),
+                profile_switching=self._profile_switching,
             )
 
     @property
     def vehicle_models(self) -> VehicleModelCatalog | None:
         return self._model_catalog
+
+    @property
+    def profile(self) -> str:
+        """The profile the next session will be built from.
+
+        The assembly reads this when it rebuilds, which is how selecting a
+        profile reaches both the in-process session and the UE4 child.
+        """
+        with self._lock:
+            return self._profile
+
+    @property
+    def profiles(self) -> tuple[ProfileInfo, ...]:
+        return self._profiles
 
     @property
     def maps(self) -> MapCatalog:
@@ -510,6 +536,46 @@ class ServerController:
         )
         return ServerState.CONNECTING
 
+    def request_profile(self, profile: str) -> ServerState:
+        """Select a navigation profile and rebuild the session from its config (idle only).
+
+        The profile carries the planner endpoint and the navigation decisions, so the
+        task pipelines are assembled again. Reloading the scene puts every vehicle
+        back at its spawn, which is what makes two profiles comparable.
+        """
+        if not self._profiles:
+            raise ValueError("this deployment does not list any navigation profiles")
+        chosen = str(profile).strip()
+        if not any(info.id == chosen for info in self._profiles):
+            raise ValueError(
+                f"unknown profile '{chosen}'; expected one of "
+                f"{[info.id for info in self._profiles]}"
+            )
+        with self._lock:
+            if (
+                self._closing.is_set()
+                or self._state is not ServerState.IDLE
+                or self._worker is None
+                or not self._worker_ready
+            ):
+                raise BackendUnavailable(self._state)
+            if chosen == self._profile:
+                return self._state
+            self._profile = chosen
+            self._profile_switching = True
+            self._sim_error = None
+            self._active = None
+            self._instruction = ""
+            self._last_result = None
+            self._pending_activation = None
+            self._view_pending = False
+            self._state = ServerState.CONNECTING
+            self._commands.put(("profile", self._generation, chosen))
+        self._log(
+            f"Switching the navigation profile to '{chosen}'; rebuilding the session."
+        )
+        return ServerState.CONNECTING
+
     # -- supervisor --------------------------------------------------------
     def _log(self, text: str, level: str = "INFO") -> None:
         self.logs.append(text, level)
@@ -563,6 +629,10 @@ class ServerController:
             self._weather_applied = False
             self._pending_activation = None
             self._view_pending = False
+            # A switch that died halfway must not leave the console reporting a
+            # switch forever: the retry rebuilds with whatever is already selected.
+            self._models_switching = False
+            self._profile_switching = False
         self._next_start = self.clock() + self.settings.reconnect_interval_s
 
     def _command(self, command) -> None:
@@ -577,6 +647,9 @@ class ServerController:
             return
         if kind == "models":
             self._switch_models()
+            return
+        if kind == "profile":
+            self._switch_profile()
             return
         if kind == "stop_world":
             self._stop_world()
@@ -724,6 +797,23 @@ class ServerController:
                 f"{vehicle}={model}" for vehicle, model in self._models.items()
             )
             + f"; loading {self._selection.scene_file}."
+        )
+        self._connect()
+
+    def _switch_profile(self) -> None:
+        """Worker CLOSED -> rebuild the session from the profile now selected."""
+        if not self._close_worker(skip_landing=True):
+            self._failed_worker(
+                "The worker did not confirm shutdown for the profile switch. "
+                "Retrying the session."
+            )
+            return
+        with self._lock:
+            profile = self._profile
+            self._profile_switching = False
+        self._log(
+            f"Navigation profile '{profile}' is active: its planner endpoint and "
+            "navigation settings are wired into the new session."
         )
         self._connect()
 

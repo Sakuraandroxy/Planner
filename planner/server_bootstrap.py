@@ -13,7 +13,12 @@ from .simulator.worker import ThreadedMissionWorker
 from .application.factories import build_detector, build_geometry, build_planner
 from .application.mission_assembly import MissionResources
 from .application.server_controller import ServerController
-from .config import AppConfig
+from .config import (
+    AppConfig,
+    load_config,
+    profile_catalog,
+    profile_config_path,
+)
 from .domain.server import MapSelection
 from .services.frame_hub import FrameHub
 from .services.trajectory_hub import TrajectoryHub
@@ -21,32 +26,53 @@ from .services.trajectory_hub import TrajectoryHub
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 
 
-def build_server(config: AppConfig):
-    """Assemble the service; it starts disconnected until a scene is chosen."""
-    detector = build_detector(
-        config,
-        config.server.detector,
-        bbox=config.server.manual_bbox,
-        surface_points=config.server.manual_surface_points,
-    )
-    planner = build_planner(config, config.server.planner)
-    geometry = build_geometry(config)
-    frames = FrameHub(max_fps=config.server.video_fps)
-    trajectory = TrajectoryHub()
+def build_resources(
+    config: AppConfig, *, frames: FrameHub, trajectory: TrajectoryHub
+) -> MissionResources:
+    """Build the per-service objects a session's task pipelines are wired from.
 
-    resources = MissionResources(
-        detector=detector,
-        planner=planner,
-        geometry=geometry,
+    The planner endpoint, the target detector and the depth geometry all come out of
+    one configuration, so choosing another profile means building these again. The
+    mission child does not share them: it reads the same file and assembles its own.
+    """
+    return MissionResources(
+        detector=build_detector(
+            config,
+            config.server.detector,
+            bbox=config.server.manual_bbox,
+            surface_points=config.server.manual_surface_points,
+        ),
+        planner=build_planner(config, config.server.planner),
+        geometry=build_geometry(config),
         trajectory=trajectory,
         frame_sink=frames.publish,
     )
 
+
+def build_server(config: AppConfig):
+    """Assemble the service; it starts disconnected until a scene is chosen."""
+    frames = FrameHub(max_fps=config.server.video_fps)
+    trajectory = TrajectoryHub()
+        # Also built at startup: an unusable model endpoint must fail the service at once.
+    resources = build_resources(config, frames=frames, trajectory=trajectory)
+
     def worker_factory(selection: MapSelection) -> ThreadedMissionWorker:
         # Which simulator owns the map is the catalog's business; the registry turns
         # that into a session, so nothing here names a simulator package.
-        entry = config.maps.entry(selection.map_id)
-        family = config.families.require(entry.simulator)
+        # The selected profile decides which base.yaml the session is built from.
+        profile = controller.profile
+        cfg = (
+            config
+            if profile == config.profile.id or not profile
+            else load_config(profile_config_path(profile))
+        )
+        wired = (
+            resources
+            if cfg is config
+            else build_resources(cfg, frames=frames, trajectory=trajectory)
+        )
+        entry = cfg.maps.entry(selection.map_id)
+        family = cfg.families.require(entry.simulator)
 
         if family.runtime_python:
             # This family's simulator client cannot be imported in the interpreter
@@ -58,11 +84,11 @@ def build_server(config: AppConfig):
             return SubprocessMissionWorker(
                 python=family.runtime_python,
                 module="planner.simulator.mission_child",
-                config_path=str(Path(config.path).resolve()),
+                config_path=str(Path(cfg.path).resolve()),
                 map_id=selection.map_id,
                 project_dir=str(PROJECT_DIR),
                 log=lambda message, level="INFO": None,
-                shutdown_timeout_s=config.drone.land_timeout_s + 10.0,
+                shutdown_timeout_s=cfg.drone.land_timeout_s + 10.0,
                 # The child's task loop cannot hold this hub, so its snapshots are
                 # adopted here -- the same object ``/api/trajectory`` reads.
                 trajectory_sink=trajectory,
@@ -71,10 +97,10 @@ def build_server(config: AppConfig):
         def session_factory(log):
             return registry.build_session(
                 entry.simulator,
-                config=config,
+                config=cfg,
                 map_entry=entry,
                 family=family,
-                resources=resources,
+                resources=wired,
                 log=log,
             )
 
@@ -98,6 +124,8 @@ def build_server(config: AppConfig):
         restart_attempts=config.simulator.restart_attempts,
         worker_shutdown_timeout_s=config.drone.land_timeout_s + 10.0,
         autostart_session=False,
+        profiles=profile_catalog(),
+        initial_profile=config.profile.id,
         # The consoles outlive the session they were filled by: switching map,
         # appearance model or configuration puts the vehicles back at spawn while
         # the remaining-trajectory panel still draws the previous run.

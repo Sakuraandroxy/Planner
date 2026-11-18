@@ -81,3 +81,56 @@ def test_service_level_features_are_not_gated_by_the_simulator():
         r'@app\.get\("/api/trajectory"\).*?return asdict\(snapshot\)', body, flags=re.S
     ).group(0)
     assert 'require("trajectory")' not in route, route
+
+
+def test_the_navigation_profile_switch_is_not_gated_either():
+    """Choosing a profile decides which planner and navigation settings are used.
+
+    Nothing in it depends on what the engine can do, so a port flag would hide the
+    switch on a family that works exactly as well: the profile tab and its two
+    endpoints stay ungated.
+    """
+    app = _code((CONSOLE / "app.js").read_text(encoding="utf-8"))
+    assert 'hasAction("profile")' not in app, (
+        "the profile tab must not depend on a simulator capability"
+    )
+    assert 'id="tab-profile"' in _html()
+    api = Path(__file__).resolve().parents[1] / "planner/adapters/http/server_api.py"
+    body = api.read_text(encoding="utf-8")
+    routes = re.search(
+        r'@app\.get\("/api/profile"\).*?status_code=code\n        \)',
+        body,
+        flags=re.S,
+    ).group(0)
+    assert 'require("profile")' not in routes, routes
+
+
+def test_the_profile_panel_shows_only_which_profile_is_running():
+    """The switch is a demo prop: the name of the profile, nothing else.
+
+    The panel used to render each profile's note and ``模型：<name>`` straight out of
+    the config, and to paste the backend's English error onto the page. That put a
+    vendor name and an endpoint string in front of an audience and turned a short
+    switch into a wall of text.
+    """
+    app = _code((CONSOLE / "app.js").read_text(encoding="utf-8"))
+    html = _html()
+    assert "deepseek" not in (app + html).lower()
+    assert "info.note" not in app, "the note is operator information, not screen text"
+    assert "info.model" not in app, "the model name belongs in the log, not the panel"
+    switch = re.search(
+        r"async function applyProfile\(\).*?\n}", app, flags=re.S
+    ).group(0)
+    assert "error.message" not in switch, (
+        "the profile panel must not quote the backend's message"
+    )
+    assert 'id="profile-choice"' in html, "the panel uses the same select as the other tabs"
+    assert 'id="profile-current"' in html, "the panel keeps the status line the other tabs have"
+    status = re.search(
+        r'\$\("profile-current"\)\.textContent =.*?;', app, flags=re.S
+    ).group(0)
+    assert "profileName(" in status, "the status line shows the profile name"
+    assert "model" not in status and "note" not in status, (
+        "the status line carries the name, or one word while switching"
+    )
+
