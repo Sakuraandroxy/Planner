@@ -269,13 +269,29 @@ Xvfb 由 xpra 自己拉起。
 
 ## 8 控制台
 
-单页应用，`console/index.html` + `app.js` + `styles.css`，没有打包步骤。
+单页应用，`console/index.html` + `styles.css` + `console/src/`，没有打包步骤。
+
+| 文件 | 负责 |
+|---|---|
+| `src/core.js` | 常量、共享状态、`request()`、渲染入口、能力门控、tab |
+| `src/world.js` | 地图与天气面板 |
+| `src/settings.js` | 载具外观与配置档面板 |
+| `src/flight.js` | 剩余航点列表、画面通道（xpra 与 MJPEG）、机位 |
+| `src/scene3d.js` | 轨迹三维视图，ES module |
+| `src/app.js` | 状态轮询、任务提交与停止、事件绑定，最后加载并调 `init()` |
+
+除 `scene3d.js` 外都是 classic script：顶层 `let` 是同一 realm 的全局词法绑定，跨文件可读写，
+所以加载顺序就是依赖顺序，`app.js` 必须排在最后。
 
 - 控件由 `capabilities` 决定是否出现，代码里不出现仿真器名字。
 - 门控按卡片 id 点名，不按 DOM 嵌套查找：曾经用 `closest("section")` 找卡片，
   UE4 缺 `models` 能力时整张世界设置卡被藏起来。
 - 状态轮询驱动界面：`connecting` 或 `view_pending` 时用不透明遮罩盖住画面，机位到位才显示。
 - 画面是嵌入的 xpra iframe，默认端口 10010，可用 `?xpra=host:port` 覆盖。
+- 三维视图用 CDN 上的 three.js，在模块里动态 import，取库有 8 秒上限。
+  视图以机头为上方：相机方位角跟着 `vehicle.yaw_deg`，载具转向或移动时路线在屏幕里跟着转。
+  库取不到或没有 WebGL 时整块隐藏，原因只写进 `console.warn`；
+  快照仍由 `flight.js` 持有，面板不自己再轮询一次。
 
 ## 9 约束由什么守着
 

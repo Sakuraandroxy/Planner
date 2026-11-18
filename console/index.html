@@ -11,8 +11,7 @@
 <body>
   <header class="topbar">
     <div>
-      <h1>ProjectAirSim VLN 控制台</h1>
-      <p class="subtitle">无人机 / 无人车视觉语言导航 · 实时画面、规划状态与剩余轨迹</p>
+      <h1>视觉语言导航在线控制台</h1>
     </div>
     <div class="topbar-actions">
       <a class="ghost" id="world-model" href="#"
@@ -44,16 +43,18 @@
           未连接任何场景
           <small>先在「世界设置」选择地图并点击「启动场景」，就绪后点「重试画面」</small>
         </div>
-        <div class="shield" id="view-shield" hidden></div>
+        <div class="shield" id="view-shield" hidden>
+          <p id="shield-hint"></p>
+        </div>
       </div>
       <div class="card-foot">
-        <span class="muted" id="view-hint">xpra 交互画面 · 点击画面后用 WASD / 右键拖动</span>
+        <span class="muted" id="view-hint">点击画面后用 WASD / 右键拖动</span>
         <div class="foot-actions">
           <div class="segmented" id="view-modes" role="group" aria-label="任务视角">
-            <button type="button" data-mode="rover_front" title="无人车前视">车前</button>
-            <button type="button" data-mode="rover_chase" title="无人车追尾">车尾</button>
-            <button type="button" data-mode="drone_front" title="无人机前视">机前</button>
-            <button type="button" data-mode="drone_chase" title="无人机追尾">机尾</button>
+            <button type="button" data-perspective="first"
+              title="当前载具的前视相机">第一人称</button>
+            <button type="button" data-perspective="third"
+              title="从后上方跟着当前载具">第三人称</button>
           </div>
           <button type="button" class="ghost" id="focus-view"
             title="返回画面接收键盘输入；鼠标视角请点击画面">恢复控制</button>
@@ -73,10 +74,10 @@
         <form id="task-form" class="stack">
           <label>载具</label>
           <div class="segmented" id="vehicle-modes" role="group" aria-label="选择载具">
-            <button type="button" data-vehicle="rover"
-              title="切换到无人车：停放无人机并回到起点">无人车</button>
             <button type="button" data-vehicle="drone"
               title="切换到无人机：停放无人车并回到起点">无人机</button>
+            <button type="button" data-vehicle="rover"
+              title="切换到无人车：停放无人机并回到起点">无人车</button>
           </div>
           <label for="instruction">指令</label>
           <textarea id="instruction" rows="3" maxlength="2000"
@@ -90,12 +91,17 @@
           </div>
         </form>
         <p class="feedback" id="feedback" role="status"></p>
-        <dl class="facts">
-          <div><dt>当前载具</dt><dd id="current-vehicle">—</dd></div>
-          <div><dt>当前指令</dt><dd id="current-instruction">—</dd></div>
-          <div><dt>最近结果</dt><dd id="last-result">—</dd></div>
-          <div><dt>当前档位</dt><dd id="current-profile">—</dd></div>
-        </dl>
+        <div class="facts-row">
+          <dl class="facts">
+            <div><dt>当前载具</dt><dd id="current-vehicle">—</dd></div>
+            <div><dt>当前指令</dt><dd id="current-instruction">—</dd></div>
+            <div><dt>最近结果</dt><dd id="last-result">—</dd></div>
+            <div><dt>当前档位</dt><dd id="current-profile">—</dd></div>
+          </dl>
+          <div class="scene" id="scene-card">
+            <canvas id="scene-canvas"></canvas>
+          </div>
+        </div>
       </section>
 
       <section class="card settings-card" id="settings-card">
@@ -111,7 +117,6 @@
         </div>
         <div class="tab-panels">
           <div class="tab-panel" id="panel-world" role="tabpanel" aria-labelledby="tab-world">
-            <p class="panel-status muted" id="world-current">选项未加载</p>
             <div class="stack">
               <label for="world-map">地图</label>
               <select id="world-map" disabled></select>
@@ -126,7 +131,6 @@
 
           <div class="tab-panel" id="panel-weather" role="tabpanel"
             aria-labelledby="tab-weather" hidden>
-            <p class="panel-status hint" id="weather-current">—</p>
             <div class="stack">
               <label for="weather-preset">预设</label>
               <select id="weather-preset" disabled></select>
@@ -143,7 +147,6 @@
 
           <div class="tab-panel" id="panel-models" role="tabpanel"
             aria-labelledby="tab-models" hidden>
-            <p class="panel-status hint" id="models-current">—</p>
             <div class="stack">
               <label for="model-rover">无人车模型</label>
               <select id="model-rover" disabled></select>
@@ -158,7 +161,6 @@
 
           <div class="tab-panel" id="panel-profile" role="tabpanel"
             aria-labelledby="tab-profile" hidden>
-            <p class="panel-status hint" id="profile-current">—</p>
             <div class="stack">
               <label for="profile-choice">当前档位</label>
               <select id="profile-choice" disabled></select>
@@ -190,10 +192,14 @@
   </main>
 
   <footer class="foot">
-    <span>状态与剩余轨迹来自规划服务；执行日志仍可通过 /api/logs 获取。交互画面经 xpra 提供。</span>
     <a href="/docs" target="_blank" rel="noopener">API 文档 ↗</a>
   </footer>
 
-  <script src="/console/app.js"></script>
+  <script src="/console/src/core.js"></script>
+  <script src="/console/src/world.js"></script>
+  <script src="/console/src/settings.js"></script>
+  <script src="/console/src/flight.js"></script>
+  <script src="/console/src/app.js"></script>
+  <script type="module" src="/console/src/scene3d.js"></script>
 </body>
 </html>

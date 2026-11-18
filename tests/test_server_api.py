@@ -974,7 +974,7 @@ def test_console_files_are_served():
     with _client(controller) as client:
         index = client.get("/")
         assert index.status_code == 200
-        assert "ProjectAirSim VLN 控制台" in index.text
+        assert "视觉语言导航在线控制台" in index.text
         assert 'id="xpra-frame"' in index.text
         assert 'id="vehicle-modes"' in index.text
         assert 'data-vehicle="rover"' in index.text
@@ -984,19 +984,16 @@ def test_console_files_are_served():
         assert 'id="world-map"' in index.text
         assert 'id="world-apply"' in index.text
         assert 'id="world-reload"' in index.text
-        assert 'id="world-current"' in index.text
         assert 'id="model-rover"' in index.text
         assert 'id="model-drone"' in index.text
         assert 'id="models-apply"' in index.text
-        assert 'id="models-current"' in index.text
         assert 'id="models-feedback"' in index.text
         assert 'id="view-modes"' in index.text
-        assert 'data-mode="rover_front"' in index.text
-        assert 'data-mode="drone_chase"' in index.text
+        assert 'data-perspective="first"' in index.text
+        assert 'data-perspective="third"' in index.text
         assert 'id="weather-apply"' in index.text
         assert 'id="weather-preset"' in index.text
         assert 'id="weather-fields"' in index.text
-        assert 'id="weather-current"' in index.text
         assert 'id="world-color"' not in index.text
         assert 'id="trajectory-list"' in index.text
         assert 'id="trajectory-empty"' in index.text
@@ -1004,47 +1001,29 @@ def test_console_files_are_served():
         assert 'id="view-shield"' in index.text
         assert index.headers["cache-control"] == "no-cache"
 
-        script = client.get("/console/app.js")
-        assert script.status_code == 200
-        assert "pollStatus" in script.text
-        assert "pollTrajectory" in script.text
-        assert "renderTrajectory" in script.text
-        assert "/api/trajectory" in script.text
-        assert "/api/tasks" in script.text
-        assert "/api/home" in script.text
-        assert "/api/vehicle" in script.text
-        assert "activateVehicle" in script.text
-        assert "drone_front" in script.text
-        assert "xpra-frame" in script.text
-        assert "10010" in script.text
-        assert "view-toggle" in script.text
-        assert "vehicle-modes" in script.text
-        assert "selectedVehicle" in script.text
-        assert "VEHICLE_LABELS" in script.text
-        assert "world-apply" in script.text
-        assert "/api/world/options" in script.text
-        assert "/api/world" in script.text
-        assert "/api/models" in script.text
-        assert "loadModelOptions" in script.text
-        assert "applyModels" in script.text
-        assert "model-drone" in script.text
-        assert "/api/view" in script.text
-        assert "/api/weather" in script.text
-        assert "applyWeather" in script.text
-        assert "applyWorld" in script.text
-        assert "disconnected" in script.text
-        assert "启动场景" in script.text
-        assert "requestView" in script.text
-        assert "renderViewButtons" in script.text
-        assert "view_pending" in script.text
-        assert "renderViewShield" in script.text
-        assert "view-shield" in script.text
-        assert "resetXpra" in script.text
-        assert "world-map" in script.text
-        assert "weather-preset" in script.text
-        assert "trajectory-toggle" in script.text
-        assert "/api/video" in script.text
-        assert script.headers["cache-control"] == "no-cache"
+        # The console is split into classic scripts sharing one global scope.
+        # Checking their concatenation keeps this test about behaviour, not about
+        # which file a function happens to live in.
+        tokens = (
+            "pollStatus", "pollTrajectory", "renderTrajectory", "/api/trajectory",
+            "/api/tasks", "/api/home", "/api/vehicle", "activateVehicle",
+            "drone_front", "xpra-frame", "10010", "view-toggle", "vehicle-modes",
+            "selectedVehicle", "VEHICLE_LABELS", "world-apply", "/api/world/options",
+            "/api/world", "/api/models", "loadModelOptions", "applyModels",
+            "model-drone", "/api/view", "/api/weather", "applyWeather", "applyWorld",
+            "disconnected", "启动场景", "requestView", "renderViewButtons",
+            "view_pending", "renderViewShield", "view-shield", "resetXpra",
+            "world-map", "weather-preset", "trajectory-toggle", "/api/video",
+        )
+        source = ""
+        for name in ("core.js", "world.js", "settings.js", "flight.js", "app.js"):
+            part = client.get(f"/console/src/{name}")
+            assert part.status_code == 200, name
+            assert part.headers["cache-control"] == "no-cache"
+            source += part.text
+        for token in tokens:
+            assert token in source, token
+        assert client.get("/console/src/scene3d.js").status_code == 200
 
         styles = client.get("/console/styles.css")
         assert styles.status_code == 200

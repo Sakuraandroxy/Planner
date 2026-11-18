@@ -11,6 +11,14 @@ import re
 from pathlib import Path
 
 CONSOLE = Path(__file__).resolve().parents[1] / "console"
+SRC = CONSOLE / "src"
+#: classic scripts in load order; app.js binds events last, so it must come last.
+SCRIPTS = ("core.js", "world.js", "settings.js", "flight.js", "app.js")
+
+
+def _sources() -> str:
+    """All console scripts joined, so moving a function between files is not an edit here."""
+    return "\n".join((SRC / name).read_text(encoding="utf-8") for name in SCRIPTS)
 
 
 def _html() -> str:
@@ -19,7 +27,7 @@ def _html() -> str:
 
 def test_gated_ids_exist_in_the_markup():
     """A gate that names a missing element silently does nothing."""
-    app = (CONSOLE / "app.js").read_text(encoding="utf-8")
+    app = _sources()
     body = re.search(r"function applyCapabilities\(\).*?\n}", app, flags=re.S).group(0)
     gated = set(re.findall(r'\$\("([a-z0-9-]+)"\)', body))
     assert gated, "applyCapabilities references no ids at all"
@@ -28,7 +36,7 @@ def test_gated_ids_exist_in_the_markup():
 
 
 def test_capability_gating_hides_a_tab_not_the_settings_card():
-    app = _code((CONSOLE / "app.js").read_text(encoding="utf-8"))
+    app = _code(_sources())
     body = re.search(r"function applyCapabilities\(\).*?\n}", app, flags=re.S).group(0)
     assert 'show($("tab-models")' in body, body
     assert "models-card" not in body, "the card is gone; hide the tab instead"
@@ -55,7 +63,7 @@ def _code(text: str) -> str:
 
 
 def test_gating_uses_explicit_card_ids_not_dom_nesting():
-    app = _code((CONSOLE / "app.js").read_text(encoding="utf-8"))
+    app = _code(_sources())
     assert 'closest("section")' not in app, (
         "capability gating must name the card it hides; resolving it by DOM nesting "
         "made moving a control between cards hide the wrong panel"
@@ -70,7 +78,7 @@ def test_service_level_features_are_not_gated_by_the_simulator():
     for data its shared workflows were already writing, and the card was hidden
     for it. A capability gate may only hide something the engine cannot do.
     """
-    app = _code((CONSOLE / "app.js").read_text(encoding="utf-8"))
+    app = _code(_sources())
     assert 'hasAction("trajectory")' not in app, (
         "the remaining-trajectory card must not depend on a simulator capability"
     )
@@ -90,7 +98,7 @@ def test_the_navigation_profile_switch_is_not_gated_either():
     switch on a family that works exactly as well: the profile tab and its two
     endpoints stay ungated.
     """
-    app = _code((CONSOLE / "app.js").read_text(encoding="utf-8"))
+    app = _code(_sources())
     assert 'hasAction("profile")' not in app, (
         "the profile tab must not depend on a simulator capability"
     )
@@ -113,7 +121,7 @@ def test_the_profile_panel_shows_only_which_profile_is_running():
     vendor name and an endpoint string in front of an audience and turned a short
     switch into a wall of text.
     """
-    app = _code((CONSOLE / "app.js").read_text(encoding="utf-8"))
+    app = _code(_sources())
     html = _html()
     assert "deepseek" not in (app + html).lower()
     assert "info.note" not in app, "the note is operator information, not screen text"
@@ -135,12 +143,30 @@ def test_the_profile_panel_shows_only_which_profile_is_running():
     assert 'setProfileFeedback("已切换", "ok")' in switch, (
         "a choice made before a scene starts must not stay on 切换中…"
     )
-    assert 'id="profile-current"' in html, "the panel keeps the status line the other tabs have"
-    status = re.search(
-        r'\$\("profile-current"\)\.textContent =.*?;', app, flags=re.S
-    ).group(0)
-    assert "profileName(" in status, "the status line shows the profile name"
-    assert "model" not in status and "note" not in status, (
-        "the status line carries the name, or one word while switching"
+
+
+def test_the_scripts_load_in_dependency_order():
+    """Classic scripts share one global scope, so order is the only wiring.
+
+    ``app.js`` calls ``init()`` at the end and touches every panel, so it has to be
+    the last tag; ``core.js`` owns the shared state the others read.
+    """
+    html = _html()
+    tags = re.findall(r'<script src="/console/src/([a-z0-9.]+)"></script>', html)
+    assert tags[: len(SCRIPTS)] == list(SCRIPTS), tags
+    assert '<script type="module" src="/console/src/scene3d.js"></script>' in html
+
+
+def test_the_3d_panel_is_optional_and_shares_one_snapshot():
+    """The waypoint list owns the snapshot; the 3D panel only receives it."""
+    scene = (SRC / "scene3d.js").read_text(encoding="utf-8")
+    assert "Promise.race([import(CDN), timeout])" in scene, (
+        "a library that never arrives must not hang the module"
+    )
+    assert "window.Trajectory3D" in scene
+    flight = _code((SRC / "flight.js").read_text(encoding="utf-8"))
+    assert "window.Trajectory3D.update(snapshot)" in flight
+    assert '"/api/trajectory"' not in _code(scene), (
+        "the panel must not poll a second copy of the same snapshot"
     )
 
