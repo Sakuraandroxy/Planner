@@ -322,7 +322,7 @@ runtime_python: /home/<user>/miniconda3/envs/vln-ue4/bin/python
 
 # config/maps.yaml
 binary: /opt/simulators/CityEnviron/Binaries/Linux/CityEnviron-Linux-Shipping
-binary: /data/airsim/Blocks/LinuxNoEditor/Blocks/Binaries/Linux/Blocks
+binary: /roxy/vln/airsim/Blocks/LinuxNoEditor/Blocks/Binaries/Linux/Blocks
 ```
 
 ## 13 故障排查

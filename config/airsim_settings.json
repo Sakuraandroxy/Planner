@@ -1,6 +1,6 @@
 {
   "SeeDocsAt": "https://microsoft.github.io/AirSim/settings/",
-  "_why": "planner 自用的 AirSim settings，不动 /data/airsim/settings.json（airsim-flight-console 在用它）。RGB 保持 1280x720 供模型输入；深度改为 256x144 是传输层决定的：pixels_as_float=True 把深度当 float 数组发，msgpack-python 0.5.6 只有纯 Python 实现，实测 36864 个 float 同帧取回 0.24s，921600 个要 25-37s。两个 ImageType 用同一个 FOV，深度几何才能直接用 depth_intrinsics 反投射。",
+  "_why": "planner 自用的 AirSim settings，不动 /roxy/vln/airsim/settings.json（airsim-flight-console 在用它）。RGB 保持 1280x720 供模型输入；深度改为 256x144 是传输层决定的：pixels_as_float=True 把深度当 float 数组发，msgpack-python 0.5.6 只有纯 Python 实现，实测 36864 个 float 同帧取回 0.24s，921600 个要 25-37s。两个 ImageType 用同一个 FOV，深度几何才能直接用 depth_intrinsics 反投射。",
   "SettingsVersion": 1.2,
   "LogMessagesVisible": false,
   "ClockSpeed": 1,

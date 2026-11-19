@@ -382,7 +382,7 @@ def test_engine_child_is_ours_by_exe_and_settings_marker(tmp_path):
     assert harness.driver.owned_map(77) == "blocks"
 
 
-CITY = "/roxy/sakura/XV3DGS-airsim-vln/sim/CityEnviron/Binaries/Linux/CityEnviron-Linux-Shipping"
+CITY = "/roxy/vln/projectairsim/CityEnviron/Binaries/Linux/CityEnviron-Linux-Shipping"
 TOPICS_PORT = 20991
 SERVICES_PORT = 20992
 

@@ -85,7 +85,7 @@ airsim:
   label: AirSim (UE4)
   driver: xpra_start
   runtime: planner.simulators.airsim
-  # planner 自己的一份 settings，不动 /data/airsim/settings.json（那是 airsim-flight-console 在用的）。
+  # planner 自己的一份 settings，不动 /roxy/vln/airsim/settings.json（那是 airsim-flight-console 在用的）。
   # RGB 与深度必须同尺寸，原因见 config/airsim_settings.json 的 _why。
   settings_file: config/airsim_settings.json
   # 连接数据。名字来自 settings.json，与地图无关，所以放在家族段而不是 maps.yaml。
