@@ -272,6 +272,53 @@ async function returnHome() {
   }
 }
 
+// 预设指令读 console/presets.json：一个字符串数组，一条一行。后端把 console/ 目录
+// 当静态文件伺服，加指令只改这个文件再刷新页面。
+let presetCommands = [];
+
+function renderPresetCommands() {
+  const select = $("instruction-preset");
+  select.replaceChildren();
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "";
+  select.appendChild(placeholder);
+  for (const text of presetCommands) {
+    const node = document.createElement("option");
+    node.value = text;
+    node.textContent = text;
+    select.appendChild(node);
+  }
+  select.value = "";
+  $("preset-strip").hidden = presetCommands.length === 0;
+}
+
+async function loadPresetCommands() {
+  try {
+    const body = await request("/console/presets.json");
+    presetCommands = Array.isArray(body)
+      ? body
+          .map((text) => (typeof text === "string" ? text.trim() : ""))
+          .filter((text) => text.length > 0)
+      : [];
+  } catch (error) {
+    // 预设文件缺失或写坏：下拉框隐藏，指令输入框照常可用。
+    presetCommands = [];
+  }
+  renderPresetCommands();
+}
+
+function applyPresetCommand() {
+  const select = $("instruction-preset");
+  const text = select.value;
+  // 选完回到「预设」，同一条可以连续选两次。
+  select.value = "";
+  if (!text) return;
+  $("instruction").value = text;
+  renderControls();
+  setFeedback("已填入预设指令，点击「开始执行」提交。");
+}
+
 function init() {
   // Browser-level jump to the world-model service on this same host; the
   // console does not call it. Scheme follows the page, host follows the
@@ -286,6 +333,7 @@ function init() {
     renderControls();
   });
   $("instruction").addEventListener("input", renderControls);
+  $("instruction-preset").addEventListener("change", applyPresetCommand);
   $("instruction").addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
@@ -368,6 +416,7 @@ function init() {
 
   setState("unknown");
   renderControls();
+  loadPresetCommands();
   loadWorldOptions();
   loadWeatherOptions();
   loadModelOptions();

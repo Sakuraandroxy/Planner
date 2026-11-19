@@ -80,8 +80,14 @@
               title="切换到无人车：停放无人机并回到起点">无人车</button>
           </div>
           <label for="instruction">指令</label>
-          <textarea id="instruction" rows="3" maxlength="2000"
-            placeholder="例如：向前直行 5 米，然后左转 90 度，再开到前方的红色汽车；或：飞到画面中的目标"></textarea>
+          <div class="instruction-row">
+            <textarea id="instruction" rows="3" maxlength="2000"
+              placeholder="例如：向前直行 5 米，然后左转 90 度，再开到前方的红色汽车；或：飞到画面中的目标"></textarea>
+            <label class="preset-strip" id="preset-strip" hidden>
+              <select id="instruction-preset"></select>
+              <span aria-hidden="true">☰</span>
+            </label>
+          </div>
           <div class="toolbar">
             <button type="submit" id="start" class="primary" disabled>开始执行</button>
             <button type="button" id="stop" class="danger" disabled>停止当前任务</button>

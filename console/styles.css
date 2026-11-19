@@ -271,6 +271,31 @@ a.ghost:hover { border-color: #3a4a51; }
 .stack { display: flex; flex-direction: column; gap: 6px; }
 label { color: var(--muted); font-size: 12px; }
 
+/* 输入框右边切出来的一条竖栏：整条都是下拉框的点击区，图标由 span 画。 */
+.instruction-row { display: flex; align-items: stretch; gap: 6px; }
+.instruction-row textarea { flex: 1; min-width: 0; }
+.preset-strip {
+  position: relative;
+  flex: none;
+  width: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+.preset-strip:hover { border-color: #3a4a51; }
+.preset-strip:focus-within { border-color: rgba(76,194,165,.6); }
+.preset-strip select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+.preset-strip span { color: var(--muted); font-size: 14px; pointer-events: none; }
+
 input, textarea, select {
   width: 100%;
   border: 1px solid var(--line);
