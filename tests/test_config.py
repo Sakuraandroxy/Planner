@@ -423,7 +423,7 @@ def test_repository_catalog_lists_the_supported_maps():
     config = load_config(default_config_path())
     pas = tuple(e.id for e in config.maps.maps if e.simulator == "projectairsim")
     air = tuple(e.id for e in config.maps.maps if e.simulator == "airsim")
-    assert pas == ("cityenviron", "neighborhood")
+    assert pas == ("cityenviron", "neighborhood", "jiaoliucenter")
     # AirSim UE4 binaries come from airsim-flight-console's scene table.
     assert air == (
         "airsimnh", "abandonedpark", "msbuild2018", "trapcam", "blocks", "shanghai",

@@ -1,0 +1,29 @@
+// /Game/Maps/JiaoLiuCenter, PlayerStart_0. UE world position in cm: [690, -970, 112].
+// UE yaw in degrees: -130. No map-specific geodetic origin has been set.
+// Other settings follow Planner main 0a5f999 (Neighborhood).
+{
+  "id": "SceneJiaoLiuCenterDrone",
+  "actors": [
+    {
+      "type": "robot",
+      "name": "Drone1",
+      "origin": {
+        "xyz": "6.9 -9.7 -1.12",
+        "rpy-deg": "0 0 -130"
+      },
+      "robot-config": "robot_drone_cameras.jsonc"
+    }
+  ],
+  "clock": {
+    "type": "steppable",
+    "step-ns": 3000000,
+    "real-time-update-rate": 3000000,
+    "pause-on-start": false
+  },
+  "segmentation": {
+    "initialize-ids": true,
+    "ignore-existing": false,
+    "use-owner-name": true
+  },
+  "scene-type": "UnrealNative"
+}
