@@ -15,6 +15,10 @@ from planner.services.segment_motion import MotionLimits as ConfiguredMotionLimi
 
 WIDTH, HEIGHT = 4, 3
 GROUND_Z = 0.85
+# The JiaoLiuCenter map authors its spawn 1.4 m above the surface the drone
+# settles on. The test only needs a surface below the spawn; the value is that
+# map's measurement.
+SPAWN_ABOVE_GROUND_M = 1.4
 ROBOT_TOPIC = "/Sim/SceneTest/robots/Drone1"
 COLLISION_TOPIC = f"{ROBOT_TOPIC}/collision_info"
 KINEMATICS_TOPIC = f"{ROBOT_TOPIC}/GetGroundTruthKinematics"
@@ -338,6 +342,27 @@ def test_start_records_the_spawn_pose_before_the_drone_is_hidden():
     assert (returned.x, returned.y, returned.z) == pytest.approx(
         (home.x, home.y, home.z)
     )
+    drone.close()
+
+
+def test_return_home_lands_on_the_measured_ground_not_the_authored_spawn():
+    drone, connection, robot, _ = make_drone()
+    drone.start()
+    home = drone._home_pose
+    # The drone settles below the spawn before the first task measures the
+    # ground. NED z grows downward, so that surface is a larger z.
+    robot.z = home.z + SPAWN_ABOVE_GROUND_M
+    drone.prepare(takeoff_if_landed=True)
+    assert drone._ground_z == pytest.approx(home.z + SPAWN_ABOVE_GROUND_M)
+    connection.advances.clear()
+
+    returned = drone.return_home()
+    # Reaching the spawn z again would leave the drone hanging above the
+    # surface: ``_is_landed`` false at home, so the settle wait would tick out
+    # its whole timeout while the engine keeps flying its previous goal.
+    assert returned.z == pytest.approx(home.z + SPAWN_ABOVE_GROUND_M)
+    assert drone._is_landed()
+    assert sum(connection.advances) < drone._land_settle_timeout_s
     drone.close()
 
 

@@ -324,6 +324,14 @@ class ProjectAirSimDrone:
         if self._ground_z is None:
             # The spawn pose is the ground reference for touchdown checks.
             self._ground_z = home.z
+        elif self._ground_z > home.z:
+            # The authored spawn can float above the surface the vehicle really
+            # rests on: this map's spawn is 1.4 m up, so returning to the
+            # authored z left the drone hovering, ``_is_landed`` never became
+            # true, and the settle wait below spent its whole timeout while the
+            # engine's stale goal lifted the drone away. The measured ground is
+            # the height a returned drone has to reach.
+            home = WorldPose(home.x, home.y, self._ground_z, home.yaw_deg)
         last_error: Exception | None = None
         for attempt in range(2):
             try:
