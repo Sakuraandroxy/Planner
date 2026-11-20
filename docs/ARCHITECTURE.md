@@ -56,10 +56,10 @@
 | `planner/workflows/` | 三类任务的阶段实现与生命周期（prepare/run） |
 | `planner/application/` | 解析→校验→路由→执行，会话装配，服务控制器 |
 | `planner/adapters/` | 与推理服务、浏览器打交道；`http/` 是路由与 MJPEG |
-| `planner/simulator/` | 两族共用的进程栈、注册表、worker、地图标记 |
-| `planner/simulators/<name>/` | 每族一个包，只有这里有仿真器客户端库的 import |
+| `planner/simulator/` | 两套仿真器共用的进程栈、注册表、worker、地图标记 |
+| `planner/simulators/<name>/` | 每套仿真器一个包，只有这里有仿真器客户端库的 import |
 | `console/` | 单页控制台，无构建步骤 |
-| `config/` | 服务配置、地图目录、家族配置、场景、任务规则 |
+| `config/` | 服务配置、地图、仿真器配置、场景、任务规则 |
 | `scripts/` | 启动、自检、机位标定、实机冒烟 |
 
 `planner/simulator/` 与 `planner/simulators/` 是两个不同的东西：前者是进程与协议，后者是每个引擎的适配层。
@@ -105,7 +105,7 @@ ACTION_PORTS = {"home": "home", "models": "models", "video": "frames", "weather"
 
 加一个任务就是加一行，不是加一个分支。
 
-### 4.3 两族实现
+### 4.3 两套仿真器的实现
 
 | 端口 | projectairsim (UE5) | airsim (UE4) |
 |---|---|---|
@@ -194,19 +194,19 @@ disconnected → connecting → idle ⇄ running → stopping
 
 ### 6.3 仿真栈
 
-两族共用一个驱动 `simulator/xpra_start.py`，
+两套仿真器共用一个驱动 `simulator/xpra_start.py`，
 它渲染 `config/simulators.yaml` 里的 argv 并执行 `xpra start --start-child`：引擎是 xpra 的子进程，
 Xvfb 由 xpra 自己拉起。
 
 | 环节 | 判据 |
 |---|---|
-| 就绪 | 家族声明探针：`window`（窗口 map 且归属对上）、`ports`（端口有人听）、`rpc`（UE4 专属） |
+| 就绪 | 各仿真器段声明探针：`window`（窗口 map 且归属对上）、`ports`（端口有人听）、`rpc`（UE4 专属） |
 | 归属 | `/proc/<pid>/exe` 真路径在 `config/maps.yaml` 里；UE4 另需 argv 里的 `-settings=` 标记 |
 | 停止 | 只停自己拉起过的进程树；先校验后动作，别人的栈只告警 |
 | 显示 | 启动前回收持有者已死的 X 锁；别人的显示号拒绝 |
 | 记录 | 拉起成功后写 `current_map`，服务重启据此恢复 |
 
-`FamilyRouter` 决定"哪一族负责停、哪一族负责起"：按 marker 找到在跑的那一族先 stop，再交给目标家族 launch。
+`FamilyRouter` 决定谁负责停、谁负责起：按 marker 找到正在跑的那套仿真器先 stop，再交给目标仿真器 launch。
 
 ### 6.4 会话握手
 
@@ -304,7 +304,7 @@ Xvfb 由 xpra 自己拉起。
 | 服务进程不加载 AirSim 客户端栈 | 新解释器里导入主进程模块，看 `sys.modules` |
 | 声明的端口槽有真实实现 | 比对 `PORT_SLOTS` 与 `build_ports`、协议成员 |
 
-另有几条针对性测试：`test_family_router.py`（哪一族负责停）、
+另有几条针对性测试：`test_family_router.py`（谁负责停）、
 `test_airsim_port_names.py` （属性名与真实成员一致，不用整机启动才发现）、
 `test_console_gating.py`（前端门控）、`test_scene_spawns.py`（场景出生点）、
 `test_runtime_catalog.py` 与 `test_airsim_session.py` （声明的端口槽与实际填的槽一致）。

@@ -2,7 +2,7 @@
 
 import pytest
 
-from planner.config import MapEntry
+from planner.config import MapEntry, MapScene
 from planner.simulator.argv import argv_values, render, render_argv
 from planner.domain.runtime import SimulatorFamily
 
@@ -18,8 +18,7 @@ def values(entry=None, simulator=None):
     return argv_values(
         entry=entry or MapEntry(
             id="city", label="城市", simulator="projectairsim",
-            launch_map="cityenviron", scene_file="scene_city_dual.jsonc",
-            sim_config_path="config/scenes/city",
+            launch_map="cityenviron", scene=MapScene(file="scene_city_dual.jsonc", config_path="config/scenes/city"),
             binary="/sim/CityEnviron/Binaries/Linux/CityEnviron-Linux-Shipping",
             map_name="CityEnviron",
         ),

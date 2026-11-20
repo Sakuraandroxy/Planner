@@ -19,7 +19,7 @@ import tempfile
 import pytest
 import yaml
 
-from planner.config import MapCatalog, MapEntry, SimulatorSettings
+from planner.config import MapCatalog, MapEntry, SimulatorSettings, MapScene
 from planner.domain.runtime import SimulatorFamily, parse_family_catalog
 from planner.errors import SimulatorNotOwned, SimulatorRestartError
 from planner.simulator.marker import read_map_marker, write_map_marker
@@ -97,8 +97,7 @@ def _maps():
             MapEntry(id="campus", label="Campus", simulator="airsim",
                      binary=CAMPUS, map_name="Campus"),
             MapEntry(id="cityenviron", label="City", simulator="projectairsim",
-                     launch_map="cityenviron", scene_file="scene_city_dual.jsonc",
-                     sim_config_path="config/scenes/city"),
+                     launch_map="cityenviron", scene=MapScene(file="scene_city_dual.jsonc", config_path="config/scenes/city")),
         ),
     )
 
@@ -410,8 +409,7 @@ def _ue5_maps():
         maps=(
             MapEntry(id="cityenviron", label="City", simulator="projectairsim",
                      binary=CITY, map_name="CityEnviron",
-                     scene_file="scene_city_dual.jsonc",
-                     sim_config_path="config/scenes/city"),
+                     scene=MapScene(file="scene_city_dual.jsonc", config_path="config/scenes/city")),
         ),
     )
 
@@ -783,8 +781,7 @@ def _both_maps():
                      binary=BLOCKS, map_name="Blocks"),
             MapEntry(id="cityenviron", label="City", simulator="projectairsim",
                      binary=CITY, map_name="CityEnviron",
-                     scene_file="scene_city_dual.jsonc",
-                     sim_config_path="config/scenes/city"),
+                     scene=MapScene(file="scene_city_dual.jsonc", config_path="config/scenes/city")),
         ),
     )
 

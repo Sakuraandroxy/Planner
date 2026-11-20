@@ -596,13 +596,12 @@ class ServerController:
         entry = self._maps.entry(map_id) or self._maps.maps[0]
         scene_file = entry.scene_file
         if self._model_catalog is not None:
-            # Same-map scene variants come from the selected model options;
-            # options without a variant keep the map's default scene.
+            # Same-map scene variants live on the map entry: a model that has no
+            # variant there keeps the map's default scene.
             for group in self._model_catalog.groups:
                 model_id = self._models.get(group.vehicle)
-                option = group.option(model_id) if model_id is not None else None
-                if option is not None:
-                    scene_file = option.scene_for(entry.id, scene_file)
+                if model_id is not None:
+                    scene_file = entry.scene.scene_for(model_id)
         return MapSelection(entry.id, scene_file, entry.sim_config_path)
 
     def _connect(self) -> None:

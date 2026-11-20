@@ -15,8 +15,8 @@ import yaml
 REPO = Path(__file__).resolve().parents[1]
 
 
-def write_config(tmp_path, data) -> Path:
-    """Write a synthetic ``config.yaml`` next to the shipped family catalog.
+def write_config(tmp_path, data, *, app=None) -> Path:
+    """Write a synthetic profile next to the shipped app and family catalogs.
 
     ``config/simulators.yaml`` is required rather than defaulted. It is the one
     place an xpra argv template is written down, and the old answer for a
@@ -24,11 +24,22 @@ def write_config(tmp_path, data) -> Path:
     for one command, which is how a driver ends up launching a stack it cannot
     stop. A test config directory therefore carries a catalog exactly like a real
     installation does.
+
+    ``app`` overrides sections of ``config/app.yml`` (server, process). The
+    shipped file is copied as-is otherwise, so a test that does not touch the
+    program-level settings still reads the real defaults.
     """
     directory = Path(tmp_path)
     path = directory / "config.yaml"
     path.write_text(yaml.safe_dump(data), encoding="utf-8")
     shutil.copyfile(REPO / "config/simulators.yaml", directory / "simulators.yaml")
+    if app is None:
+        shutil.copyfile(REPO / "config/app.yml", directory / "app.yml")
+    else:
+        base = yaml.safe_load((REPO / "config/app.yml").read_text(encoding="utf-8"))
+        for section, value in app.items():
+            base[section] = value
+        (directory / "app.yml").write_text(yaml.safe_dump(base), encoding="utf-8")
     return path
 
 

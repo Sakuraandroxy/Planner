@@ -26,20 +26,20 @@
 处理：`window` 探针找 `xpra info` 里的 `windows.<id>.pid`，校验归属，再 `xpra control map` + `focus`。
 不要用 `-RenderOffscreen` 绕：那个参数只是把症状抹掉，它连桌面画面一起去掉。
 
-### 跨族切换卡住，UE5 的栈停不掉
+### 跨仿真器切换卡住，UE5 的栈停不掉
 
-根因：归属判据要求 argv 里有本族的 `-settings=` 标记，而 UE5 引擎没有这个标记，
+根因：归属判据要求 argv 里有这套仿真器的 `-settings=` 标记，而 UE5 引擎没有这个标记，
 UE4 驱动因此把还在跑的 UE5 栈判成不可管理的进程。
 
 处理：拆成两个问题——`catalogued_map()` 回答"能不能停"（二进制在自家 `maps.yaml` 里就够），
-`owned_map()` 回答"是哪一族的哪张图"。
+`owned_map()` 回答"是哪套仿真器的哪张图"。
 
-### 换族失败，卡在显示锁上
+### 换仿真器失败，卡在显示锁上
 
-根因：`FamilyRouter.restart` 把整次切换交给目标那一族的驱动，UE4 驱动只读自己的端口，看不到 UE5 栈，
+根因：`FamilyRouter.restart` 把整次切换交给目标仿真器的驱动，UE4 驱动只读自己的端口，看不到 UE5 栈，
 于是认为机器空闲、跳过 stop 直接 launch。
 
-处理：路由先按 marker 找到在跑的那一族 stop，再交给目标族 launch。测试是 `tests/test_family_router.py`。
+处理：路由先按 marker 找到在跑的那套仿真器 stop，再交给目标仿真器 launch。测试是 `tests/test_family_router.py`。
 
 ### `Ctrl-C` 停服务后仿真器还在跑
 
@@ -318,7 +318,7 @@ with TestClient(build_server(load_config("config/core/default/base.yaml"))) as c
 
 ### 环境自检要求一个没法修的 FAIL
 
-原来把两族依赖压在同一份检查里，在 UE4 运行时环境里因缺 `fastapi` 报 FAIL。
+原来把两套仿真器的依赖压在同一份检查里，在 UE4 运行时环境里因缺 `fastapi` 报 FAIL。
 
 处理：`probe_ue4_env.py` 加 `--role auto|service|runtime`，按能导入的包判断站在哪个环境。
 不要为了让它变绿把 `airsim` 装进主环境。

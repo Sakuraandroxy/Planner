@@ -7,7 +7,9 @@ import yaml
 
 from planner.config import (
     MapEntry,
+    MapScene,
     SimulatorSettings,
+    default_config_path,
     load_config,
     load_map_catalog,
 )
@@ -100,7 +102,8 @@ def test_map_without_simulator_takes_the_catalog_default(tmp_path):
     """Single-simulator deployments need not repeat the field in YAML."""
     (tmp_path / "maps.yaml").write_text(
         "default_map: m\nmaps:\n  - id: m\n    label: M\n    launch_map: m\n"
-        "    scene_file: scene_city_dual.jsonc\n    sim_config_path: config/scenes/city\n",
+        "    scene:\n      file: scene_city_dual.jsonc\n"
+        "      config_path: config/scenes/city\n",
         encoding="utf-8",
     )
     entry = load_map_catalog(
@@ -124,10 +127,141 @@ def test_binary_map_takes_its_launch_target_from_map_name():
 def test_half_a_pair_is_rejected():
     with pytest.raises(ValueError, match="half a binary pair"):
         MapEntry(id="m", label="m", simulator="airsim", binary="/bin/m")
-    with pytest.raises(ValueError, match="half a scene pair"):
-        MapEntry(id="m", label="m", simulator="airsim", scene_file="s.jsonc")
+    with pytest.raises(ValueError, match="half a pair"):
+        MapScene(file="s.jsonc")
+
+
+def test_scene_defaults_come_from_the_simulator(tmp_path):
+    """A map writes only the scene settings it changes."""
+    for name in ("a", "b"):
+        (tmp_path / "scenes" / name).mkdir(parents=True)
+        (tmp_path / "scenes" / name / f"scene_{name}.jsonc").write_text(
+            "{}", encoding="utf-8"
+        )
+    (tmp_path / "maps.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "default_map": "a",
+                "maps": [
+                    {
+                        "id": "a",
+                        "label": "A",
+                        "simulator": "pas",
+                        "binary": "/sim/A",
+                        "map_name": "A",
+                        "scene": {
+                            "file": "scene_a.jsonc",
+                            "config_path": str(tmp_path / "scenes" / "a"),
+                        },
+                    },
+                    {
+                        "id": "b",
+                        "label": "B",
+                        "simulator": "pas",
+                        "binary": "/sim/B",
+                        "map_name": "B",
+                        "scene": {
+                            "file": "scene_b.jsonc",
+                            "config_path": str(tmp_path / "scenes" / "b"),
+                            "drone_name": "UAV2",
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    maps = load_map_catalog(
+        tmp_path / "maps.yaml",
+        scene_defaults={
+            "pas": {
+                "rover_name": "Rover9",
+                "drone_name": "Drone9",
+                "front_camera": "FrontCamera",
+                "view_cycle_start": "rover_front",
+            }
+        },
+    )
+    inherits = maps.entry("a").scene
+    assert inherits.rover_name == "Rover9"
+    assert inherits.view_cycle_start == "rover_front"
+    assert maps.entry("b").scene.drone_name == "UAV2"
+    assert maps.entry("b").scene.rover_name == "Rover9"
+
+
+def test_shipped_scene_defaults_fill_the_ue5_maps():
+    """The three UE5 entries write only file, config path and variants."""
+    config = load_config(default_config_path())
+    scene = config.maps.entry("cityenviron").scene
+    assert scene.rover_name == "Rover1"
+    assert scene.front_camera == "FrontCamera"
+    assert scene.view_cycle_start == "drone_front"
+    assert scene.delay_after_load_s == 2.0
+    assert scene.uncapturable_views == ("rover_chase",)
+
+
+def test_map_binaries_hang_off_the_catalog_root(tmp_path):
+    """One root line replaces a machine-specific prefix in every entry."""
+    (tmp_path / "maps.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "root": "/opt/sims",
+                "default_map": "a",
+                "maps": [
+                    {
+                        "id": "a",
+                        "label": "A",
+                        "simulator": "airsim",
+                        "binary": "pkg/UE/Bin",
+                        "map_name": "A",
+                    },
+                    {
+                        "id": "b",
+                        "label": "B",
+                        "simulator": "airsim",
+                        "binary": "/elsewhere/Bin",
+                        "map_name": "B",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    maps = load_map_catalog(tmp_path / "maps.yaml")
+    assert maps.entry("a").binary == "/opt/sims/pkg/UE/Bin"
+    # An absolute path is kept: one entry may point outside the root.
+    assert maps.entry("b").binary == "/elsewhere/Bin"
+
+
+def test_a_relative_binary_needs_a_root(tmp_path):
+    (tmp_path / "maps.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "default_map": "a",
+                "maps": [
+                    {
+                        "id": "a",
+                        "label": "A",
+                        "simulator": "airsim",
+                        "binary": "pkg/Bin",
+                        "map_name": "A",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="declares no root"):
+        load_map_catalog(tmp_path / "maps.yaml")
+
+
+def test_a_map_without_scene_or_binary_is_rejected(tmp_path):
+    (tmp_path / "maps.yaml").write_text(
+        "default_map: m\nmaps:\n  - id: m\n    label: M\n    simulator: airsim\n",
+        encoding="utf-8",
+    )
     with pytest.raises(ValueError, match="must declare either"):
-        MapEntry(id="m", label="m", simulator="airsim")
+        load_map_catalog(tmp_path / "maps.yaml")
 
 
 def test_map_naming_an_unconfigured_simulator_is_rejected(tmp_path):

@@ -1,13 +1,13 @@
 """The current-map marker: who writes it, who is allowed to read it back."""
 
-from planner.config import MapCatalog, MapEntry
+from planner.config import MapCatalog, MapEntry, MapScene
 from planner.simulator.marker import read_map_marker, write_map_marker
 
 CATALOG = MapCatalog(
     default_map="city",
     maps=(
         MapEntry(id="city", label="City", simulator="projectairsim",
-                 scene_file="s.jsonc", sim_config_path="config/scenes/city"),
+                 scene=MapScene(file="s.jsonc", config_path="config/scenes/city")),
     ),
 )
 

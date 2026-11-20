@@ -52,15 +52,27 @@ def build_session(*, config, map_entry, family, resources, log):
     """
     from dataclasses import replace
 
+    from ...config import build_camera_settings
     from .session import ProjectAirSimMissionSession
 
+    scene = map_entry.scene
     session_config = replace(
         config,
         projectairsim=replace(
             config.projectairsim,
             scene_file=map_entry.scene_file,
             sim_config_path=map_entry.sim_config_path,
+            delay_after_load_s=scene.delay_after_load_s,
+            rover_name=scene.rover_name,
+            drone_name=scene.drone_name,
+            front_camera=scene.front_camera,
+            chase_camera=scene.chase_camera,
+            down_camera=scene.down_camera,
+            uncapturable_views=scene.uncapturable_views,
+            view_cycle_start=scene.view_cycle_start,
         ),
+        # Camera geometry is a property of the simulator family, not the profile.
+        camera=build_camera_settings(family.camera),
     )
     return ProjectAirSimMissionSession(
         session_config,

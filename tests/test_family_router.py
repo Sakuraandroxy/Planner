@@ -38,7 +38,7 @@ MAPS = SimpleNamespace()
 
 
 def _router(tmp_path, marker_map=None):
-    from planner.config import MapCatalog, MapEntry
+    from planner.config import MapCatalog, MapEntry, MapScene
 
     maps = MapCatalog(
         default_map="blocks",
@@ -47,8 +47,7 @@ def _router(tmp_path, marker_map=None):
                      binary="/sim/Blocks/Binaries/Linux/Blocks",
                      map_name="Blocks"),
             MapEntry(id="cityenviron", label="City", simulator="projectairsim",
-                     launch_map="cityenviron", scene_file="scene_city_dual.jsonc",
-                     sim_config_path="config/scenes/city"),
+                     launch_map="cityenviron", scene=MapScene(file="scene_city_dual.jsonc", config_path="config/scenes/city")),
         ),
     )
     if marker_map:

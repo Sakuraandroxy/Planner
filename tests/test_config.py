@@ -31,7 +31,8 @@ def test_server_defaults():
 def test_server_section_is_parsed(tmp_path):
     path = _write(
         tmp_path,
-        {
+        {},
+        app={
             "server": {
                 "host": "0.0.0.0",
                 "port": 8123,
@@ -60,9 +61,15 @@ def test_server_section_is_parsed(tmp_path):
     assert server.video_fps == 6.0
 
 
-def test_empty_config_uses_server_defaults(tmp_path):
+def test_server_and_process_come_from_app_yml(tmp_path):
+    """A profile says nothing about the HTTP service or the simulator processes."""
     config = load_config(_write(tmp_path, {}))
-    assert config.server == ServerSettings()
+    assert config.server.host == "127.0.0.1"
+    assert config.server.port == 8000
+    assert config.server.vehicles == ("rover", "drone")
+    assert config.simulator.display == ":104"
+    with pytest.raises(ValueError, match="do not belong to a profile"):
+        load_config(_write(tmp_path, {"server": {"port": 8123}}, app={}))
 
 
 @pytest.mark.parametrize(
@@ -199,72 +206,30 @@ def test_empty_completion_rules_file_is_rejected(tmp_path, settings):
         load_config(_write(tmp_path, {"visual_goal_navigation": settings}))
 
 
-def test_projectairsim_defaults(tmp_path):
-    config = load_config(_write(tmp_path, {}))
-    assert config.projectairsim.address == "127.0.0.1"
-    assert config.projectairsim.port_topics == 8991
-    assert config.projectairsim.port_services == 8992
-    assert config.projectairsim.scene_file == "scene_city_dual.jsonc"
-    assert config.projectairsim.rover_name == "Rover1"
-    assert config.projectairsim.drone_name == "Drone1"
-    # Measured on this machine: four cold boots all came up on this camera.
-    assert config.projectairsim.view_cycle_start == "drone_front"
-
-
 def test_view_cycle_start_must_name_a_known_view(tmp_path):
     """A typo here silently shifts every view button by the same amount."""
-    with pytest.raises(ValueError, match="view_cycle_start"):
-        load_config(_write(tmp_path, {"projectairsim": {
-            "view_cycle_start": "rover_top",
-        }}))
-
-
-def test_projectairsim_section_is_parsed(tmp_path):
-    config = load_config(
-        _write(
-            tmp_path,
+    (tmp_path / "maps.yaml").write_text(
+        yaml.safe_dump(
             {
-                "projectairsim": {
-                    "address": "10.0.0.5",
-                    "port_topics": 9991,
-                    "port_services": 9992,
-                    "scene_file": "scene_neighborhood_dual.jsonc",
-                    "sim_config_path": "config/scenes/neighborhood",
-                    "delay_after_load_s": 3.0,
-                    "rover_name": "Rover2",
-                    "drone_name": "Drone2",
-                    "front_camera": "EgoCamera",
-                }
-            },
-        )
+                "default_map": "m",
+                "maps": [
+                    {
+                        "id": "m",
+                        "label": "M",
+                        "simulator": "projectairsim",
+                        "binary": "/bin/m",
+                        "map_name": "M",
+                        "scene": {
+                            "view_cycle_start": "rover_top",
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
     )
-    assert config.projectairsim.address == "10.0.0.5"
-    assert config.projectairsim.port_topics == 9991
-    assert config.projectairsim.scene_file == "scene_neighborhood_dual.jsonc"
-    assert config.projectairsim.sim_config_path == "config/scenes/neighborhood"
-    assert config.projectairsim.delay_after_load_s == 3.0
-    assert config.projectairsim.rover_name == "Rover2"
-    assert config.projectairsim.drone_name == "Drone2"
-    assert config.projectairsim.front_camera == "EgoCamera"
-
-
-@pytest.mark.parametrize(
-    "projectairsim",
-    [
-        {"address": ""},
-        {"port_topics": 0},
-        {"port_services": 70000},
-        {"timeout_s": 0.0},
-        {"scene_file": ""},
-        {"sim_config_path": ""},
-        {"delay_after_load_s": -1.0},
-        {"rover_name": ""},
-        {"drone_name": ""},
-    ],
-)
-def test_projectairsim_settings_are_validated(tmp_path, projectairsim):
-    with pytest.raises(ValueError):
-        load_config(_write(tmp_path, {"projectairsim": projectairsim}))
+    with pytest.raises(ValueError, match="view_cycle_start"):
+        load_config(_write(tmp_path, {}))
 
 
 def test_camera_defaults_match_the_rover_front_camera(tmp_path):
@@ -299,7 +264,7 @@ def test_simulator_ports_live_in_the_family_block(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "simulator",
+    "process",
     [
         {"display": "104"},
         {"display": ":x"},
@@ -309,9 +274,15 @@ def test_simulator_ports_live_in_the_family_block(tmp_path):
         {"restart_attempts": 0},
     ],
 )
-def test_invalid_simulator_sections_are_rejected(tmp_path, simulator):
+def test_invalid_process_sections_are_rejected(tmp_path, process):
+    """Process ownership lives with the families, not in the navigation core."""
+    path = _write(tmp_path, {})
+    catalog = tmp_path / "simulators.yaml"
+    raw = yaml.safe_load(catalog.read_text(encoding="utf-8"))
+    raw["process"] = process
+    catalog.write_text(yaml.safe_dump(raw), encoding="utf-8")
     with pytest.raises(ValueError):
-        load_config(_write(tmp_path, {"simulator": simulator}))
+        load_config(path)
 
 
 def test_map_catalog_falls_back_to_one_entry(tmp_path):
@@ -320,9 +291,9 @@ def test_map_catalog_falls_back_to_one_entry(tmp_path):
     assert config.maps.default_map == "default"
     entry = config.maps.maps[0]
     assert entry.label == "默认地图"
-    assert entry.scene_file == config.projectairsim.scene_file
-    assert entry.sim_config_path == config.projectairsim.sim_config_path
-    assert entry.launch_map == "cityenviron"
+    # A catalog-less config carries its scene inline; the shipped core declares none.
+    assert entry.scene_file == ""
+    assert entry.launch_map == ""
 
 
 def test_map_catalog_is_loaded_from_the_config_directory(tmp_path):
@@ -335,15 +306,19 @@ def test_map_catalog_is_loaded_from_the_config_directory(tmp_path):
                         "id": "cityenviron",
                         "label": "城市",
                         "launch_map": "cityenviron",
-                        "scene_file": "scene_city_dual.jsonc",
-                        "sim_config_path": "config/scenes/city",
+                        "scene": {
+                            "file": "scene_city_dual.jsonc",
+                            "config_path": "config/scenes/city",
+                        },
                     },
                     {
                         "id": "neighborhood",
                         "label": "郊区",
                         "launch_map": "neighborhood",
-                        "scene_file": "scene_neighborhood_dual.jsonc",
-                        "sim_config_path": "config/scenes/neighborhood",
+                        "scene": {
+                            "file": "scene_neighborhood_dual.jsonc",
+                            "config_path": "config/scenes/neighborhood",
+                        },
                     },
                 ],
             }
@@ -360,8 +335,10 @@ def test_map_catalog_rejects_duplicate_ids_and_a_missing_default(tmp_path):
     base = {
         "label": "城市",
         "launch_map": "cityenviron",
-        "scene_file": "scene_city_dual.jsonc",
-        "sim_config_path": "config/scenes/city",
+        "scene": {
+            "file": "scene_city_dual.jsonc",
+            "config_path": "config/scenes/city",
+        },
     }
     (tmp_path / "maps.yaml").write_text(
         yaml.safe_dump(
@@ -401,8 +378,10 @@ def test_map_catalog_checks_scene_paths_exist(tmp_path):
                         "id": "cityenviron",
                         "label": "城市",
                         "launch_map": "cityenviron",
-                        "scene_file": "scene_city_dual.jsonc",
-                        "sim_config_path": "config/scenes/absent",
+                        "scene": {
+                            "file": "scene_city_dual.jsonc",
+                            "config_path": "config/scenes/absent",
+                        },
                     }
                 ],
             }
@@ -421,8 +400,10 @@ def test_map_catalog_checks_scene_paths_exist(tmp_path):
                         "id": "cityenviron",
                         "label": "城市",
                         "launch_map": "cityenviron",
-                        "scene_file": "absent_scene.jsonc",
-                        "sim_config_path": "config/scenes/city",
+                        "scene": {
+                            "file": "absent_scene.jsonc",
+                            "config_path": "config/scenes/city",
+                        },
                     }
                 ],
             }
@@ -463,56 +444,44 @@ def test_vehicle_models_default_to_the_packaged_look(tmp_path):
         "rover": "offroad",
         "drone": "quadrotor",
     }
-    assert config.vehicle_models.group("drone").ids == ("quadrotor",)
+    # The list comes from the family that produces the meshes.
+    assert config.vehicle_models.group("drone").ids == ("quadrotor", "hexarotor")
     assert config.vehicle_models.group("rover").labels == {"offroad": "越野车"}
 
 
-def test_repository_vehicle_models_offer_the_hexarotor(tmp_path):
+def test_maps_declare_their_own_scene_variants(tmp_path):
+    """A scene variant belongs to the map that pins it, not to the model list."""
     config = load_config(default_config_path())
-    drone = config.vehicle_models.group("drone")
-    assert drone.ids == ("quadrotor", "hexarotor")
-    assert drone.option("hexarotor").scene_for(
-        "cityenviron", ""
-    ) == "scene_city_dual_hexarotor.jsonc"
-    assert drone.option("hexarotor").scene_for(
-        "neighborhood", ""
-    ) == "scene_neighborhood_dual_hexarotor.jsonc"
+    assert config.vehicle_models.group("drone").ids == ("quadrotor", "hexarotor")
     assert config.vehicle_models.group("rover").ids == ("offroad",)
+    city = config.maps.entry("cityenviron").scene
+    assert city.scene_for("quadrotor") == "scene_city_dual.jsonc"
+    assert city.scene_for("hexarotor") == "scene_city_dual_hexarotor.jsonc"
 
 
-def test_vehicle_models_are_parsed_with_scene_variants(tmp_path):
-    config = load_config(
-        _write(
-            tmp_path,
-            {
-                "vehicle_models": {
-                    "rover": {
-                        "default": "offroad",
-                        "options": [{"id": "offroad", "label": "越野车"}],
-                    },
-                    "drone": {
-                        "default": "quadrotor",
-                        "options": [
-                            {"id": "quadrotor", "label": "四旋翼"},
-                            {
-                                "id": "hexarotor",
-                                "label": "六旋翼",
-                                "scene_files": {
-                                    "default": "scene_city_dual_hexarotor.jsonc"
+def test_vehicle_model_scene_files_are_rejected(tmp_path):
+    """The old per-model map table is refused instead of silently ignored."""
+    with pytest.raises(ValueError, match="do not belong to a profile"):
+        load_config(
+            _write(
+                tmp_path,
+                {
+                    "vehicle_models": {
+                        "drone": {
+                            "default": "quadrotor",
+                            "options": [
+                                {"id": "quadrotor", "label": "四旋翼"},
+                                {
+                                    "id": "hexarotor",
+                                    "label": "六旋翼",
+                                    "scene_files": {"default": "x.jsonc"},
                                 },
-                            },
-                        ],
-                    },
-                }
-            },
+                            ],
+                        }
+                    }
+                },
+            )
         )
-    )
-    drone = config.vehicle_models.group("drone")
-    assert drone.option("hexarotor").scene_for("default", "fallback") == (
-        "scene_city_dual_hexarotor.jsonc"
-    )
-    assert drone.option("quadrotor").scene_for("default", "fallback") == "fallback"
-
 
 @pytest.mark.parametrize(
     "section",
@@ -520,32 +489,6 @@ def test_vehicle_models_are_parsed_with_scene_variants(tmp_path):
         {"boat": {"default": "offroad", "options": [{"id": "offroad", "label": "x"}]}},
         {"rover": {"default": "sports", "options": [{"id": "offroad", "label": "x"}]}},
         {"rover": {"default": "offroad", "options": []}},
-        {
-            "drone": {
-                "default": "quadrotor",
-                "options": [
-                    {"id": "quadrotor", "label": "x"},
-                    {
-                        "id": "hexarotor",
-                        "label": "x",
-                        "scene_files": {"default": "absent_scene.jsonc"},
-                    },
-                ],
-            }
-        },
-        {
-            "drone": {
-                "default": "quadrotor",
-                "options": [
-                    {"id": "quadrotor", "label": "x"},
-                    {
-                        "id": "hexarotor",
-                        "label": "x",
-                        "scene_files": {"moon": "scene_city_dual_hexarotor.jsonc"},
-                    },
-                ],
-            }
-        },
     ],
 )
 def test_invalid_vehicle_models_are_rejected(tmp_path, section):

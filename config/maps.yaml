@@ -1,42 +1,55 @@
-# 控制台可切换的仿真地图目录。
+# 可切换的仿真地图目录。
 #
-# 一个 UE 进程只加载一张 cooked 地图，不能在运行中换图；切换地图 = 后台停掉整套
-# 仿真栈（xpra + UE + Xvfb），再按 binary/map_name 拉起目标地图，然后重连。两族同形。
+# 一个 UE 进程只加载一张 cooked 地图，运行中换不了。切图 = 停掉整套仿真栈
+# （xpra + UE + Xvfb），按 binary/map_name 拉起目标图，再重连。
 #
-# id:          控制台/API 使用的地图标识。
-# label:       控制台显示名称，格式统一为「场景名 · 引擎」。同一张图不在名字里重复
-#              引擎前缀，引擎只出现在后缀里。
-# simulator:  驱动这张图的仿真器，对应 config/simulators.yaml 的一段。
+# root        仿真器包的根目录。下面的 binary 都相对它拼接，换机器改这一行。
+# id          控制台与 API 用的地图标识。
+# label       控制台显示名，格式「场景名 · 引擎」。
+# simulator   驱动这张图的仿真器，对应 simulators.yaml 的一段。
+# binary      引擎 cooked 二进制，相对 root 拼接，写绝对路径则原样使用。
+#             停止时按 /proc/<pid>/exe 的真路径比对它来判定归属。
+# map_name    传给二进制的地图名。UE 读作 argv[1]，窗口标题与它同字。
+# launch_map  留给场景选择与旧配置，引擎读 map_name。
 #
-# projectairsim（现在也是 binary 驱动）额外字段：
-# launch_map:      保留给场景选择与历史配置，引擎不再读它。
-# scene_file:      该地图的双载具场景 JSONC（位于 sim_config_path 下）。
-# sim_config_path: World 加载场景时的配置目录（相对仓库根目录）。
+# scene 段描述这张图的场景，内容取自它加载的 scene JSONC。载具名、相机 id、起图机位
+# 默认用仿真器段的 scene_defaults：
+#   file / config_path  场景文件与配置目录（相对仓库根目录）
+#   delay_after_load_s  等渲染出首帧的时间
+#   rover_name / drone_name / *_camera  场景里的对象名与相机 id
+#   uncapturable_views  采不到帧的机位，标定靠排除法定位
+#   view_cycle_start    起图时停在哪个机位，换包或换图后重新标定
+#   vehicle_scenes      非默认车型用哪份场景，缺省用 file
 #
-# 两族都需要的启动字段：
-# binary:          引擎 cooked 二进制的绝对路径，同时也是归属判据。
-# map_name:        传给二进制的地图名（UE 读作 argv[1]，窗口标题与它同字）。
-#
-# 所有仿真器包统一放在 /roxy/vln 下：UE4 在 airsim/，UE5 在 projectairsim/，
-# 两边都是包目录直接展开（以前 UE4 在 /data、UE5 在别人的 sim/ 里）。新加图拷到
-# 这里来，别再往 /data 放；chown 给跑 planner 的账号，UE 要在包里写 Saved/。
+# 包的放法：UE4 的包放 airsim/，UE5 的放 projectairsim/，都在 root 下面直接展开。
+# 拷进来后 chown 给跑 planner 的账号，引擎要在包里写 Saved/。
+root: /roxy/vln
+
 default_map: cityenviron
 maps:
   - id: cityenviron
     simulator: projectairsim
     label: 城市 · 虚幻 5
     launch_map: cityenviron
-    scene_file: scene_city_dual.jsonc
-    sim_config_path: config/scenes/city
-    binary: /roxy/vln/projectairsim/CityEnviron/Binaries/Linux/CityEnviron-Linux-Shipping
+    scene:
+      file: scene_city_dual.jsonc
+      config_path: config/scenes/city
+      uncapturable_views: [rover_chase]
+      vehicle_scenes:
+        hexarotor: scene_city_dual_hexarotor.jsonc
+    binary: projectairsim/CityEnviron/Binaries/Linux/CityEnviron-Linux-Shipping
     map_name: CityEnviron
   - id: neighborhood
     simulator: projectairsim
     label: 郊区 · 虚幻 5
     launch_map: neighborhood
-    scene_file: scene_neighborhood_dual.jsonc
-    sim_config_path: config/scenes/neighborhood
-    binary: /roxy/vln/projectairsim/Neighborhood/AirSimNH/Binaries/Linux/AirSimNH-Linux-Shipping
+    scene:
+      file: scene_neighborhood_dual.jsonc
+      config_path: config/scenes/neighborhood
+      uncapturable_views: [rover_chase]
+      vehicle_scenes:
+        hexarotor: scene_neighborhood_dual_hexarotor.jsonc
+    binary: projectairsim/Neighborhood/AirSimNH/Binaries/Linux/AirSimNH-Linux-Shipping
     # 打包目录是 Neighborhood，交给引擎的地图名却是 AirSimNH，窗口标题也是它。
     # 这两个字面量不同是 ProjectAirSim 自己的命名，不是笔误。
     map_name: AirSimNH
@@ -45,36 +58,36 @@ maps:
   - id: airsimnh
     simulator: airsim
     label: 郊区 NH · 虚幻 4
-    binary: /roxy/vln/airsim/AirSimNH/LinuxNoEditor/AirSimNH/Binaries/Linux/AirSimNH
+    binary: airsim/AirSimNH/LinuxNoEditor/AirSimNH/Binaries/Linux/AirSimNH
     map_name: AirSimNH
   - id: abandonedpark
     simulator: airsim
     label: 废弃公园 · 虚幻 4
-    binary: /roxy/vln/airsim/AbandonedPark/LinuxNoEditor/AbandonedPark/Binaries/Linux/AbandonedPark
+    binary: airsim/AbandonedPark/LinuxNoEditor/AbandonedPark/Binaries/Linux/AbandonedPark
     map_name: AbandonedPark
   - id: msbuild2018
     simulator: airsim
     label: MSBuild 园区 · 虚幻 4
-    binary: /roxy/vln/airsim/MSBuild2018/LinuxNoEditor/MSBuild2018/Binaries/Linux/MSBuild2018
+    binary: airsim/MSBuild2018/LinuxNoEditor/MSBuild2018/Binaries/Linux/MSBuild2018
     map_name: MSBuild2018
   - id: trapcam
     simulator: airsim
     label: TrapCam · 虚幻 4
-    binary: /roxy/vln/airsim/TrapCam/LinuxNoEditor/TrapCam/Binaries/Linux/TrapCam
+    binary: airsim/TrapCam/LinuxNoEditor/TrapCam/Binaries/Linux/TrapCam
     map_name: TrapCam
   - id: blocks
     simulator: airsim
     label: Blocks · 虚幻 4
-    binary: /roxy/vln/airsim/Blocks/LinuxNoEditor/Blocks/Binaries/Linux/Blocks
+    binary: airsim/Blocks/LinuxNoEditor/Blocks/Binaries/Linux/Blocks
     map_name: Blocks
   - id: shanghai
     simulator: airsim
     label: 上海 · 虚幻 4
-    binary: /roxy/vln/airsim/Shanghai/LinuxNoEditor/Shanghai/Binaries/Linux/Shanghai
+    binary: airsim/Shanghai/LinuxNoEditor/Shanghai/Binaries/Linux/Shanghai
     map_name: Shanghai
   # 本机从 ue4/urbanScene 自己打包的那张，已验二进制存在且可执行。
   - id: campus
     simulator: airsim
     label: 校园 · 虚幻 4
-    binary: /roxy/vln/airsim/Campus/LinuxNoEditor/Campus/Binaries/Linux/Campus
+    binary: airsim/Campus/LinuxNoEditor/Campus/Binaries/Linux/Campus
     map_name: Campus

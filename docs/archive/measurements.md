@@ -13,8 +13,8 @@
 | UE4 起图到就绪（`blocks`） | 5 s |
 | UE4 起图到就绪（`campus`） | 8 s |
 | 停止仿真栈 | 1.4 到 1.8 s，端口释放，无 X 锁残留 |
-| 跨族切换 cityenviron → blocks | 8 s |
-| 跨族切换 blocks → cityenviron | 40 到 42 s |
+| 跨仿真器切换 cityenviron → blocks | 8 s |
+| 跨仿真器切换 blocks → cityenviron | 40 到 42 s |
 | 机位切换在桌面生效 | 2 到 4 s |
 | 一次完整机位标定（含不可取帧超时） | 13.8 s |
 | 服务 `Ctrl-C` 退出 | 3 到 16 s；任务中要等落地，见过 40 s |

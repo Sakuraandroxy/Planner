@@ -63,10 +63,9 @@ class ProjectAirSimSettings:
                 raise ValueError(f"projectairsim.{name} must be in [1, 65535]")
         if self.timeout_s <= 0:
             raise ValueError("projectairsim.timeout_s must be positive")
-        if not str(self.scene_file).strip():
-            raise ValueError("projectairsim.scene_file must be non-empty")
-        if not str(self.sim_config_path).strip():
-            raise ValueError("projectairsim.sim_config_path must be non-empty")
+        # Scene identity is not validated here: it arrives from the map entry at
+        # session build time, and an entry without a scene belongs to a family
+        # started straight from a binary.
         if self.delay_after_load_s < 0:
             raise ValueError("projectairsim.delay_after_load_s must be >= 0")
         for name in (
@@ -454,6 +453,80 @@ class ServerSettings:
 
 
 @dataclass(frozen=True)
+class MapScene:
+    """Scene identity of one map (``scene`` inside a ``maps.yaml`` entry).
+
+    Everything here is read off the scene JSONC that the entry names: which file
+    the server loads, how long the renderer needs, what the actors and cameras
+    are called, and which camera the package starts on. It lives with the map
+    because a different map means different answers; the navigation core does
+    not see any of it.
+    """
+
+    #: Dual-vehicle scene JSONC inside ``config_path``.
+    file: str = ""
+    #: World scene-config directory, relative to the repository root.
+    config_path: str = ""
+    #: The dual scene starts with its clock paused; this only waits for the renderer.
+    delay_after_load_s: float = 2.0
+    #: Actor names, which must match the scene JSONC.
+    rover_name: str = "Rover1"
+    drone_name: str = "Drone1"
+    #: Sensor ids, which must match the robot JSONC files.
+    front_camera: str = "FrontCamera"
+    chase_camera: str = "Chase"
+    down_camera: str = "DownCamera"
+    #: Streaming views whose camera sets ``capture-enabled: false``.
+    uncapturable_views: tuple[str, ...] = ()
+    #: Which camera the engine shows right after this scene loads.
+    view_cycle_start: str = "drone_front"
+    #: Scene variant per appearance model on this map (``hexarotor: file.jsonc``).
+    #: Models without an entry use ``file``.
+    vehicle_scenes: tuple[tuple[str, str], ...] = ()
+
+    def __post_init__(self) -> None:
+        if bool(self.file.strip()) != bool(self.config_path.strip()):
+            raise ValueError(
+                "map scene declares half a pair: file and config_path are "
+                "required together"
+            )
+        for name in (
+            "rover_name",
+            "drone_name",
+            "front_camera",
+            "chase_camera",
+            "down_camera",
+        ):
+            if not str(getattr(self, name)).strip():
+                raise ValueError(f"map scene {name} must be non-empty")
+        views = tuple(self.uncapturable_views)
+        if len(set(views)) != len(views):
+            raise ValueError("map scene uncapturable_views must not repeat")
+        unknown = [view for view in views if view not in VIEW_MODES]
+        if unknown:
+            raise ValueError(
+                "map scene uncapturable_views has unknown views: "
+                + ", ".join(unknown)
+            )
+        if self.view_cycle_start not in VIEW_MODES:
+            raise ValueError(
+                f"map scene view_cycle_start must be one of "
+                f"{', '.join(VIEW_MODES)}, got {self.view_cycle_start!r}"
+            )
+        for model_id, scene_file in self.vehicle_scenes:
+            if not model_id.strip() or not scene_file.strip():
+                raise ValueError(
+                    "map scene vehicle_scenes needs a model id and a scene file"
+                )
+
+    def scene_for(self, model_id: str | None) -> str:
+        for key, value in self.vehicle_scenes:
+            if key == model_id:
+                return value
+        return self.file
+
+
+@dataclass(frozen=True)
 class MapEntry:
     """One switchable simulator map (``config/maps.yaml``).
 
@@ -469,10 +542,8 @@ class MapEntry:
     # Kept for scene selection and older configs; the engine takes ``map_name``.
     # Defaults to ``map_name`` when empty, so neither has to be written twice.
     launch_map: str = ""
-    # Dual-vehicle scene JSONC inside sim_config_path.
-    scene_file: str = ""
-    # World scene-config directory, relative to the repository root.
-    sim_config_path: str = ""
+    # Scene identity: which JSONC to load and what its actors are called.
+    scene: MapScene = field(default_factory=MapScene)
     # Simulator package that drives this map, resolved by
     # ``planner.simulator.registry``. Named after the software, not the engine
     # version, and required: no map inherits a simulator by default.
@@ -494,8 +565,8 @@ class MapEntry:
         scene_pair = bool(self.scene_file.strip()) == bool(self.sim_config_path.strip())
         if not scene_pair:
             raise ValueError(
-                f"map '{self.id}' declares half a scene pair: scene_file and "
-                "sim_config_path are required together"
+                f"map '{self.id}' declares half a scene pair: scene.file and "
+                "scene.config_path are required together"
             )
         binary_pair = bool(self.binary.strip()) == bool(self.map_name.strip())
         if not binary_pair:
@@ -504,13 +575,22 @@ class MapEntry:
                 "map_name are required together"
             )
         if not self.scene_file.strip() and not self.binary.strip():
-            raise ValueError(
-                f"map '{self.id}' must declare either scene_file plus sim_config_path "
-                "or binary plus map_name"
-            )
+            # Allowed on the fallback entry a catalog-less config produces; the map
+            # catalog itself rejects such an entry right after parsing.
+            pass
         if not self.launch_map.strip():
             # Binary families name their launch target through map_name.
             object.__setattr__(self, "launch_map", self.map_name)
+
+    @property
+    def scene_file(self) -> str:
+        """Scene JSONC this map loads; empty for maps without a scene."""
+        return self.scene.file
+
+    @property
+    def sim_config_path(self) -> str:
+        """Scene-config directory this map loads from."""
+        return self.scene.config_path
 
     @property
     def uses_scene_config(self) -> bool:
@@ -523,8 +603,6 @@ class VehicleModelOption:
 
     id: str
     label: str
-    # Scene variant per map id; maps not listed use the map entry's scene.
-    scene_files: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         for name in ("id", "label"):
@@ -533,17 +611,6 @@ class VehicleModelOption:
                 raise ValueError(f"vehicle model {name} must be non-empty text")
             if name == "id" and any(ch.isspace() for ch in value):
                 raise ValueError("vehicle model id must not contain whitespace")
-        for map_id, scene_file in self.scene_files:
-            if not isinstance(map_id, str) or not map_id.strip():
-                raise ValueError("vehicle model scene map ids must be non-empty")
-            if not isinstance(scene_file, str) or not scene_file.strip():
-                raise ValueError("vehicle model scene files must be non-empty")
-
-    def scene_for(self, map_id: str, default: str) -> str:
-        for key, value in self.scene_files:
-            if key == map_id:
-                return value
-        return default
 
 
 @dataclass(frozen=True)
@@ -597,18 +664,8 @@ class VehicleModelCatalog:
         vehicles = [group.vehicle for group in self.groups]
         if len(set(vehicles)) != len(vehicles):
             raise ValueError("vehicle model groups must be unique per vehicle")
-        # Two vehicles overriding the same map with different scenes would make
-        # the effective scene ambiguous; reject that at load time.
-        overrides: dict[str, str] = {}
-        for group in self.groups:
-            for option in group.options:
-                for map_id, scene_file in option.scene_files:
-                    previous = overrides.setdefault(map_id, scene_file)
-                    if previous != scene_file:
-                        raise ValueError(
-                            f"map '{map_id}' has conflicting vehicle model "
-                            f"scene variants: '{previous}' and '{scene_file}'"
-                        )
+        # Scene variants live on the map entry, so two vehicles can no longer
+        # point one map at two different scenes; nothing to reconcile here.
 
     def group(self, vehicle: str) -> VehicleModelGroup | None:
         for group in self.groups:
@@ -948,6 +1005,7 @@ def load_map_catalog(
     *,
     fallback: MapEntry | None = None,
     default_simulator: str = "projectairsim",
+    scene_defaults: dict[str, dict[str, Any]] | None = None,
 ) -> MapCatalog:
     """Load ``maps.yaml``; without the file fall back to a single map entry.
 
@@ -967,6 +1025,7 @@ def load_map_catalog(
     entries_raw = raw.get("maps")
     if not isinstance(entries_raw, list) or not entries_raw:
         raise ValueError("map catalog must list at least one map")
+    binary_root = _binary_root(raw.get("root"), catalog_path)
     entries = []
     for item in entries_raw:
         if not isinstance(item, dict):
@@ -977,9 +1036,18 @@ def load_map_catalog(
                 label=str(item.get("label", "")),
                 simulator=str(item.get("simulator", default_simulator)),
                 launch_map=str(item.get("launch_map", "")),
-                scene_file=str(item.get("scene_file", "")),
-                sim_config_path=str(item.get("sim_config_path", "")),
-                binary=str(item.get("binary", "")),
+                scene=_parse_map_scene(
+                    item.get("scene"),
+                    map_id=str(item.get("id", "")),
+                    defaults=(scene_defaults or {}).get(
+                        str(item.get("simulator", default_simulator)), {}
+                    ),
+                ),
+                binary=_resolve_binary(
+                    str(item.get("binary", "")),
+                    binary_root,
+                    map_id=str(item.get("id", "")),
+                ),
                 map_name=str(item.get("map_name", "")),
             )
         )
@@ -989,6 +1057,11 @@ def load_map_catalog(
     )
     root = _project_root()
     for entry in catalog.maps:
+        if not entry.scene_file.strip() and not entry.binary.strip():
+            raise ValueError(
+                f"map '{entry.id}' must declare either scene.file plus "
+                "scene.config_path or binary plus map_name"
+            )
         # Only scene-driven maps carry repository files worth pre-validating;
         # binary-launched maps are checked on the machine that owns them.
         if not entry.uses_scene_config:
@@ -1006,7 +1079,141 @@ def load_map_catalog(
                 f"map '{entry.id}' scene_file is missing: "
                 f"{entry.sim_config_path}/{entry.scene_file}"
             )
+        for model_id, scene_file in entry.scene.vehicle_scenes:
+            if not (config_dir / scene_file).is_file():
+                raise ValueError(
+                    f"map '{entry.id}' scene variant for model '{model_id}' "
+                    f"is missing: {entry.sim_config_path}/{scene_file}"
+                )
     return catalog
+
+
+def _binary_root(raw: Any, catalog_path: Path) -> Path | None:
+    """Package root the map binaries hang off (``root`` in maps.yaml).
+
+    ``/roxy/vln`` on this machine. Everything under it is written relative to
+    that one line, so moving the simulator packages to another machine does not
+    mean editing ten entries.
+    """
+    value = str(raw or "").strip()
+    if not value:
+        return None
+    root = Path(value)
+    if root.is_absolute():
+        return root
+    # Relative roots resolve against the catalog's directory, like sim_config_path.
+    return (catalog_path.parent / root).resolve()
+
+
+def _resolve_binary(value: str, root: Path | None, *, map_id: str) -> str:
+    """Engine binary for one map, joined to the package root.
+
+    An absolute path is kept as written: a catalog may pin one entry to a build
+    that lives outside the root.
+    """
+    if not value:
+        return ""
+    path = Path(value)
+    if path.is_absolute():
+        return str(path)
+    if root is None:
+        raise ValueError(
+            f"map '{map_id}' binary is relative but maps.yaml declares no root"
+        )
+    return str(root / path)
+
+
+def _parse_map_scene(
+    raw: Any,
+    *,
+    map_id: str,
+    defaults: dict[str, Any] | None = None,
+) -> MapScene:
+    """Parse the ``scene`` block of one ``maps.yaml`` entry.
+
+    ``defaults`` are the scene conventions of the map's simulator (``scene_defaults``
+    in simulators.yaml): names, cameras and start view an entry only repeats when
+    it deviates. Strict on unknown keys, because a misspelled scene setting would
+    otherwise load the map with the wrong actor names.
+    """
+    if raw is None and not defaults:
+        return MapScene()
+    if raw is not None and not isinstance(raw, dict):
+        raise ValueError(f"map '{map_id}' scene must be a mapping")
+    merged = dict(defaults or {})
+    merged.update(raw or {})
+    raw = merged
+    known = {
+        "file",
+        "config_path",
+        "delay_after_load_s",
+        "rover_name",
+        "drone_name",
+        "front_camera",
+        "chase_camera",
+        "down_camera",
+        "uncapturable_views",
+        "view_cycle_start",
+        "vehicle_scenes",
+    }
+    unknown = set(raw) - known
+    if unknown:
+        raise ValueError(
+            f"map '{map_id}' scene has unknown settings {sorted(unknown)}; "
+            f"expected any of {sorted(known)}"
+        )
+    vehicles_raw = raw.get("vehicle_scenes") or {}
+    if not isinstance(vehicles_raw, dict):
+        raise ValueError(f"map '{map_id}' scene.vehicle_scenes must be a mapping")
+    return MapScene(
+        file=str(raw.get("file", "")),
+        config_path=str(raw.get("config_path", "")),
+        delay_after_load_s=float(raw.get("delay_after_load_s", 2.0)),
+        rover_name=str(raw.get("rover_name", "Rover1")),
+        drone_name=str(raw.get("drone_name", "Drone1")),
+        front_camera=str(raw.get("front_camera", "FrontCamera")),
+        chase_camera=str(raw.get("chase_camera", "Chase")),
+        down_camera=str(raw.get("down_camera", "DownCamera")),
+        uncapturable_views=tuple(
+            str(view) for view in raw.get("uncapturable_views", ())
+        ),
+        view_cycle_start=str(raw.get("view_cycle_start", "drone_front")),
+        vehicle_scenes=tuple(
+            (str(model_id).strip(), str(scene).strip())
+            for model_id, scene in vehicles_raw.items()
+        ),
+    )
+
+
+def _flatten_scene_defaults(
+    raw: dict[str, Any], *, simulator: str
+) -> dict[str, Any]:
+    """Turn a simulator's ``scene_defaults`` into keys ``MapScene`` understands.
+
+    The three camera ids are written as one ``cameras`` mapping, because an entry
+    overrides them together or not at all.
+    """
+    if not raw:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"simulator '{simulator}' scene_defaults must be a mapping"
+        )
+    out = dict(raw)
+    cameras = out.pop("cameras", None) or {}
+    if not isinstance(cameras, dict):
+        raise ValueError(
+            f"simulator '{simulator}' scene_defaults.cameras must be a mapping"
+        )
+    unknown_cameras = set(cameras) - {"front", "chase", "down"}
+    if unknown_cameras:
+        raise ValueError(
+            f"simulator '{simulator}' scene_defaults.cameras has unknown keys "
+            f"{sorted(unknown_cameras)}; expected front, chase, down"
+        )
+    for slot, value in cameras.items():
+        out[f"{slot}_camera"] = value
+    return out
 
 
 def load_vehicle_models(
@@ -1049,19 +1256,17 @@ def load_vehicle_models(
                 raise ValueError(
                     f"vehicle_models.{vehicle_id}.options entries must be mappings"
                 )
-            scene_raw = item.get("scene_files", {}) or {}
-            if not isinstance(scene_raw, dict):
+            unknown = set(item) - {"id", "label"}
+            if unknown:
                 raise ValueError(
-                    f"vehicle_models.{vehicle_id} scene_files must be a mapping"
+                    f"vehicle_models.{vehicle_id}.options has unknown settings "
+                    f"{sorted(unknown)}; a scene variant is declared by the map "
+                    "entry in maps.yaml (scene.vehicle_scenes), not here"
                 )
             options.append(
                 VehicleModelOption(
                     id=str(item.get("id", "")),
                     label=str(item.get("label", "")),
-                    scene_files=tuple(
-                        (str(map_id).strip(), str(scene).strip())
-                        for map_id, scene in scene_raw.items()
-                    ),
                 )
             )
         groups.append(
@@ -1080,83 +1285,150 @@ def load_vehicle_models(
         if registry.capabilities_for(entry.simulator).supports("models")
     }
     root = _project_root()
-    for group in catalog.groups:
-        for option in group.options:
-            if not option.scene_files:
-                continue
-            declared = {map_id for map_id, _ in option.scene_files}
-            extra = declared - modelable
-            if extra:
-                raise ValueError(
-                    f"vehicle model '{group.vehicle}/{option.id}' names maps that "
-                    f"do not offer appearance models: {sorted(extra)}"
-                )
-            missing = modelable - declared
-            if missing:
-                raise ValueError(
-                    f"vehicle model '{group.vehicle}/{option.id}' needs a "
-                    f"scene variant for every model-capable map; missing {sorted(missing)}"
-                )
-            for map_id, scene_file in option.scene_files:
-                entry = maps.entry(map_id)
-                if entry is None:
-                    raise ValueError(
-                        f"vehicle model '{group.vehicle}/{option.id}' names "
-                        f"unknown map '{map_id}'"
-                    )
-                config_dir = Path(entry.sim_config_path)
-                if not config_dir.is_absolute():
-                    config_dir = root / config_dir
-                if not (config_dir / scene_file).is_file():
-                    raise ValueError(
-                        f"vehicle model '{group.vehicle}/{option.id}' scene "
-                        f"file is missing: {entry.sim_config_path}/{scene_file}"
-                    )
+    variant_options = {
+        option.id
+        for group in catalog.groups
+        for option in group.options
+        if option.id != group.default
+    }
+    for map_id in modelable:
+        entry = maps.entry(map_id)
+        if entry is None:
+            raise ValueError(
+                f"map catalog lists simulator '{map_id}' but no such entry exists"
+            )
+        declared = {model_id for model_id, _ in entry.scene.vehicle_scenes}
+        extra = declared - variant_options
+        if extra:
+            raise ValueError(
+                f"map '{map_id}' declares scene variants for models that are "
+                f"not non-default appearance options: {sorted(extra)}"
+            )
+        # A map without a variant for a model keeps its own scene, which is what
+        # the model list promises: the look changes only where a scene exists.
+
     return catalog
+
+
+def _triple(values: Any, *, where: str) -> tuple[float, float, float]:
+    triple = tuple(float(value) for value in values)
+    if len(triple) != 3:
+        raise ValueError(f"{where} must contain three numbers")
+    return triple
+
+
+def build_camera_settings(raw: dict[str, Any]) -> CameraSettings:
+    """Camera settings a simulator family declares (``camera`` in simulators.yaml).
+
+    Resolution, field of view, mount geometry and depth encoding are properties
+    of the simulator package that produces the images, so they sit with the
+    family instead of the navigation core.
+    """
+    known = {
+        "width",
+        "height",
+        "hfov_deg",
+        "far_m",
+        "depth_is_range",
+        "offset_m",
+        "mount_rpy_deg",
+        "drone_offset_m",
+        "drone_mount_rpy_deg",
+    }
+    unknown = set(raw) - known
+    if unknown:
+        raise ValueError(
+            f"simulator camera has unknown settings {sorted(unknown)}; "
+            f"expected any of {sorted(known)}"
+        )
+    camera = CameraSettings(
+        width=int(raw.get("width", 1280)),
+        height=int(raw.get("height", 720)),
+        hfov_deg=float(raw.get("hfov_deg", 90.0)),
+        far_m=float(raw.get("far_m", 1000.0)),
+        depth_is_range=bool(raw.get("depth_is_range", True)),
+        offset_m=_triple(raw.get("offset_m", (1.8, 0.0, -0.8)), where="camera.offset_m"),
+        mount_rpy_deg=_triple(
+            raw.get("mount_rpy_deg", (0.0, -3.0, 0.0)),
+            where="camera.mount_rpy_deg",
+        ),
+    )
+    if camera.width <= 0 or camera.height <= 0:
+        raise ValueError("camera dimensions must be positive")
+    if not 0.0 < camera.hfov_deg < 180.0:
+        raise ValueError("camera.hfov_deg must be in (0, 180)")
+    if camera.far_m <= 0:
+        raise ValueError("camera.far_m must be positive")
+    return camera
+
+
+def _family_vehicle_models(families: FamilyCatalog) -> dict[str, Any]:
+    """Appearance options declared by a simulator family.
+
+    Only the family that produces the meshes can offer a different look, so the
+    list sits in simulators.yaml; at most one family may declare it. Scene
+    variants per map stay in maps.yaml.
+    """
+    declaring = [family for family in families.families if family.vehicle_models]
+    if len(declaring) > 1:
+        raise ValueError(
+            "only one simulator family may declare vehicle_models, got "
+            + ", ".join(sorted(family.id for family in declaring))
+        )
+    return dict(declaring[0].vehicle_models) if declaring else {}
+
+
+#: Sections a profile file may declare. Everything else belongs to app.yml
+#: (program), simulators.yaml (family) or maps.yaml (map); listing them keeps a
+#: misplaced section from being silently ignored.
+PROFILE_SECTIONS = PROFILE_SWITCHABLE_SECTIONS | {"app", "simulator_families"}
 
 
 def load_config(path: str | Path) -> AppConfig:
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
     if not isinstance(raw, dict):
         raise ValueError("config root must be a mapping")
+    unknown = set(raw) - PROFILE_SECTIONS
+    if unknown:
+        raise ValueError(
+            f"profile config has sections that do not belong to a profile: "
+            f"{sorted(unknown)}; server and process live in app.yml, "
+            "vehicle_models and camera in simulators.yaml, scene identity in maps.yaml"
+        )
 
-    pas_raw = _section(raw, "projectairsim")
-    camera_raw = _section(raw, "camera")
     motion_raw = _section(raw, "motion")
 
-    offset = tuple(float(v) for v in camera_raw.get("offset_m", (1.8, 0.0, -0.8)))
-    if len(offset) != 3:
-        raise ValueError("camera.offset_m must contain three numbers")
-    mount_rpy = tuple(
-        float(v) for v in camera_raw.get("mount_rpy_deg", (0.0, -3.0, 0.0))
-    )
-    if len(mount_rpy) != 3:
-        raise ValueError("camera.mount_rpy_deg must contain three numbers")
+    families_path = shared_or_profile(path, "simulators.yaml")
+    families_raw = _section(raw, "simulator_families")
+    if not families_raw and families_path.is_file():
+        families_raw = yaml.safe_load(families_path.read_text(encoding="utf-8")) or {}
+    families = parse_family_catalog(families_raw)
+    default_family = families.require(families.default_family)
 
+    # Program-level settings shared by every profile: the HTTP service itself and
+    # who owns the simulator processes. Neither is tied to a map or a policy.
+    app_path = shared_or_profile(path, "app.yml")
+    app_raw = _section(raw, "app")
+    if not app_raw and app_path.is_file():
+        app_raw = yaml.safe_load(app_path.read_text(encoding="utf-8")) or {}
+    if not isinstance(app_raw, dict):
+        raise ValueError("app.yml root must be a mapping")
+
+    # How to reach the simulator comes from the family that owns the package.
+    # Scene identity is per map and lives on the catalog entry; the legacy
+    # ``scene_*`` keys below are only read for a config that carries no catalog.
+    # How to reach the simulator: one family, one set of ports. The client and the
+    # readiness probes therefore read the same numbers.
     projectairsim = ProjectAirSimSettings(
-        address=str(pas_raw.get("address", "127.0.0.1")),
-        port_topics=int(pas_raw.get("port_topics", 8991)),
-        port_services=int(pas_raw.get("port_services", 8992)),
-        timeout_s=float(pas_raw.get("timeout_s", 10.0)),
-        scene_file=str(pas_raw.get("scene_file", "scene_city_dual.jsonc")),
-        sim_config_path=str(
-            pas_raw.get("sim_config_path", "config/scenes/city")
-        ),
-        delay_after_load_s=float(pas_raw.get("delay_after_load_s", 2.0)),
-        rover_name=str(pas_raw.get("rover_name", "Rover1")),
-        drone_name=str(pas_raw.get("drone_name", "Drone1")),
-        front_camera=str(pas_raw.get("front_camera", "FrontCamera")),
-        chase_camera=str(pas_raw.get("chase_camera", "Chase")),
-        down_camera=str(pas_raw.get("down_camera", "DownCamera")),
-        uncapturable_views=tuple(
-            str(view) for view in pas_raw.get("uncapturable_views", ())
-        ),
-        view_cycle_start=str(
-            pas_raw.get("view_cycle_start", "drone_front")
-        ),
+        address="127.0.0.1",
+        port_topics=default_family.ports.get("topics", 8991),
+        port_services=default_family.ports.get("services", 8992),
+        timeout_s=default_family.timeout_s or 10.0,
     )
 
-    simulator_raw = _section(raw, "simulator")
+    # Who owns the simulator processes describes this machine, not a map: it sits
+    # with the families instead of the navigation core.
+    simulator_raw = _section(app_raw, "process")
     simulator = SimulatorSettings(
         display=str(simulator_raw.get("display", ":104")),
         runtime_dir=str(simulator_raw.get("runtime_dir", "output/xpra")),
@@ -1173,21 +1445,24 @@ def load_config(path: str | Path) -> AppConfig:
         ),
         restart_attempts=int(simulator_raw.get("restart_attempts", 2)),
     )
-    families_path = shared_or_profile(path, "simulators.yaml")
-    families_raw = _section(raw, "simulator_families")
-    if not families_raw and families_path.is_file():
-        families_raw = yaml.safe_load(families_path.read_text(encoding="utf-8")) or {}
-    families = parse_family_catalog(families_raw)
     maps = load_map_catalog(
         shared_or_profile(path, simulator.map_catalog_file),
         default_simulator=families.default_family,
+        # Scene conventions belong to the simulator package; each map entry writes
+        # only what it changes.
+        scene_defaults={
+            family.id: _flatten_scene_defaults(
+                family.scene_defaults, simulator=family.id
+            )
+            for family in families.families
+        },
         fallback=MapEntry(
             id="default",
             label="默认地图",
-            simulator="projectairsim",
-            launch_map="cityenviron",
-            scene_file=projectairsim.scene_file,
-            sim_config_path=projectairsim.sim_config_path,
+            simulator=default_family.id,
+            # Without a catalog there is no scene either: a deployment that wants
+            # to run a session ships maps.yaml.
+            scene=MapScene(),
         ),
     )
 
@@ -1198,36 +1473,17 @@ def load_config(path: str | Path) -> AppConfig:
             f"configured simulators are {list(families.ids)}"
         )
 
-    camera = CameraSettings(
-        width=int(camera_raw.get("width", 1280)),
-        height=int(camera_raw.get("height", 720)),
-        hfov_deg=float(camera_raw.get("hfov_deg", 90.0)),
-        far_m=float(camera_raw.get("far_m", 1000.0)),
-        depth_is_range=bool(camera_raw.get("depth_is_range", True)),
-        offset_m=offset,
-        mount_rpy_deg=mount_rpy,
-    )
-    if camera.width <= 0 or camera.height <= 0:
-        raise ValueError("camera dimensions must be positive")
-    if not 0.0 < camera.hfov_deg < 180.0:
-        raise ValueError("camera.hfov_deg must be in (0, 180)")
-    if camera.far_m <= 0:
-        raise ValueError("camera.far_m must be positive")
+    camera = build_camera_settings(default_family.camera)
 
     drone_raw = _section(raw, "drone")
-    drone_offset = tuple(
-        float(v) for v in drone_raw.get("camera_offset_m", (1.0, 0.0, 0.0))
+    drone_offset = _triple(
+        default_family.camera.get("drone_offset_m", (1.0, 0.0, 0.0)),
+        where="camera.drone_offset_m in simulators.yaml",
     )
-    if len(drone_offset) != 3:
-        raise ValueError("drone.camera_offset_m must contain three numbers")
-    drone_mount = tuple(
-        float(v)
-        for v in drone_raw.get("camera_mount_rpy_deg", (0.0, 0.0, 0.0))
+    drone_mount = _triple(
+        default_family.camera.get("drone_mount_rpy_deg", (0.0, 0.0, 0.0)),
+        where="camera.drone_mount_rpy_deg in simulators.yaml",
     )
-    if len(drone_mount) != 3:
-        raise ValueError(
-            "drone.camera_mount_rpy_deg must contain three numbers"
-        )
     drone = DroneSettings(
         speed_mps=float(drone_raw.get("speed_mps", 2.0)),
         move_timeout_s=float(drone_raw.get("move_timeout_s", 60.0)),
@@ -1320,7 +1576,7 @@ def load_config(path: str | Path) -> AppConfig:
     if trajectory_planner.max_tokens <= 0:
         raise ValueError("trajectory_planner.max_tokens must be positive")
 
-    server_raw = _section(raw, "server")
+    server_raw = _section(app_raw, "server")
     bbox_raw = server_raw.get(
         "manual_bbox", [0.45, 0.82, 0.55, 0.92]
     )
@@ -1357,7 +1613,7 @@ def load_config(path: str | Path) -> AppConfig:
         default_vehicle=str(server_raw.get("default_vehicle", "rover")),
     )
     vehicle_models = load_vehicle_models(
-        _section(raw, "vehicle_models"),
+        _family_vehicle_models(families),
         maps=maps,
         vehicles=server.vehicles,
         families=families,

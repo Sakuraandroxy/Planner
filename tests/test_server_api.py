@@ -5,6 +5,7 @@ from planner.adapters.http.server_api import create_api
 from planner.config import (
     MapCatalog,
     MapEntry,
+    MapScene,
     ProfileInfo,
     ServerSettings,
     VehicleModelCatalog,
@@ -40,13 +41,23 @@ class FakeController:
             default_map="cityenviron",
             maps=(
                 MapEntry(
-                    "cityenviron", "城市", "cityenviron",
-                    "scene_city_dual.jsonc", "config/scenes/city", "projectairsim",
+                    id="cityenviron",
+                    label="城市",
+                    launch_map="cityenviron",
+                    simulator="projectairsim",
+                    scene=MapScene(
+                        file="scene_city_dual.jsonc", config_path="config/scenes/city"
+                    ),
                 ),
                 MapEntry(
-                    "neighborhood", "郊区", "neighborhood",
-                    "scene_neighborhood_dual.jsonc",
-                    "config/scenes/neighborhood", "projectairsim",
+                    id="neighborhood",
+                    label="郊区",
+                    launch_map="neighborhood",
+                    simulator="projectairsim",
+                    scene=MapScene(
+                        file="scene_neighborhood_dual.jsonc",
+                        config_path="config/scenes/neighborhood",
+                    ),
                 ),
             ),
         )

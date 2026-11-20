@@ -120,6 +120,18 @@ class SimulatorFamily:
     vehicle_name: str = ""
     camera_id: str = ""
     timeout_s: float = 10.0
+    #: How this family's scenes are captured (``camera`` in simulators.yaml).
+    #: Resolution, field of view, mount offset and depth encoding belong to the
+    #: simulator package, not to the navigation core; ``planner.config`` turns
+    #: this mapping into ``CameraSettings`` because that type lives there.
+    camera: dict[str, Any] = field(default_factory=dict)
+    #: Appearance models this family can switch between (``vehicle_models``).
+    #: Only a family that produces the meshes can offer them, so the list sits
+    #: here instead of the program config; scene variants stay on each map.
+    vehicle_models: dict[str, Any] = field(default_factory=dict)
+    #: Scene conventions of this family (``scene_defaults``): actor names, camera
+    #: ids, start view. Map entries repeat them only when a map deviates.
+    scene_defaults: dict[str, Any] = field(default_factory=dict)
     #: Interpreter that can import this family's simulator client. Empty means the
     #: mission session runs on a worker thread inside the HTTP process, which is how
     #: ProjectAirSim has always worked. AirSim needs it because ``msgpack-python``
@@ -219,8 +231,12 @@ KNOWN_FAMILY_KEYS = frozenset(
         "label", "driver", "argv", "child_argv", "stop_argv", "probes", "ports",
         "runtime", "abslog_dir", "settings_file", "res_x", "res_y",
         "host", "vehicle_name", "camera_id", "timeout_s", "runtime_python",
+        "camera", "vehicle_models", "scene_defaults",
     }
 )
+
+#: Top-level sections of simulators.yaml that are not simulator families.
+NON_FAMILY_SECTIONS = frozenset({"default_simulator", "default_family"})
 
 
 def parse_family_catalog(raw: Any) -> FamilyCatalog:
@@ -242,7 +258,7 @@ def parse_family_catalog(raw: Any) -> FamilyCatalog:
     default_family = str(raw.get("default_simulator", raw.get("default_family", "")))
     families = []
     for family_id, item in raw.items():
-        if family_id in {"default_simulator", "default_family"}:
+        if family_id in NON_FAMILY_SECTIONS:
             continue
         if not isinstance(item, dict):
             raise ValueError(f"simulator family {family_id!r} must be a mapping")
@@ -278,6 +294,9 @@ def parse_family_catalog(raw: Any) -> FamilyCatalog:
                 runtime_python=str(item.get("runtime_python", "")),
                 res_x=int(item.get("res_x", 1280)),
                 res_y=int(item.get("res_y", 720)),
+                camera=dict(item.get("camera") or {}),
+                vehicle_models=dict(item.get("vehicle_models") or {}),
+                scene_defaults=dict(item.get("scene_defaults") or {}),
             )
         )
     catalog = FamilyCatalog(

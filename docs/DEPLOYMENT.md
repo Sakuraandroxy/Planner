@@ -10,7 +10,7 @@
 | Python | 3.10 以上 | 代码使用 `str \| None` 语法 |
 | 显卡 | NVIDIA，显存足够跑一张 UE 地图 | 同时跑两张会争显存 |
 | 显示与画面 | `Xvfb`、`xpra`、`xdpyinfo` | xpra 负责把引擎窗口搬到浏览器 |
-| 引擎 | 两族的打包产物，不编译 | 只用 Shipping / NoEditor 二进制，不碰引擎源码 |
+| 引擎 | 用两套仿真器现成的打包产物，不编译 | 只用 Shipping / NoEditor 二进制，不碰引擎源码 |
 
 服务进程不加载任何仿真器客户端。UE4 的客户端库在独立解释器、独立子进程里跑，
 这一条由 `tests/test_architecture.py` 守着。
@@ -88,19 +88,20 @@ pip install --no-deps --no-build-isolation airsim==1.8.1
 
 ## 4 配置总览
 
-四个配置来源，各管一件事，不要在第五处重复：
+五个配置来源，各管一件事，不要在第六处重复：
 
 | 文件 | 管什么 | 换机器常改 |
 |---|---|---|
-| `config/maps.yaml` | 有哪些地图、每张图的二进制与地图名、属于哪个仿真器 | 每条的 `binary` |
-| `config/simulators.yaml` | 每个仿真器怎么起停、监听哪些端口、用哪个解释器跑子进程 | `runtime_python`、`ports`、`argv` 里的 xpra 路径 |
-| `config/core/<profile>/base.yaml` | 服务、相机、运动、滑窗、四个模型端点、显示号、超时 | 模型端点与密钥来源、`simulator.display` |
+| `config/app.yml` | 程序级共用：HTTP 服务（监听、载具、CORS、帧率）与仿真器进程托管（显示号、运行时目录、起停超时） | `server.host` / `server.port`、`process.display` |
+| `config/maps.yaml` | 有哪些地图、包根目录、每张图的相对二进制与地图名、属于哪个仿真器、该图的场景身份 | `root` 一行、`scene` 段 |
+| `config/simulators.yaml` | 每个仿真器怎么起停、监听哪些端口、图像参数、可选车型 | `runtime_python`、`ports`、`camera`、`argv` 里的 xpra 路径 |
+| `config/core/<profile>/base.yaml` | 导航与控制参数、四个模型端点 | 模型端点与密钥来源 |
 | `config/airsim_settings.json` | UE4 引擎设置：载具名、相机名、分辨率、RPC 端口 | 载具名、相机名、分辨率 |
 
 一个档（profile）是一份完整的运行时配置：`config/core/<profile>/` 目录里放 `base.yaml` 和它引用的
 判定规则。启动默认读 `config/core/default`，也可以 `python scripts/serve_planner.py --profile vlm`
-从另一个档起来。`maps.yaml`、`simulators.yaml`、`scenes/`、`airsim_settings.json` 属于部署，
-所有档共用一份；某个档需要自己的副本时，放进它自己的目录里就优先于共享的那份。
+从另一个档起来。`app.yml`、`maps.yaml`、`simulators.yaml`、`scenes/`、`airsim_settings.json`
+属于部署，所有档共用一份；某个档需要自己的副本时，放进它自己的目录里就优先于共享的那份。
 
 装好的档可以列出来，同时检查它们有没有在不该不同的段上写歪：
 
@@ -121,25 +122,42 @@ python scripts/check_profiles.py
 
 `config/simulators.yaml` 缺失时配置加载直接报错，没有内置回落。
 
-## 5 `config/core/default/base.yaml`
+## 5 `config/app.yml`
 
-`simulator` 段只放与进程无关的东西：
+程序级设置，所有档共用，不跟地图也不跟导航逻辑挂钩：
 
-| 字段 | 含义 |
+```yaml
+server:            # HTTP 服务：监听地址、可接任务的载具、CORS、日志缓冲、视频帧率
+  host: 127.0.0.1
+  port: 8000
+  vehicles: ["rover", "drone"]
+  default_vehicle: drone
+process:           # 仿真器进程托管：显示号、运行时目录、起停超时、地图目录与标记文件
+  display: ":104"
+  runtime_dir: output/xpra
+  launch_timeout_s: 180.0
+```
+
+配置文件里出现不属于档的段时配置加载直接报错，并指出该段应该在哪份文件里。
+
+## 6 `config/core/<profile>/base.yaml`
+
+一个档只写影响导航与控制的东西：运动包线、感知与导航参数、四个模型端点。
+与地图、场景或仿真器包绑定的值不在这个文件里：
+
+| 内容 | 位置 |
 |---|---|
-| `display` | X 显示号，形如 `:104`。端口在 `simulators.yaml` 的家族段里 |
-| `runtime_dir` | pidfile、xpra 会话与日志目录 |
-| `map_catalog_file` | 地图目录文件名，相对 `config/` |
-| `map_marker_file` | 当前地图标记文件；服务重启时按它恢复 |
-| `launch_timeout_s` / `stop_timeout_s` / `port_release_timeout_s` | 起、停、端口释放的超时 |
-| `restart_attempts` | 换图失败时整套重启的次数 |
+| 场景文件、场景里的名字与机位 | `config/maps.yaml` 每条的 `scene` 段 |
+| 地址、端口、超时 | `config/simulators.yaml` 每套仿真器一段 |
+| 相机分辨率、视场角、挂点、深度解码 | `config/simulators.yaml` 每套仿真器的 `camera` 段 |
+| 显示号、运行时目录、起停超时 | `config/simulators.yaml` 顶部的 `process` 段 |
 
-其余常用段：
+常用段：
 
 | 段 | 内容 |
 |---|---|
-| `projectairsim` | 地址、topic/service 端口、默认场景文件、相机与载具名、`view_cycle_start` |
-| `camera` / `depth` | 前视相机分辨率与视场角、安装偏移、深度语义与可视化范围 |
+| `vehicle_models` | 控制台可选的车型清单；场景变体不在其中，写在每张图的 `scene.vehicle_scenes` |
+| `depth` | 深度语义与可视化范围 |
 | `motion` / `motion.continuous` | 速度与加速度上限、控制频率、前瞻参数 |
 | `sliding_window` | 队列容量、补点阈值、续规划周期、失败与时长上限 |
 | `free_navigation` | 碰撞倒车距离、最大恢复次数、恢复预算清零里程 |
@@ -147,22 +165,24 @@ python scripts/check_profiles.py
 | `server` | 监听地址、载具列表、默认载具、日志缓冲、CORS、视频帧率 |
 | `target_detection` / `trajectory_planner` / `task_completion` / `task_parser` | 四个模型端点 |
 
-## 6 `config/simulators.yaml`
+## 7 `config/simulators.yaml`
 
 每个仿真器一段。`projectairsim` 段的 `argv` 用 YAML 锚点定义，`airsim` 段引用同一份，
-两族因此共用一套 xpra 会话参数。测试断言两处相等，改任何一族前先看那条测试。
+两套仿真器因此共用一套 xpra 会话参数，测试断言两处相等，改任何一处前先看那条测试。
 
 | 字段 | 含义 | 注意 |
 |---|---|---|
 | `driver` | 进程驱动名，目前只有 `xpra_start` | 写成别的会被配置校验拒绝 |
-| `runtime` | 该族的 Python 包 | 由注册表按地图的 `simulator` 字段解析 |
-| `ports` | 该族监听的端口 | 键名同时是 `{ports.<键>}` 占位符；UE4 的 `rpc` 必须等于引擎 `ApiServerPort` |
+| `runtime` | 这套仿真器的 Python 包 | 由注册表按地图的 `simulator` 字段解析 |
+| `ports` | 这套仿真器监听的端口 | 键名同时是 `{ports.<键>}` 占位符；UE4 的 `rpc` 必须等于引擎 `ApiServerPort` |
 | `probes` | 就绪判据：`window` / `ports` / `rpc` | UE5 用前两个，UE4 三个都要 |
 | `child_argv` | 引擎命令行模板 | 端口与分辨率走占位符 |
-| `argv` / `stop_argv` | xpra 起停参数 | 两族共用一份 |
+| `argv` / `stop_argv` | xpra 起停参数 | 两套仿真器共用一份 |
 | `settings_file` | 引擎 settings 文件 | UE5 没有这一项；它同时是 UE4 的归属指纹 |
-| `runtime_python` | 跑任务子进程的解释器 | 只有 UE4 有；没有这一项的家族用线程 worker |
+| `runtime_python` | 跑任务子进程的解释器 | 只有 UE4 有；没有这一项的仿真器用线程 worker |
 | `host` / `vehicle_name` / `camera_id` / `timeout_s` | 连接数据 | `vehicle_name` 留空会让控制类 RPC 静默失效 |
+| `camera` | 这套仿真器产的图像怎么解释 | 分辨率、视场角、挂点、深度解码，无人机挂点也在里面 |
+| `process`（文件顶部） | 进程托管 | 显示号、运行时目录、启停超时、地图目录与标记文件 |
 | `res_x` / `res_y` | 画面尺寸 | 同时决定 Xvfb 分辨率与引擎窗口参数 |
 | `abslog_dir` | 引擎日志目录模板 | 只对会写日志的构建有意义 |
 
@@ -170,26 +190,41 @@ python scripts/check_profiles.py
 
 `argv` 里是 `xpra` 的绝对路径。发行版把它装在别处时改模板，不要在代码里加分支。
 
-## 7 `config/maps.yaml`
+## 8 `config/maps.yaml`
 
 ```yaml
+# 包根目录：下面每张图的 binary 都相对它拼接，换机器只改这一行。
+root: /roxy/vln
+
 default_map: cityenviron
 maps:
   - id: cityenviron              # 控制台与 API 使用的地图标识
     simulator: projectairsim     # 由哪个仿真器驱动，对应 simulators.yaml 的一段
     label: 城市 · 虚幻 5            # 控制台显示名，格式为「场景名 · 引擎」
-    binary: /path/to/CityEnviron-Linux-Shipping
+    binary: projectairsim/CityEnviron/Binaries/Linux/CityEnviron-Linux-Shipping
     map_name: CityEnviron        # 传给二进制的参数，窗口标题与它同字
-    scene_file: scene_city_dual.jsonc
-    sim_config_path: config/scenes/city
+    scene:                       # 这张图的场景身份，全部取自它加载的 scene JSONC
+      file: scene_city_dual.jsonc
+      config_path: config/scenes/city
+      delay_after_load_s: 2.0
+      rover_name: Rover1
+      drone_name: Drone1
+      front_camera: FrontCamera
+      chase_camera: Chase
+      down_camera: DownCamera
+      uncapturable_views: [rover_chase]
+      view_cycle_start: drone_front
+      vehicle_scenes:            # 非默认车型用哪份场景
+        hexarotor: scene_city_dual_hexarotor.jsonc
 ```
 
+- `root` 是仿真器包的根目录，`binary` 相对它拼接；写绝对路径则原样使用。换机器只改 `root` 一行。
 - `binary` 同时是进程归属判据：停止时按 `/proc/<pid>/exe` 的真路径判断"这是不是我们的进程"。
 - `map_name` 不一定等于目录名。Neighborhood 的目录叫 `Neighborhood`，交给引擎的地图名是 `AirSimNH`，这是引擎自己的命名。
 - 地图引用的 `simulator` 必须在 `simulators.yaml` 里存在，否则配置加载报错。
-- UE5 的图还带 `scene_file` 与 `sim_config_path`；UE4 的图只带 `binary` 与 `map_name`。
+- UE5 的图带 `scene` 段；UE4 的图只带 `binary` 与 `map_name`，场景与载具来自引擎自己的 settings。
 
-## 8 `config/airsim_settings.json`
+## 9 `config/airsim_settings.json`
 
 UE4 引擎读取的设置，规划器自己保存一份，不动引擎目录里的那份。
 
@@ -202,13 +237,13 @@ UE4 引擎读取的设置，规划器自己保存一份，不动引擎目录里�
 | `ImageType: 0` | RGB，分辨率与 `base.yaml` 的 `camera.width/height` 一致 |
 | `ImageType: 2` | 深度，允许独立分辨率；几何用同一 FOV |
 
-深度分辨率取 256×144 的原因是传输：`pixels_as_float=True` 把深度当 float 数组发回，
-纯 Python 的 msgpack 解包 36 864 个 float 约 0.24 秒，921 600 个要 25 秒以上。两个 ImageType 用同一个 FOV，
+深度取 256×144 是传输决定的：`pixels_as_float=True` 把深度当 float 数组发回，纯 Python 的
+msgpack 解包 36 864 个 float 约 0.24 秒，921 600 个要 25 秒以上。两个 ImageType 用同一个 FOV，
 深度几何才能直接用 `depth_intrinsics` 反投射。
 
 相机级覆盖写在 `Vehicles.<名字>.Cameras.<相机>.CaptureSettings`；写在 `CameraDefaults` 不会生效。
 
-## 9 UE5 场景与机器人文件
+## 10 UE5 场景与机器人文件
 
 `config/scenes/<map>/` 里每个场景一套：
 
@@ -224,9 +259,9 @@ UE4 引擎读取的设置，规划器自己保存一份，不动引擎目录里�
   服务端只能在它们之间循环。控制台不逐个列这四路，只区分第一人称与第三人称，
   按当前载具选对应的那一路。
 - 无人车追尾相机 `capture-enabled: false`，标定工具不尝试对它取帧。
-- 六旋翼需要单独的场景变体，`base.yaml` 的 `vehicle_models` 里为每张可切换地图指定文件。
+- 六旋翼需要单独的场景变体，写在该地图 `scene.vehicle_scenes` 的 `hexarotor` 项里。
 
-## 10 模型端点与密钥
+## 11 模型端点与密钥
 
 四段配置各有一个端点，都接受 OpenAI 兼容协议：
 
@@ -244,7 +279,7 @@ UE4 引擎读取的设置，规划器自己保存一份，不动引擎目录里�
 - 端点不可用时任务被明确拒绝，服务本身照常启动、画面照常可看。拒绝信息里带状态码、 URL、
   该改哪个字段与 provider 原话。
 
-## 11 启动、验证、关闭
+## 12 启动、验证、关闭
 
 ### 启动
 
@@ -277,7 +312,7 @@ python scripts/smoke_projectairsim_drone.py      # 起飞、位置保持、基�
 
 ### 手动起停仿真栈
 
-控制台之外的唯一入口，两族同一条命令：
+控制台之外的唯一入口，两套仿真器都是同一条命令：
 
 ```bash
 PYTHONPATH=. python -c "
@@ -297,19 +332,21 @@ print('running:', router.running())
 
 `Ctrl-C` 停服务会带走本服务拉起的仿真栈：引擎、xpra 会话与 Xvfb 一起停。不属于本服务的栈只告警不动。
 
-## 12 换机器要改什么
+## 13 换机器要改什么
 
 | 项 | 位置 | 说明 |
 |---|---|---|
-| 引擎二进制路径 | `config/maps.yaml` 每条的 `binary` | 逃不掉的一项；`binary` 也是所有权判据 |
+| 仿真器包根目录 | `config/maps.yaml` 的 `root` | 一行改完下面所有 `binary` |
+| 单个引擎二进制 | `config/maps.yaml` 每条的 `binary` | 相对 root；`binary` 也是所有权判据 |
 | UE4 子进程解释器 | `config/simulators.yaml` 的 `airsim.runtime_python` | 指向装了 `airsim` 的环境 |
 | 引擎 settings | `config/simulators.yaml` 的 `airsim.settings_file` | 相对路径以仓库根为基准 |
-| 显示号 | `config/core/<profile>/base.yaml` 的 `simulator.display` | 形如 `:104` |
-| 端口 | `config/simulators.yaml` 各族的 `ports` | 改 UE4 的 `rpc` 时要同步改引擎 settings |
+| 显示号 | `config/app.yml` 的 `process.display` | 形如 `:104` |
+| HTTP 监听 | `config/app.yml` 的 `server.host` / `server.port` | 从别的机器访问时改 `0.0.0.0` |
+| 端口 | `config/simulators.yaml` 各套仿真器的 `ports` | 改 UE4 的 `rpc` 时要同步改引擎 settings |
 | xpra 路径 | `config/simulators.yaml` 的 `argv` / `stop_argv` | 发行版装在别处才需要改 |
 | 模型端点与密钥 | `config/core/<profile>/base.yaml` 的四段 | 换 provider 时改 `request_format` |
 | UE4 载具名与相机名 | `airsim_settings.json` 与 `simulators.yaml` | 两处必须一致 |
-| UE5 机位起点 | `config/core/<profile>/base.yaml` 的 `projectairsim.view_cycle_start` | 换了包或图之后需要重新确认 |
+| UE5 机位起点 | `config/maps.yaml` 每条的 `scene.view_cycle_start` | 换了包或图之后需要重新确认 |
 | GPU 选择 | 环境变量或引擎启动参数 | 有坏卡时显式绑定健康卡 |
 
 `config/maps.yaml` 至少有 `default_map` 一张图；`default_map` 必须在列表里。
@@ -321,11 +358,13 @@ print('running:', router.running())
 runtime_python: /home/<user>/miniconda3/envs/vln-ue4/bin/python
 
 # config/maps.yaml
-binary: /opt/simulators/CityEnviron/Binaries/Linux/CityEnviron-Linux-Shipping
-binary: /roxy/vln/airsim/Blocks/LinuxNoEditor/Blocks/Binaries/Linux/Blocks
+root: /roxy/vln
+maps:
+  - binary: projectairsim/CityEnviron/Binaries/Linux/CityEnviron-Linux-Shipping
+  - binary: airsim/Blocks/LinuxNoEditor/Blocks/Binaries/Linux/Blocks
 ```
 
-## 13 故障排查
+## 14 故障排查
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
@@ -338,12 +377,12 @@ binary: /roxy/vln/airsim/Blocks/LinuxNoEditor/Blocks/Binaries/Linux/Blocks
 | 控制台没有某些控件 | 当前地图的仿真器没有对应端口 | 这是设计：能力由端口推导。`/api/status` 的 `capabilities` 可见 |
 | 三维块不出现 | CDN 取不到库或没有 WebGL | 只影响这块视图；需要离线时把库放本地，改 `scene3d.js` 里的地址 |
 | UE4 天气拖了没反应 | AirSim 特效默认关，参数要先启用才生效 | 适配器按状态开关；路面三项还要求地图带材质 |
-| 接口返回 501 并带 `unsupported` | 该动作背后的端口当前家族没有实现 | 同上，不是故障 |
+| 接口返回 501 并带 `unsupported` | 当前仿真器没有实现这个动作背后的端口 | 同上，不是故障 |
 | 无人机第二个任务贴地前飞 | `landed_state` 落地后停在 Flying 不回 0 | 起飞判据已改为按地面高度比较；会话重建后仍复现时检查高度参考 |
 | 切换载具后车悬空 | 归位目标用了场景文件里的作者坐标 | 归位用暖机刹车沉降后实测的贴地姿态，日志里有 `Rover home pose measured` |
 | 自由导航反复撞同一障碍 | 没有车道参考，提示词只能靠画面判断 | 属已知限制，不是崩溃 |
 
-## 14 运行目录与日志
+## 15 运行目录与日志
 
 | 路径 | 内容 |
 |---|---|

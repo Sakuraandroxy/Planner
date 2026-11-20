@@ -1,23 +1,12 @@
-# 仿真器族注册表。加一个新仿真器 = 在这里加一段，再在 maps.yaml 里引用它的 id。
+# 仿真器配置。一段对应一套仿真器软件：怎么连、怎么起停。
+# 加一个仿真器就在这里加一段，再在 maps.yaml 里用同一个 id 引用它。
 #
-# 约束：这里只写"怎么连、怎么起停"。能力位不在此声明，由仿真器包实现的端口推导
-# （planner/simulator/registry.py 读 planner/simulators/<name>/runtime.py 的
-# PORT_SLOTS）。写了 capabilities 会被配置校验拒绝，因为配置文件可以对现实说谎，
-# 实现不能。HTTP 层、ServerController 与前端都只读推导结果，不判断仿真器名。
-#
-# driver:
-#   xpra_start  按 argv 模板拼 xpra start --start-child 命令，两族共用
-# probes:
-#   window  找到引擎窗口、校验归属，再 map + focus
-#   ports   确认 ports 里列出的端口全部监听
-#   rpc     向 AirSim RPC 发一次探测调用
-#
-# argv 占位符（由 planner/simulator/argv.py 的 argv_values 提供）：
-#   {display} {display_number} {runtime_dir} {settings_file} {res_x} {res_y} {abslog}
-#   {map.id} {map.binary} {map.map_name} {map.launch_map} {map.scene_file}
-#   {map.sim_config_path}
-#   {ports.<名字>}，名字就是本段 ports 里的键；xpra_start 驱动额外提供 {start_child}
-#   （已拼好的子进程命令行）。写错名字是报错，不是原样透传给 xpra。
+# driver  目前只有 xpra_start，它把 argv 模板渲染成 xpra start --start-child 命令。
+# probes  就绪判据：window 找引擎窗口并校验归属，ports 确认端口在监听，rpc 向 AirSim 发一次调用。
+# 占位符由 planner/simulator/argv.py 提供：{display} {display_number} {runtime_dir}
+#   {settings_file} {res_x} {res_y} {abslog} {map.id} {map.binary} {map.map_name}
+#   {map.launch_map} {map.scene_file} {map.sim_config_path} {ports.<键>}，
+#   驱动另提供 {start_child}。
 
 default_simulator: projectairsim
 
@@ -29,9 +18,43 @@ projectairsim:
   res_y: 720
   abslog_dir: output/logs
   ports: {xpra: 10010, topics: 8991, services: 8992}
-  # 两族共用一份 xpra 会话参数：同一个显示号、同一个画面端口、同一套运行时目录，
-  # 因为同一时刻只跑一个仿真器。锚点在本段，airsim 段引用 *xpra_argv。
-  # 写两份是下一个 agent 改了一处忘另一处的地方。
+  # 场景约定：载具名、相机 id、起图机位。maps.yaml 的条目可逐项覆盖。
+  scene_defaults:
+    delay_after_load_s: 2.0
+    rover_name: Rover1
+    drone_name: Drone1
+    cameras: {front: FrontCamera, chase: Chase, down: DownCamera}
+    view_cycle_start: drone_front
+  # 这套仿真器出的图像怎么解释。分辨率与挂点必须与场景里的 robot JSONC 一致。
+  camera:
+    width: 1280
+    height: 720
+    hfov_deg: 90.0
+    far_m: 1000.0
+    depth_is_range: true
+    # 车前视相机：机体坐标（前、右、下，米）与安装姿态（度）。
+    offset_m: [1.8, 0.0, -0.8]
+    mount_rpy_deg: [0.0, -3.0, 0.0]
+    # 无人机前视相机：与 robot_drone_flight.jsonc 的 FrontCamera 一致。
+    drone_offset_m: [1.0, 0.0, 0.0]
+    drone_mount_rpy_deg: [0.0, 0.0, 0.0]
+  # 可切换的车型清单。只有声明了 vehicle_models 的仿真器能在控制台切车型。
+  # 每张图用哪份场景写在 maps.yaml 的 scene.vehicle_scenes 里。
+  vehicle_models:
+    rover:
+      default: offroad
+      options:
+        - id: offroad
+          label: 越野车
+    drone:
+      default: quadrotor
+      options:
+        - id: quadrotor
+          label: 四旋翼
+        # 六旋翼没有默认场景，靠每张图在 maps.yaml 里给。
+        - id: hexarotor
+          label: 六旋翼
+  # xpra 会话参数两套仿真器共用一份，airsim 段用 YAML 锚点引用。同一时刻只跑一个仿真器。
   argv: &xpra_argv
     - /usr/bin/xpra
     - start
@@ -65,10 +88,8 @@ projectairsim:
     - "socket://{runtime_dir}/sessions/{display_number}/socket"
     - "--socket-dirs={runtime_dir}/sockets"
     - "--sessions-dir={runtime_dir}/sessions"
-  # 引擎参数照 ProjectAirSim 的打包产物要求，与原启动脚本给的同字。
-  # 不要加 -abslog 或 -Stdout：实测这个构建不写任何日志文件，也不往 stdout 打
-  # （退出时也不刷），带上它们只会让报错指向一个不会出现的路径。就绪判断因此
-  # 只能靠 window 与 ports 两个探针。
+  # 引擎参数与打包产物自带的启动脚本一致。这个构建不写日志文件，-abslog 与 -Stdout
+  # 没有对应文件输出；就绪判断用 window 与 ports 两个探针。
   child_argv:
     - "{map.binary}"
     - "{map.map_name}"
@@ -85,19 +106,16 @@ airsim:
   label: AirSim (UE4)
   driver: xpra_start
   runtime: planner.simulators.airsim
-  # planner 自己的一份 settings，不动 /roxy/vln/airsim/settings.json（那是 airsim-flight-console 在用的）。
-  # RGB 与深度必须同尺寸，原因见 config/airsim_settings.json 的 _why。
+  # planner 的引擎设置。尺寸与 FOV 见 docs/DEPLOYMENT.md 第 9 节。
   settings_file: config/airsim_settings.json
-  # 连接数据。名字来自 settings.json，与地图无关，所以放在家族段而不是 maps.yaml。
-  # vehicle_name 留空会让控制类 RPC 静默失效：这台机器的构建把载具注册成 Drone_1，
-  # 空名字读得到状态却下不了指令（moveToPositionAsync 返回 False，landAsync 抛异常）。
-  host: ""                       # 空串 = 用 AirSim 客户端的默认地址
+  # 连接数据与地图无关。vehicle_name 要与 settings.json 注册的载具同名，
+  # 写成别的控制类 RPC 会失败：moveToPositionAsync 返回 False，landAsync 抛异常。
+  host: ""                       # 空串 = AirSim 客户端的默认地址
   vehicle_name: Drone_1
   camera_id: front_center        # settings.json 里的相机名
-  timeout_s: 15.0                # 单次 RPC 超时；动作超时另见 config/base.yaml 的 drone 段
-  # 跑这一族任务管线的解释器。projectairsim 没有这一项，它的会话就留在 HTTP 进程里。
-  # 不是偏好而是依赖：airsim 客户端拖进 msgpack-python 0.5.6，与 projectairsim 要的
-  # msgpack 1.2.4 抢同一个模块名，两个环境不可合并（docs/DEPLOYMENT.md 第 2 节）。
+  timeout_s: 15.0                # 单次 RPC 超时。动作超时见 core 档的 drone 段
+  # 任务会话跑在子进程里。这个客户端依赖 msgpack-python 0.5.6，projectairsim 要
+  # msgpack 1.2.4，两者同名冲突，装不进同一个环境。
   runtime_python: /home/kedior/miniconda3/envs/vln-ue4/bin/python
   res_x: 1280
   res_y: 720
@@ -105,13 +123,9 @@ airsim:
   ports: {xpra: 10010, rpc: 41451}
   argv: *xpra_argv
   stop_argv: *xpra_stop_argv
-  # 三个探针都跑得到（实现照抄 ../airsim-flight-console/scene_processes.py）。
-  # window 不是只看窗口存在：seamless xpra 在客户端接上之前不会 map 窗口，
-  # UE4 对未 map 的窗口暂停渲染，simGetImages 永不返回。就绪 = xpra info 找到
-  # windows.<id>.pid、校验归属、再 xpra control map + focus。
-  # 不要用 -RenderOffscreen 绕它：那个参数只是抹掉了症状，而它会连桌面画面一起去掉。
+  # window 探针在窗口 map 之后才 focus：seamless xpra 在客户端接入前不 map 窗口，
+  # UE4 对未 map 的窗口暂停渲染，取图会一直等。-RenderOffscreen 会连桌面画面一起去掉。
   probes: [window, ports, rpc]
-  # argv 逐字来自 airsim-flight-console/scene_launcher.py:33-75，不要随手加参数。
   # {start_child} 由驱动用下面的 child_argv 拼成带引号的单个参数。
   child_argv:
     - "{map.binary}"

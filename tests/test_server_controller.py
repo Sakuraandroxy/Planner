@@ -5,6 +5,7 @@ import pytest
 
 from planner.application.server_controller import ServerController
 from planner.config import (
+    MapScene,
     MapCatalog,
     MapEntry,
     ProfileInfo,
@@ -43,13 +44,30 @@ def _maps():
         default_map="city",
         maps=(
             MapEntry(
-                "city", "城市", "cityenviron", "scene_city_dual.jsonc",
-                "config/scenes/city", "projectairsim",
+                id="city",
+                label="城市",
+                launch_map="cityenviron",
+                simulator="projectairsim",
+                scene=MapScene(
+                    file="scene_city_dual.jsonc",
+                    config_path="config/scenes/city",
+                    vehicle_scenes=(
+                        ("hexarotor", "scene_city_dual_hexarotor.jsonc"),
+                    ),
+                ),
             ),
             MapEntry(
-                "suburb", "郊区", "neighborhood",
-                "scene_neighborhood_dual.jsonc",
-                "config/scenes/neighborhood", "projectairsim",
+                id="suburb",
+                label="郊区",
+                launch_map="neighborhood",
+                simulator="projectairsim",
+                scene=MapScene(
+                    file="scene_neighborhood_dual.jsonc",
+                    config_path="config/scenes/neighborhood",
+                    vehicle_scenes=(
+                        ("hexarotor", "scene_neighborhood_dual_hexarotor.jsonc"),
+                    ),
+                ),
             ),
         ),
     )
@@ -68,14 +86,7 @@ def _models():
                 "quadrotor",
                 (
                     VehicleModelOption("quadrotor", "四旋翼"),
-                    VehicleModelOption(
-                        "hexarotor",
-                        "六旋翼",
-                        (
-                            ("city", "scene_city_dual_hexarotor.jsonc"),
-                            ("suburb", "scene_neighborhood_dual_hexarotor.jsonc"),
-                        ),
-                    ),
+                    VehicleModelOption("hexarotor", "六旋翼"),
                 ),
             ),
         )

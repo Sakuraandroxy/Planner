@@ -63,15 +63,17 @@
 1. `config/scenes/<目录>/` 放场景与机器人文件：`scene_*_dual.jsonc`、`robot_rover.jsonc`、`robot_drone_*.jsonc`。
 2. 场景约束：两台载具出生点完全相同、`clock.pause-on-start: true`、恰好四个相机 `streaming-enabled`、
    无人车追尾相机 `capture-enabled: false`。
-3. `config/maps.yaml` 加一条：`simulator: projectairsim`、`binary`、`map_name`、`scene_file`、`sim_config_path`。
-4. 六旋翼等外观模型需要场景变体时，
-   在 `config/core/<profile>/base.yaml` 的 `vehicle_models` 里为这张图指定 `scene_files`，
-   否则换模型会失败。
-5. 换包后跑一次 `scripts/calibrate_streaming_views.py`，把 `projectairsim.view_cycle_start` 改成实测值。
+3. `config/maps.yaml` 加一条：`simulator: projectairsim`、`binary`（相对顶部的 `root`）、`map_name`，
+   以及 `scene:` 段：
+   `file`、`config_path`、`delay_after_load_s`、载具名与相机 id、`uncapturable_views`、`view_cycle_start`。
+4. 六旋翼等外观模型需要场景变体时，在这张图的 `scene.vehicle_scenes` 里加一行
+   `hexarotor: scene_xxx_dual_hexarotor.jsonc`。车型清单在 `config/simulators.yaml` 对应的仿真器段里
+   （`vehicle_models`，只有产出网格的仿真器才声明），场景文件属于地图。
+5. 换包后跑一次 `scripts/calibrate_streaming_views.py`，把这张图的 `scene.view_cycle_start` 改成实测值。
 
 **UE4（AirSim）**
 
-1. `config/maps.yaml` 加一条：`simulator: airsim`、`binary`、`map_name`。UE4 没有场景文件，
+1. `config/maps.yaml` 加一条：`simulator: airsim`、`binary`（相对 `root`）、`map_name`。UE4 没有场景文件，
    场景与载具来自引擎自己的 settings。
 2. 确认 `config/airsim_settings.json` 的载具名、相机名、
    `ApiServerPort` 与 `config/simulators.yaml` 的 `airsim` 段一致。
@@ -82,8 +84,9 @@
    `build_session()`。会话实现 worker 协议：`start / run / stop / poll / shutdown / terminate`，
    可选命令 `home / activate / set_weather / set_view`。
 2. **注册。** `planner/simulator/registry.py` 的 `RUNTIME_MODULES` 加一行，`labels()` 加显示名。
-3. **家族配置。** `config/simulators.yaml` 加一段：`driver: xpra_start`、`ports`、`probes`、
-   `argv` / `stop_argv`、`child_argv`、`res_x` / `res_y`。有 `runtime_python` 就走子进程。
+3. **仿真器配置。** `config/simulators.yaml` 加一段：`driver: xpra_start`、`ports`、`probes`、
+   `argv` / `stop_argv`、`child_argv`、`res_x` / `res_y`、`camera`（分辨率、视场角、挂点、深度解码）。
+   有 `runtime_python` 就走子进程。显示号、运行时目录与起停超时写在文件顶部的 `process` 段。
 4. **地图。** `config/maps.yaml` 里给这个仿真器的每条图填 `simulator: <name>`。
 5. **测试。** `tests/test_architecture.py` 里 `registry.known()` 的断言要更新；
    再补 `build_ports` 与 `PORT_SLOTS` 一致的用例。
@@ -95,7 +98,7 @@
 1. `planner/ports/capabilities.py` 写 Protocol，方法数控制在必要范围。
 2. `planner/simulator/ports.py`：`SimulatorPorts` 加字段（默认 `None`），`from_slots` 认这个槽。
 3. 需要暴露成控件就在 `ACTION_PORTS` 加映射；需要暴露成任务需求就加到 `TASK_REQUIREMENTS`。
-4. 在仿真器包里实现，并把它加进该族的 `PORT_SLOTS`。
+4. 在仿真器包里实现，并加进那套仿真器的 `PORT_SLOTS`。
 5. HTTP 端点用 `require("<action>")` 门控；控制台按 `capabilities` 决定控件。
 6. 测试：`PORT_SLOTS` 与实际实现一致、缺端口时能力消失、501 的 `unsupported` 字段。
 
@@ -117,13 +120,15 @@
 
 ### 3.7 新增一个配置档
 
-- 一个档 = `config/core/<目录名>/`，里面放完整的 `base.yaml` 和它自己的 `tasks/`；
+- 一个档 = `config/core/<目录名>/`，里面放完整的 `base.yaml` 和它自己的 `tasks/`。档只写导航与控制
+  参数与模型端点；程序级的 `server` / `process` 在 `config/app.yml`，仿真器相关的在
+  `config/simulators.yaml`，地图与场景在 `config/maps.yaml`。写错文件会被配置校验拒绝；
   档位由目录枚举得到，加一档就是新建目录。
 - `base.yaml` 顶部的 `profile` 段只有 `id`、`label`、`note`：`id` 等于目录名，`label` 是前端文案，
   `note` 给运维与日志用。
-- 档与档只允许在导航与模型段上不同。`projectairsim`、`simulator`、`camera`、`vehicle_models`、`server`
-  这些段写不一样，`python scripts/check_profiles.py` 会报错，测试里也有同一条断言。
-  理由：切档只重建 worker、只重载场景，仿真器进程不动。
+- 档与档只允许在导航与模型段上不同，`python scripts/check_profiles.py` 会检查这一点，
+  测试里也有同一条断言。切档只重建 worker、重载场景，仿真器进程不动，所以程序级与
+  仿真器级的设置本来就无法随档生效。
 - 共享的 `maps.yaml`、`simulators.yaml`、`scenes/` 只写一份在 `config/`；某个档需要自己的副本时，
   放进它自己的目录里就优先。
 - 新功能和新参数先进 `default`，演示对照档只按需跟随。

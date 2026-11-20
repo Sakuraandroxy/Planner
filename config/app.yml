@@ -1,0 +1,41 @@
+# 程序级配置，所有档共用。这里只有两段：
+#   server   HTTP 服务：监听地址、可接任务的载具、CORS、日志缓冲、视频帧率。
+#   process  仿真器进程：显示号、运行时目录、起停超时、地图目录与标记文件。
+#
+# 其余三处：maps.yaml 放地图与场景，simulators.yaml 放仿真器连接与起停，
+# config/core/<profile>/base.yaml 放导航与控制参数。
+
+server:
+  host: 127.0.0.1
+  port: 8000
+  # manual = 固定归一化框；vlm = 用 core 档里 target_detection 的端点。
+  detector: vlm
+  # geometric = 确定性方位规划；vlm = 用 core 档里 trajectory_planner 的端点。
+  planner: vlm
+  # manual 检测器用的框，按图像框归一化。
+  manual_bbox: [0.47, 0.62, 0.53, 0.66]
+  # 可选的归一化 u,v 表面点；留空则对准框中心。
+  manual_surface_points: []
+  allowed_origins: ["*"]
+  log_buffer_size: 500
+  reconnect_interval_s: 2.0
+  startup_timeout_s: 60.0
+  # GET /api/video 的最新帧率，20 Hz 控制回路与之解耦。
+  video_fps: 10.0
+  # 会话内可接任务的载具；任务提交时必须指定其中之一。
+  vehicles: ["rover", "drone"]
+  # 控制台默认选中的载具。
+  default_vehicle: drone
+
+process:
+  display: ":104"
+  # pidfile、xpra 会话与日志目录；当前地图标记写在 map_marker_file。
+  runtime_dir: output/xpra
+  map_catalog_file: maps.yaml
+  map_marker_file: output/xpra/current_map
+  # 脚本等待窗口/端口就绪的顶层超时与端口释放轮询超时，单位秒。
+  launch_timeout_s: 180.0
+  stop_timeout_s: 40.0
+  port_release_timeout_s: 30.0
+  # 换图失败时整套重启的最大尝试次数。
+  restart_attempts: 2
