@@ -98,33 +98,33 @@ pip install --no-deps --no-build-isolation airsim==1.8.1
 | `config/core/<profile>/base.yaml` | 导航与控制参数、四个模型端点 | 模型端点与密钥来源 |
 | `config/airsim_settings.json` | UE4 引擎设置：载具名、相机名、分辨率、RPC 端口 | 载具名、相机名、分辨率 |
 
-一个档（profile）是一份完整的运行时配置：`config/core/<profile>/` 目录里放 `base.yaml` 和它引用的
+一份配置（profile）是一份完整的运行时参数：`config/core/<profile>/` 目录里放 `base.yaml` 和它引用的
 判定规则。启动默认读 `config/core/default`，也可以 `python scripts/serve_planner.py --profile vlm`
-从另一个档起来。`app.yml`、`maps.yaml`、`simulators.yaml`、`scenes/`、`airsim_settings.json`
-属于部署，所有档共用一份；某个档需要自己的副本时，放进它自己的目录里就优先于共享的那份。
+从另一份配置起来。`app.yml`、`maps.yaml`、`simulators.yaml`、`scenes/`、`airsim_settings.json`
+属于部署，所有配置共用一份；某份配置需要自己的副本时，放进它自己的目录里就优先。
 
-装好的档可以列出来，同时检查它们有没有在不该不同的段上写歪：
+装好的配置可以列出来，同时检查它们有没有在不该不同的段上写歪：
 
 ```bash
 python scripts/check_profiles.py
 ```
 
-切档在控制台的「规划设置」标签页。场景已启动且空闲时，切档会重建会话、重载场景、载具回到出生点，
-约 8 到 10 秒。还没启动场景时，切档只记下档名，不重连也不启动引擎，下一次启动场景就按它装配。
-切档不动仿真器进程，所以两档只能在导航与模型相关段上不同，上面那条检查就是守这一点的。
+切换配置在控制台的「规划设置」标签页。场景已启动且空闲时，切换会重建会话、重载场景、载具回到出生点，
+约 8 到 10 秒。场景未启动时，切换只记下名字，下一次启动场景就按它装配。
+切换不动仿真器进程，所以两份配置只在导航与模型相关段上不同，上面那条检查守的就是这一点。
 
 场景与任务规则：
 
 | 路径 | 内容 |
 |---|---|
 | `config/scenes/<map>/*.jsonc` | UE5 场景与机器人文件（双载具、相机、流式开关） |
-| `config/core/<profile>/tasks/*.yaml` | 视觉目标的完成判定规则，跟着档走 |
+| `config/core/<profile>/tasks/*.yaml` | 视觉目标的完成判定规则，跟着配置走 |
 
-`config/simulators.yaml` 缺失时配置加载直接报错，没有内置回落。
+`config/simulators.yaml` 缺失时配置加载直接报错。
 
 ## 5 `config/app.yml`
 
-程序级设置，所有档共用，不跟地图也不跟导航逻辑挂钩：
+程序级设置，所有配置共用，与地图和导航逻辑分开：
 
 ```yaml
 server:            # HTTP 服务：监听地址、可接任务的载具、CORS、日志缓冲、视频帧率
@@ -138,12 +138,12 @@ process:           # 仿真器进程托管：显示号、运行时目录、起�
   launch_timeout_s: 180.0
 ```
 
-配置文件里出现不属于档的段时配置加载直接报错，并指出该段应该在哪份文件里。
+配置文件里出现不属于配置的段时，配置加载直接报错，并指出该段应该在哪份文件里。
 
 ## 6 `config/core/<profile>/base.yaml`
 
-一个档只写影响导航与控制的东西：运动包线、感知与导航参数、四个模型端点。
-与地图、场景或仿真器包绑定的值不在这个文件里：
+一份配置只写影响导航与控制的东西：运动包线、感知与导航参数、四个模型端点。
+与地图、场景或仿真器包绑定的值放在这些位置：
 
 | 内容 | 位置 |
 |---|---|
