@@ -257,7 +257,16 @@ def test_execute_segment_requires_start():
 def test_collision_state_latches_one_non_ground_contact():
     rover, connection, _ = make_rover()
     callback = connection.client.callbacks[COLLISION_TOPIC]
-    callback(None, {"object_name": "Landscape_1"})
+    callback(
+        None,
+        {
+            "object_name": "Landscape_1",
+            "time_stamp": 400,
+            "position": {"x": 0.0, "y": 0.0, "z": 0.0},
+            "normal": {"x": 0.0, "y": 0.0, "z": 1.0},
+            "penetration_depth": 0.0,
+        },
+    )
     assert rover.collision_state() is False
     callback(
         None,

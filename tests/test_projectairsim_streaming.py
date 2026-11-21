@@ -378,6 +378,41 @@ def test_neighborhood_road_surface_contacts_are_ignored():
     assert monitor.consume() is None
 
 
+def test_jiaoliu_center_ground_contacts_are_ignored():
+    client = FakeClient()
+    monitor = CollisionMonitor(client, COLLISION_TOPIC)
+    monitor.start()
+    client.callbacks[COLLISION_TOPIC](None, collision_message("LCCActor_0"))
+    assert monitor.consume() is None
+
+
+def test_jiaoliu_center_merged_actor_wall_contact_is_latched():
+    """The merged actor also presents the road-edge wall: a horizontal normal
+    must stay a real collision even though the same object publishes the
+    ground contacts."""
+    client = FakeClient()
+    monitor = CollisionMonitor(client, COLLISION_TOPIC)
+    monitor.start()
+    message = collision_message("LCCActor_0")
+    message["normal"] = {"x": 0.9, "y": 0.0, "z": -0.4}
+    client.callbacks[COLLISION_TOPIC](None, message)
+    event = monitor.consume()
+    assert event is not None
+    assert event.object_name == "LCCActor_0"
+
+
+def test_missing_normal_on_ground_prefix_is_latched():
+    """Without a normal the contact cannot be classified as ground; wedging
+    the car silently is worse than a spurious stop."""
+    client = FakeClient()
+    monitor = CollisionMonitor(client, COLLISION_TOPIC)
+    monitor.start()
+    message = collision_message("LCCActor_0")
+    del message["normal"]
+    client.callbacks[COLLISION_TOPIC](None, message)
+    assert monitor.consume() is not None
+
+
 def test_self_contacts_are_ignored_by_exact_name():
     client = FakeClient()
     monitor = CollisionMonitor(

@@ -40,12 +40,24 @@ def _point(value: object) -> tuple[float, float, float] | None:
 
 
 class CollisionMonitor:
+    # Contacts against these prefixes are ground ONLY when the contact normal
+    # is vertical. The JiaoLiuCenter map merges its whole static world —
+    # drivable ground AND boundary walls — into one ``LCCActor_0`` collision
+    # actor: resting on or driving over the ground latches contacts with zero
+    # penetration at every traveled position (all with a vertical normal), but
+    # the same actor also publishes the road-edge wall hit (horizontal normal).
+    # Unconditionally ignoring the prefix wedges the car silently against the
+    # boundary; a purely vertical-normal rule keeps the wall contact as a real
+    # collision.
+    GROUND_PREFIXES = ("Landscape", "Road_", "LCCActor")
+    VERTICAL_NORMAL_Z = 0.7
+
     def __init__(
         self,
         client,
         topic: str,
         *,
-        ignored_prefixes: tuple[str, ...] = ("Landscape", "Road_"),
+        ignored_prefixes: tuple[str, ...] = GROUND_PREFIXES,
         ignored_names: tuple[str, ...] = (),
     ):
         self._client = client
@@ -71,17 +83,11 @@ class CollisionMonitor:
             # The client may already be disconnected; topics die with it.
             pass
 
-    def _is_ignored(self, object_name: str) -> bool:
-        lowered = object_name.lower()
-        if lowered in self._ignored_names:
-            return True
-        return any(lowered.startswith(prefix) for prefix in self._ignored_prefixes)
-
     def _on_collision(self, _topic, message: dict) -> None:
         # Runs on the client's topic receive thread: keep it cheap and safe.
         try:
             object_name = str(message.get("object_name") or "")
-            if not object_name or self._is_ignored(object_name):
+            if not object_name:
                 return
             event = CollisionEvent(
                 object_name=object_name,
@@ -92,6 +98,8 @@ class CollisionMonitor:
             )
         except Exception:
             return
+        if self._is_ignored(event):
+            return
         with self._lock:
             if self._closed or self._pending is not None:
                 return
@@ -100,11 +108,30 @@ class CollisionMonitor:
         # spawn/settle and attachment contacts on the same topic as real
         # obstacles, and only the object name tells one from the other.
         logger.info(
-            "collision contact latched: object=%s penetration=%.3f position=%s",
+            "collision contact latched: object=%s penetration=%.3f normal=%s position=%s",
             event.object_name,
             event.penetration_depth,
+            event.normal,
             event.position,
         )
+
+    def _is_ignored(self, event: CollisionEvent) -> bool:
+        lowered = event.object_name.lower()
+        if lowered in self._ignored_names:
+            return True
+        if not any(lowered.startswith(prefix) for prefix in self._ignored_prefixes):
+            return False
+        # A ground prefix only suppresses ground-like contacts: a vertical
+        # normal means a wheel or the body touched a surface from above. The
+        # same merged actor can also present a wall face, whose horizontal
+        # normal must stay a real collision.
+        normal = event.normal
+        if normal is None:
+            # Without a normal the contact cannot be classified as ground;
+            # report it rather than silently wedge the car against an
+            # unreported wall.
+            return False
+        return abs(normal[2]) >= self.VERTICAL_NORMAL_Z
 
     def consume(self) -> CollisionEvent | None:
         """Return the latched contact, if any, and clear it."""

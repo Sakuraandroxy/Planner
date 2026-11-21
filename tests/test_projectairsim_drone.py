@@ -596,7 +596,16 @@ def test_cancel_sets_the_flag_and_cancels_the_native_task():
 def test_collision_state_latches_one_non_ground_contact():
     drone, connection, _, _ = make_drone()
     callback = connection.client.callbacks[COLLISION_TOPIC]
-    callback(None, {"object_name": "Landscape_1"})
+    callback(
+        None,
+        {
+            "object_name": "Landscape_1",
+            "time_stamp": 400,
+            "position": {"x": 0.0, "y": 0.0, "z": 0.0},
+            "normal": {"x": 0.0, "y": 0.0, "z": 1.0},
+            "penetration_depth": 0.0,
+        },
+    )
     assert drone.collision_state() is False
     callback(
         None,
