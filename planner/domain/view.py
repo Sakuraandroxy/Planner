@@ -22,7 +22,6 @@ measuring at every startup costs more than the simulator itself.
 
 from __future__ import annotations
 
-
 VIEW_MODES: tuple[str, ...] = (
     "rover_front",
     "rover_chase",

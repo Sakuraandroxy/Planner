@@ -1,7 +1,6 @@
 import numpy as np
 import pytest
 
-from tests.support import ue_camera_matrix
 from planner.capabilities.targeting.association import (
     accept_position,
     bound_target_geometry,
@@ -26,6 +25,7 @@ from planner.domain.visual_goal import (
 )
 from planner.domain.visual_goal_limits import VisualGoalLimits
 from planner.errors import BudgetExceeded
+from tests.support import ue_camera_matrix
 
 
 def _observation(

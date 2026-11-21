@@ -72,7 +72,7 @@ class HoldVehicle:
             self.pose.yaw_deg + yaw_rate_deg_s * duration_s,
         )
         self.velocity = velocity
-        self.timestamp_ns += int(round(duration_s * 1e9))
+        self.timestamp_ns += round(duration_s * 1e9)
 
 
 def build(vehicle, clock, timeout_s=5.0):

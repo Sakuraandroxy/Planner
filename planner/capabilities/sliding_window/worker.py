@@ -1,7 +1,7 @@
 """One lazy model-only worker. No callbacks, queue mutation or flight I/O."""
-from concurrent.futures import Future
 import threading
-from typing import Callable
+from collections.abc import Callable
+from concurrent.futures import Future
 
 from planner.domain.sliding_window import PlanningOutput
 from planner.errors import ExecutionError

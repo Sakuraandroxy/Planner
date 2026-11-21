@@ -2,7 +2,10 @@
 import math
 
 from planner.domain.pose import wrap_yaw_deg
-from planner.domain.visual_goal_completion import VisualGoalTriggerRules, VisualGoalTargetSnapshot
+from planner.domain.visual_goal_completion import (
+    VisualGoalTargetSnapshot,
+    VisualGoalTriggerRules,
+)
 
 
 class VisualGoalRadiusTrigger:

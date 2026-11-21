@@ -45,6 +45,7 @@ from planner.services.observation_snapshot import freeze_observation
 from planner.services.planning_window import PlanningWindow
 from planner.services.resource_cleanup import close_resources
 from planner.services.trajectory_transform import relative_to_world
+
 from .continuous import FreeNavigationContinuous
 
 logger = logging.getLogger(__name__)

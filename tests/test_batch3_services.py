@@ -5,7 +5,6 @@ import time
 import numpy as np
 import pytest
 
-from tests.support import ue_camera_matrix
 from planner.capabilities.sliding_window.scheduler import RefillScheduler
 from planner.domain.execution import ExecutionBudget, ExecutionReceipt
 from planner.domain.motion import MotionLimits
@@ -29,6 +28,7 @@ from planner.services.moving_observations import MovingObservations
 from planner.services.planning_window import PlanningWindow
 from planner.services.resource_cleanup import close_resources
 from planner.services.trajectory_validation import TrajectoryValidator
+from tests.support import ue_camera_matrix
 
 
 def _pose(x: float = 0.0, yaw: float = 0.0) -> WorldPose:

@@ -1,6 +1,6 @@
 """Stage-scoped static target estimate; accepted coordinates are not ground truth."""
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
 
 from .visual_goal import GoalObservation
 

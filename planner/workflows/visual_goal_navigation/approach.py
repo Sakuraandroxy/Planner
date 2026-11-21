@@ -2,11 +2,16 @@
 import math
 from dataclasses import replace
 from functools import partial
-from planner.services.observation_snapshot import freeze_observation
 
-from planner.domain.visual_goal import VisualGoalPlanningContext, VisualGoalState, GoalVisibility
+from planner.domain.visual_goal import (
+    GoalVisibility,
+    VisualGoalPlanningContext,
+    VisualGoalState,
+)
 from planner.errors import ExecutionError
+from planner.services.observation_snapshot import freeze_observation
 from planner.services.trajectory_transform import relative_to_world, world_to_relative
+
 from .session import model_call
 
 

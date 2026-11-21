@@ -8,8 +8,6 @@ own -- the ``WeatherParameter`` enum values.
 
 from __future__ import annotations
 
-from typing import Callable
-
 #: ``airsim.WeatherParameter`` values, keyed by the engine's spelling. Note
 #: ``roadwetness``: the engine writes it without the underscore the planner uses,
 #: and that difference is exactly why the spelling map lives in the adapter.

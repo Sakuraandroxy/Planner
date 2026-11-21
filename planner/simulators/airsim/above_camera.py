@@ -1,8 +1,10 @@
 """Single attached camera control; no workflow decisions or flight commands."""
 import math
+
 import numpy as np
 
 from planner.domain.pose import CameraMountPose
+
 from .camera_model import quaternion_to_rotation
 
 

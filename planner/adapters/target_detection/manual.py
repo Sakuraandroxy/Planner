@@ -38,7 +38,7 @@ class ManualTargetDetector:
         xmax: float,
         ymax: float,
         surface_points: tuple[tuple[float, float], ...] = (),
-    ) -> "ManualTargetDetector":
+    ) -> ManualTargetDetector:
         return cls(
             NormalizedBoundingBox(xmin, ymin, xmax, ymax),
             surface_points=surface_points,

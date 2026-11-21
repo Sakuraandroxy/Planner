@@ -12,7 +12,7 @@ rather than a literal left in the argv, because a stray ``{binary}`` reaches
 from __future__ import annotations
 
 import re
-from typing import Mapping
+from collections.abc import Mapping
 
 TOKEN = re.compile(r"\{([a-z_][a-z0-9_]*(?:\.[a-z_][a-z0-9_]*)?)\}")
 

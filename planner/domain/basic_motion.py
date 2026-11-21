@@ -1,7 +1,7 @@
 """Typed relative ground commands and measured results; no model/device dependencies."""
+import math
 from dataclasses import dataclass
 from enum import Enum
-import math
 
 from .execution import StopResult
 from .pose import WorldPose

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import math
-import uuid
-import time
-import threading
 import logging
+import math
+import threading
+import time
+import uuid
 from contextlib import nullcontext
 from dataclasses import replace
 from functools import partial
@@ -12,18 +12,23 @@ from functools import partial
 import numpy as np
 from PIL import Image
 
+from planner.domain.depth_visualization import render_depth
+from planner.domain.execution import ExecutionBudget
+from planner.domain.observation import Observation
+from planner.errors import (
+    BudgetExceeded,
+    ExecutionError,
+    ObservationError,
+    SimulatorConnectionError,
+)
+from planner.ports.vehicle import Vehicle
+from planner.services.background_operation import BackgroundOperation
 from planner.simulators.airsim.camera_model import (
     camera_matrix,
     intrinsics_from_horizontal_fov,
     quaternion_to_rotation,
 )
 from planner.simulators.airsim.connection import AirSimConnection
-from planner.domain.observation import Observation
-from planner.domain.execution import ExecutionBudget
-from planner.ports.vehicle import Vehicle
-from planner.errors import BudgetExceeded, ObservationError, ExecutionError, SimulatorConnectionError
-from planner.services.background_operation import BackgroundOperation
-from planner.domain.depth_visualization import render_depth
 
 logger = logging.getLogger(__name__)
 

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 import threading
 import time
+from dataclasses import replace
 
 from ..domain.pose import WorldPose
 from ..domain.trajectory_telemetry import (

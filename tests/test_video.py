@@ -66,7 +66,8 @@ def test_mjpeg_later_chunks_close_the_previous_part():
         hub.publish(_bgra())
         chunks = mjpeg_chunks(hub, poll_s=0.01)
         await anext(chunks)
-        time.sleep(0.002)
+        # 这里就是要阻塞 2 ms，让生成器在两次发布之间真的停住。
+        time.sleep(0.002)  # noqa: ASYNC251
         hub.publish(_bgra())
         try:
             return await anext(chunks)

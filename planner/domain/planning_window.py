@@ -1,7 +1,7 @@
 """Frozen task-independent inputs for one owner-submitted continuation request."""
 
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
 
 from .pose import WorldPose
 from .trajectory import RelativeTrajectory

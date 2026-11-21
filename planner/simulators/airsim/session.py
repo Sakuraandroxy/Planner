@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Callable
+from collections.abc import Callable
 
 from planner.application.mission_assembly import (
     MissionInputs,

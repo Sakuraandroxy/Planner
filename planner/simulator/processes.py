@@ -21,13 +21,13 @@ away, so they are named here as well as at the function:
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import re
 import signal
 import socket
 import subprocess
 import time
-from typing import Callable
+from collections.abc import Callable
+from pathlib import Path
 
 from ..errors import SimulatorRestartError
 
@@ -63,6 +63,7 @@ def listener_pids(port: int) -> set[int]:
         capture_output=True,
         text=True,
         timeout=3,
+        check=False,
     )
     pids = set(map(int, re.findall(r"pid=(\d+)", result.stdout or "")))
     if pids:

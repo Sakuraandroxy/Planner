@@ -3,12 +3,12 @@ import threading
 
 from planner.domain.pose import WorldPose, resolve_yaw_delta_deg
 from planner.domain.sliding_window import PlanningSnapshot, QueuedWaypoint
+from planner.domain.streaming import QueuePauseSnapshot
 from planner.domain.trajectory import RelativeTrajectory, WorldTrajectory
 from planner.errors import ExecutionError, ProtocolError
+from planner.services.motion.continuous import reached
 from planner.services.trajectory_transform import world_to_relative
 from planner.services.trajectory_validation import require_execution_anchor
-from planner.domain.streaming import QueuePauseSnapshot
-from planner.services.motion.continuous import reached
 
 
 class WorldWaypointQueue:

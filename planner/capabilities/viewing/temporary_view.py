@@ -1,5 +1,6 @@
 """Save once per stage; all temporary views restore the same initial mount."""
 import logging
+
 from planner.ports.camera_view import CameraView
 
 

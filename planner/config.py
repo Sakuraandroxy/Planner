@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, fields, replace
 import math
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any
 
@@ -14,9 +14,9 @@ from .domain.depth_foreground import DepthForegroundSettings
 from .domain.motion import ContinuousTrackingSettings
 from .domain.runtime import FamilyCatalog, parse_family_catalog
 from .domain.sliding_window import SlidingWindowSettings
+from .domain.view import VIEW_MODES
 from .domain.visual_goal_completion import VisualGoalTriggerRules
 from .domain.visual_goal_limits import VisualGoalLimits
-from .domain.view import VIEW_MODES
 from .services.segment_motion import MotionLimits
 
 
@@ -1284,7 +1284,6 @@ def load_vehicle_models(
         for entry in maps.maps
         if registry.capabilities_for(entry.simulator).supports("models")
     }
-    root = _project_root()
     variant_options = {
         option.id
         for group in catalog.groups

@@ -4,11 +4,12 @@ Operations must contain model I/O only, never vehicle/queue access. A running
 HTTP request cannot be forcibly killed: on timeout its future is detached,
 and another call is refused until that operation actually returns.
 """
-from concurrent.futures import Future
 import math
 import threading
 import time
-from typing import Callable, TypeVar
+from collections.abc import Callable
+from concurrent.futures import Future
+from typing import TypeVar
 
 from planner.errors import ExecutionError, ModelCallTimeout
 

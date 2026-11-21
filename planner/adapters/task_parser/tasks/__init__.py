@@ -1,8 +1,9 @@
 """Explicit built-in task codecs; importing this module registers nothing."""
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from planner.domain.mission import TaskKind, TaskParameters
+
 from .basic_motion import (
     AERIAL_BASIC_MOTION_RULES,
     BASIC_MOTION_RULES,

@@ -15,9 +15,9 @@ arrive, prints their statistics and writes them under output/smoke_projectairsim
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 import sys
 import time
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -25,9 +25,10 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from planner.config import default_config_path, load_config  # noqa: E402
-from projectairsim import Drone, ProjectAirSimClient, Rover, World  # noqa: E402
-from projectairsim.utils import unpack_image  # noqa: E402
+from projectairsim import Drone, ProjectAirSimClient, Rover, World
+from projectairsim.utils import unpack_image
+
+from planner.config import default_config_path, load_config
 
 
 def resolve(path: str) -> Path:

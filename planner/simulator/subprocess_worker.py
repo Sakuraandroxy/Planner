@@ -25,18 +25,17 @@ commands, and it must not care which side of a pipe the session lives on.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import queue
 import subprocess
 import threading
 import time
-import dataclasses
-from typing import Callable
-
-from ..domain.trajectory_telemetry import snapshot_from_payload
+from collections.abc import Callable
 
 from ..domain.server import TaskSubmission, WorkerEvent, WorkerEventKind
+from ..domain.trajectory_telemetry import snapshot_from_payload
 from ..domain.weather import weather_catalog_from_payload
 
 #: How long the child may take to exit after it is asked nicely.

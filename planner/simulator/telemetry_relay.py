@@ -15,7 +15,7 @@ one pipe line per call would bury the events that matter.
 from __future__ import annotations
 
 import time
-from typing import Callable
+from collections.abc import Callable
 
 from ..domain.trajectory_telemetry import TrajectorySnapshot
 from ..services.trajectory_hub import TrajectoryHub
@@ -69,7 +69,7 @@ class RelayedTelemetry:
         self._sent_at = now
         try:
             self._emit(snapshot)
-        except Exception:  # noqa: BLE001
+        except Exception:
             # A telemetry channel that cannot be written must not end a flight.
             # The task's own events travel a different path and still report.
             pass

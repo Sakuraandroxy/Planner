@@ -1,0 +1,29 @@
+# Ruff 基线。
+#
+# 只忽略本项目刻意为之、改掉就会改变行为的规则，其余保持 Ruff 默认规则集。
+# 每条 ignore 都写明理由；升级 Ruff 后出现新规则时，先确认这些理由是否仍然成立。
+
+target-version = "py310"
+
+[lint]
+ignore = [
+    # 设备、子进程与网络代码要在任意异常下完成清理或上报，捕获 Exception 就是这套错误处理的实现方式，
+    # 收窄到具体类型会漏掉清理路径。
+    "BLE001",
+    # 参数校验统一用 ValueError 表达，调用方按它分支；改成 TypeError 会改变对外行为。
+    "TRY004",
+    # clock=time.monotonic、sleep=time.sleep 这类默认参数是依赖注入的默认实现，不是每次调用求值的可变默认值。
+    "B008",
+    # 有意吞掉的探测失败与清理失败，落点旁边都有说明注释。
+    "S110",
+    # dict(...) 与 {...} 的选择不承载含义，保持现有写法。
+    "C408",
+    # scripts/ 下的入口按 `python scripts/x.py` 调用，shebang 只作文档。
+    "EXE001",
+    # 默认值是 frozen dataclass 实例（MotionTrajectory 等），共享安全。
+    "RUF009",
+    # TypeVar 名称不反映协变/逆变，属命名偏好。
+    "PLC0105",
+    # 测试替身模拟引擎的只读元数据字段，从不修改。
+    "RUF012",
+]

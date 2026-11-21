@@ -3,8 +3,7 @@ from typing import Protocol
 from planner.domain.execution import ExecutionBudget
 from planner.domain.observation import Observation
 from planner.domain.pose import WorldPose
-from planner.domain.visual_goal import GoalReference
-from planner.domain.visual_goal import GoalObservation
+from planner.domain.visual_goal import GoalObservation, GoalReference
 
 
 class GoalObserver(Protocol):

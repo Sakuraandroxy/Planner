@@ -1,10 +1,9 @@
 from typing import Protocol, TypeVar
 
+from ..domain.execution import ExecutionBudget
 from ..domain.observation import Observation
 from ..domain.pose import WorldPose
 from ..domain.trajectory import RelativeTrajectory
-from ..domain.execution import ExecutionBudget
-
 
 ContextT = TypeVar("ContextT", contravariant=True)
 

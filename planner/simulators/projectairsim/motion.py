@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import math
 import time
+from collections.abc import Callable
 from dataclasses import replace
-from typing import Callable
 
 from ...domain.execution import ExecutionBudget, PoseCheckpoint
 from ...domain.motion import ContinuousTrackingSettings, MotionLimits

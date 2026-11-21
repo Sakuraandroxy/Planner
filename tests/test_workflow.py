@@ -4,7 +4,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from tests.support import ue_camera_matrix
 from planner.capabilities.approach import TargetApproach
 from planner.capabilities.completion.visual_goal import VisualGoalCompletion
 from planner.capabilities.planning import GeometricTargetPlanner
@@ -28,6 +27,7 @@ from planner.services.execution import ExecutionService
 from planner.services.motion import SynchronizedMotionPlanner
 from planner.services.trajectory_validation import TrajectoryValidator
 from planner.workflows.visual_goal_navigation import VisualGoalNavigationWorkflow
+from tests.support import ue_camera_matrix
 
 BOX = (0.4, 0.4, 0.6, 0.6)
 

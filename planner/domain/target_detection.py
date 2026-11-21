@@ -7,8 +7,8 @@ image evidence; depth back-projection happens later in
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
 from typing import Any
 
 from .observation import Observation
@@ -79,7 +79,7 @@ class TargetDetection:
                 raise ValueError("surface point is outside the target bbox")
 
     @classmethod
-    def missing(cls) -> "TargetDetection":
+    def missing(cls) -> TargetDetection:
         return cls(found=False)
 
     @property

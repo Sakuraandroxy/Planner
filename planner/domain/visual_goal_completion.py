@@ -1,12 +1,12 @@
 """Contracts specific to visual-goal navigation, separate from trajectory prompts."""
+import math
 from dataclasses import dataclass
 from typing import Any
-import math
 
 from .observation import Observation
 from .pose import WorldPose
+from .target_state import TargetObservationEvidence, TargetPositionState
 from .visual_goal import GoalGeometry, GoalObservation, VisualGoalNavigationParameters
-from .target_state import TargetPositionState, TargetObservationEvidence
 
 
 @dataclass(frozen=True)

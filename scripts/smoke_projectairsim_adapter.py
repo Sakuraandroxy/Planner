@@ -18,23 +18,23 @@ from __future__ import annotations
 
 import argparse
 import math
-from pathlib import Path
 import sys
-import time
+from pathlib import Path
 
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from planner.simulators.projectairsim.connection import (  # noqa: E402
+from projectairsim import Rover
+
+from planner.config import default_config_path, load_config
+from planner.errors import ObservationError
+from planner.simulators.projectairsim.connection import (
     ProjectAirSimConnection,
     ProjectAirSimConnectionConfig,
 )
-from planner.simulators.projectairsim.rover import ProjectAirSimRover  # noqa: E402
-from planner.config import default_config_path, load_config  # noqa: E402
-from planner.errors import ObservationError  # noqa: E402
-from projectairsim import Rover  # noqa: E402
+from planner.simulators.projectairsim.rover import ProjectAirSimRover
 
 
 def set_controls(connection, robot, *, engine, steering_angle, brake):

@@ -28,16 +28,12 @@ from __future__ import annotations
 import os
 import subprocess
 import tempfile
-import threading
 import time
+from collections.abc import Callable, Mapping, Sequence
 from itertools import permutations
-from typing import Callable, Mapping, Sequence
 
 import cv2
 import numpy as np
-
-from projectairsim import ProjectAirSimClient
-from projectairsim.utils import unpack_image
 
 from ...domain.view import VIEW_MODES
 
@@ -105,9 +101,8 @@ def signature_score(left: np.ndarray, right: np.ndarray) -> float:
 
 def xpra_screenshot(display: str) -> np.ndarray:
     """Capture the xpra shadow's window as a BGR frame."""
-    handle = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-    path = handle.name
-    handle.close()
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as handle:
+        path = handle.name
     try:
         subprocess.run(
             ["xpra", "screenshot", path, display],
@@ -127,94 +122,6 @@ def xpra_screenshot(display: str) -> np.ndarray:
         )
     return bgr
 
-
-def service_frame_fetcher(
-    *,
-    address: str,
-    port_topics: int,
-    port_services: int,
-    parent_topic: str,
-    advance: Callable[[float], object],
-    timeout_s: float = FRAME_TIMEOUT_S,
-    advance_s: float = ADVANCE_S,
-):
-    """Build ``fetch_frame(robot, camera) -> ndarray | None``.
-
-    The request blocks until the server captures a frame at or after the
-    request time, so the world is advanced in this thread while a
-    helper thread waits on a service-only client. The returned callable owns
-    that client; call ``fetch_frame.close()`` when done.
-    """
-    state: dict[str, ProjectAirSimClient | None] = {"client": None}
-
-    def _connect() -> ProjectAirSimClient:
-        client = ProjectAirSimClient(address, port_topics, port_services)
-        client.connect_services()
-        client.socket_services.recv_timeout = int(max(1.0, timeout_s) * 1000)
-        state["client"] = client
-        return client
-
-    def _drop(client: ProjectAirSimClient) -> None:
-        if state["client"] is client:
-            state["client"] = None
-        try:
-            client.disconnect()
-        except Exception:
-            pass
-
-    def close() -> None:
-        client, state["client"] = state["client"], None
-        if client is not None:
-            _drop(client)
-
-    def fetch_frame(robot: str, camera: str) -> np.ndarray | None:
-        client = state["client"] or _connect()
-        result: dict[str, object] = {}
-
-        def _request() -> None:
-            try:
-                result["data"] = client.request(
-                    {
-                        "method": (
-                            f"{parent_topic}/robots/{robot}/sensors/"
-                            f"{camera}/GetImages"
-                        ),
-                        "params": {"image_type_ids": [0]},
-                        "version": 1.0,
-                    }
-                )
-            except Exception as error:  # noqa: BLE001
-                result["error"] = error
-
-        worker = threading.Thread(
-            target=_request, name=f"streaming-view-frame-{camera}", daemon=True
-        )
-        worker.start()
-        deadline = time.monotonic() + timeout_s
-        while worker.is_alive() and time.monotonic() < deadline:
-            advance(advance_s)
-        worker.join(timeout=timeout_s)
-        if worker.is_alive() or "error" in result or "data" not in result:
-            # A service timeout disconnects the client inside ``request``;
-            # drop it so the next fetch opens a fresh link.
-            _drop(client)
-            return None
-        data = result.get("data")
-        if not isinstance(data, dict) or not data:
-            _drop(client)
-            return None
-        message = data.get("0") or data.get(0)
-        if not isinstance(message, dict):
-            _drop(client)
-            return None
-        try:
-            return unpack_image(message)
-        except Exception:  # noqa: BLE001
-            _drop(client)
-            return None
-
-    fetch_frame.close = close  # type: ignore[attr-defined]
-    return fetch_frame
 
 
 def _classify(
@@ -373,7 +280,7 @@ def _fetch_references(
         robot, camera = cameras[mode]
         try:
             frame = fetch_frame(robot, camera)
-        except Exception as error:  # noqa: BLE001
+        except Exception as error:
             emit(f"streaming-view reference {mode} failed: {error}", "WARNING")
             frame = None
         if frame is None:
@@ -513,7 +420,7 @@ def calibrate_streaming_views(
                     "calibration"
                 )
                 break
-    except Exception as error:  # noqa: BLE001
+    except Exception as error:
         failure = f"{type(error).__name__}: {error}"
     finally:
         # Return to the position the cycle started at, even on failure.
@@ -523,7 +430,7 @@ def calibrate_streaming_views(
             try:
                 if not _step():
                     break
-            except Exception:  # noqa: BLE001
+            except Exception:
                 break
 
     if failure is not None:
@@ -603,7 +510,7 @@ def verify_streaming_views(
         sleep(settle_s)
         try:
             shot = signature_bgr(screenshot())
-        except Exception as error:  # noqa: BLE001
+        except Exception as error:
             emit(f"streaming-view cache check failed: {error}", "WARNING")
             return None
         ranked = sorted(
@@ -628,7 +535,7 @@ def verify_streaming_views(
         try:
             if not switch_view():
                 return None
-        except Exception as error:  # noqa: BLE001
+        except Exception as error:
             emit(f"streaming-view cache check failed: {error}", "WARNING")
             return None
         advance(advance_s)

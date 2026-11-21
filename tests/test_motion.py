@@ -1,3 +1,4 @@
+import itertools
 import math
 
 import pytest
@@ -19,7 +20,7 @@ def test_quintic_boundaries_and_midpoint():
 
 def test_quintic_is_monotonic():
     values = [quintic(i / 50.0) for i in range(51)]
-    assert all(b >= a for a, b in zip(values, values[1:]))
+    assert all(b >= a for a, b in itertools.pairwise(values))
 
 
 def test_duration_respects_minimum():

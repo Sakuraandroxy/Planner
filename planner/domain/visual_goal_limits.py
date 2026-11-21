@@ -1,6 +1,7 @@
 """Task policy values, separate from simulator or model configuration."""
-from dataclasses import dataclass, fields
 import math
+from dataclasses import dataclass, fields
+
 from .approach import ApproachSettings
 
 

@@ -20,8 +20,9 @@ from planner.domain.pose import WorldPose
 
 
 def _png_bytes(width=8, height=6, color=(10, 20, 30)):
-    from PIL import Image
     import io
+
+    from PIL import Image
 
     image = Image.new("RGB", (width, height), color)
     buffer = io.BytesIO()

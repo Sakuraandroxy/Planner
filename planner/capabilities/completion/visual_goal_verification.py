@@ -1,11 +1,12 @@
 """Semantic check over frozen local evidence; no simulator or HTTP implementation."""
 from dataclasses import replace
 
+from planner.domain.visual_goal_completion import VisualGoalCompletionInput
 from planner.errors import ProtocolError
 from planner.ports.task_completion import TaskCompletionChecker
-from planner.domain.visual_goal_completion import VisualGoalCompletionInput
-from .visual_goal_request import require_visual_completion_evidence
 from planner.services.model_calls import ModelCallService
+
+from .visual_goal_request import require_visual_completion_evidence
 
 
 class VisualGoalVerification:
@@ -28,7 +29,7 @@ class VisualGoalVerification:
         for attempt in range(retry_count+1):
             timeout = min(timeout_s, budget.remaining(clock()))
             try:
-                value = self.calls.call(lambda: self.checker.check(frozen, timeout_s=timeout), timeout, checkpoint)
+                value = self.calls.call(lambda timeout=timeout: self.checker.check(frozen, timeout_s=timeout), timeout, checkpoint)
                 if type(value) is not bool:
                     raise ProtocolError("completion checker must return a boolean")
                 return value

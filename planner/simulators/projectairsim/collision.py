@@ -14,9 +14,9 @@ contact that the execution layer must treat as a collision.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import logging
 import threading
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 

@@ -1,14 +1,14 @@
 """暂停轨迹执行并保持固定位置；正式采集期间仅发送保持指令。"""
-from contextlib import contextmanager
-from concurrent.futures import Future
-from collections import deque
 import math
 import threading
 import time
+from collections import deque
+from concurrent.futures import Future
+from contextlib import contextmanager
 
-from planner.domain.pose import wrap_yaw_deg
 from planner.domain.execution import ExecutionBudget
-from planner.errors import ExecutionError, BudgetExceeded
+from planner.domain.pose import wrap_yaw_deg
+from planner.errors import BudgetExceeded, ExecutionError
 
 
 class ObservationGate:

@@ -21,9 +21,9 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import os
-from pathlib import Path
 import socket
 import sys
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -255,7 +255,7 @@ def check_settings(families: dict) -> None:
 def check_ports(families: dict) -> None:
     wanted: dict[str, int] = {}
     for simulator_id, item in families.items():
-        for label, port in ((item.get("ports") or {})).items():
+        for label, port in (item.get("ports") or {}).items():
             wanted[f"{simulator_id}.{label}"] = int(port)
     if not wanted:
         warn("ports", "no ports declared in simulators.yaml")

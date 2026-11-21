@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -23,7 +23,7 @@ class CameraIntrinsics:
     @classmethod
     def from_horizontal_fov(
         cls, width: int, height: int, hfov_deg: float
-    ) -> "CameraIntrinsics":
+    ) -> CameraIntrinsics:
         """Build a pinhole model from CARLA's horizontal field of view.
 
         CARLA renders square pixels, so fx == fy. The principal point uses

@@ -12,8 +12,8 @@ above-ground surface inside the report range, and unseen space stays unknown.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -194,7 +194,7 @@ def measure_free_space(
 
     sectors = []
     for center in centers:
-        index = int(round(center / settings.sector_width_deg))
+        index = round(center / settings.sector_width_deg)
         selected = sector_index == index
         sectors.append(
             _measure_sector(
@@ -248,7 +248,7 @@ def _measure_sector(
         return FreeSpaceSector(center, None, None, None, False)
 
     bin_ids = np.arange(
-        0, int(math.floor(settings.max_range_m / settings.distance_bin_m)) + 1
+        0, math.floor(settings.max_range_m / settings.distance_bin_m) + 1
     )
     known = np.array(sorted(ground), dtype=np.float64)
     known_height = np.array(
@@ -267,11 +267,9 @@ def _measure_sector(
     order = np.argsort(distances, kind="stable")
     rank = min(
         order.size - 1,
-        int(
-            math.floor(
+        math.floor(
                 settings.obstacle_distance_percentile / 100.0 * order.size
-            )
-        ),
+            ),
     )
     point = order[rank]
     return FreeSpaceSector(

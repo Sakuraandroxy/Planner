@@ -1,6 +1,7 @@
 """Sparse roof planes and contour-ray intersections; no depth raster meshing."""
-from itertools import combinations
 import logging
+from itertools import combinations
+
 import numpy as np
 
 from planner.domain.above_polygon import in_ring

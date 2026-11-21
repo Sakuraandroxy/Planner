@@ -2,13 +2,13 @@ import math
 
 import pytest
 
-from planner.simulators.projectairsim.motion import SteppedMotionTracker, limit_vector
 from planner.domain.execution import ExecutionBudget
 from planner.domain.motion import MotionLimits
 from planner.domain.pose import WorldPose
 from planner.domain.trajectory import MotionSegment
 from planner.errors import BudgetExceeded, ExecutionError, MotionPaused
 from planner.services.motion.synchronized import SMOOTH_PROFILE
+from planner.simulators.projectairsim.motion import SteppedMotionTracker, limit_vector
 
 LIMITS = MotionLimits(
     max_acceleration_mps2=5.0,

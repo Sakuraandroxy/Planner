@@ -24,8 +24,8 @@ needs the opposite steering sign while backing up.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
 
 
 def _clamp(value: float, low: float, high: float) -> float:

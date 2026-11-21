@@ -2,10 +2,7 @@ import pytest
 import yaml
 
 from planner.config import (
-    MapCatalog,
-    MapEntry,
     ServerSettings,
-    SimulatorSettings,
     default_config_path,
     load_completion_rules,
     load_config,

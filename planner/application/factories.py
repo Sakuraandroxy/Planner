@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Collection
+from collections.abc import Collection
 
 from ..adapters.diagnostics import VisualGoalTrace
 from ..adapters.multimodal_chat import MultimodalChatClient
@@ -31,7 +31,6 @@ from ..capabilities.targeting.depth_foreground import DepthForegroundFilter
 from ..config import AppConfig
 from ..domain.mission import TaskKind
 from ..domain.target_detection import NormalizedBoundingBox
-
 
 logger = logging.getLogger(__name__)
 

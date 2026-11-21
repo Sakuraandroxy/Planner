@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import math
-import numpy as np
 from numbers import Integral
 
+import numpy as np
+
 from planner.domain.observation import CameraIntrinsics
+
 
 #根据图像尺寸 + 水平 FOV，算相机内参
 def intrinsics_from_horizontal_fov(width: int, height: int, horizontal_fov_deg: float) -> CameraIntrinsics:
@@ -22,7 +24,7 @@ def intrinsics_from_horizontal_fov(width: int, height: int, horizontal_fov_deg: 
 #把四元数姿态转换成 3×3 旋转矩阵
 def camera_matrix(
     camera_position: tuple[float, float, float], camera_rotation
-) -> "np.ndarray":
+) -> np.ndarray:
     """4x4 NED camera-to-world transform (rotation + translation).
 
     ``Observation.__post_init__`` fills ``camera_position_world`` and

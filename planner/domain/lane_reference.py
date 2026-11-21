@@ -8,8 +8,8 @@ five-action relative protocol can consume them directly.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
 
 
 def _finite(value: float) -> bool:

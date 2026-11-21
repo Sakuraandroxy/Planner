@@ -4,16 +4,16 @@ import time
 from collections import deque
 
 from planner.domain.execution import ExecutionRecord
-from planner.domain.pose import resolve_yaw_delta_deg
-from planner.domain.trajectory import RelativeTrajectory
 from planner.domain.motion import ContinuousTrackingSettings
+from planner.domain.pose import resolve_yaw_delta_deg
 from planner.domain.streaming import ControlTelemetry
+from planner.domain.trajectory import RelativeTrajectory
 from planner.errors import ExecutionError
+from planner.ports.streaming_vehicle import StreamingVehicle
 from planner.services.execution import ExecutionService
 from planner.services.motion.continuous import ContinuousFollower
 from planner.services.motion.continuous_reference import is_rotation
 from planner.services.stream_timeline import StreamTimeline
-from planner.ports.streaming_vehicle import StreamingVehicle
 
 
 class ContinuousExecution:

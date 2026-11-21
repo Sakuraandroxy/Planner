@@ -673,7 +673,6 @@ class FakePlanningWindow:
 
     def poll_stream(self, measured, checkpoint):
         self.polls += 1
-        return None
 
     def submit_stream(
         self,
@@ -973,7 +972,7 @@ def test_continuous_discards_a_contact_latched_before_the_stage(monkeypatch):
         hover=lambda: None,
         last_collision=SimpleNamespace(object_name="Rover1"),
     )
-    controller, execution, stream, frames = _continuous_controller(
+    controller, execution, stream, _frames = _continuous_controller(
         monkeypatch,
         stream=stream,
         clock=clock,
@@ -1003,7 +1002,7 @@ def test_continuous_collision_recovery_budget_exhausts(monkeypatch):
         collision_state=lambda: True,
         hover=lambda: None,
     )
-    controller, execution, stream, frames = _continuous_controller(
+    controller, execution, stream, _frames = _continuous_controller(
         monkeypatch,
         stream=stream,
         clock=clock,
@@ -1034,7 +1033,7 @@ def test_continuous_collision_backoff_escalates_per_recovery(monkeypatch):
         collision_state=lambda: True,
         hover=lambda: None,
     )
-    controller, execution, stream, frames = _continuous_controller(
+    controller, execution, stream, _frames = _continuous_controller(
         monkeypatch,
         stream=stream,
         clock=clock,
@@ -1074,7 +1073,7 @@ def test_continuous_collision_budget_resets_after_progress(monkeypatch):
         collision_state=lambda: next(collisions, False),
         hover=lambda: None,
     )
-    controller, execution, stream, frames = _continuous_controller(
+    controller, execution, stream, _frames = _continuous_controller(
         monkeypatch,
         stream=stream,
         clock=clock,
@@ -1252,7 +1251,7 @@ def _continuous_workflow(continuous_stack, **kwargs):
         "sliding_window", SlidingWindowSettings(enabled=True)
     )
     kwargs.setdefault("motion_limits", MotionLimits())
-    workflow, source, planner, validator, motion, execution = _workflow(
+    workflow, source, _planner, _validator, _motion, execution = _workflow(
         **kwargs
     )
     return workflow, source, execution

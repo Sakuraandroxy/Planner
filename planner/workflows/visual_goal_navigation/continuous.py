@@ -1,19 +1,28 @@
 """Visual-task orchestration over shared streaming, capture and planning services."""
-from functools import partial
 import math
+from functools import partial
 
+from planner.capabilities.targeting.association import (
+    bound_target_geometry,
+    bound_target_goal,
+)
 from planner.capabilities.targeting.visual_goal_refresh import VisualGoalRefresh
-from planner.capabilities.targeting.association import bound_target_geometry, bound_target_goal
-from planner.domain.streaming import QueueObservationAnchor
 from planner.domain.motion import ContinuousTrackingSettings
+from planner.domain.streaming import QueueObservationAnchor
 from planner.domain.trajectory import MotionSegment, MotionTrajectory
-from planner.domain.visual_goal import GoalVisibility, VisualGoalPlanningContext, VisualGoalState, VisualGoalStatus
 from planner.domain.trajectory_telemetry import MODE_CONTINUOUS
-from planner.errors import ProtocolError, ExecutionError, ObservationError
+from planner.domain.visual_goal import (
+    GoalVisibility,
+    VisualGoalPlanningContext,
+    VisualGoalState,
+    VisualGoalStatus,
+)
+from planner.errors import ExecutionError, ObservationError, ProtocolError
 from planner.services.continuous_execution import ContinuousExecution
 from planner.services.moving_observations import MovingObservations
 from planner.services.observation_snapshot import freeze_observation, freeze_reference
 from planner.services.target_coordinates import point_in_horizontal_body
+
 from .session import model_call
 from .termination import VisualGoalFailure
 

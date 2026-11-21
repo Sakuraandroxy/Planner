@@ -17,32 +17,33 @@ spawn pose.
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 import sys
 import threading
 import time
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from planner.simulators.projectairsim.connection import (  # noqa: E402
+from projectairsim import Rover
+
+from planner.application.factories import (
+    build_free_navigation_planner,
+)
+from planner.config import default_config_path, load_config
+from planner.domain.basic_motion import BasicMotionParameters
+from planner.domain.free_navigation import FreeNavigationParameters
+from planner.domain.mission import MissionStage, TaskKind
+from planner.services.execution import ExecutionService
+from planner.services.motion import SynchronizedMotionPlanner
+from planner.services.trajectory_validation import TrajectoryValidator
+from planner.simulators.projectairsim.connection import (
     ProjectAirSimConnection,
     ProjectAirSimConnectionConfig,
 )
-from planner.simulators.projectairsim.rover import ProjectAirSimRover  # noqa: E402
-from planner.application.factories import (  # noqa: E402
-    build_free_navigation_planner,
-)
-from planner.config import default_config_path, load_config  # noqa: E402
-from planner.domain.basic_motion import BasicMotionParameters  # noqa: E402
-from planner.domain.free_navigation import FreeNavigationParameters  # noqa: E402
-from planner.domain.mission import MissionStage, TaskKind  # noqa: E402
-from planner.services.execution import ExecutionService  # noqa: E402
-from planner.services.motion import SynchronizedMotionPlanner  # noqa: E402
-from planner.services.trajectory_validation import TrajectoryValidator  # noqa: E402
-from planner.workflows.basic_motion import BasicMotionWorkflow  # noqa: E402
-from planner.workflows.free_navigation import FreeNavigationWorkflow  # noqa: E402
-from projectairsim import Rover  # noqa: E402
+from planner.simulators.projectairsim.rover import ProjectAirSimRover
+from planner.workflows.basic_motion import BasicMotionWorkflow
+from planner.workflows.free_navigation import FreeNavigationWorkflow
 
 
 def print_basic(label, result, rover):

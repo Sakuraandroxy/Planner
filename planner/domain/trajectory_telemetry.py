@@ -7,8 +7,8 @@ thread while it still owns the queue; the HTTP thread never touches
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
 
 from .pose import WorldPose
 from .sliding_window import QueuedWaypoint

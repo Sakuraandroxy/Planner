@@ -16,7 +16,6 @@ from .base import (
     build_base_user_prompt,
 )
 
-
 FREE_NAVIGATION_SYSTEM_PROMPT = BASE_TRAJECTORY_SYSTEM_PROMPT + """
 
 Free navigation road-following rules:
@@ -410,9 +409,11 @@ class FreeNavigationTrajectoryPrompt:
 
 def format_lane_reference(reference: LaneReference | None) -> str:
     lines = [
-        "Lane reference (measured from the simulator HD map at the planning "
-        "anchor for these new actions - the predicted pose after the pending "
-        "queue, or the current pose when nothing is pending):"
+        (
+            "Lane reference (measured from the simulator HD map at the planning "
+            "anchor for these new actions - the predicted pose after the pending "
+            "queue, or the current pose when nothing is pending):"
+        )
     ]
     if reference is None:
         lines.append(

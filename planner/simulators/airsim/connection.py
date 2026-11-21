@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import inspect
-import threading
 import logging
+import threading
 import time
 from collections import deque
-from typing import Any
 from contextlib import contextmanager
+from typing import Any
+
 from planner.errors import ExecutionError, SimulatorConnectionError
+
 from .rpc_loop import close_rpc_client, configure_rpc_loop
 
 logger = logging.getLogger(__name__)
@@ -85,7 +87,8 @@ class AirSimConnection:
         except Exception as exc:
             transport_errors = (OSError, EOFError, TimeoutError)
             try:
-                from msgpackrpc.error import TransportError, TimeoutError as RpcTimeoutError
+                from msgpackrpc.error import TimeoutError as RpcTimeoutError
+                from msgpackrpc.error import TransportError
                 transport_errors += (TransportError, RpcTimeoutError)
             except ImportError:
                 pass

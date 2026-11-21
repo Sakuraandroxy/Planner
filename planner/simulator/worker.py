@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import queue
 import threading
-from typing import Callable
+from collections.abc import Callable
 
 from ..application.reporting import task_finish_events
 from ..domain.server import TaskSubmission, WorkerEvent, WorkerEventKind

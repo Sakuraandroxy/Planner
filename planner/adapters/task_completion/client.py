@@ -3,6 +3,7 @@ from typing import Generic, TypeVar
 
 from planner.adapters.multimodal_chat import MultimodalChatClient
 from planner.errors import ProtocolError
+
 from .prompt import CompletionPromptBuilder
 
 RequestT = TypeVar("RequestT")

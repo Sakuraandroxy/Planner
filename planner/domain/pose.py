@@ -16,8 +16,8 @@ CARLA adapter is the only place that converts between the two.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
 
 
 def wrap_deg(angle: float) -> float:
@@ -87,7 +87,7 @@ class WorldPose:
         dy: float,
         dz: float = 0.0,
         dyaw_deg: float = 0.0,
-    ) -> "WorldPose":
+    ) -> WorldPose:
         wx, wy, wz = relative_to_world(self.yaw_deg, dx, dy, dz)
         return WorldPose(
             self.x + wx,
@@ -96,13 +96,13 @@ class WorldPose:
             wrap_deg(self.yaw_deg + dyaw_deg),
         )
 
-    def with_yaw(self, yaw_deg: float) -> "WorldPose":
+    def with_yaw(self, yaw_deg: float) -> WorldPose:
         return WorldPose(self.x, self.y, self.z, wrap_deg(yaw_deg))
 
     def as_tuple(self) -> tuple[float, float, float, float]:
         return (self.x, self.y, self.z, self.yaw_deg)
 
-    def at_height(self, z: float) -> "WorldPose":
+    def at_height(self, z: float) -> WorldPose:
         """Return the same pose clamped to a fixed world z (ground vehicle)."""
         return WorldPose(self.x, self.y, float(z), self.yaw_deg)
 
@@ -124,7 +124,7 @@ class RelativePoseDelta:
     def apply(self, pose: WorldPose) -> WorldPose:
         return pose.offset(self.dx, self.dy, self.dz, self.dyaw_deg)
 
-    def without_vertical(self) -> "RelativePoseDelta":
+    def without_vertical(self) -> RelativePoseDelta:
         """Drop dz for ground vehicles that cannot change altitude."""
         return RelativePoseDelta(self.dx, self.dy, 0.0, self.dyaw_deg)
 

@@ -54,7 +54,6 @@ class _Connection:
 
     def call_streaming(self, name, *args, **kwargs):
         self.calls.append(name)
-        return None
 
     def prepare_vehicle(self, *, arm=True):
         self.calls.append("prepare_vehicle")
@@ -75,7 +74,7 @@ def fake_airsim(monkeypatch):
     module.LandedState = LandedState
     module.DrivetrainType = types.SimpleNamespace(MaxDegreeOfFreedom=0)
     module.YawMode = lambda **kwargs: kwargs
-    monkeypatch.setitem(sys_modules := __import__("sys").modules, "airsim", module)
+    monkeypatch.setitem(__import__("sys").modules, "airsim", module)
 
 
 class _FakeHold:

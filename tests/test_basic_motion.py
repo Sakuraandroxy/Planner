@@ -1,4 +1,3 @@
-import math
 
 import pytest
 
@@ -224,7 +223,7 @@ def test_workflow_executes_a_climb_as_a_vertical_move():
 
 
 def test_workflow_rejects_a_climb_that_stops_short():
-    workflow, execution, _, stage = _workflow(
+    workflow, _execution, _, stage = _workflow(
         BasicMotionParameters("climb 10m", up_m=10.0), reach=False
     )
     result = workflow.run(stage)

@@ -1,10 +1,13 @@
 """Completion-only messages; never used by the trajectory planner."""
 import json
-from planner.domain.depth import depth_display_description
-from planner.domain.visual_goal_completion import VisualGoalCompletionInput
+
 from planner.adapters.model_visual_inputs import aligned_depth_image
 from planner.adapters.task_completion.prompt import CompletionMessages
-from planner.capabilities.completion.visual_goal_request import require_visual_completion_evidence
+from planner.capabilities.completion.visual_goal_request import (
+    require_visual_completion_evidence,
+)
+from planner.domain.depth import depth_display_description
+from planner.domain.visual_goal_completion import VisualGoalCompletionInput
 
 
 def _binding_evidence(request: VisualGoalCompletionInput) -> str:
@@ -21,8 +24,7 @@ def _binding_evidence(request: VisualGoalCompletionInput) -> str:
         return '\n'.join(lines)
     encode = lambda value: json.dumps(value, ensure_ascii=False, allow_nan=False)
     goal = evidence.goal
-    lines.extend((f"- 最近检测来源观测ID：{evidence.capture_id}；"
-                  f"距当前观测{observation.captured_monotonic-evidence.captured_monotonic:.3f}秒。",
+    lines.extend((f"- 最近检测来源观测ID：{evidence.capture_id}；距当前观测{observation.captured_monotonic-evidence.captured_monotonic:.3f}秒。",
         f"- 最近检测与本次停稳图像是否同一观测：{str(evidence.capture_id == observation.capture_id).lower()}。",
         f"- 检测器报告状态：{goal.status.value}；声称同一目标：{str(goal.same_target).lower()}。",
         f"- 检测器报告描述：{goal.description}；关联来源：{goal.association_source}。",

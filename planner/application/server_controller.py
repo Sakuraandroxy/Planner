@@ -17,7 +17,7 @@ import logging
 import queue
 import threading
 import time
-from typing import Callable
+from collections.abc import Callable
 
 from ..config import MapCatalog, MapEntry, ProfileInfo, VehicleModelCatalog
 from ..domain.server import (
@@ -1008,10 +1008,9 @@ class ServerController:
                     event.message or "Worker preparation failed."
                 )
                 return
-            elif event.kind is WorkerEventKind.CLOSED:
-                if not self._closing.is_set():
-                    self._failed_worker("The worker closed the simulator session.")
-                    return
+            elif event.kind is WorkerEventKind.CLOSED and not self._closing.is_set():
+                self._failed_worker("The worker closed the simulator session.")
+                return
 
     def _run(self) -> None:
         try:

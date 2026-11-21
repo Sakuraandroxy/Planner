@@ -3,7 +3,6 @@ import time
 import numpy as np
 import pytest
 
-from tests.support import ue_camera_matrix
 from planner.capabilities.approach import TargetApproach
 from planner.capabilities.completion.visual_goal import VisualGoalCompletion
 from planner.capabilities.completion.visual_goal_request import (
@@ -13,7 +12,9 @@ from planner.capabilities.completion.visual_goal_retained_motion import (
     retained_world_trajectory,
 )
 from planner.capabilities.completion.visual_goal_trigger import VisualGoalRadiusTrigger
-from planner.capabilities.completion.visual_goal_verification import VisualGoalVerification
+from planner.capabilities.completion.visual_goal_verification import (
+    VisualGoalVerification,
+)
 from planner.domain.approach import ApproachSettings, ApproachStatus, ApproachTarget
 from planner.domain.execution import ExecutionBudget
 from planner.domain.observation import CameraIntrinsics, Observation
@@ -32,6 +33,7 @@ from planner.domain.visual_goal_completion import (
 )
 from planner.domain.visual_goal_limits import VisualGoalLimits
 from planner.errors import ProtocolError
+from tests.support import ue_camera_matrix
 
 
 def _observation(pose=WorldPose(0.0, 0.0, 0.0, 0.0), *, stopped=True) -> Observation:

@@ -1,10 +1,12 @@
 """Roof contours and sparse metric supports produce finite planar polygons."""
 import math
+
 import numpy as np
 
-from planner.domain.visual_goal import GoalObservation, GoalVisibility
-from .depth_geometry import DepthGeometry
 from planner.domain.above_polygon import in_ring
+from planner.domain.visual_goal import GoalObservation, GoalVisibility
+
+from .depth_geometry import DepthGeometry
 from .top_plane import reconstruct_region
 
 
@@ -46,7 +48,7 @@ class TopGeometry:
                     continue
                 ray = self.geometry.ray(obs, point)
                 x, y = self.geometry.project_camera(obs, ray)
-                x, y = int(round(x)), int(round(y))
+                x, y = round(x), round(y)
                 if not (0 <= x < depth.shape[1] and 0 <= y < depth.shape[0]):
                     continue
                 distance = float(depth[y, x])

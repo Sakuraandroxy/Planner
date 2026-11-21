@@ -29,16 +29,16 @@ from __future__ import annotations
 
 import argparse
 import logging
-from pathlib import Path
 import sys
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import uvicorn  # noqa: E402
+import uvicorn
 
-from planner.config import default_profile, load_config, profile_config_path  # noqa: E402
-from planner.server_bootstrap import build_server  # noqa: E402
+from planner.config import default_profile, load_config, profile_config_path
+from planner.server_bootstrap import build_server
 
 
 class PlannerServer(uvicorn.Server):

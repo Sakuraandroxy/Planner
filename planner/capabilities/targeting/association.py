@@ -1,11 +1,16 @@
 """Immutable first reference, bounded coordinate updates and stage-bound views."""
-from planner.domain.visual_goal import GoalReference, GoalObservation, GoalGeometry
-from planner.domain.observation import Observation
-from planner.domain.target_state import TargetPositionState
-from planner.domain.visual_goal import GoalVisibility
 import math
 from dataclasses import replace
+
+from planner.domain.observation import Observation
 from planner.domain.pose import WorldPose
+from planner.domain.target_state import TargetPositionState
+from planner.domain.visual_goal import (
+    GoalGeometry,
+    GoalObservation,
+    GoalReference,
+    GoalVisibility,
+)
 from planner.services.target_coordinates import horizontal_distance, nearest_surface
 
 

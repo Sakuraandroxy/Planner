@@ -3,11 +3,11 @@ import logging
 import math
 import time
 
-from planner.errors import ExecutionError, SimulatorConnectionError
 from planner.domain.motion import ContinuousTrackingSettings
 from planner.domain.pose import WorldPose
-from planner.simulators.airsim.vehicle import AirSimVehicle
+from planner.errors import ExecutionError, SimulatorConnectionError
 from planner.services.position_hold import PositionHold
+from planner.simulators.airsim.vehicle import AirSimVehicle
 
 logger = logging.getLogger(__name__)
 

@@ -1,5 +1,6 @@
 """Common mission admission; task-specific checks are explicitly injected."""
-from typing import Collection, Mapping, Protocol
+from collections.abc import Collection, Mapping
+from typing import Protocol
 
 from planner.domain.mission import MissionPlan, MissionStage, TaskKind
 from planner.errors import ProtocolError

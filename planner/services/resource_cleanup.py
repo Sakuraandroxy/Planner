@@ -1,5 +1,5 @@
 """Attempt every owned cleanup once; report aggregate failures on Python 3.10."""
-from typing import Callable
+from collections.abc import Callable
 
 from planner.errors import ResourceCleanupError
 

@@ -20,8 +20,8 @@ def resize_longest_side(rgb: np.ndarray, max_side: int) -> np.ndarray:
     if scale >= 1.0:
         return np.ascontiguousarray(array)
     size = (
-        max(1, int(round(width * scale))),
-        max(1, int(round(height * scale))),
+        max(1, round(width * scale)),
+        max(1, round(height * scale)),
     )
     return cv2.resize(array, size, interpolation=cv2.INTER_AREA)
 

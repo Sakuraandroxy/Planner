@@ -1,6 +1,6 @@
 """Use a box edge as a viewing cue, never as a measured roof surface."""
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
 
 import numpy as np
 

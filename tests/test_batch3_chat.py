@@ -1,8 +1,7 @@
 import numpy as np
 import pytest
 
-import planner.adapters.multimodal_chat as multimodal_chat
-from tests.support import ue_camera_matrix
+from planner.adapters import multimodal_chat
 from planner.adapters.chat_request_options import generation_options
 from planner.adapters.image_encoding import image_url
 from planner.adapters.model_visual_inputs import aligned_depth_image
@@ -10,6 +9,7 @@ from planner.adapters.multimodal_chat import MultimodalChatClient
 from planner.domain.observation import CameraIntrinsics, Observation
 from planner.domain.pose import WorldPose
 from planner.errors import ObservationError, ProtocolError
+from tests.support import ue_camera_matrix
 
 
 def _observation(*, depth_image=None) -> Observation:

@@ -27,8 +27,8 @@ from .coordinates import (
     pose_from_kinematics,
 )
 from .drive import (
-    RoverDriveModel,
     RoverControls,
+    RoverDriveModel,
     SpeedPid,
     controls_from_reference,
 )
@@ -184,7 +184,7 @@ class ProjectAirSimRover:
         """
         self.settle(settle_s)
         waited = settle_s
-        window: deque = deque(maxlen=max(2, int(round(window_s / step_s))))
+        window: deque = deque(maxlen=max(2, round(window_s / step_s)))
         pose = self.current_pose()
         while True:
             window.append((pose.x, pose.y, pose.z))

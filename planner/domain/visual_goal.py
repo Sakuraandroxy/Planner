@@ -3,9 +3,9 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from .depth_foreground import DepthForegroundResult
 from .execution import StopResult
 from .trajectory import MotionTrajectory
-from .depth_foreground import DepthForegroundResult
 
 
 class ArrivalRelation(str, Enum):

@@ -1,16 +1,16 @@
 import math
-from types import SimpleNamespace
 import time
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
-from planner.simulators.projectairsim.collision import CollisionMonitor
-from planner.simulators.projectairsim.frames import CameraTopicStream
-from planner.simulators.projectairsim.observation import ProjectAirSimObservationSource
 from planner.config import CameraSettings, DepthSettings
 from planner.domain.execution import ExecutionBudget
 from planner.errors import BudgetExceeded, ObservationError
+from planner.simulators.projectairsim.collision import CollisionMonitor
+from planner.simulators.projectairsim.frames import CameraTopicStream
+from planner.simulators.projectairsim.observation import ProjectAirSimObservationSource
 
 WIDTH, HEIGHT = 4, 3
 ROBOT_TOPIC = "/Sim/SceneTest/robots/Rover1"
@@ -143,7 +143,7 @@ class FakeConnection:
         return self.time_ns
 
     def advance_for_sim_time(self, delta_s):
-        self.time_ns += int(round(delta_s * 1e9))
+        self.time_ns += round(delta_s * 1e9)
         if self.advance_hook is not None:
             self.advance_hook(self.time_ns)
 
@@ -197,7 +197,7 @@ def test_stream_latest_pair_discards_unread_frames():
 
 def test_stream_publishes_bgra_to_the_frame_sink():
     published = []
-    stream, client = make_stream(lambda array, timestamp: published.append((array, timestamp)))
+    _stream, client = make_stream(lambda array, timestamp: published.append((array, timestamp)))
     feed(client, stamp=123)
     assert len(published) == 1
     image, timestamp = published[0]

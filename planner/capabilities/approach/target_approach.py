@@ -1,7 +1,12 @@
 """Reusable measured-distance arrival evaluation, without route authorization."""
 import math
 
-from planner.domain.approach import ApproachAssessment, ApproachSettings, ApproachStatus, ApproachTarget
+from planner.domain.approach import (
+    ApproachAssessment,
+    ApproachSettings,
+    ApproachStatus,
+    ApproachTarget,
+)
 from planner.domain.pose import WorldPose
 
 

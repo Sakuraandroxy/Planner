@@ -1,8 +1,8 @@
 """One bounded data-only operation, with late-result quarantine and explicit close."""
-from concurrent.futures import Future
+import math
 import threading
 import time
-import math
+from concurrent.futures import Future
 
 from planner.errors import ExecutionError, ModelCallTimeout
 

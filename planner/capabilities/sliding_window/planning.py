@@ -1,14 +1,19 @@
 """Owner-side collection of model-only futures; results are never auto-authorized."""
-from concurrent.futures import Future
 import logging
 import threading
 import time
+from concurrent.futures import Future
 
-from planner.domain.sliding_window import ContinuationCandidate, PlanningOutput, PlanningSnapshot
+from planner.domain.sliding_window import (
+    ContinuationCandidate,
+    PlanningOutput,
+    PlanningSnapshot,
+)
 from planner.errors import ExecutionError, ProtocolError
 from planner.ports.trajectory_planner import TrajectoryPlanner
 from planner.services.trajectory_transform import relative_to_world
 from planner.services.trajectory_validation import TrajectoryValidator
+
 from .scheduler import RefillScheduler
 from .worker import SlowPlannerWorker
 

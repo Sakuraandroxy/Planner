@@ -17,13 +17,14 @@ server's single topic pipe claimed after a failed attempt.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
 import logging
 import math
 import threading
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 from projectairsim import ProjectAirSimClient, World
 
@@ -42,7 +43,7 @@ _CLOCK_STALL_TIMEOUT_S = 2.0
 logger = logging.getLogger(__name__)
 
 _ACTIVE_LOCK = threading.Lock()
-_ACTIVE_CONNECTION: "ProjectAirSimConnection | None" = None
+_ACTIVE_CONNECTION: ProjectAirSimConnection | None = None
 
 
 @dataclass(frozen=True)
@@ -236,7 +237,7 @@ class ProjectAirSimConnection:
             raise ValueError("simulator advance must be a positive finite time")
         if self._free_running:
             return self._await_clock(float(delta_s))
-        nanoseconds = int(round(float(delta_s) * 1e9))
+        nanoseconds = round(float(delta_s) * 1e9)
         with self._lock:
             world = self._require_world_locked()
             result = world.continue_for_sim_time(
@@ -258,7 +259,7 @@ class ProjectAirSimConnection:
         period, which is the coupling this mode exists to remove.
         """
         started = self.sim_time_ns()
-        target = started + int(round(delta_s * 1e9))
+        target = started + round(delta_s * 1e9)
         deadline = time.monotonic() + max(_CLOCK_STALL_TIMEOUT_S, delta_s * 4.0)
         coarse = delta_s - _CLOCK_POLL_S
         if coarse > 0:
@@ -281,7 +282,7 @@ class ProjectAirSimConnection:
         for hook in hooks:
             try:
                 hook(sim_ns)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.exception("simulator advance hook failed")
 
     def sim_time_ns(self) -> int:

@@ -1,13 +1,13 @@
 """Stage-local contracts for observing and reaching a target's top surface."""
+import math
 from dataclasses import dataclass
 from enum import Enum
-import math
 
+from .above_polygon import in_ring
+from .execution import ExecutionRecord
 from .observation import Observation
 from .pose import WorldPose
 from .target_detection import NormalizedBoundingBox
-from .execution import ExecutionRecord
-from .above_polygon import in_ring
 
 
 def positive(value):

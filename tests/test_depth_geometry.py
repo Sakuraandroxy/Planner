@@ -3,11 +3,11 @@ import math
 import numpy as np
 import pytest
 
-from tests.support import ue_camera_matrix
 from planner.capabilities.targeting.depth_geometry import DepthGeometry
 from planner.domain.observation import CameraIntrinsics, Observation
 from planner.domain.pose import WorldPose
 from planner.domain.visual_goal import GoalObservation, GoalVisibility
+from tests.support import ue_camera_matrix
 
 BOX = (0.4, 0.4, 0.6, 0.6)
 

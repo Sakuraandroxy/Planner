@@ -1,9 +1,9 @@
 """Simulator-independent synchronized translation/yaw profiles."""
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
 
 from planner.domain.motion import MotionLimits
-from planner.domain.pose import WorldPose, wrap_yaw_deg, resolve_yaw_delta_deg
+from planner.domain.pose import WorldPose, resolve_yaw_delta_deg, wrap_yaw_deg
 from planner.domain.trajectory import MotionSegment, MotionTrajectory, WorldTrajectory
 
 SMOOTH_PROFILE = "synchronized_quintic"

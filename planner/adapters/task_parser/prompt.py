@@ -1,4 +1,5 @@
 from planner.domain.mission import TaskKind
+
 from .tasks import TaskCodec, builtin_task_codecs
 
 TASK_PARSER_SYSTEM_PROMPT = """You are a ground-vehicle mission parser. Return JSON only, protocol mission_plan_v1.

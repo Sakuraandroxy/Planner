@@ -2,14 +2,14 @@ import math
 
 import pytest
 
-from planner.simulators.projectairsim.rover import (
-    SETTLE_DURATION_S,
-    ProjectAirSimRover,
-)
 from planner.config import CameraSettings, DepthSettings
 from planner.domain.pose import WorldPose
 from planner.errors import ExecutionError
 from planner.services.segment_motion import MotionLimits as ConfiguredMotionLimits
+from planner.simulators.projectairsim.rover import (
+    SETTLE_DURATION_S,
+    ProjectAirSimRover,
+)
 
 WIDTH, HEIGHT = 4, 3
 ROBOT_TOPIC = "/Sim/SceneTest/robots/Rover1"
@@ -113,7 +113,7 @@ class FakeConnection:
 
     def advance_for_sim_time(self, delta_s):
         self.advances.append(delta_s)
-        self.time_ns += int(round(delta_s * 1e9))
+        self.time_ns += round(delta_s * 1e9)
 
     def control_requests(self):
         return [payload for topic, payload in self.requests if topic == CONTROLS_TOPIC]

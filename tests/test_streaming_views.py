@@ -3,6 +3,7 @@
 import numpy as np
 import pytest
 
+from planner.domain.view import VIEW_MODES
 from planner.simulators.projectairsim.streaming_views import (
     MAX_UNMATCHED_SCORE,
     MIN_MATCH_SCORE,
@@ -12,7 +13,6 @@ from planner.simulators.projectairsim.streaming_views import (
     signature_score,
     verify_streaming_views,
 )
-from planner.domain.view import VIEW_MODES
 
 MODES = VIEW_MODES
 CAMERAS = {

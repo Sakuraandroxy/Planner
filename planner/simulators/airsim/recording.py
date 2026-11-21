@@ -4,7 +4,8 @@ import json
 import math
 import threading
 import time
-from concurrent.futures import Future, TimeoutError as FutureTimeoutError
+from concurrent.futures import Future
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from datetime import datetime
 from pathlib import Path
 
@@ -151,8 +152,7 @@ class CameraApiRecorder:
                     break
                 self._last_error = str(exc)
             deadline += interval
-            if deadline < time.monotonic():
-                deadline = time.monotonic()
+            deadline = max(deadline, time.monotonic())
 
     def _save(self, observation: Observation, index: int) -> None:
         if self.run_dir is None:

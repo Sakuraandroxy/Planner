@@ -4,25 +4,35 @@ The bridge receives measured observations/context and executable motion.
 It never decides completion or calls the vehicle. The Workflow checks protocol,
 request freshness and ownership before execution; no corridor audit is applied.
 """
-from dataclasses import dataclass, replace
-import math
 import logging
+import math
 import time
-from typing import Callable, Generic, TypeVar
+from collections.abc import Callable
+from dataclasses import dataclass, replace
+from typing import Generic, TypeVar
 
 from planner.capabilities.sliding_window.planning import BackgroundContinuationPlanner
 from planner.capabilities.sliding_window.scheduler import RefillScheduler
 from planner.capabilities.sliding_window.worker import SlowPlannerWorker
 from planner.domain.execution import ExecutionRecord
-from planner.domain.sliding_window import PlanningSnapshot, SlidingWindowSettings
-from planner.domain.trajectory import MotionTrajectory, RelativeTrajectory, WorldTrajectory
 from planner.domain.planning_window import PlanningWindowInput
-from planner.errors import BudgetExceeded, ExecutionError, ModelCallTimeout, ProtocolError
+from planner.domain.pose import resolve_yaw_delta_deg
+from planner.domain.sliding_window import PlanningSnapshot, SlidingWindowSettings
+from planner.domain.trajectory import (
+    MotionTrajectory,
+    RelativeTrajectory,
+    WorldTrajectory,
+)
+from planner.errors import (
+    BudgetExceeded,
+    ExecutionError,
+    ModelCallTimeout,
+    ProtocolError,
+)
 from planner.ports.trajectory_planner import TrajectoryPlanner
 from planner.services.trajectory_queue import WorldWaypointQueue
-from planner.services.trajectory_validation import TrajectoryValidator
-from planner.domain.pose import resolve_yaw_delta_deg
 from planner.services.trajectory_transform import world_to_relative
+from planner.services.trajectory_validation import TrajectoryValidator
 
 ContextT = TypeVar("ContextT")
 logger = logging.getLogger(__name__)

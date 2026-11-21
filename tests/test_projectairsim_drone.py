@@ -6,12 +6,12 @@ import pytest
 from projectairsim.drone import YawControlMode
 from projectairsim.types import LandedState
 
-from planner.simulators.projectairsim.drone import ProjectAirSimDrone
-from planner.simulators.projectairsim.moving_source import BorrowedMovingSource
 from planner.config import CameraSettings, DepthSettings
 from planner.domain.pose import WorldPose
 from planner.errors import ExecutionError
 from planner.services.segment_motion import MotionLimits as ConfiguredMotionLimits
+from planner.simulators.projectairsim.drone import ProjectAirSimDrone
+from planner.simulators.projectairsim.moving_source import BorrowedMovingSource
 
 WIDTH, HEIGHT = 4, 3
 GROUND_Z = 0.85
@@ -296,7 +296,7 @@ class FakeConnection:
 
     def advance_for_sim_time(self, delta_s):
         self.advances.append(delta_s)
-        self.time_ns += int(round(delta_s * 1e9))
+        self.time_ns += round(delta_s * 1e9)
         self.robot.advance(float(delta_s))
 
 
@@ -327,7 +327,7 @@ def test_start_enables_api_control_and_arms():
 
 
 def test_start_records_the_spawn_pose_before_the_drone_is_hidden():
-    drone, _, robot, _ = make_drone()
+    drone, _, _robot, _ = make_drone()
     drone.start()
     home = drone._home_pose
     assert home is not None
@@ -384,7 +384,7 @@ def test_prepare_tolerates_a_false_native_takeoff_with_measured_climb(caplog):
 
 
 def test_prepare_rejects_a_takeoff_that_is_still_landed():
-    drone, _, robot, _ = make_drone(takeoff_lands=True)
+    drone, _, _robot, _ = make_drone(takeoff_lands=True)
     drone.start()
     with pytest.raises(ExecutionError, match="still landed"):
         drone.prepare(takeoff_if_landed=True)
@@ -394,7 +394,7 @@ def test_prepare_rejects_a_takeoff_that_is_still_landed():
 def test_prepare_rejects_a_takeoff_without_measured_climb():
     # Clear the 0.1 m ground band so the landed-state check passes, but stay
     # inside the 0.3 m position tolerance that defines a confirmed climb.
-    drone, _, robot, _ = make_drone(takeoff_climb_m=0.2)
+    drone, _, _robot, _ = make_drone(takeoff_climb_m=0.2)
     drone.start()
     with pytest.raises(ExecutionError, match="measured climb"):
         drone.prepare(takeoff_if_landed=True)
@@ -473,7 +473,7 @@ def test_stream_velocity_sends_move_by_velocity_and_advances_one_step():
 
 
 def test_stream_velocity_reports_an_interrupted_command():
-    drone, _, robot, _ = make_drone(velocity_result=False)
+    drone, _, _robot, _ = make_drone(velocity_result=False)
     drone.start()
     with pytest.raises(ExecutionError, match="interrupted"):
         drone.stream_velocity((1.0, 0.0, 0.0), 0.0, 0.05)

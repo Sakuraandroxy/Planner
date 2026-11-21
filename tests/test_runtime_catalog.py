@@ -8,7 +8,6 @@ import yaml
 from planner.config import (
     MapEntry,
     MapScene,
-    SimulatorSettings,
     default_config_path,
     load_config,
     load_map_catalog,

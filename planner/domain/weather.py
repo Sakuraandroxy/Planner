@@ -7,9 +7,8 @@ the session adapter performs the enum conversion.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import math
-
+from dataclasses import dataclass
 
 # WeatherParameter order: RAIN=1, ROAD_WETNESS=2, SNOW=3, ROAD_SNOW=4,
 # MAPLE_LEAF=5, ROAD_LEAF=6, DUST=7, FOG=8.

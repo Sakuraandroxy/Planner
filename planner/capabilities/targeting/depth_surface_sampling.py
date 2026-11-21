@@ -1,6 +1,6 @@
 """Read exactly one calibrated raw-depth pixel, without neighborhood processing."""
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
 
 import numpy as np
 

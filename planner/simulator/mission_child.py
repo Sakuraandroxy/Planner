@@ -18,7 +18,6 @@ kinds. The two must behave the same, because ``ServerController`` cannot tell th
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 import dataclasses
 import json
 import logging
@@ -26,7 +25,8 @@ import os
 import queue
 import sys
 import threading
-from typing import Callable
+from collections.abc import Callable
+from pathlib import Path
 
 from ..application.factories import (
     build_detector,
@@ -36,7 +36,7 @@ from ..application.factories import (
 from ..application.mission_assembly import MissionResources
 from ..application.reporting import task_finish_events
 from ..config import load_config
-from ..domain.server import TaskSubmission, WorkerEvent, WorkerEventKind
+from ..domain.server import TaskSubmission, WorkerEventKind
 from ..domain.trajectory_telemetry import snapshot_to_payload
 from . import registry
 from .subprocess_worker import EVENT_FD_ENV

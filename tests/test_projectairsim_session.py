@@ -5,14 +5,8 @@ import threading
 from types import SimpleNamespace
 
 import pytest
+from projectairsim.types import WeatherParameter
 
-from planner.simulators.projectairsim.session import (
-    DEFAULT_CONTROL_PERIOD_S,
-    HIDE_ALTITUDE_GAIN_M,
-    HIDE_PIN_PERIOD_S,
-    ProjectAirSimMissionSession,
-    _VehicleArm,
-)
 from planner.domain.mission import MissionPlan, MissionStage, TaskKind
 from planner.domain.pose import WorldPose
 from planner.domain.result import MissionResult
@@ -20,7 +14,13 @@ from planner.domain.server import TaskSubmission
 from planner.domain.view import VIEW_MODES
 from planner.domain.weather import WEATHER_FIELDS, default_weather
 from planner.errors import ExecutionError, ProtocolError
-from projectairsim.types import WeatherParameter
+from planner.simulators.projectairsim.session import (
+    DEFAULT_CONTROL_PERIOD_S,
+    HIDE_ALTITUDE_GAIN_M,
+    HIDE_PIN_PERIOD_S,
+    ProjectAirSimMissionSession,
+    _VehicleArm,
+)
 
 
 def test_the_constructor_accepts_the_arguments_the_registry_passes():

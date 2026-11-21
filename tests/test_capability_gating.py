@@ -14,7 +14,6 @@ from planner.config import ServerSettings, load_map_catalog
 from planner.domain.server import ServerState
 from planner.services.frame_hub import FrameHub
 from planner.services.trajectory_hub import TrajectoryHub
-
 from tests.test_server_api import FakeController
 
 ROOT = Path(__file__).resolve().parents[1]

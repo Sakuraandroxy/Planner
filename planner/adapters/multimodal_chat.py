@@ -3,15 +3,15 @@
 Supports the OpenAI-compatible ``/chat/completions`` wire format (also used by
 the ``deepseek`` dialect) and the Anthropic Messages API.
 """
-import math
 import logging
+import math
 
 import httpx
 
-from planner.adapters.image_encoding import encoded_image_payload, image_url
-from planner.errors import ProtocolError
 from planner.adapters.chat_request_options import generation_options
 from planner.adapters.http_errors import describe_http_error
+from planner.adapters.image_encoding import encoded_image_payload, image_url
+from planner.errors import ProtocolError
 
 ANTHROPIC_VERSION = "2023-06-01"
 

@@ -13,8 +13,8 @@ so a service restart still finds the stack that is actually up.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from ..config import MapCatalog, MapEntry, SimulatorSettings
 from .marker import read_map_marker

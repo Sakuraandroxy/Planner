@@ -11,19 +11,21 @@ a map switch and ``SIGKILL``ing somebody else's process.
 
 import atexit
 import os
-from pathlib import Path
 import shutil
-from types import SimpleNamespace
 import tempfile
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
 
-from planner.config import MapCatalog, MapEntry, SimulatorSettings, MapScene
+from planner.config import MapCatalog, MapEntry, MapScene, SimulatorSettings
 from planner.domain.runtime import SimulatorFamily, parse_family_catalog
 from planner.errors import SimulatorNotOwned, SimulatorRestartError
-from planner.simulator.marker import read_map_marker, write_map_marker
-from planner.simulator.processes import UnattributedListener, display_files, reclaim_stale_display
+from planner.simulator.processes import (
+    UnattributedListener,
+    display_files,
+)
 from planner.simulator.xpra_start import (
     SUPPORTED_PROBES,
     XpraStartSupervisor,
@@ -186,7 +188,7 @@ class Harness:
         def identity_reader(pid):
             for owners in self.bindings.values():
                 if pid in owners:
-                    map_id, exe, argv = owners[pid]
+                    _map_id, exe, argv = owners[pid]
                     return _identity(pid, exe, self.expand(argv), uid=self.uid)
             return None
 
@@ -262,7 +264,8 @@ def test_start_child_survives_quoting_as_one_argument(tmp_path):
 
 def test_xvfb_geometry_follows_resolution(tmp_path):
     argv = Harness(tmp_path).driver.launch_argv(_entry())
-    assert "1280x720x24" in [p for p in argv if p.startswith("--xvfb=")][0]
+    relevant = next(p for p in argv if p.startswith("--xvfb="))
+    assert "1280x720x24" in relevant
 
 
 def test_unresolved_placeholder_is_an_error_not_a_literal(tmp_path):
@@ -629,8 +632,8 @@ def test_stop_waits_for_the_xvfb_to_drop_the_display(tmp_path, monkeypatch):
     going quiet is not the end of the teardown. The wait is bounded and silent: a
     display somebody else owns on purpose still fails in launch's reclaim.
     """
-    import planner.simulator.processes as processes
     import planner.simulator.xpra_start as driver_module
+    from planner.simulator import processes
 
     lock = tmp_path / ".X199-lock"
     sock = tmp_path / "X199"
@@ -666,8 +669,8 @@ def test_a_stopped_adopted_stack_still_waits_for_the_display(tmp_path, monkeypat
     it is still our job, and so is the teardown wait -- without it the refusal
     arrives one second later, from the next launch, looking like a stuck display.
     """
-    import planner.simulator.processes as processes
     import planner.simulator.xpra_start as driver_module
+    from planner.simulator import processes
 
     lock = tmp_path / ".X199-lock"
     monkeypatch.setattr(processes, "display_files",
@@ -713,8 +716,8 @@ def test_stop_reclaims_the_xvfb_xpra_leaves_behind(tmp_path, monkeypatch):
     left ``Xvfb-for-Xpra-104`` alive with the lock, so the next launch refused with
     "display is still held by PID" -- about debris of our own stack.
     """
-    import planner.simulator.processes as processes
     import planner.simulator.xpra_start as module
+    from planner.simulator import processes
 
     lock = tmp_path / ".X199-lock"
     monkeypatch.setattr(processes, "display_files",
@@ -740,8 +743,8 @@ def test_a_foreign_x_server_on_the_display_is_not_killed(tmp_path, monkeypatch):
     uid would also make the engine unattributable, and then the stop would refuse at
     the ownership gate for a reason that has nothing to do with this test.
     """
-    import planner.simulator.processes as processes
     import planner.simulator.xpra_start as module
+    from planner.simulator import processes
 
     lock = tmp_path / ".X199-lock"
     monkeypatch.setattr(processes, "display_files",
@@ -826,7 +829,7 @@ def test_start_reports_the_other_family_as_the_live_map(tmp_path):
 
 def test_no_wait_when_the_display_is_already_free(tmp_path, monkeypatch):
     """Nothing holds the display here, so the reaper must not spin or sleep."""
-    import planner.simulator.processes as processes
+    from planner.simulator import processes
 
     monkeypatch.setattr(processes, "display_files",
                         lambda display, **kw: (tmp_path / ".X199-lock", tmp_path / "X199"))
@@ -909,12 +912,12 @@ def test_launch_writes_the_map_marker(tmp_path):
 # -- probes and wiring -----------------------------------------------------
 def test_unknown_probe_is_refused_at_construction(tmp_path):
     with pytest.raises(ValueError, match="probe"):
-        Harness(tmp_path, family=_family(probes=("ports", "telepathy"))).driver
+        _ = Harness(tmp_path, family=_family(probes=("ports", "telepathy"))).driver
 
 
 def test_rpc_probe_needs_a_port_named_rpc(tmp_path):
     with pytest.raises(ValueError, match="no port named rpc"):
-        Harness(tmp_path, family=_family(probes=("rpc",), ports={"xpra": XPRA_PORT})).driver
+        _ = Harness(tmp_path, family=_family(probes=("rpc",), ports={"xpra": XPRA_PORT})).driver
 
 
 def test_window_probe_is_supported():

@@ -1,7 +1,13 @@
 """OpenAI-compatible grounding adapter; provider configuration is injected."""
 import json
-from planner.domain.target_detection import NormalizedBoundingBox, TargetDetection, TargetDetectionInput
+
+from planner.domain.target_detection import (
+    NormalizedBoundingBox,
+    TargetDetection,
+    TargetDetectionInput,
+)
 from planner.errors import ProtocolError
+
 from ..image_encoding import resize_longest_side
 from .prompts import TARGET_DETECTION_SYSTEM_PROMPT, VisualGoalTargetDetectionPrompt
 

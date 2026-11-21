@@ -1,7 +1,7 @@
 """Immutable continuation anchors; no network or vehicle ownership here."""
 
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
 
 from .observation import Observation
 from .pose import WorldPose

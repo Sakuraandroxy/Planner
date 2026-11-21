@@ -1,13 +1,11 @@
 """Task-owned deadlines and measured execution receipts; clocks are monotonic."""
 
-from dataclasses import dataclass
 import math
-from typing import Callable
+from collections.abc import Callable
+from dataclasses import dataclass
 
-from .pose import WorldPose
-from .pose import RelativePoseDelta
+from .pose import RelativePoseDelta, WorldPose
 from .trajectory import MotionTrajectory, RelativeTrajectory
-
 
 # Measured pose and continuous yaw in the MotionSegment.start angle branch;
 # return True to pause. False still records measurements without requesting a stop.

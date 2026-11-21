@@ -1,53 +1,74 @@
 """Static visual-goal observe/approach/verify workflow; dependencies are injected."""
 import logging
-import time
 import threading
-from typing import Callable
-from functools import partial
+import time
+from collections.abc import Callable
 from dataclasses import replace
+from functools import partial
 
-from planner.capabilities.targeting.association import bound_target_geometry, bound_target_goal
+from planner.capabilities.completion.visual_goal import VisualGoalCompletion
+from planner.capabilities.completion.visual_goal_trigger import VisualGoalRadiusTrigger
+from planner.capabilities.completion.visual_goal_verification import (
+    VisualGoalVerification,
+)
+from planner.capabilities.targeting.association import (
+    bound_target_geometry,
+    bound_target_goal,
+)
+from planner.capabilities.targeting.depth_geometry import DepthGeometry
 from planner.capabilities.targeting.visual_goal_refresh import VisualGoalRefresh
 from planner.domain.execution import ExecutionBudget, StopResult
-from planner.domain.sliding_window import SlidingWindowSettings
-from planner.domain.motion import MotionLimits, ContinuousTrackingSettings
-from planner.domain.pose import RelativePoseDelta, wrap_yaw_deg
-from planner.domain.result import StageResult, StageSummary, CompletionBasis, ResultMeasurement
-from planner.domain.trajectory import RelativeTrajectory
-from planner.domain.trajectory import MotionTrajectory
-from planner.domain.trajectory_telemetry import MODE_STOPPED_BATCH
-from planner.domain.visual_goal_completion import (
-    VisualGoalTriggerRules, VisualGoalCompletionInput,
-)
-from planner.capabilities.completion.visual_goal_trigger import VisualGoalRadiusTrigger
-from planner.capabilities.completion.visual_goal_verification import VisualGoalVerification
-from planner.ports.task_completion import TaskCompletionChecker
-from planner.domain.visual_goal import (
-    GoalVisibility, VisualGoalNavigationParameters, VisualGoalNavigationResult,
-    VisualGoalPlanningContext, VisualGoalState, VisualGoalStatus,
-)
-from planner.errors import BudgetExceeded, ExecutionError, ObservationError, ProtocolError, ModelCallTimeout
 from planner.domain.mission import MissionStage
+from planner.domain.motion import ContinuousTrackingSettings, MotionLimits
+from planner.domain.pose import RelativePoseDelta, wrap_yaw_deg
+from planner.domain.result import (
+    CompletionBasis,
+    ResultMeasurement,
+    StageResult,
+    StageSummary,
+)
+from planner.domain.sliding_window import SlidingWindowSettings
+from planner.domain.trajectory import MotionTrajectory, RelativeTrajectory
+from planner.domain.trajectory_telemetry import MODE_STOPPED_BATCH
+from planner.domain.visual_goal import (
+    GoalVisibility,
+    VisualGoalNavigationParameters,
+    VisualGoalNavigationResult,
+    VisualGoalPlanningContext,
+    VisualGoalState,
+    VisualGoalStatus,
+)
+from planner.domain.visual_goal_completion import (
+    VisualGoalCompletionInput,
+    VisualGoalTriggerRules,
+)
 from planner.domain.visual_goal_limits import VisualGoalLimits
-from planner.ports.observation_source import ObservationSource, MovingObservationSource
+from planner.errors import (
+    BudgetExceeded,
+    ExecutionError,
+    ModelCallTimeout,
+    ObservationError,
+    ProtocolError,
+)
 from planner.ports.collision_check import CollisionCheck
 from planner.ports.goal_observer import GoalObserver
+from planner.ports.observation_source import MovingObservationSource, ObservationSource
+from planner.ports.task_completion import TaskCompletionChecker
+from planner.ports.task_trace import TaskTrace
 from planner.ports.trajectory_planner import TrajectoryPlanner
 from planner.services.execution import ExecutionService
-from planner.services.motion.base import MotionPlanner
-from planner.services.trajectory_validation import TrajectoryValidator
-from planner.capabilities.targeting.depth_geometry import DepthGeometry
-from planner.capabilities.completion.visual_goal import VisualGoalCompletion
-from planner.ports.task_trace import TaskTrace
-from planner.services.trajectory_transform import relative_to_world
 from planner.services.model_calls import ModelCallService
-from planner.services.resource_cleanup import close_resources
+from planner.services.motion.base import MotionPlanner
 from planner.services.observation_snapshot import freeze_observation
-from .termination import SearchPolicy, VisualGoalExitPolicy, VisualGoalFailure
-from .session import VisualGoalSession, model_call
-from .flight import VisualGoalFlightPhase
 from planner.services.planning_window import PlanningWindow
+from planner.services.resource_cleanup import close_resources
+from planner.services.trajectory_transform import relative_to_world
+from planner.services.trajectory_validation import TrajectoryValidator
+
 from .approach import VisualGoalApproachPhase
+from .flight import VisualGoalFlightPhase
+from .session import VisualGoalSession, model_call
+from .termination import SearchPolicy, VisualGoalExitPolicy, VisualGoalFailure
 
 logger = logging.getLogger(__name__)
 
@@ -335,7 +356,7 @@ class VisualGoalNavigationWorkflow:
             session.confirmations = 0
             if session.pending_motion.segments:
                 self.flight.resume(observation, parameters, session, trace,
-                    prefetch=lambda: self.approach.prefetch(observation, goal, parameters, session))
+                    prefetch=lambda observation=observation, goal=goal: self.approach.prefetch(observation, goal, parameters, session))
                 continue
             context = VisualGoalPlanningContext(parameters.target_description, goal, geometry,
                 VisualGoalState.APPROACHING, self.trigger_rules.effective_pause_radius_m, self.limits.distance_uncertainty_margin_m,

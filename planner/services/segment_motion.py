@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
 
 from ..domain.pose import (
     RelativePoseDelta,
@@ -129,7 +129,7 @@ def plan_segment(
 ) -> list[SegmentSetpoint]:
     """Sample a quintic segment at the control rate."""
     duration = duration_for(delta, limits)
-    steps = max(2, int(math.ceil(duration * limits.control_hz)) + 1)
+    steps = max(2, math.ceil(duration * limits.control_hz) + 1)
     world_dx, world_dy, world_dz = relative_to_world(
         start.yaw_deg, delta.dx, delta.dy, delta.dz
     )

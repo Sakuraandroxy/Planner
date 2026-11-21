@@ -9,8 +9,8 @@ inside the arrival sphere-the workflow checks arrival before planning.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
 
 from ...domain.pose import RelativePoseDelta
 from ...domain.trajectory import RelativeTrajectory

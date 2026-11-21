@@ -16,7 +16,6 @@ from planner.adapters.task_parser.response_schema import (
 )
 from planner.adapters.task_parser.task_factory import mission_from_dict
 from planner.adapters.task_parser.tasks import (
-    TaskCodec,
     builtin_task_codecs,
 )
 from planner.domain.basic_motion import BasicMotionParameters

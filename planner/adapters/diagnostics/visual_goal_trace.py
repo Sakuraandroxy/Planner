@@ -1,12 +1,12 @@
 """Filesystem TaskTrace adapter; never writes model payloads or secrets."""
-from dataclasses import asdict, is_dataclass
-from datetime import datetime
 import csv
 import json
 import math
-from pathlib import Path
 import threading
 import uuid
+from dataclasses import asdict, is_dataclass
+from datetime import datetime
+from pathlib import Path
 
 import cv2
 import numpy as np

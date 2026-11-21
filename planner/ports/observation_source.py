@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Protocol
 from concurrent.futures import Future
+from typing import Protocol
 
 from ..domain.execution import ExecutionBudget
 from ..domain.observation import Observation

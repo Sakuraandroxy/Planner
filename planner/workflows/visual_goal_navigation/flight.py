@@ -1,12 +1,15 @@
 """Task-owned pause, semantic verification and retained-flight recovery phase."""
 from dataclasses import replace
 
+from planner.capabilities.completion.visual_goal_retained_motion import (
+    retained_world_trajectory,
+)
 from planner.domain.execution import ExecutionReceipt
-from planner.domain.trajectory import RelativeTrajectory, MotionTrajectory
-from planner.domain.visual_goal_completion import VisualGoalCompletionInput
+from planner.domain.trajectory import MotionTrajectory, RelativeTrajectory
 from planner.domain.visual_goal import VisualGoalStatus
+from planner.domain.visual_goal_completion import VisualGoalCompletionInput
 from planner.errors import ExecutionError
-from planner.capabilities.completion.visual_goal_retained_motion import retained_world_trajectory
+
 from .termination import VisualGoalFailure
 
 

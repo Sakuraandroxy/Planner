@@ -1,4 +1,4 @@
-from typing import Callable
+from collections.abc import Callable
 
 from planner.application.mission_runner import MissionRunner
 from planner.application.mission_validator import MissionValidator

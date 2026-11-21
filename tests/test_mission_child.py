@@ -10,7 +10,6 @@ thread.
 
 import io
 import json
-import queue
 import sys
 
 from planner.simulator.mission_child import MissionChild

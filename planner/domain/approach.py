@@ -1,7 +1,7 @@
 """Reusable arrival-radius contracts; no trajectory authorization or body envelope."""
+import math
 from dataclasses import dataclass
 from enum import Enum
-import math
 
 WorldPoint = tuple[float, float, float]
 

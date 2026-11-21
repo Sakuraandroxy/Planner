@@ -1,7 +1,7 @@
 """Whole-queue speed preview with yaw timing and jerk-aware braking distance."""
 import math
 
-from .continuous_reference import segment_length, xyz, is_rotation
+from .continuous_reference import is_rotation, segment_length, xyz
 
 
 def stopping_distance(speed, acceleration, jerk, current_acceleration=0., response_time=0.):

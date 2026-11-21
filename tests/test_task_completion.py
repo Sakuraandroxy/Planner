@@ -1,7 +1,6 @@
 import numpy as np
 import pytest
 
-from tests.support import ue_camera_matrix
 from planner.adapters.task_completion import OpenAICompatibleTaskCompletionChecker
 from planner.adapters.task_completion.prompts import VisualGoalCompletionPrompt
 from planner.domain.observation import CameraIntrinsics, Observation
@@ -17,6 +16,7 @@ from planner.domain.visual_goal_completion import (
     VisualGoalTriggerRules,
 )
 from planner.errors import ProtocolError
+from tests.support import ue_camera_matrix
 
 
 def _observation(pose=WorldPose(0.0, 0.0, 0.0, 0.0)) -> Observation:

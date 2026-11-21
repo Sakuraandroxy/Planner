@@ -14,15 +14,17 @@ holds that line.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from ..capabilities.approach import TargetApproach
 from ..capabilities.completion.visual_goal import VisualGoalCompletion
 from ..capabilities.targeting.bbox_goal_observation import BBoxGoalObserver
 from ..capabilities.task_validation.basic_motion import BasicMotionStageValidator
 from ..capabilities.task_validation.free_navigation import FreeNavigationStageValidator
-from ..capabilities.task_validation.visual_goal_navigation import VisualGoalStageValidator
+from ..capabilities.task_validation.visual_goal_navigation import (
+    VisualGoalStageValidator,
+)
 from ..domain.mission import TaskKind
 from ..errors import ProtocolError
 from ..services.execution import ExecutionService

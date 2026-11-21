@@ -49,6 +49,6 @@ def test_a_choice_fills_the_instruction_box():
     assert 'request("/console/presets.json")' in app
     assert '$("instruction-preset").addEventListener' in app
     body = re.search(
-        r"function applyPresetCommand\(\).*?\n}", app, flags=re.S
+        r"function applyPresetCommand\(\).*?\n}", app, flags=re.DOTALL
     ).group(0)
     assert '$("instruction").value = text' in body

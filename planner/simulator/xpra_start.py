@@ -18,32 +18,27 @@ client is allowed.
 from __future__ import annotations
 
 import os
-from pathlib import Path
-import re
 import shlex
 import subprocess
 import time
+from collections.abc import Callable
+from pathlib import Path
 from types import SimpleNamespace
-from typing import Callable
 
 from ..config import MapCatalog, MapEntry, SimulatorSettings
 from ..errors import SimulatorNotOwned, SimulatorRestartError
 from .argv import argv_values, render_argv
 from .marker import write_map_marker
 from .processes import (
-    WINDOW_PID_LINE,
     KILL_WAIT_S,
-    LOOPBACK,
     POLL_INTERVAL_S,
+    WINDOW_PID_LINE,
     UnattributedListener,
     default_spawn,
-    descendants,
-    display_files,
     display_holder,
     display_released,
     identity,
     listener_pids,
-    pid_alive,
     port_alive,
     reclaim_stale_display,
     tail,
@@ -375,11 +370,8 @@ class XpraStartSupervisor:
                     f"the launch process exited with {getattr(self._process, 'returncode', '?')} "
                     f"while waiting for {description}; read {launcher_log}"
                 )
-            try:
-                if condition():
-                    return
-            except UnattributedListener:
-                raise
+            if condition():
+                return
             self._sleep(POLL_INTERVAL_S)
         raise SimulatorRestartError(
             f"timed out after {self._settings.launch_timeout_s:g}s waiting for "

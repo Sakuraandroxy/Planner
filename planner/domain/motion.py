@@ -1,5 +1,5 @@
-from dataclasses import dataclass, fields
 import math
+from dataclasses import dataclass, fields
 
 from .trajectory import MotionSegment, MotionTrajectory
 
@@ -82,4 +82,4 @@ class MotionLimits:
         if not 1 <= self.control_hz <= 50:
             raise ValueError("motion.control_hz must be between 1 and 50")
 
-__all__ = ["MotionSegment", "MotionTrajectory", "MotionLimits", "ContinuousTrackingSettings", "ContinuousReference"]
+__all__ = ["ContinuousReference", "ContinuousTrackingSettings", "MotionLimits", "MotionSegment", "MotionTrajectory"]

@@ -23,9 +23,9 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-from pathlib import Path
 import sys
 import time
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -33,45 +33,46 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from planner.simulators.projectairsim.connection import (  # noqa: E402
-    ProjectAirSimConnection,
-    ProjectAirSimConnectionConfig,
-)
-from planner.simulators.projectairsim.drone import (  # noqa: E402
-    ProjectAirSimDrone,
-)
-from planner.simulators.projectairsim.moving_source import (  # noqa: E402
-    BorrowedMovingSource,
-)
-from planner.application.factories import (  # noqa: E402
+from projectairsim import Drone
+
+from planner.application.factories import (
     build_detector,
     build_geometry,
     build_planner,
 )
-from planner.capabilities.approach import TargetApproach  # noqa: E402
-from planner.capabilities.completion.visual_goal import (  # noqa: E402
+from planner.capabilities.approach import TargetApproach
+from planner.capabilities.completion.visual_goal import (
     VisualGoalCompletion,
 )
-from planner.capabilities.targeting.bbox_goal_observation import (  # noqa: E402
+from planner.capabilities.targeting.bbox_goal_observation import (
     BBoxGoalObserver,
 )
-from planner.config import default_config_path, load_config  # noqa: E402
-from planner.domain.basic_motion import BasicMotionParameters  # noqa: E402
-from planner.domain.depth_visualization import render_depth  # noqa: E402
-from planner.domain.mission import MissionStage, TaskKind  # noqa: E402
-from planner.domain.visual_goal import (  # noqa: E402
+from planner.config import default_config_path, load_config
+from planner.domain.basic_motion import BasicMotionParameters
+from planner.domain.depth_visualization import render_depth
+from planner.domain.mission import MissionStage, TaskKind
+from planner.domain.visual_goal import (
     VisualGoalNavigationParameters,
 )
-from planner.services.execution import ExecutionService  # noqa: E402
-from planner.services.motion import SynchronizedMotionPlanner  # noqa: E402
-from planner.services.trajectory_validation import (  # noqa: E402
+from planner.services.execution import ExecutionService
+from planner.services.motion import SynchronizedMotionPlanner
+from planner.services.trajectory_validation import (
     TrajectoryValidator,
 )
-from planner.workflows.basic_motion import BasicMotionWorkflow  # noqa: E402
-from planner.workflows.visual_goal_navigation import (  # noqa: E402
+from planner.simulators.projectairsim.connection import (
+    ProjectAirSimConnection,
+    ProjectAirSimConnectionConfig,
+)
+from planner.simulators.projectairsim.drone import (
+    ProjectAirSimDrone,
+)
+from planner.simulators.projectairsim.moving_source import (
+    BorrowedMovingSource,
+)
+from planner.workflows.basic_motion import BasicMotionWorkflow
+from planner.workflows.visual_goal_navigation import (
     VisualGoalNavigationWorkflow,
 )
-from projectairsim import Drone  # noqa: E402
 
 
 class AlwaysApproveCompletion:

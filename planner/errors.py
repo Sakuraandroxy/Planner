@@ -11,10 +11,6 @@ class ObservationError(RuntimeError):
     """An observation does not satisfy the geometry contract."""
 
 
-class PlanningError(RuntimeError):
-    """A planner could not produce a usable trajectory."""
-
-
 class ExecutionError(RuntimeError):
     """A vehicle or execution command could not be completed."""
 

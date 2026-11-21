@@ -10,8 +10,8 @@ from planner.domain.trajectory_telemetry import (
     MODE_CONTINUOUS,
     MODE_IDLE,
     MODE_NO_QUEUE,
-    MODE_STOPPED_BATCH,
     MODE_PENDING,
+    MODE_STOPPED_BATCH,
     QueueSnapshot,
     TrajectorySnapshot,
     snapshot_from_payload,
@@ -124,49 +124,6 @@ def test_revisions_increase_and_reads_return_the_latest_snapshot():
     assert cleared.active is False
     assert cleared.mode == MODE_IDLE
     assert hub.read().revision == 3
-
-def test_adopt_stamps_the_parent_clock_and_bumps_revision():
-    """A snapshot relayed from a mission child is published like a local one.
-
-    The child's ``updated_monotonic`` is another process's clock; keeping it would
-    make the console's staleness checks compare numbers that never meant the same
-    instant.
-    """
-    ticks = iter([100.0, 200.0])
-    hub = TrajectoryHub(clock=lambda: next(ticks))
-    hub.clear()
-    adopted = hub.adopt(
-        TrajectorySnapshot(active=True, mode=MODE_CONTINUOUS, revision=7)
-    )
-    assert adopted.updated_monotonic == 200.0
-    assert adopted.revision == 2
-
-
-def test_snapshot_payload_round_trips_every_field():
-    """The wire form is the domain type's own business, not the pipe's."""
-    from planner.domain.pose import WorldPose
-    from planner.domain.trajectory_telemetry import (
-        snapshot_from_payload,
-        snapshot_to_payload,
-    )
-
-    hub = TrajectoryHub()
-    original = hub.publish_queue(
-        instruction="Fly to the red car. 飞到红色汽车那里。",
-        stage_id="stage_1",
-        mode=MODE_STOPPED_BATCH,
-        capacity=4,
-        pose=WorldPose(1.0, 2.0, -3.0, 10.0),
-        items=[
-            type("W", (), {})() for _ in range(0)
-        ],
-        planning_calls=2,
-        path_length_m=4.0,
-    )
-    payload = snapshot_to_payload(original)
-    assert json.dumps(payload, ensure_ascii=False)
-    assert snapshot_from_payload(payload) == original
-
 
 
 def test_adopt_stamps_the_parent_clock_and_bumps_revision():

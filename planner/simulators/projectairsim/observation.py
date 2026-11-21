@@ -19,9 +19,13 @@ import numpy as np
 from ...config import CameraSettings, DepthSettings
 from ...domain.depth_visualization import render_depth
 from ...domain.execution import ExecutionBudget
-from ...domain.observation import CameraIntrinsics, Observation
+from ...domain.observation import Observation
 from ...errors import BudgetExceeded, ObservationError
-from .camera import assert_camera_matches_scene, intrinsics_from_camera, sensor_configuration
+from .camera import (
+    assert_camera_matches_scene,
+    intrinsics_from_camera,
+    sensor_configuration,
+)
 from .connection import ProjectAirSimConnection
 from .coordinates import (
     body_pose_from_camera,

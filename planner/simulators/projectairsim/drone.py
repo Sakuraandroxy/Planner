@@ -266,9 +266,10 @@ class ProjectAirSimDrone:
         except ExecutionError:
             raise
         except Exception as exc:
+            # 消息里显式带异常对象，便于按类型检索日志。
             logger.exception(
                 "Land bridge failure: %r bridge_alive=%s",
-                exc,
+                exc,  # noqa: TRY401
                 self._bridge.alive,
             )
             raise ExecutionError("ProjectAirSim land did not complete") from exc

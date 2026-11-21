@@ -1,6 +1,6 @@
 """Settings and evidence for local depth-layer filtering, not object recognition."""
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)

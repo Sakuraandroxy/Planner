@@ -1,11 +1,11 @@
 """Measured streaming state and immutable pause records; no device ownership."""
 
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
 
+from .execution import ExecutionRecord
 from .pose import WorldPose
 from .sliding_window import QueuedWaypoint
-from .execution import ExecutionRecord
 
 
 @dataclass(frozen=True)

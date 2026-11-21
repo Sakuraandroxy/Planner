@@ -5,15 +5,16 @@ import pytest
 
 from planner.application.server_controller import ServerController
 from planner.config import (
-    MapScene,
     MapCatalog,
     MapEntry,
+    MapScene,
     ProfileInfo,
     ServerSettings,
     VehicleModelCatalog,
     VehicleModelGroup,
     VehicleModelOption,
 )
+from planner.domain.pose import WorldPose
 from planner.domain.server import (
     BackendUnavailable,
     MapSelection,
@@ -21,12 +22,11 @@ from planner.domain.server import (
     WorkerEvent,
     WorkerEventKind,
 )
-from planner.domain.pose import WorldPose
 from planner.domain.sliding_window import QueuedWaypoint
 from planner.domain.trajectory_telemetry import MODE_CONTINUOUS
-from planner.services.trajectory_hub import TrajectoryHub
 from planner.domain.weather import WEATHER_FIELDS
 from planner.errors import SimulatorNotOwned
+from planner.services.trajectory_hub import TrajectoryHub
 
 
 def _settings(**overrides):

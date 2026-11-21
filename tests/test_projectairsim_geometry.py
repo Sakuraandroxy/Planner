@@ -3,6 +3,7 @@ import math
 import numpy as np
 import pytest
 
+from planner.domain.pose import WorldPose
 from planner.simulators.projectairsim.camera import (
     assert_camera_matches_scene,
     capture_settings,
@@ -19,7 +20,6 @@ from planner.simulators.projectairsim.coordinates import (
     rotation_yaw_deg,
     rpy_rotation_deg,
 )
-from planner.domain.pose import WorldPose
 
 
 def _scene(camera_origin=("1.8 0.0 0.2", "0 -3 0"), width=1280, height=720, fov=90):
@@ -227,7 +227,9 @@ def test_missing_depth_capture_setting_is_rejected():
 def test_yaw_rate_is_read_from_the_angular_twist_in_degrees():
     import math
 
-    from planner.simulators.projectairsim.coordinates import yaw_rate_deg_from_kinematics
+    from planner.simulators.projectairsim.coordinates import (
+        yaw_rate_deg_from_kinematics,
+    )
 
     kinematics = {"twist": {"angular": {"x": 0.0, "y": 0.0, "z": -0.5}}}
     assert yaw_rate_deg_from_kinematics(kinematics) == pytest.approx(math.degrees(-0.5))

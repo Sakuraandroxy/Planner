@@ -106,7 +106,8 @@ def test_main_process_never_loads_a_simulator_client():
         f"if m.split('.')[0] in {sorted(FORBIDDEN_IN_MAIN_PROCESS)!r})))"
     )
     result = subprocess.run(
-        [sys.executable, "-c", script], cwd=ROOT, capture_output=True, text=True, timeout=180
+        [sys.executable, "-c", script], cwd=ROOT, capture_output=True, text=True, timeout=180,
+        check=False,
     )
     assert result.returncode == 0, result.stderr[-2000:]
     loaded = json.loads(result.stdout.strip().rsplit("\n", 1)[-1])
@@ -129,16 +130,14 @@ def test_every_registered_simulator_declares_its_slots():
 
 def test_airsim_slots_are_backed_by_real_code():
     """PORT_SLOTS may not claim a capability nothing implements."""
-    from planner.ports.capabilities import CameraView
-    from planner.simulators.airsim import runtime
-    from planner.simulators.airsim.above_camera import AirSimCameraView
-    from planner.simulators.airsim.vehicle import AirSimVehicle
-    from planner.ports.streaming_vehicle import StreamingVehicle
-    from planner.ports.vehicle import Vehicle
-
     from dataclasses import fields as dc_fields
 
+    from planner.ports.capabilities import CameraView
+    from planner.ports.streaming_vehicle import StreamingVehicle
+    from planner.ports.vehicle import Vehicle
     from planner.simulator.ports import SimulatorPorts
+    from planner.simulators.airsim.above_camera import AirSimCameraView
+    from planner.simulators.airsim.vehicle import AirSimVehicle
 
     known = {item.name for item in dc_fields(SimulatorPorts)}
     for simulator in ("airsim", "projectairsim"):

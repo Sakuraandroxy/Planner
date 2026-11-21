@@ -29,13 +29,17 @@ pull it back down. Only the active vehicle is visible in the streaming view.
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 import numpy as np
-
 from projectairsim import Drone, Rover
 from projectairsim.types import WeatherParameter
 
+from ...application.mission_assembly import (
+    MissionInputs,
+    VehicleArm,
+    require_application,
+)
 from ...config import AppConfig
 from ...domain.pose import WorldPose
 from ...domain.result import MissionResult
@@ -60,11 +64,6 @@ from .connection import (
 from .drone import ProjectAirSimDrone
 from .moving_source import BorrowedMovingSource
 from .rover import ProjectAirSimRover
-from ...application.mission_assembly import (
-    MissionInputs,
-    VehicleArm,
-    require_application,
-)
 
 DEFAULT_CONTROL_PERIOD_S = 1.0 / 20.0
 
@@ -539,7 +538,7 @@ class ProjectAirSimMissionSession:
         """
         try:
             self.set_view_mode(default_view_for(self._active_vehicle))
-        except Exception as error:  # noqa: BLE001
+        except Exception as error:
             self._log(
                 "could not switch to the initial streaming view: "
                 f"{type(error).__name__}: {error}",
@@ -622,7 +621,7 @@ class ProjectAirSimMissionSession:
         for vehicle_id, pose in tuple(self._hidden_teleports.items()):
             try:
                 self._vehicle_for(vehicle_id).teleport(pose)
-            except Exception as error:  # noqa: BLE001
+            except Exception as error:
                 if vehicle_id not in self._pin_failures:
                     self._pin_failures.add(vehicle_id)
                     self._log(
@@ -727,7 +726,7 @@ class ProjectAirSimMissionSession:
                 # rejected with "another ProjectAirSim connection is active".
                 try:
                     landed = self._drone.landed
-                except Exception as error:  # noqa: BLE001
+                except Exception as error:
                     landed = True
                     self._log(
                         "could not confirm the drone landing state on close: "

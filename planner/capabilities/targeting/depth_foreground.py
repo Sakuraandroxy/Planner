@@ -1,9 +1,14 @@
 """Per-point native-depth discontinuities; no global bbox histogram or new points."""
-from dataclasses import replace
 import math
+from dataclasses import replace
+
 import numpy as np
 
-from planner.domain.depth_foreground import DepthForegroundResult, DepthForegroundSettings, DepthPointLayer
+from planner.domain.depth_foreground import (
+    DepthForegroundResult,
+    DepthForegroundSettings,
+    DepthPointLayer,
+)
 
 
 class DepthForegroundFilter:

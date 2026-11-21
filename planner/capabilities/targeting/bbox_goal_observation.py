@@ -1,12 +1,12 @@
 """Optional grounding observer; surface pixels are selected by the model."""
 import time
 
-from planner.domain.target_detection import TargetDetectionInput
-from planner.domain.visual_goal import GoalObservation, GoalVisibility, GoalReference
-from planner.domain.observation import Observation
 from planner.domain.execution import ExecutionBudget
-from planner.ports.target_detector import TargetDetector
+from planner.domain.observation import Observation
+from planner.domain.target_detection import TargetDetectionInput
+from planner.domain.visual_goal import GoalObservation, GoalReference, GoalVisibility
 from planner.errors import BudgetExceeded
+from planner.ports.target_detector import TargetDetector
 
 
 class BBoxGoalObserver:

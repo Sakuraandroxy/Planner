@@ -1,7 +1,6 @@
 import json
 
 import pytest
-import yaml
 
 from planner.adapters.diagnostics import VisualGoalTrace
 from planner.adapters.task_completion.prompts import VisualGoalCompletionPrompt

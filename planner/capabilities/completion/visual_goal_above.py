@@ -1,5 +1,6 @@
 """Above completion measurements; no networking or flight commands."""
 import numpy as np
+
 from planner.capabilities.targeting.top_geometry import top_height
 from planner.domain.visual_goal_above import AboveCompletionRequest
 

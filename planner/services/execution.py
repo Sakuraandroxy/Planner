@@ -1,18 +1,28 @@
 from __future__ import annotations
-import time
+
 import logging
 import math
 import threading
+import time
+from collections.abc import Callable
 from dataclasses import replace
-from typing import Callable
 
-from planner.domain.execution import ExecutionBudget, ExecutionReceipt, ExecutionRecord, StopResult
-
+from planner.domain.execution import (
+    ExecutionBudget,
+    ExecutionReceipt,
+    ExecutionRecord,
+    StopResult,
+)
+from planner.domain.pose import (
+    RelativePoseDelta,
+    WorldPose,
+    resolve_yaw_delta_deg,
+    wrap_yaw_deg,
+)
 from planner.domain.trajectory import MotionTrajectory, RelativeTrajectory
-from planner.domain.pose import WorldPose, RelativePoseDelta, resolve_yaw_delta_deg, wrap_yaw_deg
 from planner.errors import BudgetExceeded, ExecutionError, MotionPaused
-from planner.ports.vehicle import Vehicle
 from planner.ports.collision_check import CollisionCheck
+from planner.ports.vehicle import Vehicle
 
 
 class ExecutionService:

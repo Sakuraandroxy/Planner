@@ -134,7 +134,7 @@ class SimulatorPorts:
         weather_fields: dict[str, str] | None = None,
         weather_presets: tuple[str, ...] = (),
         enabled_tasks: tuple[str, ...] = (),
-    ) -> "SimulatorPorts":
+    ) -> SimulatorPorts:
         """A stand-in bundle built from the slot names a simulator declares.
 
         The console needs feature flags before any simulator is running, so the

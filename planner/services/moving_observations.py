@@ -1,9 +1,9 @@
 """Bounded read-only capture pump. It never receives a vehicle controller."""
 from functools import partial
 
-from planner.services.background_operation import BackgroundOperation
 from planner.errors import ObservationError
 from planner.ports.observation_source import MovingObservationSource
+from planner.services.background_operation import BackgroundOperation
 
 
 class MovingObservations:

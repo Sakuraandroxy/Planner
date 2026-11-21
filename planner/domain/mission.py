@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from .visual_goal import VisualGoalNavigationParameters
+
 from .basic_motion import BasicMotionParameters
 from .free_navigation import FreeNavigationParameters
+from .visual_goal import VisualGoalNavigationParameters
 
 
 # 枚举任务类型

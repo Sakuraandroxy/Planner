@@ -90,13 +90,3 @@ class FramePublisher(Protocol):
 
     def publish(self, name: str, jpeg: bytes, timestamp_ns: int) -> None: ...
 
-
-class VehicleRoster(Protocol):
-    """Which vehicles this simulator actually spawns and can control."""
-
-    @property
-    def vehicles(self) -> tuple[str, ...]: ...
-
-    @property
-    def default_vehicle(self) -> str: ...
-

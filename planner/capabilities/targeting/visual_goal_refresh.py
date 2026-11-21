@@ -1,15 +1,21 @@
 """Stage-scoped target updates. Only the owner accepts data-only worker results."""
-from functools import partial
-import threading
-import math
 import logging
+import math
+import threading
+from functools import partial
 
-from planner.domain.visual_goal_completion import VisualGoalTargetSnapshot
 from planner.domain.target_state import TargetObservationEvidence
+from planner.domain.visual_goal_completion import VisualGoalTargetSnapshot
+from planner.errors import (
+    BudgetExceeded,
+    ModelCallTimeout,
+    ObservationError,
+    ProtocolError,
+)
 from planner.services.background_operation import BackgroundOperation
 from planner.services.observation_snapshot import freeze_observation, freeze_reference
-from .association import make_reference, accept_position, bound_target_geometry
-from planner.errors import ModelCallTimeout, ProtocolError, BudgetExceeded, ObservationError
+
+from .association import accept_position, bound_target_geometry, make_reference
 
 logger = logging.getLogger(__name__)
 

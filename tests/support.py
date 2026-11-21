@@ -6,8 +6,8 @@ Not collected by pytest.
 from __future__ import annotations
 
 import math
-from pathlib import Path
 import shutil
+from pathlib import Path
 
 import numpy as np
 import yaml

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import threading
 from collections import deque
 from datetime import datetime
-import threading
 
 from ..domain.server import LogBatch, ServerLog
 

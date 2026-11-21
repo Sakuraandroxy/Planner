@@ -1,20 +1,25 @@
 """Run-local state and finite control-flow helpers for visual-goal navigation."""
-from dataclasses import dataclass
 import time
+from collections.abc import Callable
+from dataclasses import dataclass
 
-from planner.domain.execution import ExecutionBudget
-from planner.domain.visual_goal import GoalReference, GoalGeometry, VisualGoalStatus
-from planner.domain.pose import WorldPose
-from planner.domain.trajectory import RelativeTrajectory, MotionTrajectory
 from planner.capabilities.completion.visual_goal_trigger import VisualGoalRadiusTrigger
-from planner.errors import BudgetExceeded, ModelCallTimeout
-from .termination import VisualGoalExitPolicy, SearchPolicy, VisualGoalFailure
-from planner.services.planning_window import PlanningWindow
+from planner.domain.execution import ExecutionBudget
 from planner.domain.planning_window import PlanningWindowInput
-from planner.domain.visual_goal import VisualGoalPlanningContext
+from planner.domain.pose import WorldPose
+from planner.domain.target_state import TargetObservationEvidence, TargetPositionState
+from planner.domain.trajectory import MotionTrajectory, RelativeTrajectory
+from planner.domain.visual_goal import (
+    GoalGeometry,
+    GoalReference,
+    VisualGoalPlanningContext,
+    VisualGoalStatus,
+)
+from planner.errors import BudgetExceeded, ModelCallTimeout
 from planner.services.model_calls import ModelCallService
-from typing import Callable
-from planner.domain.target_state import TargetPositionState, TargetObservationEvidence
+from planner.services.planning_window import PlanningWindow
+
+from .termination import SearchPolicy, VisualGoalExitPolicy, VisualGoalFailure
 
 
 @dataclass

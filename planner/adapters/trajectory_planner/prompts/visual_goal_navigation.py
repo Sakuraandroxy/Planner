@@ -1,5 +1,6 @@
 import json
 import math
+
 from planner.domain.visual_goal import VisualGoalPlanningContext
 from planner.errors import ProtocolError
 from planner.services.target_coordinates import point_in_horizontal_body
@@ -11,7 +12,6 @@ from .base import (
     build_aerial_base_user_prompt,
     build_base_user_prompt,
 )
-
 
 VISUAL_GOAL_SYSTEM_PROMPT = BASE_TRAJECTORY_SYSTEM_PROMPT + """
 

@@ -1,5 +1,6 @@
 """One task-owned, temporary adjustment of a single attached camera."""
 from typing import Protocol
+
 from planner.domain.visual_goal_above import CameraMountPose, Point3
 
 

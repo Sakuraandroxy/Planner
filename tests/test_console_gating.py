@@ -28,7 +28,7 @@ def _html() -> str:
 def test_gated_ids_exist_in_the_markup():
     """A gate that names a missing element silently does nothing."""
     app = _sources()
-    body = re.search(r"function applyCapabilities\(\).*?\n}", app, flags=re.S).group(0)
+    body = re.search(r"function applyCapabilities\(\).*?\n}", app, flags=re.DOTALL).group(0)
     gated = set(re.findall(r'\$\("([a-z0-9-]+)"\)', body))
     assert gated, "applyCapabilities references no ids at all"
     have = set(re.findall(r'id="([^"]+)"', _html()))
@@ -37,7 +37,7 @@ def test_gated_ids_exist_in_the_markup():
 
 def test_capability_gating_hides_a_tab_not_the_settings_card():
     app = _code(_sources())
-    body = re.search(r"function applyCapabilities\(\).*?\n}", app, flags=re.S).group(0)
+    body = re.search(r"function applyCapabilities\(\).*?\n}", app, flags=re.DOTALL).group(0)
     assert 'show($("tab-models")' in body, body
     assert "models-card" not in body, "the card is gone; hide the tab instead"
     assert "settings-card" not in body, "the settings card must stay visible"
@@ -86,7 +86,7 @@ def test_service_level_features_are_not_gated_by_the_simulator():
     api = Path(__file__).resolve().parents[1] / "planner/adapters/http/server_api.py"
     body = api.read_text(encoding="utf-8")
     route = re.search(
-        r'@app\.get\("/api/trajectory"\).*?return asdict\(snapshot\)', body, flags=re.S
+        r'@app\.get\("/api/trajectory"\).*?return asdict\(snapshot\)', body, flags=re.DOTALL
     ).group(0)
     assert 'require("trajectory")' not in route, route
 
@@ -108,7 +108,7 @@ def test_the_navigation_profile_switch_is_not_gated_either():
     routes = re.search(
         r'@app\.get\("/api/profile"\).*?status_code=code\n        \)',
         body,
-        flags=re.S,
+        flags=re.DOTALL,
     ).group(0)
     assert 'require("profile")' not in routes, routes
 
@@ -127,14 +127,14 @@ def test_the_profile_panel_shows_only_which_profile_is_running():
     assert "info.note" not in app, "the note is operator information, not screen text"
     assert "info.model" not in app, "the model name belongs in the log, not the panel"
     switch = re.search(
-        r"async function applyProfile\(\).*?\n}", app, flags=re.S
+        r"async function applyProfile\(\).*?\n}", app, flags=re.DOTALL
     ).group(0)
     assert "error.message" not in switch, (
         "the profile panel must not quote the backend's message"
     )
     assert 'id="profile-choice"' in html, "the panel uses the same select as the other tabs"
     enabled = re.search(
-        r"function renderProfiles\(\).*?const enabled =(.*?);\n", app, flags=re.S
+        r"function renderProfiles\(\).*?const enabled =(.*?);\n", app, flags=re.DOTALL
     ).group(1)
     assert '"disconnected"' in enabled, (
         "a profile can be chosen before any scene is loaded"
