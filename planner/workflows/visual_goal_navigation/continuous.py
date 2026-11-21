@@ -1,4 +1,5 @@
 """Visual-task orchestration over shared streaming, capture and planning services."""
+import logging
 import math
 from functools import partial
 
@@ -8,8 +9,9 @@ from planner.capabilities.targeting.association import (
 )
 from planner.capabilities.targeting.visual_goal_refresh import VisualGoalRefresh
 from planner.domain.motion import ContinuousTrackingSettings
+from planner.domain.pose import RelativePoseDelta
 from planner.domain.streaming import QueueObservationAnchor
-from planner.domain.trajectory import MotionSegment, MotionTrajectory
+from planner.domain.trajectory import MotionSegment, MotionTrajectory, RelativeTrajectory
 from planner.domain.trajectory_telemetry import MODE_CONTINUOUS
 from planner.domain.visual_goal import (
     GoalVisibility,
@@ -22,16 +24,29 @@ from planner.services.continuous_execution import ContinuousExecution
 from planner.services.moving_observations import MovingObservations
 from planner.services.observation_snapshot import freeze_observation, freeze_reference
 from planner.services.target_coordinates import point_in_horizontal_body
+from planner.services.trajectory_transform import relative_to_world
 
 from .session import model_call
 from .termination import VisualGoalFailure
+
+logger = logging.getLogger(__name__)
 
 
 class VisualGoalContinuous:
     def __init__(self, execution, moving_source, limits, motion_limits, speed_mps, observer, geometry,
                  completion, flight, capture_stopped, search, clock, sleep, event, waypoint_timeout_s=60., *,
                  target_updates=None, tracking_settings=ContinuousTrackingSettings(), telemetry=None,
-                 vertical_motion: bool = True):
+                 vertical_motion: bool = True, motion=None, collision_backoff_m: float = 3.0,
+                 maximum_collision_recoveries: int = 3, collision_recovery_reset_m: float = 20.0):
+        for name, value in (
+            ("collision backoff", collision_backoff_m),
+            ("collision recovery reset distance", collision_recovery_reset_m),
+        ):
+            if (isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not math.isfinite(value) or value <= 0):
+                raise ValueError(f"continuous {name} must be finite and positive")
+        if type(maximum_collision_recoveries) is not int or maximum_collision_recoveries < 1:
+            raise ValueError("continuous collision recovery budget must be a positive integer")
         self.execution, self.limits, self.completion = execution, limits, completion
         self.flight, self.capture_stopped, self.search = flight, capture_stopped, search
         self.clock, self.sleep, self.event = clock, sleep, event
@@ -43,6 +58,12 @@ class VisualGoalContinuous:
         self.owns_targets = target_updates is None
         self.telemetry = telemetry
         self.vertical_motion = bool(vertical_motion)
+        self.motion = motion
+        self.collision_backoff_m = float(collision_backoff_m)
+        self.maximum_collision_recoveries = maximum_collision_recoveries
+        self.collision_recovery_reset_m = float(collision_recovery_reset_m)
+        self.collision_recoveries = 0
+        self.collision_reset_baseline_m = None
 
     def prepare(self):
         if not all(callable(getattr(self.execution.vehicle, name, None))
@@ -217,9 +238,83 @@ class VisualGoalContinuous:
                 frozen_pending_count=len(snapshot.pending.points), live_queue_count=len(window.queue.items))
         return submitted
 
+    def _discard_pretask_contact(self):
+        """Drop a contact latched before this stage started (teleport/settle)."""
+        consume = getattr(self.execution.vehicle, "collision_state", None)
+        if callable(consume) and consume():
+            last = getattr(self.execution.vehicle, "last_collision", None)
+            logger.info("[VisualGoal] discarding a contact latched before the stage started (object=%s)",
+                        getattr(last, "object_name", "unknown"))
+
+    def _reset_recovery_budget_after_progress(self):
+        """Clear the consecutive-contact count after sustained forward progress."""
+        if not self.collision_recoveries or self.collision_reset_baseline_m is None:
+            return
+        if self.stream.path_length_m - self.collision_reset_baseline_m < self.collision_recovery_reset_m:
+            return
+        logger.info("[VisualGoal] progress since the last contact; collision recovery budget reset")
+        self.collision_recoveries = 0
+        self.collision_reset_baseline_m = None
+
+    def _recover_from_collision(self, session):
+        """Back off, drop the authorized queue and let the loop replan.
+
+        Mirrors ``FreeNavigationContinuous._recover_from_collision``. A contact
+        means the follower drove into something; reverse along the heading,
+        clear every remaining waypoint and discard speculative planning/captures
+        so the next tick replans from a fresh stopped observation. Repeated
+        contacts back off farther before the budget is exhausted.
+        """
+        self.collision_recoveries += 1
+        if self.collision_recoveries > self.maximum_collision_recoveries:
+            raise ExecutionError("collision recovery budget exhausted")
+        if self.motion is None:
+            raise ExecutionError("collision recovery requires a motion planner")
+        window = session.window
+        backoff_m = self.collision_backoff_m * self.collision_recoveries
+        last = getattr(self.execution.vehicle, "last_collision", None)
+        logger.warning(
+            "[VisualGoal] collision detected against %s; backing off %.1f m and clearing "
+            "the queue (recovery %d/%d)",
+            getattr(last, "object_name", "unknown"), backoff_m,
+            self.collision_recoveries, self.maximum_collision_recoveries)
+        self.execution.stop()
+        window.background.discard()
+        self.frames.discard()
+        self.targets.job.discard()
+        self.frames.failures = 0
+        self.frames.retry_at = 0.0
+        pose = self.stream.state.pose
+        backoff = RelativeTrajectory((RelativePoseDelta(dx=-backoff_m),))
+        self.execution.execute(self.motion.create_motion(relative_to_world(backoff, pose)))
+        window.queue.clear()
+        # Contacts made while still overlapping or reversing out are handled here.
+        self.execution.vehicle.collision_state()
+        self.stream.goal_yaw = None
+        self.stream.head_id = None
+        self.stream.paused = None
+        self.stream.holding = True
+        self.stream.follower.reset()
+        self.stream.sample()
+        # A fresh history window anchored at the recovered pose; the collided
+        # segment must not anchor replanning back onto the failed path.
+        self.stream.initial = self.stream.state.pose
+        self.stream.actions = []
+        self.stream.record = None
+        self.collision_reset_baseline_m = self.stream.path_length_m
+        deadline = self.clock() + self.limits.model_request_timeout_s
+        while self.frames.job.busy:
+            if self.clock() >= deadline:
+                raise ObservationError("previous capture did not finish during collision recovery")
+            self.sleep(0.01)
+        return self.capture_stopped(session)
+
     def run(self, parameters, session, trace):
         self.frames.begin()
         self.targets.begin()
+        self.collision_recoveries = 0
+        self.collision_reset_baseline_m = None
+        self._discard_pretask_contact()
         observation = None
         while observation is None:
             observation = self._observe_stopped(parameters, session, trace)
@@ -233,6 +328,12 @@ class VisualGoalContinuous:
                 self.stream.sample()
                 window = session.window
                 window.record = self.stream.record
+                self._reset_recovery_budget_after_progress()
+                check_collision = getattr(self.execution.vehicle, "collision_state", None)
+                if callable(check_collision) and check_collision():
+                    observation = self._recover_from_collision(session)
+                    used_capture = None
+                    queue_was_empty = True
                 frame = self.frames.poll()
                 if frame is not None:
                     try:

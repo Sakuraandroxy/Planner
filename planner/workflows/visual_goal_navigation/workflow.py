@@ -117,7 +117,7 @@ class VisualGoalNavigationWorkflow:
                 motion_limits, stream_speed_mps, goal_observer, geometry, completion, self.flight,
                 self._capture, self._search, clock, sleep, self._event, stream_waypoint_timeout_s,
                 target_updates=self.target_updates, tracking_settings=continuous_tracking,
-                telemetry=telemetry, vertical_motion=self.vertical_motion)
+                telemetry=telemetry, vertical_motion=self.vertical_motion, motion=self.motion)
 
     def prepare(self) -> None:
         if self._closed:
