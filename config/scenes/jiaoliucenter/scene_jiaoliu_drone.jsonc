@@ -8,8 +8,8 @@
       "type": "robot",
       "name": "Drone1",
       "origin": {
-        "xyz": "6.9 -9.7 -1.12",
-        "rpy-deg": "0 0 -130"
+        "xyz": "-32.022151 -49.767305 -0.025970",
+        "rpy-deg": "0 0 -140"
       },
       "robot-config": "robot_drone_cameras.jsonc"
     }
