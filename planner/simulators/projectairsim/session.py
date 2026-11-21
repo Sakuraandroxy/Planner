@@ -164,7 +164,7 @@ class ProjectAirSimMissionSession:
                 motion=config.motion,
                 motion_timeout_s=config.drone.move_timeout_s,
                 tracking=config.continuous,
-                frame_sink=self._sink,
+                frame_sink=self._sink_for("rover"),
             )
             self._drone = ProjectAirSimDrone(
                 self._connection,
@@ -187,7 +187,7 @@ class ProjectAirSimMissionSession:
                 takeoff_climb_m=config.drone.takeoff_climb_m,
                 motion=config.motion,
                 tracking=config.continuous,
-                frame_sink=self._sink,
+                frame_sink=self._sink_for("drone"),
             )
             self._rover.start()
             self._drone.start()
@@ -699,9 +699,29 @@ class ProjectAirSimMissionSession:
                         "ERROR",
                     )
 
-    def _sink(self, frame: np.ndarray, timestamp_s: float) -> None:
-        if self._frame_sink is not None and self._publish_frames:
-            self._frame_sink(frame, timestamp_s)
+    def _sink_for(
+        self, vehicle_id: str
+    ) -> Callable[[np.ndarray, float], None]:
+        """A frame sink that forwards only the active vehicle's camera.
+
+        Both vehicles' front-camera topic streams subscribe at startup and push
+        every frame to this session's shared hub. An unfiltered sink lets the
+        hidden vehicle -- parked 1000 m up with its camera aimed at the sky --
+        overwrite the live preview, so the console "相机画面" flickers between
+        ground and sky. Gating on the active vehicle keeps the preview on the
+        camera its label promises ("当前载具的前视相机"); the inactive vehicle
+        keeps streaming for its own observations, which never go through here.
+        """
+
+        def sink(frame: np.ndarray, timestamp_s: float) -> None:
+            if (
+                vehicle_id == self._active_vehicle
+                and self._frame_sink is not None
+                and self._publish_frames
+            ):
+                self._frame_sink(frame, timestamp_s)
+
+        return sink
 
     def close(self, *, skip_landing: bool = False) -> None:
         try:
