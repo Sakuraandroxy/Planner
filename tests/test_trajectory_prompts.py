@@ -226,6 +226,27 @@ def test_zero_bearing_adds_no_side_restriction():
     )
 
 
+def test_ground_visual_prompt_includes_the_measured_free_space_fan():
+    # The rover gets the same depth-derived obstacle fan as free navigation so
+    # it plans against metric distances instead of eyeballing the RGB scale.
+    prompt = _visual_prompt()
+    assert "Metric free-space profile" in prompt
+    assert "Nearest obstacle directly ahead" in prompt
+    # Sector bearings share the body horizontal frame of the target vectors.
+    assert "bearing is measured from the current forward axis" in prompt
+
+
+def test_aerial_visual_prompt_keeps_the_ground_free_space_fan_out():
+    prompt = VisualGoalTrajectoryPrompt(aerial=True).build_user_prompt(
+        "fly to the target",
+        _observation(WorldPose(0.0, 0.0, 0.0, 0.0)),
+        5,
+        round_index=1,
+        task_context=_context(),
+    )
+    assert "Metric free-space profile" not in prompt
+
+
 def test_visual_goal_system_prompts_forbid_turning_away_from_the_target_side():
     for prompt in (VISUAL_GOAL_SYSTEM_PROMPT, AERIAL_VISUAL_GOAL_SYSTEM_PROMPT):
         assert "never output a positive" in prompt

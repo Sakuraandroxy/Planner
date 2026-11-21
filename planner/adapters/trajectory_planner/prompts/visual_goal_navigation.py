@@ -3,6 +3,7 @@ import math
 
 from planner.domain.visual_goal import VisualGoalPlanningContext
 from planner.errors import ProtocolError
+from planner.services.free_space import FreeSpaceProfileSettings, measure_free_space
 from planner.services.target_coordinates import point_in_horizontal_body
 from planner.services.trajectory_transform import relative_to_world
 
@@ -12,6 +13,7 @@ from .base import (
     build_aerial_base_user_prompt,
     build_base_user_prompt,
 )
+from .free_navigation import format_free_space_profile
 
 VISUAL_GOAL_SYSTEM_PROMPT = BASE_TRAJECTORY_SYSTEM_PROMPT + """
 
@@ -47,6 +49,11 @@ This ground vehicle cannot change height; vertical motion is unavailable and dz 
 maximum_vertical_offset_m is therefore not a motion-planning constraint.
 Choose useful evidence-supported motion; forward motion is not mandatory.
 Do not plan blind lateral or backward motion into unobserved space.
+A measured metric free-space profile lists the nearest above-ground obstacle distance
+per bearing sector in the body frame. Keep every planned step clear of those measured
+distances: do not advance into a sector whose measured obstacle distance is shorter
+than that step's forward reach, and keep lateral or reverse motion out of measured
+blocked sectors.
 The executor follows valid trajectory points in order, with radius pauses for completion checks.
 Use the execution history and pending to determine what was actually driven.
 Previous executed command prefix is not an exact measured driving path; use actual pose updates.
@@ -227,8 +234,12 @@ def visual_goal_system_prompt(*, aerial: bool = False) -> str:
 
 
 class VisualGoalTrajectoryPrompt:
-    def __init__(self, *, aerial: bool = False):
+    def __init__(self, *, aerial: bool = False,
+                 free_space: FreeSpaceProfileSettings | None = None):
         self.aerial = aerial
+        # Shared with free navigation: the same depth-derived obstacle fan
+        # supplies the ground vehicle's metric clearance here too.
+        self.free_space = free_space or FreeSpaceProfileSettings()
 
     def system_prompt(self):
         return visual_goal_system_prompt(aerial=self.aerial)
@@ -239,6 +250,12 @@ class VisualGoalTrajectoryPrompt:
             raise ProtocolError("visual goal prompt requires typed target context")
         base = (build_aerial_base_user_prompt if self.aerial else build_base_user_prompt)(
             instruction, observation, max_points, **execution_context)
+        if not self.aerial:
+            # Ground vehicle only: give the model measured metric obstacle
+            # distances instead of leaving it to estimate scale from the image.
+            base += "\n\n" + format_free_space_profile(
+                measure_free_space(observation, self.free_space)
+            )
         pending = execution_context.get("pending_trajectory")
         tail = (relative_to_world(pending, observation.pose).poses[-1]
                 if pending is not None and pending.points else observation.pose)
