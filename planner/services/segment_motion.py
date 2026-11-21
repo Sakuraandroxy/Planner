@@ -25,6 +25,9 @@ class MotionLimits:
     max_yaw_accel_dps2: float = 60.0
     control_hz: float = 20.0
     min_duration_s: float = 1.0
+    #: “已驶过端点”横向走廊；映射进 domain tracking limits。默认与位置容差同宽，
+    #: 全向载具行为不变；无人车适配构造期会放宽（见 rover.rover_tracking_limits）。
+    passed_lateral_tolerance_m: float = 0.3
     #: 航向伺服的四个参数，含义见 planner/services/motion/heading_servo.py。
     heading_hold_gain: float = 0.4
     heading_rate_damping: float = 0.0
@@ -36,7 +39,7 @@ class MotionLimits:
         {"heading_rate_damping", "heading_deadband_deg", "heading_rate_deadband_dps"}
     )
     #: 必须为正的参数，单独列出以便校验时区分。
-    POSITIVE = frozenset({"heading_hold_gain"})
+    POSITIVE = frozenset({"heading_hold_gain", "passed_lateral_tolerance_m"})
 
     def __post_init__(self) -> None:
         for name in (
@@ -81,6 +84,7 @@ class MotionLimits:
             max_yaw_acceleration_deg_s2=self.max_yaw_accel_dps2,
             control_hz=self.control_hz,
             min_duration_s=max(self.min_duration_s, 1e-3),
+            passed_lateral_tolerance_m=self.passed_lateral_tolerance_m,
             heading_hold_gain=self.heading_hold_gain,
             heading_rate_damping=self.heading_rate_damping,
             heading_deadband_deg=self.heading_deadband_deg,

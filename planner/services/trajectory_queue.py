@@ -12,9 +12,14 @@ from planner.services.trajectory_validation import require_execution_anchor
 
 
 class WorldWaypointQueue:
-    def __init__(self, position_tolerance_m: float, yaw_tolerance_deg: float):
+    def __init__(self, position_tolerance_m: float, yaw_tolerance_deg: float,
+                 passed_lateral_tolerance_m: float | None = None):
         self.position_tolerance_m = position_tolerance_m
         self.yaw_tolerance_deg = yaw_tolerance_deg
+        self.passed_lateral_tolerance_m = (
+            position_tolerance_m if passed_lateral_tolerance_m is None
+            else passed_lateral_tolerance_m
+        )
         self._owner = threading.get_ident()
         self._items: list[QueuedWaypoint] = []
         self._next_id = 0
@@ -124,7 +129,8 @@ class WorldWaypointQueue:
     def consume_stream(self, measured, unwrapped_yaw, goal_yaw):
         self.check_owner()
         if not self._items or not reached(self._items[0], measured, unwrapped_yaw, goal_yaw,
-                                         self.position_tolerance_m, self.yaw_tolerance_deg):
+                                         self.position_tolerance_m, self.yaw_tolerance_deg,
+                                         self.passed_lateral_tolerance_m):
             return False
         self._items.pop(0)
         return True

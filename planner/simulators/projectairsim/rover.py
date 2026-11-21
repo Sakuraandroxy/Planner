@@ -14,6 +14,7 @@ import math
 import threading
 import time
 from collections import deque
+from dataclasses import replace
 
 from ...config import CameraSettings, DepthSettings
 from ...domain.observation import Observation
@@ -40,6 +41,22 @@ from .observation import ProjectAirSimObservationSource
 # Neighborhood: the drop finishes within ~1.0 s of braking and the pose is
 # stable afterwards; hold a little longer so slower maps settle too.
 SETTLE_DURATION_S = 2.0
+
+#: 阿克曼车不能横移：冲过端点后横向残差收不到中心线。给“已驶过端点”判据一条
+#: 车宽量级的走廊（0.6 m），让“冲过一点但仍在走廊内”直接推进下一个航点，而不是
+#: 回头精确命中一个它够不到的点——后者会退化成身后的目标，触发倒车与原地卡死。
+ROVER_PASSED_LATERAL_TOLERANCE_M = 0.6
+
+
+def rover_tracking_limits(motion):
+    """Configured envelope -> domain tracking limits, widened for the rover."""
+    limits = tracking_limits(motion)
+    return replace(
+        limits,
+        passed_lateral_tolerance_m=max(
+            limits.passed_lateral_tolerance_m, ROVER_PASSED_LATERAL_TOLERANCE_M
+        ),
+    )
 
 # ``SetObjectPose`` refuses ("Unable to move object ... not movable") when the
 # actor is already at the requested pose. That happens whenever a vehicle is
@@ -80,7 +97,7 @@ class ProjectAirSimRover:
         self._connection = connection
         self._robot = robot
         self._motion = motion or MotionLimits()
-        self._tracking = tracking_limits(self._motion)
+        self._tracking = rover_tracking_limits(self._motion)
         self._hold_tracking = tracking or ContinuousTrackingSettings()
         self._drive_model = drive_model
         self._pid = SpeedPid(drive_model)

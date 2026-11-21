@@ -1504,6 +1504,7 @@ def load_config(path: str | Path) -> AppConfig:
         max_yaw_accel_dps2=float(motion_raw.get("max_yaw_accel_dps2", 60.0)),
         control_hz=float(motion_raw.get("control_hz", 20.0)),
         min_duration_s=float(motion_raw.get("min_duration_s", 1.0)),
+        passed_lateral_tolerance_m=float(motion_raw.get("passed_lateral_tolerance_m", 0.3)),
         **{
             # 回落值取 dataclass 默认值：默认值是实机验过的那一组，不在这里重写一份。
             name: float(motion_raw.get(name, getattr(MotionLimits, name)))

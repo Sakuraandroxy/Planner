@@ -46,6 +46,11 @@ class MotionLimits:
     yaw_gain: float = 2.0
     position_tolerance_m: float = 0.3
     yaw_tolerance_deg: float = 2.0
+    #: “已驶过端点”判据允许的横向走廊。全向载具（无人机）能直接压到点上，
+    #: 用 position_tolerance_m 即可；阿克曼车不能横移，冲过端点时只能带着
+    #: 横向残差回头，走廊太窄会让队伍头永远弹不掉 → 目标落到身后 → 倒车 →
+    #: 原地卡死。默认与 position 相同以保持全向行为不变，无人车适配层放宽。
+    passed_lateral_tolerance_m: float = 0.3
     stopped_speed_mps: float = 0.15
     stopped_yaw_rate_deg_s: float = 2.0
     settle_time_s: float = 0.3

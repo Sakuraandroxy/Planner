@@ -221,7 +221,7 @@
       "wheel-settings": {
         "normal-vector": "0.0 -1.0 0.0",
         "wheel-type": 0.0,
-        "coeff-of-friction": 0.0,
+        "coeff-of-friction": 1.0,
         "coeff-of-wheel-torque": 0.040164,
         "engine": true,
         "steering": false,
@@ -242,7 +242,7 @@
       "wheel-settings": {
         "normal-vector": "0.0 -1.0 0.0",
         "wheel-type": 0.0,
-        "coeff-of-friction": 0.0,
+        "coeff-of-friction": 1.0,
         "coeff-of-wheel-torque": 0.040164,
         "engine": true,
         "steering": false,

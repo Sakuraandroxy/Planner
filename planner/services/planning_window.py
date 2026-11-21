@@ -66,7 +66,9 @@ class PlanningWindow(Generic[ContextT]):
     def __init__(self, planner, validator: TrajectoryValidator, settings: SlidingWindowSettings,
                  motion_limits, clock):
         self.planner, self.settings, self.clock = planner, settings, clock
-        self.queue = WorldWaypointQueue(motion_limits.position_tolerance_m, motion_limits.yaw_tolerance_deg)
+        self.queue = WorldWaypointQueue(
+            motion_limits.position_tolerance_m, motion_limits.yaw_tolerance_deg,
+            motion_limits.passed_lateral_tolerance_m)
         self.worker = SlowPlannerWorker()
         self.scheduler = RefillScheduler(settings.refill_pending_count, settings.latency_margin_s)
         self.background = BackgroundContinuationPlanner(planner, validator, self.worker, self.scheduler, clock)
