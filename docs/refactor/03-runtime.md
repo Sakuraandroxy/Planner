@@ -21,10 +21,10 @@
 
 | 文件 | 类与函数签名 | 估计行数 | 从哪来 |
 | --- | --- | --- | --- |
-| `runtime/__init__.py` | 导出 `ControlLoop`、`ExecutionService`、`PlanningWindow`、`CollisionRecovery`、`PositionHold` | 14 | 新建 |
+| `runtime/__init__.py` | 本层唯一公开入口，只导出 `ControlLoop`、`GuidedVehicle`、`QueueFollower`、`ExecutionService`、`PlanningWindow`、`CollisionRecovery`、`PositionHold`、`FrameHub`、`TrajectoryHub`、`LogBuffer`、`ModelCallService`、`MovingObservations`、`StreamTimeline`、`close_resources`（裁决 R19a）；跨层 import 只能指向这个入口与 `runtime/window/__init__.py` | 18 | 新建 |
 | `runtime/execution.py` | `class ExecutionService(vehicle: Vehicle, clock=time.monotonic)`；`acquire_flight(owner)`（裁决 R5：去掉 `collision_check` 参数）；`release_flight(owner, pending_cleanup=None)`；`stop_if_owner(owner)`；`set_deadline(deadline)`；`clear_deadline()`；`request_stop()`；`check_deadline()`；`checkpoint()`；`wait(seconds)`；`stop() -> StopResult`；`current_pose()` | 210 | `planner/services/execution.py` 262 行，`execute`/`execute_with_receipt` 移出到 `motion/loop.py` |
 | `runtime/collision_recovery.py` | `class CollisionRecovery(settings: CollisionRecoverySettings, capability: MotionCapability, limits: MotionLimits)`；`poll(state: CollisionState) -> CollisionContact \| None`；`begin(contact, pose) -> BackoffPlan`；`finish()`；`note_progress(metres)`；`reset()`；`attempts: int` | 130 | 新建，吸收 `planner/workflows/free_navigation/continuous.py:312` 与 `planner/workflows/visual_goal_navigation/continuous.py:259` 两份镜像 |
-| `runtime/motion/__init__.py` | 导出 `ControlLoop`、`make_control_loop(...)` | 18 | 新建 |
+| `runtime/motion/__init__.py` | 子包内部入口，只给同层使用（裁决 R19a：跨层不走这一层） | 18 | 新建 |
 | `runtime/motion/loop.py` | `SEGMENT_PERIOD_S = 0.030`；`class ControlLoop(execution, *, streaming, synthesizer, limiter, recovery, window=None, clock=time.monotonic, sleep=time.sleep)`；`run_segment(segment: MotionSegment, sink: SegmentSink, *, budget: ExecutionBudget \| None) -> ExecutionReceipt`；`run_stream(goals: StreamGoalSource, sink: StreamSink, *, deadline_monotonic: float \| None) -> None` | 430 | 吸收 `planner/services/execution.py:127` 的逐段循环与 `planner/services/continuous_execution.py` 169 行 |
 | `runtime/motion/tracking.py` | `class MotionSynthesizer(capability, limits, tracking)`；`reset(velocity_world)`；`desired(goals, state, unwrapped_yaw, goal_yaw, dt) -> MotionCommand`；`class HolonomicSynthesizer`；`class AckermannSynthesizer` | 260 | 拆分 `planner/services/motion/continuous.py:31` 的 `ContinuousFollower`；阿克曼纯跟踪新写 |
 | `runtime/motion/limits.py` | `class CommandLimiter(limits, tracking)`；`reset(velocity_world)`；`limit(command, state, dt) -> MotionCommand`；`command_type` | 120 | `planner/services/motion/command_smoothing.py` 32 行的 `CommandSmoother` 加航向伺服包装 |
@@ -294,6 +294,11 @@ owner  limiter.reset / synthesizer.reset
 
 ## 3 跨层接口
 
+层间调用规则（裁决 R19）：
+
+- R19a：每层只有一个公开入口 `<pkg>/__init__.py`。跨层 import 只能指向包入口，禁止 `planner.runtime.motion.loop` 这类深层路径；同层内部随便 import。
+- R19b：层的输入只有契约层类型或本层自己声明的 `Protocol`。禁止把另一层的具体类当构造参数或返回值的声明类型。
+
 ### 3.1 我提供什么
 
 ```python
@@ -354,10 +359,11 @@ StreamSink = CommandSink
 | --- | --- | --- |
 | `domain/` | `MotionModel`、`MotionCapability`、`HolonomicCommand`、`CarCommand`、`MotionCommand`、`CollisionContact`、`CollisionState`、`CollisionRecoverySettings`、`ExecutionBudget`、`ExecutionReceipt`、`ExecutionRecord`、`StopResult`、`MotionSegment`、`MotionTrajectory`、`WorldPose`、`resolve_yaw_delta_deg`、`wrap_yaw_deg`、`TimedVehicleState`、`QueuedWaypoint`、`PlanningSnapshot`、`PlanningWindowInput`、`SlidingWindowSettings`、`ContinuousTrackingSettings`、`MotionLimits`（只留一份） | `00-boundaries.md` 第四节与契约层方案 |
 | `ports/` | `Vehicle.current_pose/motion_capability/execute_segment/cancel/hover/collision_state -> CollisionState`（裁决 R1：槽最终由 runtime 的 `GuidedVehicle(streaming, loop)` 兑现，引擎侧只提供 `current_pose`/`motion_capability`/`collision_state`/`cancel`/`hover` 与 `stream_command`）；`StreamingVehicle.stream_state/stream_command`；`PositionHoldVehicle.stream_state/cancel/hold_velocity`（裁决 R7：`hold_velocity` 内部转调 `stream_command`）；`StreamGoalSource.next`（裁决 R16，文件 `ports/goal_source.py`）；`TrajectoryPlanner.plan`；`ObservationSource.capture`；`MovingObservationSource.capture_moving` | 端口文件 14 个；`collision_check.py` 删除（裁决 R5）后 13 个，新增 `goal_source.py`（裁决 R16）后回到 14 个 |
-| `algorithms/` | `corridor_for(model, limits)`（裁决 R6：`ACKERMANN` 0.6 m，`HOLONOMIC` 取 `MotionLimits.position_tolerance_m`）、`heading_rate_deg_s`、`braking_speed`、`planned_speed`、`corner_speed`、`reached`、`duration_for`、`sample_segment`、`translation_handoff`、`ContinuousPathReference`、`world_to_relative`、`relative_to_world`、`require_execution_anchor`、`RefillScheduler` | 现 `services/motion/` 与 `capabilities/sliding_window/scheduler.py` 的纯函数部分，加 `algorithms/motion/corridor.py` |
+| `algorithms/` | `corridor_for(model, limits)`（裁决 R6、R17：`ACKERMANN_PASSED_LATERAL_TOLERANCE_M = 1.0`，`HOLONOMIC` 取 `MotionLimits.position_tolerance_m`；配置只能抬高不能压低）、`heading_rate_deg_s`、`braking_speed`、`planned_speed`、`corner_speed`、`reached`、`duration_for`、`sample_segment`、`translation_handoff`、`ContinuousPathReference`、`world_to_relative`、`relative_to_world`、`require_execution_anchor`、`RefillScheduler` | 现 `services/motion/` 与 `capabilities/sliding_window/scheduler.py` 的纯函数部分，加 `algorithms/motion/corridor.py` |
 | `workflows/` | 实现或组装 `StreamGoalSource`（默认直接用 `QueueFollower`，只补暂停策略钩子，裁决 R4）；每阶段一个 `PlanningWindowInput`；调 `window` 六个方法；把 `delay`、`maximum_rounds` 交给 `window.begin` | 见任务层方案 |
 | `assembly/` | 按载具造一套 `ControlLoop`：`capability = vehicle.motion_capability()`、`limits` 从 `config.motion` 一次构造、`tracking` 从 `config.continuous`、`recovery` 从 `config.motion.collision`（开关只有 `motion.collision.enabled`，默认 true；删 `visual_goal_navigation.collision_check_enabled`，裁决 R8）、注入 `clock`/`sleep`；用 `GuidedVehicle(streaming, loop)` 填 `Vehicle` 槽（裁决 R1） | 见装配层方案 |
 | `simulators/` | 只实现执行器：`stream_command(command, duration_s)` 按 `CarCommand` / `HolonomicCommand` 落地并推进一个周期；收到与 `MotionCapability` 不符的命令抛错，不许静默丢分量 | 现 `drive.py` 的投影必须改成校验 |
+| `simulator/ports.py` | 可跑任务只由 `REQUIRED_PORTS ⊆ 已填槽位` 推导；删 `SimulatorPorts.enabled_tasks` 与 `simulators/projectairsim/runtime.py` 的 `ENABLED_TASKS`（裁决 R18，原 R11 作废） | 能力矩阵无第二个人工开关；UE4 实现了 streaming 槽位，巡航因此自动开放 |
 
 ### 3.3 时钟与节拍的注入点
 
@@ -369,6 +375,44 @@ StreamSink = CommandSink
 | `PositionHold(clock, sleep)` | `planner/services/position_hold.py:21` | 不变 |
 | `StreamRecorder(clock)` | 新 | 由 `ControlLoop` 注入，测试断言节拍用 |
 | 周期 | `1/limits.control_hz` 散落各处（`planner/services/continuous_execution.py:125`、`planner/services/position_hold.py:68`） | 只有两处：`SEGMENT_PERIOD_S` 与 `1/MotionLimits.control_hz`，都在 `loop.py`，不进配置（裁决 R9） |
+
+### 3.4 输入面与输出面（裁决 R19c）
+
+只列跨层可见的名字。内部的实现类不进表。
+
+输入：
+
+| 名字 | 形状 | 由谁提供 | 是否可选 |
+| --- | --- | --- | --- |
+| `MotionSegment` / `MotionTrajectory` | `domain/` dataclass | 任务层 | 必需 |
+| `ExecutionBudget` | `domain/` dataclass | 任务层 | 可选（`None` = 段内不设预算） |
+| `deadline_monotonic` | `float` | 任务层 | 可选（`None` = 无界，只由停止事件结束） |
+| `StreamGoalSource` | `ports/goal_source.py` 的 `Protocol` | 任务层（用 `runtime` 包入口的 `QueueFollower` 或自己的实现） | 必需（`run_stream`） |
+| `SegmentSink` / `StreamSink` | `stream_command` 的 `Callable` 别名，声明在 `ports/goal_source.py` | 装配层、引擎 | 必需 |
+| `Vehicle` / `StreamingVehicle` / `PositionHoldVehicle` | `ports/` 的 `Protocol` | 装配层填槽（`GuidedVehicle` 也归入 `Vehicle`） | 必需 |
+| `MotionCapability` | `domain/` dataclass（由端口返回） | 引擎经 `Vehicle.motion_capability()` | 必需 |
+| `MotionLimits`、`ContinuousTrackingSettings`、`CollisionRecoverySettings`、`SlidingWindowSettings` | `domain/` dataclass | 装配层从 `config` 构造 | 必需 |
+| `Observation`、`PlanningWindowInput` | `domain/` dataclass | 任务层 | 必需（`submit`） |
+| `TrajectoryPlanner` | `ports/` 的 `Protocol` | 装配层 | 必需（窗口构造） |
+| `ObservationSource` / `MovingObservationSource` | `ports/` 的 `Protocol` | 装配层 | 可选（无移动取帧时退回停稳取帧） |
+| `clock` / `sleep` | `Callable[[], float]` / `Callable[[float], None]` | 装配层，默认 `time.monotonic` / `time.sleep` | 可选 |
+
+输出：
+
+| 名字 | 形状 | 由谁消费 | 稳定性 |
+| --- | --- | --- | --- |
+| `ControlLoop.run_segment` / `run_stream` | 方法签名，见 3.1 | 任务层 | 稳定 |
+| `ExecutionReceipt` / `ExecutionRecord` / `StopResult` | `domain/` dataclass | 任务层 | 稳定 |
+| `PlanningWindow` 六个公开方法 | 见 3.1 | 任务层 | 稳定 |
+| `ExecutionService` 公开方法 | 见 3.1 | 任务层、装配层 | 稳定 |
+| `GuidedVehicle` | 符合 `ports.Vehicle` | 装配层填槽 | 稳定 |
+| `QueueFollower` | 符合 `ports.StreamGoalSource` | 任务层构造后传给 `run_stream` | 稳定 |
+| `PositionHold` | 类（`start`/`wait`/`release`/`tick`） | 任务层与装配层 | 稳定 |
+| `FrameHub` / `TrajectoryHub` / `LogBuffer` | 汇类 | HTTP 入口层、UE4 子进程的 `telemetry_relay` | 稳定 |
+| `ModelCallService` / `MovingObservations` / `BackgroundOperation` / `StreamTimeline` / `close_resources` | 类与函数 | 任务层 | 稳定 |
+| `StreamRecorder` / `MotionSynthesizer` / `CommandLimiter` / `SlowPlannerWorker` / `BackgroundContinuationPlanner` | 内部类 | 仅本层 | 内部 |
+
+不暴露什么：`WorldWaypointQueue`（任务层只能经 `PlanningWindow` 的队列视图与六个方法访问，队列的 `revision`、`waypoint_id` 不进跨层签名）、`BackgroundContinuationPlanner`、`SlowPlannerWorker`、`RefillScheduler` 的类名与实例、`StreamRecorder`、`MotionSynthesizer`、`CommandLimiter`、`SEGMENT_PERIOD_S` 的导出、以及 `_guard` / `_tick` / `_recover_stream` 等私有方法。
 
 ## 4 错误与失败路径
 
@@ -491,7 +535,7 @@ owner       release_flight；position_hold 继续持有直到下一任务
 | 3 | 同上：重入 | 嵌套 `run_segment` 抛 `ExecutionError` | 第二次调用不得发出任何 `stream_command` |
 | 4 | `test_control_loop_stream.py`：节拍 | 假时钟下 20 拍耗时 1.0 s，`stream_command` 第二参数恒为 0.05；deadline 到期抛 `BudgetExceeded`（裁决 R3） | 目标源返回 `None` 时不发非零命令，`stop()` 调用一次 |
 | 5 | 同上：命令类型 | `capability.model == ACKERMANN` 时给 `HolonomicCommand` → 构造期 `ValueError` | 无人机收 `CarCommand` 同样报错 |
-| 6 | `test_motion_model_commands.py`（扩展 `tests/test_motion.py` 与 `tests/test_passed_corridor.py`） | `corridor_for(ACKERMANN)` 返回 0.6 m、`corridor_for(HOLONOMIC)` 返回 `position_tolerance_m`（裁决 R6）；阿克曼在"冲过端点、残差侧向"状态下 `CarCommand.forward_speed_mps >= 0`，且永不产生横向分量；无人机对照允许横向 | 阿克曼出现 `reverse=True` 且未越点 → 失败 |
+| 6 | `test_motion_model_commands.py`（扩展 `tests/test_motion.py` 与 `tests/test_passed_corridor.py`） | `corridor_for(ACKERMANN)` 返回 1.0 m（`ACKERMANN_PASSED_LATERAL_TOLERANCE_M`）、`corridor_for(HOLONOMIC)` 返回 `position_tolerance_m`；配置取 0.3 时仍返回 1.0，取 1.2 时返回 1.2（只能抬高不能压低，裁决 R17）；阿克曼在"冲过端点、残差侧向"状态下 `CarCommand.forward_speed_mps >= 0`，且永不产生横向分量；无人机对照允许横向 | 阿克曼出现 `reverse=True` 且未越点 → 失败 |
 | 7 | `test_command_limiter.py`（扩展 `tests/test_heading_servo.py`） | 阶跃目标下加速度范数 ≤ `max_acceleration_mps2`、jerk ≤ `max_jerk_mps3`，偏航角速度 ≤ `max_yaw_rate_deg_s` | `NaN` 输入 → `ExecutionError`，且整段零下发 |
 | 8 | `test_collision_recovery.py`（用 `tests/test_visual_goal_collision_recovery.py` 的假载具） | 第 n 次接触后退距离 = `backoff_m * n`；`attempts` 超上限抛 `ExecutionError`；批次 receipt 段数不变 | 恢复期间再接触不得连乘两次退避 |
 | 9 | 同上：预算复位 | 前进 `reset_after_progress_m` 后 `attempts == 0` | 未达阈值时 `attempts` 保持 |
@@ -501,8 +545,10 @@ owner       release_flight；position_hold 继续持有直到下一任务
 | 13 | `test_stream_timeline.py` | 同一 `timestamp_ns` 覆盖写、时间倒退抛 `ProtocolError`、超过 `maximum_gap_ns` 拒绝锚点 | 阶段 token 不符 → `ProtocolError` |
 | 14 | `test_position_hold.py`（已有，迁移导入） | `observable` 要求整窗进容差；`wait` 超时抛 `ExecutionError` | 只在一瞬间对齐 → `False` |
 | 15 | `test_frame_hub.py`、`test_trajectory_hub.py`、`test_log_buffer.py`（已有） | 限流丢帧、`adopt` 覆盖 revision、游标截断标记 | — |
-| 16 | `test_layering.py`（`docs/REFACTOR.md` 验收项） | `runtime/` 不 import `workflows/`、`assembly/`、`simulators/`；`algorithms/` 不 import `runtime/` | 任一反向 import → 失败 |
+| 16 | `test_layering.py`（`docs/REFACTOR.md` 验收项） | `runtime/` 不 import `workflows/`、`assembly/`、`simulators/`；`algorithms/` 不 import `runtime/`；跨层 import 的目标模块是对方包入口，不是 `planner.<pkg>.<sub>.<mod>`（裁决 R19a） | 任一反向 import 或深层跨层 import → 失败 |
 | 17 | `test_resource_cleanup.py` | 每个回调都执行一次，失败聚合；`KeyboardInterrupt` 优先上抛 | 只抛第一条失败 → 失败 |
+| 18 | `test_capability_matrix.py` | 可跑任务 = 任务包 `REQUIRED_PORTS ⊆ 已填槽位`；`SimulatorPorts` 无 `enabled_tasks` 属性，`simulators/projectairsim/runtime.py` 无 `ENABLED_TASKS`；UE4 的 `streaming` 槽位已填 → 巡航在推导结果里（裁决 R18） | 任一白名单常量或字段重新出现 → 失败 |
+| 19 | `test_input_surface.py` | 本层每个公开函数的参数与返回类型都是 `domain/` 类型或 `ports/` 的 `Protocol`；无另一层具体类（裁决 R19b） | 以 `motion.loop.ControlLoop` 或 `window.window.PlanningWindow` 作参数类型 → 失败 |
 
 测试用假件统一放 `tests/support.py`：`FakeClock`、`RecordingSink`、`ScriptedGoalSource`、`FakeVehicle`（可注入 `CollisionState` 序列）。现有 `tests/support.py` 已有假载具骨架，扩展即可。
 
@@ -515,7 +561,7 @@ owner       release_flight；position_hold 继续持有直到下一任务
 | 1 | 纯搬迁：`services/` → `runtime/`；`services/planning_window.py` → `runtime/window/window.py`；`trajectory_queue.py` → `runtime/window/queue.py`；`capabilities/sliding_window/{worker,planning}.py` → `runtime/window/`。只改 import 与包名 | `pytest tests/ -q` 全绿；新增 `test_layering.py` 通过 |
 | 2 | 纯函数下沉：`services/motion/{heading_servo,continuous_speed,continuous_reference,hold_handoff,synchronized,base}.py`、`trajectory_transform.py`、`trajectory_validation.py`、`reached` 移到 `algorithms/`；`runtime` 改 import | 同上；`tests/test_motion.py`、`tests/test_heading_servo.py` 不改断言 |
 | 3 | 合并 `MotionLimits`：删 `services/segment_motion.py` 的同名类，`to_tracking_limits` 进 `domain/motion.py`；`runtime/__init__.py` 不再导出 `MotionLimits` | `tests/test_config.py`、`tests/test_motion.py`、`tests/test_passed_corridor.py` |
-| 4 | 端口与引擎加 `motion_capability()` 与 `stream_command`；`drive.py` 的横向投影改成类型校验；删 `ROVER_PASSED_LATERAL_TOLERANCE_M` 与 `rover_tracking_limits()`，走廊改取 `algorithms/motion/corridor.py`（裁决 R6）。本层只消费能力位，不写引擎 | `tests/test_projectairsim_drive.py`、`tests/test_projectairsim_streaming.py`；给车喂横向命令必须抛错 |
+| 4 | 端口与引擎加 `motion_capability()` 与 `stream_command`；`drive.py` 的横向投影改成类型校验；删 `ROVER_PASSED_LATERAL_TOLERANCE_M` 与 `rover_tracking_limits()`，走廊改取 `algorithms/motion/corridor.py` 的 1.0 m（裁决 R6、R17）。本层只消费能力位，不写引擎 | `tests/test_projectairsim_drive.py`、`tests/test_projectairsim_streaming.py`；给车喂横向命令必须抛错 |
 | 5 | 引入 `ControlLoop` 外壳：`run_segment` 内部先调现有 `execute_with_receipt`，`run_stream` 内部先调现有 `ContinuousExecution.tick`。对外已经是新签名 | 三类任务各跑一次，`telemetry` 与重构前逐行比对 |
 | 6 | 把律搬进 `motion/tracking.py` 与 `motion/limits.py`，`run_segment` 自己采样五次曲线并 `sink.stream_command`；删 `SteppedMotionTracker` 整体，引擎只剩 `stream_command`（裁决 R1、R2）；过渡期允许引擎保留三行委派，随本步一起删 | `tests/test_projectairsim_motion.py` 改造成假 sink 断言；UE5 数值动作位置误差不劣于现状 |
 | 7 | 加 `CollisionRecovery`，先与 `free_navigation` 现逻辑并存、日志对比后删两份镜像与 `visual_goal` 的碰撞预检分支 | `tests/test_visual_goal_collision_recovery.py`、`tests/test_free_navigation.py`；接触后退、清队列、继续 |
@@ -525,12 +571,12 @@ owner       release_flight；position_hold 继续持有直到下一任务
 
 ## 8 未决问题
 
-### 1 越点走廊的取值（裁决 R6）
+### 1 越点走廊的取值（裁决 R6、R17）
 
-- 裁决：常量放 `algorithms/motion/corridor.py`，按 `MotionModel` 取值：`ACKERMANN` 0.6 m，`HOLONOMIC` 取 `MotionLimits.position_tolerance_m`；`config.motion.passed_lateral_tolerance_m` 可覆盖；不从 `min_turn_radius_m` 推导。`MotionCapability` 不加走廊字段。
+- 裁决：常量放 `algorithms/motion/corridor.py`，`ACKERMANN_PASSED_LATERAL_TOLERANCE_M = 1.0`，`HOLONOMIC` 取 `MotionLimits.position_tolerance_m`；`config.motion.passed_lateral_tolerance_m` 只能抬高不能压低；不从 `min_turn_radius_m` 推导。`MotionCapability` 不加走廊字段。
 - 落点：删 `planner/simulators/projectairsim/rover.py:48` 的 `ROVER_PASSED_LATERAL_TOLERANCE_M` 与 `rover_tracking_limits()`（`planner/simulators/projectairsim/rover.py:56`）。
-- 不采纳：按 `min_turn_radius_m` 推导（原默认，标定值与真实越点走廊脱钩）；走廊留在引擎适配层（两个引擎各写一份）。
-- 残余不确定：0.6 m 与车宽的对应关系没有实测记录，直接取 `rover.py:48` 的现值。
+- 不采纳：按 `min_turn_radius_m` 推导（原默认，标定值与真实越点走廊脱钩）；走廊留在引擎适配层（两个引擎各写一份）；0.6 m（R17 前的取值，实测失败率偏高）。
+- 残余不确定：1.0 m 与车宽的对应关系没有实测记录，R17 按失败率选定，取代 `rover.py:48` 的 0.6 m。
 
 ### 2 碰撞检查的挂载点（裁决 R5）
 

@@ -10,7 +10,7 @@
 
 ```
 planner/algorithms/
-  __init__.py                          包说明，不做再导出
+  __init__.py                          本层唯一公开入口，`__all__` 见 §3.5（裁决 R19a）
   target_coordinates.py                几何：水平距离、最近表面、机体系投影
   trajectory_transform.py              变换：机体/世界互转，参考系增量
   free_space.py                        深度：扇面测距与地面高度带过滤
@@ -41,7 +41,7 @@ planner/algorithms/
   sliding_window/scheduler.py          补点策略
 ```
 
-依赖白名单：`domain/`、`planner/errors.py`、标准库与 `numpy`。本层不 import `ports/`（没有端口调用，连类型标注也不需要），不 import `runtime/`、`workflows/`、`assembly/`、`adapters/`、`simulator/`、`simulators/`。四份下游文档要求的名字与路径逐一对应：`01-contracts.md:154` 的 `algorithms/motion/quintic.py`、`03-runtime.md:57-60` 的 `algorithms/motion/{...}` 与 `algorithms/motion/reached.py`、`03-runtime.md:363` 的 `RefillScheduler`、`04-workflows.md:197` 的 `BasicMotionConverter` 与 `TrajectoryValidator`；裁决 R6 把走廊拆到 `algorithms/motion/corridor.py`，比 `03-runtime.md` 的清单多一个文件。
+依赖白名单：`domain/`、`planner/errors.py`、标准库与 `numpy`。本层不 import `ports/`（没有端口调用，连类型标注也不需要），不 import `runtime/`、`workflows/`、`assembly/`、`adapters/`、`simulator/`、`simulators/`。跨层 import 只写 `from planner.algorithms import <名字>`，`algorithms/motion/*`、`algorithms/depth/*` 等子模块路径不出本层，同层内部可以深层 import（裁决 R19a）；子包的 `__init__.py`（`motion/`、`depth/`、`planning/`、`targeting/`、`sliding_window/`）只是同层内的聚合，不对外。四份下游文档要求的名字与路径逐一对应：`01-contracts.md:154` 的 `algorithms/motion/quintic.py`、`03-runtime.md:57-60` 的 `algorithms/motion/{...}` 与 `algorithms/motion/reached.py`、`03-runtime.md:363` 的 `RefillScheduler`、`04-workflows.md:197` 的 `BasicMotionConverter` 与 `TrajectoryValidator`；裁决 R6 把走廊拆到 `algorithms/motion/corridor.py`，比 `03-runtime.md` 的清单多一个文件。
 
 ### 1.2 文件清单
 
@@ -329,18 +329,18 @@ planner/algorithms/
 - 数值稳定性：`progress` 用 `max(progress, min(length, projected))` 单调不回溯；前视距离 `clamp(speed·lookahead_time_s, min_lookahead_m, max_lookahead_m)`；`0.45`/`0.5` 的几何系数保持现值；`position_tolerance_m·0.5` 是切角走廊，改动会改路线形状。
 - 单测点：队首切换后 `progress == 0`；`progress` 不随测量抖动回退；`aligning` 置位后在位置圈外仍为真；预览不跨纯旋转段；切角结果与 `distance_to_segment <= position_tolerance/2` 一致。
 
-**`corridor_default(model: MotionModel, limits: MotionLimits) -> float` 与 `passed_lateral_corridor(model: MotionModel, limits: MotionLimits) -> float`**（裁决 R6）
+**`corridor_default(model: MotionModel, limits: MotionLimits) -> float` 与 `passed_lateral_corridor(model: MotionModel, limits: MotionLimits) -> float`**（裁决 R6、R17）
 - 输入输出：载具运动模型与合并后的 `MotionLimits` → 越点横向走廊；`corridor_default` 只给按模型的默认值。
-- 边界条件：`corridor_default` 对 `ACKERMANN` 返回 `ACKERMANN_PASSED_LATERAL_TOLERANCE_M = 0.6`，对 `HOLONOMIC` 返回 `limits.position_tolerance_m`；`passed_lateral_corridor` 在 `limits.passed_lateral_tolerance_m is not None` 时直接返回该值（配置覆盖），否则返回 `corridor_default`；`model` 不是 `MotionModel` 成员 → `ValueError`；配置值非有限或非正 → `ValueError`。
-- 数值稳定性：无算术，只有分支；两个默认值都是米级常量，不存在量纲混用。`min_turn_radius_m` 不参与推导（裁决 R6 明确排除这条路）。
-- 单测点：阿克曼默认 0.6；全向默认等于 `position_tolerance_m`（默认 0.3）；配置 0.2 时阿克曼得 0.2、全向得 0.2；配置 `None` 回落默认。旧断言「配置只能抬高」按裁决 R6 作废（`tests/test_passed_corridor.py:56-61` 需改写）。
-- 这个常量来自实车宽度量级，不是标定值。
+- 边界条件：`corridor_default` 对 `ACKERMANN` 返回 `ACKERMANN_PASSED_LATERAL_TOLERANCE_M = 1.0`（裁决 R17），对 `HOLONOMIC` 返回 `limits.position_tolerance_m`；`passed_lateral_corridor` 返回 `max(limits.passed_lateral_tolerance_m, corridor_default(...))`，即配置只能抬高不能压低（裁决 R17）；`model` 不是 `MotionModel` 成员 → `ValueError`；配置值非有限或非正 → `ValueError`。
+- 数值稳定性：无算术，只有 `max` 与分支；两个默认值都是米级常量，不存在量纲混用。`min_turn_radius_m` 不参与推导（裁决 R6 明确排除这条路）。
+- 单测点：阿克曼默认 1.0；全向默认等于 `position_tolerance_m`（默认 0.3）；配置 0.2 时阿克曼仍得 1.0、全向仍得 0.3；配置 1.5 时两者都得 1.5（裁决 R17）。`tests/test_passed_corridor.py:56-61` 的「只能抬高」断言保留，期望值从 0.6 改成 1.0。
+- 这个常量来自实车宽度量级，不是标定值；裁决 R17 把它从 0.6 抬到 1.0，理由是 0.6 为手工挑值、实测失败率偏高。
 
 **`reached(waypoint, pose, unwrapped_yaw, goal_yaw, position_tolerance, yaw_tolerance, passed_lateral_tolerance=None) -> bool`**
 - 输入输出：队首航点、实测位姿、连续偏航、目标连续偏航、两个容差、可选走廊 → 是否推进队列。
 - 边界条件：距离判据（三维距离 `<= position_tolerance`）与越点判据（投影 `>= 1` 且横向 `<= corridor`）任一成立，且同时满足 `|goal_yaw - unwrapped_yaw| <= yaw_tolerance`；线段长度平方 `<= 1e-12` 时只靠距离判据；`passed_lateral_tolerance is None` 时用 `position_tolerance`。
 - 数值稳定性：投影用 `dot(offset, delta)/|delta|²`；横向用 `offset - projection·delta` 的模长；`1e-12` 是平方量级，10 cm 级的段不会误判。
-- 单测点：冲过 4.0 m 端点 0.14 m、横向 0.355 m 时窄走廊不判过（`tests/test_passed_corridor.py:41`），0.6 m 走廊判过（`:47`）；偏航未对齐时宽走廊也不判过（`:52`）；零长段只按距离。
+- 单测点：冲过 4.0 m 端点 0.14 m、横向 0.355 m 时窄走廊不判过（`tests/test_passed_corridor.py:41`），显式传 0.6 的用例仍判过（`:47`）；默认值改 1.0 后该用例参数不动，只加一条默认值断言（裁决 R17）；偏航未对齐时宽走廊也不判过（`:52`）；零长段只按距离。
 
 **`pose_delta_measurement(previous: WorldPose, actual: WorldPose, dt: float) -> tuple[tuple[float,float,float], float, float, float]`**
 - 输入输出：相邻两拍位姿与时间差 → (测量速度向量, 速度标量, 偏航角速度 dps, 偏航增量)。等价于现两份 tracker 各自的差值算术。
@@ -498,7 +498,7 @@ BasicMotionConverter.create_target(params, start)              参数 → 目标
 | 6 | `holonomic_velocity` / `pursuit_solution` | 误差或车体系分解 | 见 §3.4 |
 | 7 | `smoothed_step(desired, velocity, acceleration, ...)` | 上一拍速度与加速度（执行层 `CommandLimiter` 持有） | `bandwidth ≤ 4`，`w·dt ≤ 1` |
 | 8 | `heading_rate_deg_s` / `pursuit_solution` 的角速度 | 偏航误差、实测角速度 | 0–30 dps |
-| 9 | `reached(...)` | 队首、位姿、两个连续偏航 | 走廊按 `corridor.py`：全向 `position_tolerance_m`、阿克曼 0.6 m，配置可覆盖（裁决 R6） |
+| 9 | `reached(...)` | 队首、位姿、两个连续偏航 | 走廊按 `corridor.py`：全向 `position_tolerance_m`、阿克曼 1.0 m，配置只能抬高（裁决 R17） |
 
 段执行与速度流共用第 7、8 步的两个限幅器与同一条偏航律，差别只在第 6 步的目标生成方式。速度流的每拍调用者与队列消耗者是 `runtime/motion/follower.py::QueueFollower`（裁决 R4）。
 
@@ -585,7 +585,7 @@ BasicMotionConverter.create_target(params, start)              参数 → 目标
 
 | 相邻层 | 要求 | 用在哪 |
 | --- | --- | --- |
-| `domain/` | `MotionLimits` 18 字段齐全，含 `max_speed_mps`、`position_gain`、`yaw_gain`、`passed_lateral_tolerance_m`、`position_tolerance_m`、`yaw_tolerance_deg`、`stopped_speed_mps`、`stopped_yaw_rate_deg_s`、`settle_time_s`、四个 heading 参数；其中 `passed_lateral_tolerance_m` 需为 `float \| None`（`None` 表示未配置、按模型取默认，裁决 R6） | 全部运动律 |
+| `domain/` | `MotionLimits` 18 字段齐全，含 `max_speed_mps`、`position_gain`、`yaw_gain`、`passed_lateral_tolerance_m`、`position_tolerance_m`、`yaw_tolerance_deg`、`stopped_speed_mps`、`stopped_yaw_rate_deg_s`、`settle_time_s`、四个 heading 参数；`passed_lateral_tolerance_m` 保持 `float`（裁决 R17 改成 `max` 语义，不再需要区分「未配置」） | 全部运动律 |
 | `domain/` | `MotionModel`、`MotionCapability`（`model`、`min_turn_radius_m`、`max_lateral_speed_mps`、`allows_reverse`）；`ACKERMANN` 的 `min_turn_radius_m` 必非 `None` | `passed_lateral_corridor`、`pursuit_solution` |
 | `domain/` | `ContinuousTrackingSettings`（`lookahead_time_s`、`min/max_lookahead_m`、`max_jerk_mps3`、`max_yaw_jerk_deg_s3`）与 `ContinuousReference`（`position`、`distance_m`、`remaining_head_m`、`segment_length_m`、`progress_m`、`aligning`、`pure_rotation`） | `reference.py`、`speed.py`、`pursuit.py` |
 | `domain/` | `QueuedWaypoint`（`waypoint_id`、`start`、`end`、`yaw_delta_deg`）是队列元素的唯一类型；`reached`/`planned_speed`/`corner_*` 只认这个类型，不认 list | `reached.py`、`speed.py`、`reference.py` |
@@ -644,6 +644,61 @@ omega  = clamp(degrees(v*kappa), -max_yaw_rate_deg_s, +max_yaw_rate_deg_s)
 
 `R_min` 从标定反算的理由：转向角 1.0 时 `yaw_rate = 17.9·speed` dps，即 `ω/v = 17.9°/s` 每 m/s = 0.3124 rad/m，曲率上限即 0.3124 1/m。改标定（`speed_per_engine_mps`、`yaw_rate_per_steer_mps`）时 `R_min` 跟着变，`min_turn_radius_m` 由适配层在构造期算一次。低于 0.5 m/s 时引擎把转向比按 0.5 m/s 冻结（`drive.py:83-85`），曲率指令在该速度以下只会按冻结比实现，速度不会因此增加。
 
+### 3.5 输入面与输出面（裁决 R19）
+
+本层对外的唯一入口是 `planner/algorithms/__init__.py`，`__all__` 与下面两张表一一对应；表中名字就是跨层可见的全部。表里的深层文件路径只表示实现位置，跨层 import 一律写 `from planner.algorithms import <名字>`（裁决 R19a）。
+
+输入面：全部是契约层类型，本层没有要求任何其他层提供类型或具体对象（裁决 R19b）。
+
+| 名字 | 形状 | 由谁提供 | 是否可选 |
+| --- | --- | --- | --- |
+| `MotionLimits`、`ContinuousTrackingSettings`、`ContinuousReference` | frozen dataclass | `domain.motion` | 必需 |
+| `MotionModel`、`MotionCapability` | enum、frozen dataclass | `domain.motion` | 必需 |
+| `QueuedWaypoint` | frozen dataclass（`waypoint_id`、`start`、`end`、`yaw_delta_deg`） | `domain.sliding_window` | 必需 |
+| `WorldPose`、`RelativePoseDelta`、`RelativeTrajectory`、`WorldTrajectory`、`MotionSegment`、`MotionTrajectory` | frozen dataclass | `domain.pose`、`domain.trajectory` | 必需 |
+| `HolonomicCommand`、`CarCommand`、`MotionCommand` | frozen dataclass、类型别名 | `domain.motion` | 必需（`ackermann_command` 的返回值） |
+| `Observation`、`CameraIntrinsics` | frozen dataclass（含 numpy 数组字段） | `domain.observation` | 深度组必需 |
+| `GoalObservation`、`GoalGeometry`、`SurfacePointEstimate` | frozen dataclass | `domain.visual_goal` | 深度组必需 |
+| `DepthForegroundSettings`、`DepthForegroundResult`、`DepthPointLayer` | frozen dataclass | `domain.depth_foreground` | 可选（`DepthGeometry(foreground_filter=None)` 时不需） |
+| `TargetPositionState`、`GoalReference` | frozen dataclass | `domain.target_state`、`domain.visual_goal` | 仅 `association.py` 需要 |
+| `BasicMotionParameters` | frozen dataclass | `domain.basic_motion` | 仅 `basic_motion_conversion.py` 需要 |
+| `INVALID_DEPTH_SENTINEL_M` | `float` 常量 | `domain.depth` | 必需（`free_space.py`） |
+| `ProtocolError`、`ExecutionError` | 异常类 | `planner/errors.py`（顶层模块，不属任何层） | 必需 |
+
+输出面：返回值只有数据类型（数字、tuple、契约类型）与本层的纯函数或纯策略对象；当消费方收的是本层的有状态对象时，消费方在自己的模块里声明 Protocol，构造参数与返回类型写那个 Protocol，本层只保证结构上满足（裁决 R19b）。
+
+| 名字 | 形状 | 由谁消费 | 稳定性 |
+| --- | --- | --- | --- |
+| `horizontal_distance`、`nearest_surface`、`point_in_horizontal_body`、`horizontal_body_offset` | 纯函数，入出均为契约类型或 tuple | `workflows/`、`adapters/trajectory_planner/` | 稳定 |
+| `world_pose_delta_in_reference_frame`、`relative_to_world`、`world_to_relative` | 纯函数 | `runtime/window/`、`workflows/`、`adapters/trajectory_planner/` | 稳定 |
+| `FreeSpaceProfileSettings`、`FreeSpaceSector`、`FreeSpaceProfile`、`measure_free_space` | frozen dataclass、纯函数 | `adapters/trajectory_planner/prompts/` | 稳定 |
+| `sector_centers`、`measure_sector` | 纯函数 | 仅 `tests/test_free_space.py` | 内部（不进 `__all__`） |
+| `DepthGeometry`、`DepthForegroundFilter`、`SurfaceDepthSample`、`sample_surface_depth` | 纯计算类（无可变状态）、frozen dataclass、纯函数 | `workflows/`、`assembly/` | 稳定 |
+| `TrajectoryValidator`、`require_execution_anchor` | 不可变配置对象、纯函数 | `runtime/window/`、`workflows/` | 稳定 |
+| `BasicMotionConverter`、`GeometricTargetPlanner`、`GeometricPlannerSettings` | 纯计算类（无可变状态） | `workflows/basic_motion/`、`assembly/factories/` | 稳定 |
+| `accept_position`、`bound_target_geometry`、`bound_target_goal`、`make_reference` | 纯函数 | `workflows/visual_goal_navigation/` | 稳定（细则不在四组） |
+| `quintic`、`duration_for`、`SegmentSetpoint` | 纯函数、frozen dataclass | `tests/test_motion.py` | 内部 |
+| `plan_segment` | 纯函数 | 无生产调用方（§8 第 7 条） | 内部 |
+| `duration_for_poses`、`sample_segment`、`MotionSample`、`SynchronizedMotionPlanner`、`MotionPlanner` | 纯函数、frozen dataclass、无状态类、`Protocol` | `runtime/motion/loop.py`、`assembly/`、`workflows/` | 稳定；`MotionPlanner` 与 R19b 冲突，见 §8 第 4 条 |
+| `bounded`、`limit_vector`、`tracking_velocity`、`slew_limited`、`command_bandwidth`、`smoothed_step` | 纯函数，返回 tuple | `runtime/motion/limits.py`、`runtime/motion/loop.py`、`runtime/position_hold.py` | 稳定 |
+| `stopping_distance`、`braking_speed`、`angular_duration`、`corner_speed`、`corner_entry_speed`、`damped_approach_speed`、`planned_speed` | 纯函数，返 `float` | `runtime/motion/follower.py`、`runtime/position_hold.py` | 稳定 |
+| `ContinuousPathReference` | 状态对象（`reset()` + `sample()`） | `runtime/motion/follower.py` | 稳定（消费方按自己 Protocol 接） |
+| `xyz`、`segment_length`、`is_rotation`、`distance_to_segment` | 纯函数 | 本层内部 | 内部 |
+| `reached`、`corridor_default`、`passed_lateral_corridor`、`ACKERMANN_PASSED_LATERAL_TOLERANCE_M` | 纯函数、`float` 常量 | `runtime/motion/follower.py`、`runtime/window/queue.py` | 稳定 |
+| `pose_delta_measurement`、`is_settled`、`within_tolerance` | 纯函数，入出均为标量或契约类型 | `runtime/motion/loop.py`、`runtime/motion/follower.py` | 稳定 |
+| `heading_rate_deg_s`、`tracked_heading_rate_deg_s` | 纯函数，返 `float` | `runtime/motion/`、`runtime/position_hold.py` | 稳定 |
+| `lookahead_distance`、`pure_pursuit_curvature`、`max_curvature`、`lateral_speed_limit`、`pursuit_solution`、`PursuitSolution`、`ackermann_command`、`holonomic_velocity` | 纯函数、frozen dataclass，返契约命令或 tuple | `runtime/motion/follower.py` | 稳定 |
+| `translation_handoff` | 纯函数，返 `WorldPose \| None` | `runtime/position_hold.py` | 稳定 |
+| `RefillScheduler` | 状态对象（`should_refill` + `record_latency`） | `runtime/window/inflight.py` | 稳定（消费方按自己 Protocol 接） |
+
+不暴露什么：
+
+- 子模块路径。`algorithms/motion/speed.py`、`algorithms/motion/settle.py` 这类文件划分属实现细节，跨层看不到，也不承诺稳定（裁决 R19a）。
+- 内部辅助函数与方法。`_layer`、`_sample_point`、`_sector_centers`（现名）等私有名，以及只给测试用的 `sector_centers`、`measure_sector`。
+- 限幅器与队列的内部状态。`CommandLimiter` 在 runtime，本层只有 `smoothed_step`；`WorldWaypointQueue`、`PlanningWindow`、`QueueFollower` 都是消费方自己的对象，不列为本层输出（反例：把 `WorldWaypointQueue` 当输出）。
+- 配置读取与默认值拼装。本层不收原始配置字典，`MotionLimits`、`ContinuousTrackingSettings`、`passed_lateral_tolerance_m` 都由装配层构造后传入。
+- 诊断串格式。`SurfaceDepthSample.reason`、`GoalGeometry.reason` 的文案是留档内容，不是接口承诺。
+
 ## 四、错误与失败路径
 
 | 触发 | 谁抛 | 异常类型与消息 | 谁捕获 | 恢复动作 |
@@ -683,7 +738,7 @@ omega  = clamp(degrees(v*kappa), -max_yaw_rate_deg_s, +max_yaw_rate_deg_s)
   - `ContinuousPathReference`：由 `runtime/motion/follower.py::QueueFollower` 持有，owner 线程独占。
   - `RefillScheduler`：由 `runtime/window/inflight.py` 持有（现 `planner/capabilities/sliding_window/planning.py:45` 的 owner 校验），`should_refill`、`record_latency` 都在 owner 线程（现 `planning.py:86` 的 `poll` 先 `check_owner`）。
 - `TrajectoryValidator` 是不可变配置加纯方法，可跨线程共享；现调用点仍全在 owner 线程（`planning.py:101-103`）。
-- 切换载具：不重建算法对象，`MotionLimits`、`ContinuousTrackingSettings`、`MotionCapability` 随载具 `VehicleArm` 一起换引用；执行层在换引用后对限幅器调 `reset(velocity_world)`、对 `ContinuousPathReference` 调 `reset()`。理由：同一族载具的参数可能不同（阿克曼的走廊 0.6、全向 0.3），状态必须按新参数从头积分，不能把旧速度带过去。
+- 切换载具：不重建算法对象，`MotionLimits`、`ContinuousTrackingSettings`、`MotionCapability` 随载具 `VehicleArm` 一起换引用；执行层在换引用后对限幅器调 `reset(velocity_world)`、对 `ContinuousPathReference` 调 `reset()`。理由：同一族载具的参数可能不同（阿克曼的走廊 1.0、全向 0.3，裁决 R17），状态必须按新参数从头积分，不能把旧速度带过去。
 - 暂停/恢复：`pause()` 停稳后 `reset(measured_velocity)`；`resume()` 再次 `reset()` 并重建 `goal_yaw`（现 `planner/services/continuous_execution.py:159`、`:170` 已是这个顺序）。`ContinuousPathReference` 在 `reset()` 后 `progress` 归零，队首未变时下一次 `sample` 重新投影，不会沿用暂停前的进度。
 - 顺序约束：`planned_speed` 与 `heading_rate_deg_s` 的 `current_acceleration` 都来自限幅器的上一拍状态，同一拍里必须先读状态、后 `smoothed_step`，否则用的是本拍中间值。这个顺序由执行层的调用次序保证，本层不记忆。
 
@@ -700,7 +755,7 @@ omega  = clamp(degrees(v*kappa), -max_yaw_rate_deg_s, +max_yaw_rate_deg_s)
 | `tests/test_batch3_services.py`（现有，拆出调度部分到 `tests/test_algorithms_scheduler.py`） | `should_refill` 四种组合；`record_latency` 的 EMA 系数 | `count=0`/`count=6` 不补；负延迟抛 `ValueError`；`latency_s` 状态在异常后不变 |
 | `tests/test_motion.py`（现有 8 例，改 import） | `quintic` 端点与单调；`duration_for` 四项约束；`plan_segment` 端点/偏航回绕/步数 | `speed<=0` 抛；`min_duration_s=0` 合法 |
 | `tests/test_heading_servo.py`（现有 11 例，不动断言） | 比例项斜率、刹车曲线压低大误差、阻尼符号、死区、钳位、`tracked_*` 的斜率限制 | `nan`/`inf`/`True` 抛 `ValueError`；`inf` 前馈抛 `ExecutionError` |
-| `tests/test_passed_corridor.py`（现有 5 例，改断言对象与默认语义） | `corridor_default` 按模型取；阿克曼 0.6、全向 `position_tolerance_m`；配置值覆盖默认（裁决 R6） | 偏航未对齐时宽走廊不判过；零长段只按距离；旧「配置只能抬高」断言改写 |
+| `tests/test_passed_corridor.py`（现有 5 例，改默认值断言） | `corridor_default` 按模型取；阿克曼 1.0（裁决 R17）、全向 `position_tolerance_m`；配置只能抬高 | 偏航未对齐时宽走廊不判过；零长段只按距离；旧 0.6 断言改 1.0，配置 0.2 仍得 1.0 |
 | `tests/test_algorithms_limits.py`（新） | `limit_vector` 缩放与零向量；`tracking_velocity` 先加后限；`slew_limited` 差值范数；`command_bandwidth` 上限 4；`smoothed_step` 首拍增量与 `dt` 稳定性 | 非有限向量抛 `ExecutionError`；`maximum<=0` 抛；`dt=0` 抛；长度不等抛 `ValueError` |
 | `tests/test_algorithms_settle.py`（新） | `pose_delta_measurement` 三返回值；`is_settled` 五条件逐条；`within_tolerance` 边界 | `dt=0` 抛 `ValueError`；`elapsed<duration` 时即便到位也为假 |
 | `tests/test_algorithms_pursuit.py`（新） | 直线 `κ=0`；`κ=2l/d²` 与 `2sinα/d` 在 100 组随机点相等；曲率钳到 `1/3.2`；`v_lat` 与满舵 2.19 m/s；`ackermann_command` 的符号 | 非阿克曼能力抛 `ValueError`；`min_turn_radius_m=None` 抛；`d=0` 返回 0；`forward_speed<0` 抛 |
@@ -714,13 +769,15 @@ omega  = clamp(degrees(v*kappa), -max_yaw_rate_deg_s, +max_yaw_rate_deg_s)
 
 ### 6.3 分层测试
 
-`tests/test_layering.py` 增加三条针对本层的检查：
+`tests/test_layering.py` 增加五条针对本层与 R19 的检查：
 
 1. `planner/algorithms/**` 不 import `planner.runtime`、`planner.workflows`、`planner.assembly`、`planner.adapters`、`planner.simulator`、`planner.simulators`、`planner.ports`。
 2. `planner/algorithms/**` 不 import `time`、`threading`、`asyncio`、`socket`、`subprocess`；AST 扫描 import 节点。
 3. `planner/algorithms/**` 只有 `depth/` 与 `free_space.py` 可以 import `numpy`（其余模块保持纯 Python，便于在无 numpy 环境跑单测）。
+4. 跨层 import 只指向包入口（裁决 R19a）：`planner/algorithms/` 之外的包不得出现 `from planner.algorithms.<子模块>` 或 `import planner.algorithms.<子模块>`；反向同理，本层不得写 `planner.runtime.motion...` 一类深层路径。同层内部深层 import 不算违反。
+5. 每个层包的 `__init__.py` 有显式 `__all__`，且 `__all__` 非空、无下划线名、每个名字都能 `getattr` 到；`planner/algorithms/__init__.py` 的 `__all__` 与 §3.5 输出表中标为「稳定」的名字集合相等（裁决 R19a）。构造参数与返回注解不得出现其他层的具体类（裁决 R19b）：扫描 `planner/runtime/` 与 `planner/workflows/` 的函数签名注解，只允许 `planner.domain.*`、`planner.ports.*`、本层 Protocol、内置类型与本层名字，出现 `planner.algorithms.<类名>` 即失败。
 
-第三条是可执行的形式化约束：`motion/*`、`trajectory_*`、`target_coordinates`、`trajectory_validation`、`sliding_window/scheduler` 全部只用标准库。
+第三条是可执行的形式化约束：`motion/*`、`trajectory_*`、`target_coordinates`、`trajectory_validation`、`sliding_window/scheduler` 全部只用标准库。第五条里「本层名字」指消费层自己声明的 Protocol：runtime 接收 `TrajectoryValidator`、`RefillScheduler`、`ContinuousPathReference` 时用的那几个 Protocol 由 `03-runtime.md` 命名；`MotionPlanner` 的归属见 §8 第 4 条（与 R19b 冲突，待裁）。
 
 ## 七、迁移步骤
 
@@ -739,8 +796,8 @@ omega  = clamp(degrees(v*kappa), -max_yaw_rate_deg_s, +max_yaw_rate_deg_s)
 
 ## 八、未决问题
 
-**1.（裁决 R6 已关闭，不再是未决项）越点横向走廊**
-裁决内容：常量放 `algorithms/motion/corridor.py`；`ACKERMANN` 取 0.6 m，`HOLONOMIC` 取 `MotionLimits.position_tolerance_m`；配置 `motion.passed_lateral_tolerance_m` 可覆盖；不从 `min_turn_radius_m` 推导；引擎侧的 `ROVER_PASSED_LATERAL_TOLERANCE_M` 与 `rover_tracking_limits()` 删除。实现细节见 §1.6；它要求 `MotionLimits.passed_lateral_tolerance_m` 能区分「未配置」（`float \| None`，见 §3.2），这一点需要 01 契约层同步。
+**1.（裁决 R6、R17 已关闭，不再是未决项）越点横向走廊**
+裁决内容：常量放 `algorithms/motion/corridor.py`；`ACKERMANN` 取 1.0 m（裁决 R17 从 0.6 抬到 1.0），`HOLONOMIC` 取 `MotionLimits.position_tolerance_m`；配置 `motion.passed_lateral_tolerance_m` 只能抬高不能压低（取 `max`）；不从 `min_turn_radius_m` 推导；引擎侧的 `ROVER_PASSED_LATERAL_TOLERANCE_M` 与 `rover_tracking_limits()` 删除。实现细节见 §1.6；`max` 语义下 `MotionLimits.passed_lateral_tolerance_m` 保持 `float`，不再需要 `None`。
 
 **2. 扇区网格的视场来源**
 `_sector_centers` 用 rgb 内参的 `horizontal_fov_deg`（`planner/services/free_space.py:219`），而方位角由深度内参的 `fx/cx` 算出（`:155-156`）。两套内参分辨率不同时（`planner/domain/observation.py:94-99` 记录过 AirSim 的 rgb 与 depth 不是同一网格），扇区网格与实测方位可能错开。
@@ -754,7 +811,7 @@ omega  = clamp(degrees(v*kappa), -max_yaw_rate_deg_s, +max_yaw_rate_deg_s)
 - 选项 B：一律以 `MotionCapability.max_lateral_speed_mps` 为上限。代价：车的该值为 0，语义直接崩掉，需要再加「前向速度上限」字段。
 - 选项 C：删 `motion.max_speed_mps`，只留载具能力。代价：配置里失去一个与物理包络无关的调试上限，段规划时长会跟着载具变。
 
-**4. `MotionPlanner` 声明的归属**
+**4. `MotionPlanner` 声明的归属**（本条默认与裁决 R19b 冲突，需裁：裁决 R19b 只允许把「本层自己声明的 Protocol」当输入，因此工作流用本层的 `MotionPlanner` 作构造参数不符；下面三个选项按 R19b 重新排序时，选项 B 与选项 C 合规，选项 A 不再合规）
 `planner/services/motion/base.py:6` 只有一个 `Protocol`，实现只有 `SynchronizedMotionPlanner` 一份，使用方是 `workflows/visual_goal_navigation/workflow.py:61,79` 的类型标注。
 - 默认：留在 `algorithms/motion/base.py`，当作内部策略声明，不当作端口。代价：与「`Protocol` 声明集中在 `ports/`」的风格约定不一致。
 - 选项 B：搬到 `ports/motion_planner.py`。代价：需要 `01-contracts.md` 加一个端口文件，而它没有对应的外部实现方（两个引擎都不实现它）。

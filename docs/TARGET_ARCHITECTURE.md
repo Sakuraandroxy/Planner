@@ -66,7 +66,7 @@
 
 判据能直接检验：能不能脱离仿真器单独跑。写不出这样的测试，说明它偷偷用了别处的状态。现有的扇面测距、位姿换算、目标表面估计都满足这一点，现在分散在 `capabilities/` 与 `services/` 两个包里。
 
-运动律里唯一按载具分叉的地方是能否横移。无人机走全向分支，无人车走前后加转向分支，越点走廊在车这一侧放宽到 0.6 m。这个数值现在写在 `simulators/projectairsim/rover.py` 的 `ROVER_PASSED_LATERAL_TOLERANCE_M` 里，目标位置是本层。
+运动律里唯一按载具分叉的地方是能否横移。无人机走全向分支，无人车走前后加转向分支，越点走廊在车这一侧放宽到 1.0 m。这个数值现在写在 `simulators/projectairsim/rover.py` 的 `ROVER_PASSED_LATERAL_TOLERANCE_M` 里（原值 0.6 m，实测失败率偏高后改为 1.0 m），目标位置是本层。
 
 ### 执行层 `planner/runtime/`、`planner/simulator/`（现 `planner/services/`）
 
@@ -112,7 +112,7 @@
 - `capabilities` 反向引用 `services`。纯函数方面有 `target_coordinates`、`trajectory_transform`；持状态方面有 `background_operation`、`observation_snapshot`、`model_calls`。`adapters` 也引用 `services` 的 `free_space`、`target_coordinates`、`trajectory_transform`。这些引用没引发运行错误，但让"计算层不依赖执行层"这句话不成立。
 - 同一个概念定义两遍或三遍。`MotionLimits` 在 `domain/motion.py:38` 与 `services/segment_motion.py:21` 各一份，字段大半重合，`to_tracking_limits()` 做转换，加一个参数要在两处都改。`CameraView` 在 `ports/camera_view.py:7` 与 `ports/capabilities.py:20` 各一份，签名相同。世界位姿跟踪有三套，分别在 `services/motion/continuous.py`、`simulators/projectairsim/motion.py`、`simulators/airsim/motion_tracker.py`，差别只在执行器接口。碰撞后的后退与清队列重规划在两个任务里各写一遍，逻辑镜像。
 - 任务侧的事写在引擎包里。`planner/simulator/ports.py:45` 的 `TASK_REQUIREMENTS` 声明的是"某类任务需要哪些端口"，属于任务侧的事实。
-- 载具差异写在引擎包里。阿克曼车不能横移，处理办法是把 `passed_lateral_tolerance_m` 从 0.3 m 抬到 0.6 m（`simulators/projectairsim/rover.py:57`），越点走廊的放宽发生在端口实现内部。任务层确实不知道这件事，代价是同一份运动律换个调用方就换个行为。
+- 载具差异写在引擎包里。阿克曼车不能横移，处理办法是把 `passed_lateral_tolerance_m` 从 0.3 m 抬到 1.0 m（`simulators/projectairsim/rover.py:57`，原值 0.6 m），越点走廊的放宽发生在端口实现内部。任务层确实不知道这件事，代价是同一份运动律换个调用方就换个行为。
 - 新加一类任务要改八处。`TaskKind` 与 `TaskParameters`（`domain/mission.py`）、解码器注册表（`adapters/task_parser/tasks/__init__.py`）、准入校验（`application/mission_validator.py`）、工作流路由（`application/workflow_router.py`）、装配（`application/application.py`）、能力需求表（`simulator/ports.py`）、一段配置。这些位置之间没有统一约定，漏改一处只在跑到那个任务时才暴露。
 
 ## 依赖规则

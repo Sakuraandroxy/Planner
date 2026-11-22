@@ -8,7 +8,7 @@
 
 | 文件 | 类与函数签名 | 估计行数 | 从哪来 |
 | --- | --- | --- | --- |
-| `workflows/__init__.py` | 无导出，只写包说明 | 6 | 现 `workflows/__init__.py:10`，删三段 eager import（三个包必须能被单独 import，eager 会破坏零依赖测试） |
+| `workflows/__init__.py` | 层入口，唯一跨层可见面：`Workflow`、`TaskDeclaration`、`TASK_PACKAGES`、三个工作流类、三个 `StageAdmission`、`require_confirmed` | 24 | 现 `workflows/__init__.py:10`；改为显式重导出，装配层只从这个入口 import（裁决 R19a） |
 | `workflows/base.py` | `Workflow(Protocol)`：`prepare() / run(stage) / close()`；`TaskDeclaration`；`declaration_of(package) -> TaskDeclaration` | 30 | 现 `workflows/base.py:8-10` 加两个新符号 |
 | `workflows/common/__init__.py` | 包说明 | 3 | 新建 |
 | `workflows/common/budget.py` | `StageBudget`：`start(stage, limits)`、`remaining_s(clock)`、`require_time(clock)`、`count_model_call(clock)`、`unreliable_observation(ambiguous=False)`、`record(receipt)`、`stop`、`remaining_motion` | 120 | 现 `visual_goal_navigation/session.py:68` 的 `require_time`、同文件 `:84` 的 `model_call`、`visual_goal_navigation/termination.py` 的调用计数、`free_navigation/workflow.py` 的各参数校验 |
@@ -21,7 +21,7 @@
 | `workflows/visual_goal_navigation/__init__.py` | `TASK_KIND`、`REQUIRED_PORTS`、`VisualGoalNavigationWorkflow`、`StageAdmission`、`select_channel` | 12 | 现 `visual_goal_navigation/__init__.py:4` |
 | `workflows/visual_goal_navigation/workflow.py` | `VisualGoalNavigationWorkflow(observation, moving_capture, goal_observer, planner, validator, control_loop, execution, geometry, completion, limits, *, trigger_rules, sliding_window, motion_limits, continuous_tracking, trace_factory, clock, sleep, telemetry, vertical_motion)`；内部 `VisualGoalCycle` | 240 | 现 `visual_goal_navigation/workflow.py:414`，连续分支移出 |
 | `workflows/visual_goal_navigation/policy.py` | `StageAdmission.validate(stage)`；`select_channel(streaming, moving_capture, sliding_window) -> Channel`；`VisualGoalExitPolicy`；`SearchPolicy` | 160 | `capabilities/task_validation/visual_goal_navigation.py:26`、`visual_goal_navigation/termination.py:109`、`capabilities/approach/target_approach.py:28` |
-| `workflows/visual_goal_navigation/targeting.py` | `TargetTracker(observer, geometry, limits, clock, event)`：`begin/poll/request/submit/accept/close` | 175 | `capabilities/targeting/visual_goal_refresh.py:132` 与 `bbox_goal_observation.py:33`，线程部分改调 `runtime/background_operation.py` |
+| `workflows/visual_goal_navigation/targeting.py` | `TargetTracker(observer, geometry, limits, clock, event)`：`begin/poll/request/submit/accept/close` | 175 | `capabilities/targeting/visual_goal_refresh.py:132` 与 `bbox_goal_observation.py:33`，线程部分改调 `planner.runtime` 的 `BackgroundOperation`（裁决 R19a） |
 | `workflows/visual_goal_navigation/completion.py` | `CompletionGate(completion, verification, trigger_rules, limits, clock)`：`should_pause(pose)`、`candidate(...)`、`confirm(...)`、`verify(...)`、`measurements(...)` | 190 | `capabilities/completion/` 五个文件共 175 行加 `flight.py:23` 的 `verify` |
 | `workflows/free_navigation/__init__.py` | `TASK_KIND`、`REQUIRED_PORTS`、`FreeNavigationWorkflow`、`StageAdmission` | 12 | 现 `free_navigation/__init__.py:5` |
 | `workflows/free_navigation/workflow.py` | `FreeNavigationWorkflow(observation, moving_capture, planner, validator, control_loop, execution, *, limits, sliding_window, motion_limits, stream_speed_mps, stream_waypoint_timeout_s, stall_timeout_s, continuous_tracking, trace_factory, clock, sleep, telemetry, vertical_motion)`；`prepare/run/close` | 150 | 现 `free_navigation/workflow.py:403`，删停稳批次回退与车道先验 |
@@ -56,7 +56,7 @@ class MotionChannel(Protocol):
 
 `SegmentChannel.load` 收下已授权的整条轨迹，`send` 逐段调 `run_segment`；`StreamChannel.load` 是空操作（航点在 `PlanningWindow` 的队列里），`send` 调一次 `run_stream`。两个 sink 是同一签名的别名：`stream_command(command: MotionCommand, duration_s: float) -> None`（裁决 R2）；段执行的采样循环在 `runtime/motion/loop.py`，引擎不再有 tracker（裁决 R1）。`visual_goal_navigation` 连续模式同时持有两个 `ObservationFeed`：`MovingFeed` 供循环取帧，`StoppedFeed` 供暂停后的确认取帧。
 
-`planner/workflows/` 只 import `domain/`、`ports/`、`algorithms/`、`runtime/`、以及本包内的 `workflows.common`。`base.py` 除 `domain/mission.py` 外不 import 任何东西。
+`planner/workflows/` 跨层只 import `planner.domain`、`planner.ports`、`planner.algorithms`、`planner.runtime` 四个包入口，深层路径一律不出现；同层内部可以 import 兄弟模块与 `workflows.common`（裁决 R19a）。构造参数与返回值的类型只用契约层类型或本层 Protocol，不出现别的层的具体类（裁决 R19b）。`base.py` 除 `planner.domain.mission` 外不 import 任何东西。
 
 ## 2 数据流与时序
 
@@ -178,7 +178,7 @@ def require_confirmed(result: StageResult[object], stage: MissionStage) -> Stage
 
 用法三条，写进测试：
 
-1. `assembly/requirements.py` 从一张显式元组 `EXECUTABLE_PACKAGES` 里逐个 import 任务包的 `__init__`，只读 `TASK_KIND` 与 `REQUIRED_PORTS`，生成 `TASK_REQUIREMENTS`（替掉 `planner/simulator/ports.py:44-48` 的表）。不做自动发现。
+1. `assembly/requirements.py` 只 import `planner.workflows`，读 `TASK_PACKAGES`（三条 `TaskDeclaration`，源头是各任务包 `__init__.py` 的 `TASK_KIND`/`REQUIRED_PORTS`），生成 `TASK_REQUIREMENTS`（替掉 `planner/simulator/ports.py:44-48` 的表）。不做自动发现，不直接 import 任务包（裁决 R19a，与裁决 R10 相容）。
 2. `assembly/workflow_router.py` 用 `TASK_KIND` 建路由表，不写 `TaskKind.X → 某类` 的字面映射。
 3. 任务包自己不读回这两个常量，也不把槽位名映射成端口对象；槽位名到对象的解析在装配层。`declaration_of` 只校验形状：`kind` 是 `TaskKind`、`required_ports` 是非空 `tuple[str, ...]` 且首项为 `"vehicle"`。槽位名是否等于 `SimulatorPorts` 的字段名，由 `assembly/requirements.py` 交叉校验。
 
@@ -194,9 +194,9 @@ def require_confirmed(result: StageResult[object], stage: MissionStage) -> Stage
 
 端口 `ports/`：`Vehicle`（`current_pose`、`motion_capability`、`execute_segment`、`cancel`、`hover`、`collision_state`）、`StreamingVehicle`（`stream_state`、`stream_command`）、`ObservationSource` 等。`Vehicle` 槽由 runtime 的 `GuidedVehicle(streaming, loop)` 组合对象兑现，引擎只实现 `stream_command(command, duration_s)` 与 `current_pose`/`motion_capability`/`collision_state`/`cancel`/`hover`（裁决 R1），过渡期保留三行委派、最终删除。`ObservationSource`、`ControlledObservationSource`、`MovingObservationSource`、`GoalObserver`、`TrajectoryPlanner`、`TaskCompletionChecker`、`TaskTrace`。
 
-计算层 `algorithms/`：`BasicMotionConverter.create_target`、`TrajectoryValidator.validate_relative/validate_world`、`TrajectoryTransform.relative_to_world/world_to_relative`、`bound_target_geometry`/`bound_target_goal`、`point_in_horizontal_body`。本层不做几何，也不做限幅。
+计算层 `algorithms/`：`BasicMotionConverter.create_target`、`TrajectoryValidator.validate_relative/validate_world`、`TrajectoryTransform.relative_to_world/world_to_relative`、`bound_target_geometry`/`bound_target_goal`、`point_in_horizontal_body`、`corridor.ACKERMANN_PASSED_LATERAL_TOLERANCE_M`（1.0 m，`motion.passed_lateral_tolerance_m` 只能抬高不能压低，裁决 R17）。本层不做几何，也不做限幅。
 
-执行层 `runtime/`，这是本层最依赖的一块：
+执行层 `runtime/`，这是本层最依赖的一块。下表的名字全部从 `planner.runtime` 包入口导入，括号里的文件只说明实现位置，不是 import 路径（裁决 R19a）。表里写的是形状要求，不是类型：任务包的构造参数与返回值只出现本层 Protocol——`MotionControl`（`run_segment`/`run_stream`/`segment_sink`/`stream_sink`，声明在 `common/loop.py`）、`ExecutionControl`（`acquire_flight`/`release_flight`/`checkpoint`/`set_deadline`/`stop_if_owner`/`request_stop`/`current_pose`/`collision_state`，同文件）、`PlanningQueue`（六个方法加 `queue_view`，声明在 `common/streaming.py`）、`MovingCapture`（`begin`/`request`/`poll`/`discard`/`close`，同文件）。runtime 的类靠结构匹配满足它们，任务包不 import 这些类名（裁决 R19b）。
 
 | 我用的名字 | 要求 |
 | --- | --- |
@@ -204,13 +204,50 @@ def require_confirmed(result: StageResult[object], stage: MissionStage) -> Stage
 | `ControlLoop.run_stream(goals, sink, *, deadline_monotonic) -> None` | 20 Hz 伺服；`goals.next(state)` 返回 `None` 时正常返回；`deadline_monotonic` 到期抛 `BudgetExceeded`（裁决 R3），任务层捕获后映射 `TIMEOUT`；**可重复进入**：跟随器、时间线、队列游标跨调用保持 |
 | `ControlLoop.segment_sink() / stream_sink()` | 两个名字同一签名 `stream_command(command: MotionCommand, duration_s: float) -> None`（裁决 R2）；段执行的采样循环在 `runtime/motion/loop.py`，引擎无 tracker（裁决 R1）；任务层从 loop 取 sink 传回 loop，不直接调 `vehicle.execute_segment` |
 | `PlanningWindow.begin/submit/poll_stream/pause_for_completion/complete/end` | 任务层只调这六个。`poll_stream(measured, checkpoint) -> bool`，`True` 表示"新一批已授权写进队列"；`submit(observation, context, instruction, planning) -> None`。窗口另外只提供队列视图与 `consume`，不实现 `StreamGoalSource`、不承担伺服（裁决 R4） |
-| `QueueFollower`（`runtime/motion/follower.py`） | 实现 `StreamGoalSource`：队列消耗、航点超时、`pause_when` 谓词。任务层构造它并传给 `run_stream`（裁决 R4），半径暂停仍由任务层判 |
+| `QueueFollower` | 实现契约层 `StreamGoalSource`：队列消耗、航点超时、`pause_when` 谓词。任务层从 `planner.runtime` 导入并构造它，传给 `run_stream`（裁决 R4、R19a），半径暂停仍由任务层判 |
 | `ExecutionService.acquire_flight/release_flight/stop_if_owner/checkpoint/set_deadline/request_stop/current_pose/collision_state` | 控制权唯一；`checkpoint()` 只管停止与预算，不管碰撞。碰撞检查挂在 `ControlLoop._guard`，由 `CollisionRecovery.poll` 触发（裁决 R5）；`acquire_flight` 不再有 `collision_check` 参数。碰撞开关只有 `config` 的 `motion.collision.enabled`，默认 `true`，任务层不传（裁决 R8） |
-| `MovingObservationSource`（`runtime/moving_observations.py`） | 提供 `begin()`、`request(budget)`、`poll() -> Observation \| None`、`discard()`、`job.busy`、`close()`；取帧线程在 runtime |
+| `MovingCapture`（本层 Protocol，runtime 侧实现是取帧泵） | `begin()`、`request(budget)`、`poll() -> Observation \| None`、`discard()`、`busy`、`close()`；取帧线程在 runtime |
 | `BackgroundOperation`（`runtime/background_operation.py`） | 目标刷新单飞；结果不自动授权，任务层显式 `accept` |
 | `ModelCallService`（`runtime/model_calls.py`）与 `ExecutionBudget` | 单飞模型调用加超时；调用计数由 `common/budget.py` 记 |
 
 本层不 import `assembly/`、`simulators/`、`adapters/`，不出现引擎名，不出现 `MotionModel`/`ACKERMANN`/`HOLONOMIC`。
+
+### 输入面与输出面
+
+两张表只列跨层可见的名字（裁决 R19c）；第 3.2 节里括号标注的文件不构成 import 面（裁决 R19a）。
+
+输入：
+
+| 名字 | 形状 | 由谁提供 | 是否可选 |
+| --- | --- | --- | --- |
+| `TaskKind`、`MissionStage`、`StageResult`、`StageSummary`、`CompletionBasis`、`ResultMeasurement` | 契约类型 | `planner.domain` | 否 |
+| `WorldPose`、`Observation`、`TimedVehicleState`、`MotionLimits`、`ContinuousTrackingSettings`、`SlidingWindowSettings` | 契约类型 | `planner.domain` | 否 |
+| `MotionSegment`、`MotionTrajectory`、`RelativeTrajectory`、`MotionCommand`、`MotionCapability`、`CollisionState` | 契约类型 | `planner.domain` | 否 |
+| `ExecutionBudget`、`ExecutionReceipt`、`StopResult` | 契约类型 | `planner.domain` | 否 |
+| `BasicMotionParameters`、`VisualGoalNavigationParameters`、`FreeNavigationParameters` 与三个 `*Result`、三个 `*Status`、`VisualGoalLimits`、`VisualGoalTriggerRules` | 契约类型 | `planner.domain` | 否 |
+| `ProtocolError`、`ObservationError`、`ExecutionError`、`ModelCallTimeout`、`BudgetExceeded`、`FreeNavigationStalled` | 契约异常 | `planner.errors` | 否 |
+| `Vehicle`、`StreamingVehicle`、`ObservationSource`、`ControlledObservationSource` | 端口 Protocol | `planner.ports` | 否 |
+| `MovingObservationSource` | 端口 Protocol | `planner.ports` | 是，缺则 `STOPPED_BATCH` |
+| `GoalObserver`、`TrajectoryPlanner` | 端口 Protocol | `planner.ports` | 否 |
+| `TaskCompletionChecker` | 端口 Protocol | `planner.ports` | 视觉目标必选，其余不用 |
+| `TaskTrace` | 端口 Protocol | `planner.ports` | 是 |
+| `MotionControl`、`ExecutionControl` | 本层 Protocol（`common/loop.py`） | 装配层注入，runtime 对象结构匹配 | 否 |
+| `PlanningQueue`、`MovingCapture` | 本层 Protocol（`common/streaming.py`） | 装配层注入 | 连续模式必选 |
+| `QueueFollower` | 契约 `StreamGoalSource` 的实现者 | `planner.runtime` | 连续模式必选 |
+| `BasicMotionConverter`、`TrajectoryValidator`、`relative_to_world`、`world_to_relative`、`bound_target_geometry`、`bound_target_goal`、`point_in_horizontal_body`、`ACKERMANN_PASSED_LATERAL_TOLERANCE_M` | 纯函数与常量 | `planner.algorithms` | 否 |
+
+输出：
+
+| 名字 | 形状 | 由谁消费 | 稳定性 |
+| --- | --- | --- | --- |
+| `TASK_PACKAGES` | `tuple[TaskDeclaration, ...]`，长度 3 | `assembly/requirements.py` | 稳定 |
+| `TaskDeclaration` | frozen dataclass：`kind`、`required_ports`、`package` | `assembly/requirements.py` | 稳定 |
+| `Workflow` | Protocol：`prepare()`、`run(stage)`、`close()` | 装配层、`assembly/mission_runner` | 稳定 |
+| `BasicMotionWorkflow`、`VisualGoalNavigationWorkflow`、`FreeNavigationWorkflow` | 构造器 + `prepare/run/close` | 装配层 | 稳定 |
+| `StageAdmission`（三个任务包各一个） | `validate(stage) -> None` | `assembly/mission_validator` | 稳定 |
+| `require_confirmed` | `(StageResult[object], MissionStage) -> StageResult[object]` | `assembly/mission_runner` | 稳定 |
+
+不暴露什么：`StageEvidence`、`CycleContext`、`RoundOutcome`、`TaskLoop`、`MotionChannel`、`SegmentChannel`、`StreamChannel`、`ObservationFeed`、`ChannelReport`、`TargetTracker`、`CompletionGate`、`StallWatch`、`VisualGoalExitPolicy`、`SearchPolicy`、`MEASUREMENT_NAMES`，以及 runtime 的 `WorldWaypointQueue`、`PlanningWindow` 内部队列状态、`SegmentSink`/`StreamSink` 的实现体。任务包之间也不通过任何名字互引（裁决 R19b、R19c）。
 
 ## 4 错误与失败路径
 
@@ -243,13 +280,13 @@ def require_confirmed(result: StageResult[object], stage: MissionStage) -> Stage
 
 ## 5 并发与所有权
 
-**线程。** 任务包运行在 worker 线程上，该线程就是载具 owner：`run()` 首行 `execution.acquire_flight(self)`，`finally` 里 `execution.release_flight(self, pending_cleanup=...)`。任务包自己不起线程。三个后台动作都有 runtime 承载者：`runtime/window/` 的模型 worker、`runtime/moving_observations.py` 的取帧线程、`runtime/background_operation.py` 的单飞操作。任务包只轮询。
+**线程。** 任务包运行在 worker 线程上，该线程就是载具 owner：`run()` 首行 `execution.acquire_flight(self)`，`finally` 里 `execution.release_flight(self, pending_cleanup=...)`。任务包自己不起线程。三个后台动作都有 runtime 承载者：滑窗模型 worker、取帧泵、单飞模型调用。任务包只通过 `MotionControl`/`ExecutionControl`/`PlanningQueue`/`MovingCapture` 四个 Protocol 接触它们，不 import runtime 的内部模块（裁决 R19a、R19b）。
 
 **控制权交接。** 观测采集与位置保持是临时 owner，由 `runtime/execution.py` 在检查点上做停稳与确认，任务包不感知。切载具只在 idle 发生，且每台载具一个 `VehicleArm`（`application/mission_assembly.py:140`：`VehicleArm` 持有 `vehicle`、`execution`、`application`、`workflows`），所以切换是装配层换 arm，旧的 workflow 不参与交接、不 `close`、不重建。`close()` 只在会话拆除时对全部 arm 各调一次。
 
 **实例寿命。** 一个 arm 一个 workflow 实例，实例跨多个 stage 复用，跨 stage 的可变状态必须清零。三个工作流的 `run()` 首行调用 `budget.start(stage, ...)` 与 `cycle.reset()`；`VisualGoalExitPolicy`、`SearchPolicy`、`StallWatch`、`TargetTracker` 的每次运行状态都在 `run()` 里重建，不留在实例字段上（现在是 `visual_goal_navigation/workflow.py:138` 的写法：每轮 `run` 新建 `VisualGoalSession`）。
 
-**关闭顺序。** `close()` 的调用顺序固定：`TargetTracker.close` → `MovingFeed.close` → `window.close` → `verification.calls.close` → `model_calls.close`，用 `runtime/resource_cleanup.close_resources` 逐个尝试、失败聚合上报。
+**关闭顺序。** `close()` 的调用顺序固定：`TargetTracker.close` → `MovingFeed.close` → `window.close` → `verification.calls.close` → `model_calls.close`，用 `planner.runtime` 导出的 `close_resources` 逐个尝试、失败聚合上报（裁决 R19a）。
 
 **故障隔离。** 一次 `run` 结束前必须让所有在途请求落地或作废：`budget` 记录 `remaining_motion`，`feed.discard()`、`targeting.discard()`、`window.end()`。理由写在可测处：`window` 关闭后仍有 worker 在跑，会让下一 stage 读到上一 stage 的轨迹。
 
@@ -271,7 +308,7 @@ def require_confirmed(result: StageResult[object], stage: MissionStage) -> Stage
 
 零依赖与分层：
 
-7. `test_workflows_layering.py`：每个任务包 import 的模块集合 ⊆ `{planner.domain.*, planner.ports.*, planner.algorithms.*, planner.runtime.*, planner.workflows.common.*}`；任意两个任务包互相 import 计数为 0；`workflows/common/**` 的源码字符串里不出现 `visual_goal`、`free_navigation`、`basic_motion`、`cruise`。
+7. `test_workflows_layering.py`：每个任务包 import 的目标集合 ⊆ `{planner.domain, planner.ports, planner.algorithms, planner.runtime, planner.workflows, planner.workflows.common}` 与本包，深层路径（`ImportFrom.module` 点数 > 2）出现一次即失败（裁决 R19a）；任意两个任务包互相 import 计数为 0；`workflows/common/**` 的源码字符串里不出现 `visual_goal`、`free_navigation`、`basic_motion`、`cruise`。
 8. `test_task_declaration.py`：三个包 `declaration_of` 返回的 `kind` 与 `required_ports` 等于表值；负例：删掉 `REQUIRED_PORTS` 的 fake 包 → 抛 `ProtocolError`；`required_ports` 首项不是 `"vehicle"` → 抛 `ProtocolError`；`assembly/requirements.py` 生成的表与 `SimulatorPorts` 字段名交叉校验，出现未知槽位名即失败。
 
 证据形状：
@@ -290,6 +327,8 @@ def require_confirmed(result: StageResult[object], stage: MissionStage) -> Stage
 
 15. `test_no_lane_prior.py`：`planner/workflows/**` 全文不含 `lane`；`FreeNavigationWorkflow` 的构造参数里没有 `lane_reference_provider`；对规划器的调用 kwargs 里 `task_context is None`（用 fake 规划器记录 kwargs 断言）。
 
+16. `test_public_surface.py`：`planner.workflows` 的公开名字集合等于输出表，多一个或少一个都失败；输出表里的内部名（`StageEvidence`、`ChannelReport`、`PlanningWindow` 等）不得出现在包入口（裁决 R19c）。`test_task_annotations.py`：三个工作流 `__init__` 的参数与 `run` 的返回注解只出现契约层类型或本层 Protocol，出现其他层的具体类名即失败（裁决 R19b）。
+
 ## 7 迁移步骤
 
 每步独立可验证，前一步不绿不进下一步。
@@ -305,9 +344,9 @@ def require_confirmed(result: StageResult[object], stage: MissionStage) -> Stage
 ## 8 未决问题
 
 1. **批次模式怎样拿到已授权的航点。** 默认：批次模式完全不用 `PlanningWindow`，任务包直连 `planner.plan` 并发 `ControlLoop.run_segment`，因为"一批确定航点、期间不重规划"没有补点需求。备选：给 `PlanningWindow` 加 `take_batch() -> MotionTrajectory`，让批次模式也走滑窗。取舍：默认方案少一个跨层方法、失败面更小，代价是批次模式没有后台预取，批次之间必然停稳；备选方案能预取，但要往契约里加第七个方法，且批次模式的"停稳取帧"语义与窗口的流式队列混在一起。
-2. **`QueueFollower` 由谁构造、暂停判据放哪。** 裁决 R3/R4 已定：`run_stream` 的 deadline 到期抛 `BudgetExceeded`；`QueueFollower` 实现 `StreamGoalSource`，`PlanningWindow` 不承担伺服；任务层把 `pause_when` 交给 `QueueFollower`。剩下的选择是构造点：默认在任务包的 `StreamChannel` 里按 `window.queue_view()` 造，暂停判据与任务策略同处；备选在装配层造好注入，执行层可见全部 hook。取舍：默认方案让 `runtime/motion/follower.py` 不认识任务，代价是构造参数随任务策略增长；备选方案把任务策略搬进装配层，与"任务判定在任务包"冲突。
+2. **`QueueFollower` 由谁构造、暂停判据放哪。** 裁决 R3/R4 已定：`run_stream` 的 deadline 到期抛 `BudgetExceeded`；`QueueFollower` 实现 `StreamGoalSource`，`PlanningWindow` 不承担伺服；任务层把 `pause_when` 交给 `QueueFollower`。剩下的选择是构造点：默认在任务包的 `StreamChannel` 里按 `window.queue_view()` 造，暂停判据与任务策略同处；备选在装配层造好注入，执行层可见全部 hook。取舍：默认方案让 `QueueFollower` 不认识任务，代价是构造参数随任务策略增长；备选方案把任务策略搬进装配层，与"任务判定在任务包"冲突。
 3. **段执行的暂停粒度。** 默认：段级，`SegmentChannel.send()` 在段与段之间查 `completion.should_pause(pose)`，命中即停，剩余段写进 `budget.remaining_motion`。备选：检查点级，给 `ControlLoop.run_segment` 加 `pause_when` 谓词，可在段中途停。取舍：默认方案零契约改动，代价是最长要跑完一整段才发现进了半径；备选方案暂停更及时，但要把停稳与残余段重锚逻辑搬进执行层。
-4. **`moving_capture` 是否进 `REQUIRED_PORTS`。** 默认：不进，`free_navigation` 仍声明 `("vehicle", "observation", "streaming")`，与 `docs/REFACTOR.md` 的表一致；`moving_capture` 缺失在 `FreeNavigationWorkflow.__init__` 抛 `ProtocolError`（构造期失败）。备选：声明四槽位。取舍：默认方案保持与表一致、能力门更宽；备选方案让装配层在路由前就拒绝该任务，但要同步改能力门与 `enabled_tasks` 的既有语义。
+4. **`moving_capture` 是否进 `REQUIRED_PORTS`。** 默认：不进，`free_navigation` 仍声明 `("vehicle", "observation", "streaming")`，与 `docs/REFACTOR.md` 的表一致；`moving_capture` 缺失在 `FreeNavigationWorkflow.__init__` 抛 `ProtocolError`（构造期失败）。备选：声明四槽位。取舍：默认方案与表一致，代价是连续模式的前置条件要在构造期补一次检查；备选方案让装配层在路由前就拒绝该任务。可跑任务只由"`REQUIRED_PORTS` ⊆ 已填槽位"推导，没有第二个开关：裁决 R18 删除 `SimulatorPorts.enabled_tasks` 与 `simulators/projectairsim/runtime.py` 的 `ENABLED_TASKS`，原裁决 R11 作废。
 5. **`TASK_KIND` 与 `REQUIRED_PORTS` 的位置。** 裁决 R10 已定：写在任务包 `__init__.py`，`assembly/requirements.py` 读它们生成表。剩下的是校验强度：默认 `base.declaration_of` 校验形状，装配期再交叉校验槽位名是否等于 `SimulatorPorts` 字段名；备选只在装配期校验。取舍：默认方案把错误提前到 import 任务包那一刻，代价是 `workflows/base.py` 多一个函数；备选方案少一层，槽位名写错要到填槽时才发现。
 6. **`StageSummary.measurements` 的字段集是否统一。** 默认：每任务固定字段，`evidence.MEASUREMENT_NAMES` 给常量名，`basic_motion` 用 `elapsed/translation/yaw_delta/stop_confirmed`，`visual_goal` 用 `distance/elapsed/planning_calls/stop_confirmed/execution_mode`，`free_navigation` 用 `planning_calls/elapsed/traveled/stop_confirmed/execution_mode`。备选：统一成一套字段加 `task_specific` 子表。取舍：默认方案读到的人不必知道字段语义差异，代价是跨任务对账要按名字取；备选方案便于聚合，但把类型差异藏进字典，违背"完成要能复盘"。
 7. **数值动作在阿克曼车上要不要保留五次多项式合成。** 默认：保留，段由 `BasicMotionConverter` 算位姿、`ControlLoop.run_segment` 下发，与无人机同一条路径。备选：车用原生驾驶原语（转向角加油门）。取舍：默认方案一条路径、一套限幅，代价是转弯的横向误差靠位置容差吸收；备选方案物理更真，但要在 `runtime/motion` 里加第二套下发分支，且段执行与速度流的限幅不再共用。

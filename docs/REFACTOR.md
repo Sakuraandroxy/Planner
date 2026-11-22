@@ -20,7 +20,7 @@
 
 ## 分层与目标目录
 
-判据见 `docs/TARGET_ARCHITECTURE.md`，这里只列落地结果。
+判据见 `docs/TARGET_ARCHITECTURE.md`，层间契约、输入输出面与裁决记录见 `docs/refactor/README.md`，这里只列落地结果。
 
 ```
 planner/
@@ -228,7 +228,7 @@ planner/
 | 2 | 被动安全下沉：加 `CollisionState` 端口、`runtime/collision_recovery.py`、配置段；删 `free_navigation` 里的退避与 `visual_goal` 的碰撞预检分支 | 单测用假载具模拟接触，三类任务都触发退避；恢复次数超上限时任务失败并报原因 | 改变失败语义，需要人工回归 |
 | 3 | 公共编排：抽 `workflows/common/`，合并两个连续执行实现，收敛目标接近的批处理与连续分支 | 行为不变，`telemetry` 输出对比一致；删除镜像代码 | 合并循环最容易引入时序差 |
 | 4 | 装配与配置拆分：`assembly/controller/`、`assembly/factories/`、`config/`；`REQUIRED_PORTS` 下沉到任务包，装配层只汇总 | `/api/status` 与 `/api/world/options` 输出与重构前逐字段一致 | 状态机拆分要保事件顺序 |
-| 5 | 引擎侧收敛：跟踪律合并、`session.py` 拆分、提示词外置 | UE5 跑完三类任务；UE4 跑数值动作与目标接近，巡航补测后加入 `enabled_tasks`；提示词渲染结果与旧版逐字一致 | 需要引擎环境，最慢 |
+| 5 | 引擎侧收敛：跟踪律合并、`session.py` 拆分、提示词外置 | UE5 跑完三类任务；UE4 跑数值动作、目标接近与巡航（能力由槽位推导，不设实测白名单）；提示词渲染结果与旧版逐字一致 | 需要引擎环境，最慢 |
 
 ## 验收标准
 

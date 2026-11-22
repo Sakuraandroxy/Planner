@@ -33,7 +33,7 @@
 | `target_detection.py` | `NormalizedBoundingBox`、`TargetDetection`、`TargetDetectionInput` | 100 | 不动 |
 | `target_state.py` | `TargetPositionState`、`TargetObservationEvidence` | 49 | 不动 |
 | `depth.py`、`depth_foreground.py`、`depth_visualization.py` | 深度协议、前景过滤设置、深度渲染 | 31 / 35 / 34 | 不动 |
-| `__init__.py` | 现有 7 个再导出 | 14 | 不动，不新增导出 |
+| `__init__.py` | 包入口：现有 7 个再导出，加 `MotionModel`、`MotionCapability`、`HolonomicCommand`、`CarCommand`、`MotionCommand`、`command_type_for`、`require_supported`、`CollisionContact`、`CollisionState`、`CollisionRecoverySettings`、`Capabilities`、`MotionLimits`、`ContinuousTrackingSettings`、`ExecutionBudget`、`ExecutionReceipt`、`StopResult`、`PoseCheckpoint`、`TimedVehicleState`、`PlanningWindowInput`、`SlidingWindowSettings` | 45 | 现有 14 行按裁决 R20 扩成完整导出；跨层只走这个入口 |
 
 删除：`lane_reference.py`（99 行，决定纯视觉）、`planning_window.py`（36 行，并入 `sliding_window.py`）。
 
@@ -51,7 +51,7 @@
 | `backend_worker.py` | 十个 worker 方法 | 28 | 不动 |
 | `capabilities.py` | `ReturnHome`、`WeatherControl`、`StreamingViews`、`AppearanceModelControl`、`FramePublisher` | 70 | 不动 |
 | `goal_observer.py`、`target_detector.py`、`task_parser.py`、`task_completion.py`、`trajectory_planner.py`、`task_trace.py` | 各一个 `Protocol` | 12 / 12 / 10 / 7 / 37 / 12 | 不动 |
-| `__init__.py` | 包说明 | 6 | 不动 |
+| `__init__.py` | 包入口：全部 `Protocol` 与 `SegmentSink`/`StreamSink` 两个别名、`StreamGoalSource` | 25 | 现 6 行，按裁决 R20 扩成完整导出 |
 
 两个周期常量只写在 `runtime/motion/loop.py`：`SEGMENT_PERIOD_S = 0.030` 与 `1 / MotionLimits.control_hz`，不进配置（裁决 R9）。`duration_s` 的类型仍是秒的 `float`，周期由执行层决定，不由适配层。
 
@@ -67,7 +67,7 @@
 
 - `Capabilities` 内容一字不改，不获得任何运动学字段。
 - `MotionCapability` 不含 `actions`、`task_kinds`、`vehicles`，只回答"这台载具能怎么动"。
-- 两者不互相引用，不在同一文件，`planner/domain/__init__.py` 一个都不再导出（现状也不导出 `Capabilities`，保持不导出）。
+- 两者都从 `planner/domain` 入口导出，靠名字与字段区分（裁决 R20）：`Capabilities` 说引擎控件，`MotionCapability` 说载具运动学，同名不混用。
 - 新增测试守住：`MotionCapability` 只出现在 `domain/motion.py`，`Capabilities` 只出现在 `domain/engine_family.py`。
 
 ### 1.4 两份 `MotionLimits` 合并：保留 18 个字段
@@ -82,7 +82,7 @@
 | `max_yaw_acceleration_deg_s2` | 配置侧 `max_yaw_accel_dps2` 改名 | 60.0 |
 | `control_hz` | 两侧同名 | 20.0 |
 | `min_duration_s` | 两侧同名 | 1.0 |
-| `passed_lateral_tolerance_m` | 两侧同名，改成配置覆盖项 | `None`，表示按 `MotionModel` 取默认（裁决 R6） |
+| `passed_lateral_tolerance_m` | 两侧同名，改成配置覆盖项 | `None` 表示不覆盖；生效值取模型默认与配置值的较大者，配置只能抬高不能压低（裁决 R17） |
 | `heading_hold_gain` | 两侧同名 | 0.4 |
 | `heading_rate_damping` | 两侧同名 | 0.0 |
 | `heading_deadband_deg` | 两侧同名 | 0.5 |
@@ -95,7 +95,7 @@
 | `stopped_yaw_rate_deg_s` | domain 独有 | 2.0 |
 | `settle_time_s` | domain 独有 | 0.3 |
 
-删除：`to_tracking_limits()`（合并后无转换对象）、配置侧的 `OPTIONAL`/`POSITIVE` 两套校验。`__post_init__` 只保留 domain 版规则（有限、非负、非零项为正、`1 <= control_hz <= 50`），`OPTIONAL` 变成四个可零项：`heading_rate_damping`、`heading_deadband_deg`、`heading_rate_deadband_dps`，外加允许 `None` 的 `passed_lateral_tolerance_m`（裁决 R6）。
+删除：`to_tracking_limits()`（合并后无转换对象）、配置侧的 `OPTIONAL`/`POSITIVE` 两套校验。`__post_init__` 只保留 domain 版规则（有限、非负、非零项为正、`1 <= control_hz <= 50`），`OPTIONAL` 变成四个可零项：`heading_rate_damping`、`heading_deadband_deg`、`heading_rate_deadband_dps`，外加允许 `None` 的 `passed_lateral_tolerance_m`（裁决 R6、R17：`None` 表示不覆盖）。
 
 `max_yaw_acceleration_deg_s2` 的默认值从 domain 的 30.0 改成配置侧的 60.0。生产路径一直由 `planner/config.py:1504` 与两份 `config/core/*/base.yaml` 传 60.0，所以这个改动只影响测试里的裸构造：`tests/test_motion.py:27`、`tests/test_airsim_server_vehicle.py:111`、`tests/test_batch3_services.py:72`、`tests/test_basic_motion.py:154`、`tests/test_projectairsim_motion.py:13`、`tests/test_position_hold.py:12`、`tests/test_workflow.py:201`、`tests/test_free_navigation.py:764`。合并那一步要重跑这些文件，若某条时长断言依赖 30.0，改断言而不是改默认值。
 
@@ -152,7 +152,7 @@
 | `simulators/projectairsim/{rover,drone}.py`、`simulators/airsim/vehicle.py` | 实现 `stream_command(command, duration_s)` 与 `current_pose`、`motion_capability`、`collision_state`、`cancel`、`hover`。不实现 `execute_segment`，不保留 tracker，不做段采样（裁决 R1）。过渡期允许三行委派，最终删除。`stream_command` 第一句 `require_supported`。`collision_state()` 改返回 `CollisionState`，`last_collision` 作为过渡别名保留，供 `scripts/smoke_projectairsim_{adapter,rover}.py` 与现有测试继续读 |
 | `runtime/execution.py` | `checkpoint()` 只管停止与预算，不读碰撞、不锁存接触；删掉 `collision_state()`、`check_safety()` 与 `_collision_check`，`acquire_flight()` 去掉 `collision_check` 参数（裁决 R5） |
 | `runtime/motion/loop.py` | `ControlLoop` 构造参数只收 `MotionCapability`，由它选律（全向律或纯跟踪律），不收独立的"模式"参数。`GuidedVehicle(streaming, loop)` 兑现 `Vehicle` 槽，`execute_segment` 由 `run_segment` 驱动逐拍调 `stream_command`（裁决 R1）。碰撞检查挂在 `ControlLoop._guard` 上，由 `CollisionRecovery.poll` 触发（裁决 R5）。`SEGMENT_PERIOD_S = 0.030` 与 `1/control_hz` 是这里的模块常量（裁决 R9） |
-| `algorithms/motion/corridor.py` | 越点走廊常量按 `MotionModel` 取值：`ACKERMANN` 0.6 m，`HOLONOMIC` 取 `MotionLimits.position_tolerance_m`；配置 `motion.passed_lateral_tolerance_m` 可覆盖，不从 `min_turn_radius_m` 推导（裁决 R6）。引擎里删掉 `ROVER_PASSED_LATERAL_TOLERANCE_M`（`simulators/projectairsim/rover.py:48`）与 `rover_tracking_limits()`（同文件 51 行） |
+| `algorithms/motion/corridor.py` | 越点走廊常量按 `MotionModel` 取值：`ACKERMANN_PASSED_LATERAL_TOLERANCE_M = 1.0`，`HOLONOMIC` 取 `MotionLimits.position_tolerance_m`；配置 `motion.passed_lateral_tolerance_m` 只能抬高不能压低，不从 `min_turn_radius_m` 推导（裁决 R6、R17）。引擎里删掉 `ROVER_PASSED_LATERAL_TOLERANCE_M`（`simulators/projectairsim/rover.py:48`）与 `rover_tracking_limits()`（同文件 51 行） |
 | `algorithms/motion/quintic.py` | 接收 `services/segment_motion.py` 的 `SegmentSetpoint`、`quintic`、`duration_for`、`plan_segment` 与 `_QUINTIC_PEAK_*` 常量，签名不变，入参类型换成合并后的 `MotionLimits` |
 | `assembly/` | `is_drone = vehicle_id == "drone"`（`application/mission_assembly.py:214`）改成 `motion.model is MotionModel.HOLONOMIC`；用 `GuidedVehicle(streaming, loop)` 填 `vehicle` 槽并保留底层 `streaming` 对象；删掉 `collision_check=vehicle.collision_state`（同文件 252 行）接线；`tracking_limits=` 四处（222、251、266、296 行）直接传 `config.motion` |
 | `planner/config.py` | `MotionLimits` 改从 `.domain.motion` 导入（现 `config.py:20`），关键字改三个新名；`motion.collision` 子段构造 `CollisionRecoverySettings`，新增 `motion.collision.enabled`（默认 `true`），删掉 `visual_goal_navigation.collision_check_enabled`（`config.py:345`），碰撞开关只剩这一个（裁决 R8） |
@@ -171,7 +171,7 @@
 | `MotionLimits` | `planner/config.py:1500` 一处，测试若干 | `algorithms/`（段规划时长）、`runtime/motion/`（跟踪与保持）、`workflows/basic_motion/workflow.py` 等把 limits 传给规划器 |
 | `ExecutionBudget`、`PoseCheckpoint` | `runtime/execution.py` | `Vehicle.execute_segment` 实现 |
 | `MotionSegment`、`MotionTrajectory` | `algorithms/` 段规划、`workflows/basic_motion/workflow.py` | `Vehicle.execute_segment` 实现 |
-| `Capabilities` | `simulator/ports.py:107` 的推导 | `adapters/http/server_api.py`、`console/` |
+| `Capabilities` | `simulator/ports.py:107` 的推导 | `adapters/http/server_api.py`、`console/`。`task_kinds` 纯粹由 `REQUIRED_PORTS ⊆ 已填槽位` 推出；`SimulatorPorts.enabled_tasks` 字段与 `simulators/projectairsim/runtime.py` 的 `ENABLED_TASKS` 删除，可跑任务没有第二个开关（裁决 R18，R11 作废） |
 
 ### 3.4 两种原语怎么共存
 
@@ -180,6 +180,45 @@
 - 能力拒绝仍只有一个地方：引擎 `stream_command` 的第一句 `require_supported`。段执行与速度流都在到达引擎前经过它，所以"适配层静默丢掉横向分量"（现 `simulators/projectairsim/drive.py:156-161`）没有存活空间。
 - 互斥不靠新增标志位。`ExecutionService` 已有 owner 线程与 flight owner 两层校验（`services/execution.py:46-77`），`_executing` 拦住嵌套段执行（同文件 133-136）。`GuidedVehicle` 是这两层之下唯一的 `Vehicle` 实现者，两条路径不会同时在同一载具上活动。
 - 一个任务只选一种原语。选哪一种由任务层按 `docs/refactor/00-boundaries.md` 第二节的判据决定，执行层两条都提供且不判断业务。
+
+### 3.5 输入面与输出面（裁决 R19）
+
+两条规则，都能写成测试。
+
+- 入口唯一：`planner/<层>/__init__.py` 是该层唯一公开入口，只导出该层公开名字。跨层 import 只能指向包入口，`from planner.runtime.motion.loop import ControlLoop` 这类深层路径禁；同层内部随便 import。
+- 输入只有两类：契约层的类型（`planner.domain`、`planner.ports` 导出的名字），或本层自己声明的 `Protocol`。禁止把另一层的具体类当构造参数或返回值。
+
+输入：
+
+| 名字 | 形状 | 由谁提供 | 是否可选 |
+| --- | --- | --- | --- |
+| `WorldPose`、`MotionSegment`、`MotionTrajectory` | frozen dataclass | `planner.domain` | 必需 |
+| `MotionLimits`、`ContinuousTrackingSettings` | frozen dataclass | `planner.domain` | 必需（可取默认值） |
+| `MotionModel`、`MotionCapability` | enum 与 frozen dataclass | `planner.domain` | 必需 |
+| `HolonomicCommand`、`CarCommand`、`MotionCommand` | frozen dataclass 与联合 | `planner.domain` | 必需 |
+| `CollisionState`、`CollisionContact` | frozen dataclass | `planner.domain` | 必需（无接触时 `last_contact` 为 `None`） |
+| `CollisionRecoverySettings` | frozen dataclass | `planner.domain` | 可选，`motion.collision.enabled=false` 时不传 |
+| `ExecutionBudget`、`PoseCheckpoint` | frozen dataclass 与 `Callable` 别名 | `planner.domain` | 可选 |
+| `TimedVehicleState` | frozen dataclass | `planner.domain` | 必需 |
+| `Capabilities` | frozen dataclass | `planner.domain` | 必需（只给入口层读） |
+
+输出：
+
+| 名字 | 形状 | 由谁消费 | 稳定性 |
+| --- | --- | --- | --- |
+| `MotionModel`、`MotionCapability` | 见上 | `assembly`、`algorithms`、`runtime`、`adapters/task_parser` | 稳定 |
+| `MotionCommand`（含两个成员） | 见上 | 引擎适配层 `stream_command`、`adapters/diagnostics` | 稳定 |
+| `MotionLimits` | 见上 | `algorithms`、`runtime` | 稳定 |
+| `CollisionState`、`CollisionContact` | 见上 | `runtime` | 稳定 |
+| `CollisionRecoverySettings` | 见上 | `runtime` | 稳定 |
+| `Vehicle`、`StreamingVehicle` | `Protocol` | 引擎适配层实现，`runtime` 消费 | 稳定 |
+| `StreamGoalSource` | `Protocol` | 任务层实现，`runtime/motion/loop.py` 消费（裁决 R16） | 稳定 |
+| `PositionHoldVehicle` | `Protocol` | 引擎适配层实现，`runtime` 消费（裁决 R7） | 内部，阶段 5 再定 |
+| `command_type_for`、`require_supported` | 纯函数 | 引擎适配层、`assembly` 构造期、`runtime` | 稳定 |
+
+不暴露什么：`GuidedVehicle`、`ControlLoop`、`QueueFollower`、`PlanningWindow`、`WorldWaypointQueue` 属执行层内部，不进任何跨层表；`SegmentSink`、`StreamSink` 只是 `stream_command` 的别名，不单独建文件也不导出（裁决 R2）；`SimulatorPorts`、`TASK_REQUIREMENTS`、`_Slot` 等占位类属装配与引擎侧，不进契约；任何引擎实现类（`ProjectAirSimRover`、`AirSimVehicle`）不跨层可见。
+
+冲突已由 R20 解决：`planner/domain/__init__.py` 导出全部公开名字（含 `Capabilities`），`planner/ports/__init__.py` 导出全部 `Protocol` 与 `SegmentSink`/`StreamSink` 两个别名加 `StreamGoalSource`，`planner/errors.py` 保持单文件，算契约层的第三个入口。1.1 与 1.3 已按此口径改写。
 
 ## 四 错误与失败路径
 
@@ -228,7 +267,7 @@
 | `collision_state` 含义 | 有事件时 `in_contact is True` 且 `last_contact.counterpart == "Building_3"`、`at_monotonic_s` 单调递增；无事件时 `in_contact is False` 且 `last_contact is None`；AirSim 电平式：`has_collided=True` 得 `in_contact is True`、`last_contact is None` 合法 |
 | `stream_velocity` 已消失 | `assert not hasattr(StreamingVehicle, "stream_velocity")`；反向断言 `stream_command` 在三个适配层上存在 |
 | `GuidedVehicle` 满足 `Vehicle` | `runtime/motion/loop.py` 的 `GuidedVehicle(streaming, loop)` 具备 `Vehicle` 的六个公开方法，`execute_segment` 逐拍调 `stream_command`（裁决 R1） |
-| 走廊取值（裁决 R6） | `algorithms/motion/corridor.py` 的测试断言 `ACKERMANN` 得 0.6 m、`HOLONOMIC` 得 `MotionLimits.position_tolerance_m`、配置覆盖优先；本层只断言 `passed_lateral_tolerance_m is None` 表示未指定 |
+| 走廊取值（裁决 R17） | `algorithms/motion/corridor.py` 的测试断言 `ACKERMANN_PASSED_LATERAL_TOLERANCE_M == 1.0`、`HOLONOMIC` 得 `MotionLimits.position_tolerance_m`、配置只能抬高（传 0.4 仍得 1.0，传 1.2 得 1.2）；本层只断言 `passed_lateral_tolerance_m is None` 表示不覆盖 |
 | 内参两份（裁决 R14） | `CameraIntrinsics` 的两份实现都保留，加断言两份主点差不超过 0.5 px |
 
 `tests/test_architecture.py` 里比对协议成员与适配层的那段循环从 `AirSimVehicle` 扩到 `ProjectAirSimRover` 与 `ProjectAirSimDrone`：`Vehicle` 的六个公开方法与 `StreamingVehicle` 的两个公开方法在每个适配层上都能找到。这条守的是 `motion_capability` 与 `stream_command` 不会只在协议里存在。
@@ -248,6 +287,7 @@
 5. 换下发原语并上提控制循环。三个适配层把 `stream_velocity` 改为 `stream_command` 并接 `require_supported`；`runtime/motion/loop.py` 新增 `ControlLoop` 与 `GuidedVehicle`，引擎删 tracker、删 `execute_segment` 的采样循环（过渡期留三行委派，裁决 R1）；`services/continuous_execution.py:125`、`workflows/visual_goal_navigation/continuous.py:70`、`workflows/free_navigation/continuous.py:126`、11 处测试同步改；协议里的 `stream_velocity` 删除（裁决 R2）。验收：`pytest tests/test_free_navigation.py tests/test_projectairsim_rover.py tests/test_projectairsim_drone.py tests/test_vehicle_port.py -q`，并 `grep -rn stream_velocity planner tests` 为空。
 6. 加 `CollisionRecoverySettings`。`domain/motion.py` 加三字段类型；`config/core/<profile>/base.yaml` 的 `free_navigation` 段三个键迁到 `motion.collision`，并新增 `motion.collision.enabled`（默认 `true`）；删 `visual_goal_navigation.collision_check_enabled`（裁决 R8）；`planner/config.py` 的 `FreeNavigationSettings`（373-393 行）减三个字段、新增 `CollisionSettings`。验收：`pytest tests/test_config.py tests/test_reference_config.py tests/test_profiles.py -q`。
 7. 删文件。`domain/lane_reference.py` 与其两处接线删除；`domain/planning_window.py` 的 `PlanningWindowInput` 并入 `domain/sliding_window.py` 后删文件，改 4 个引用（`services/planning_window.py:18`、`workflows/visual_goal_navigation/session.py:8`、`workflows/free_navigation/continuous.py:17`、`tests/test_batch3_services.py:12`）。验收：`pytest tests/ -q` 全绿，用例数不减少。
+8. 跨层 import 改走包入口（裁决 R20）。`from planner.domain.pose import WorldPose` → `from planner.domain import WorldPose`，`planner.ports` 同理。现状估算：指向 `planner.domain.<模块>` 的深层 import 约 444 条（绝对路径 368，相对两三级点 76），指向 `planner.ports.<模块>` 约 25 条，合计约 470 条、涉 162 个文件。按包分批：`runtime`（现 `services/`）116 处、`adapters` 52 处，其余为 `workflows`、`tests`、`scripts` 各一批，每批 `pytest tests/ -q`。验收：`grep -rn "from planner\.domain\.\|from \.\.domain\.\|from \.\.\.domain\.\|from planner\.ports\.\|from \.\.ports\." planner tests scripts` 只剩 `planner/domain/` 与 `planner/ports/` 包内部及两个包入口。
 
 ## 八 未决问题
 
@@ -263,6 +303,3 @@
 4. `CarCommand.reverse` 与速度符号的校验强度。
    - 选项 A（默认）：严格相等，`reverse is (forward_speed_mps < 0)`，否则构造期抛错。
    - 选项 B：只在两者矛盾时报错、允许 `reverse=False` 配负速度。代价：`reverse` 变成可被忽略的字段，适配层还得自己判符号。
-5. `motion.passed_lateral_tolerance_m` 的"未指定"判据（裁决 R6 只说了可覆盖）。
-   - 选项 A（默认）：字段改成 `float | None = None`，`None` 表示按 `MotionModel` 取默认，`algorithms/motion/corridor.py` 读它。代价：字段语义从数值变成"数值或未指定"，`MotionLimits.__post_init__` 要放行 `None`。
-   - 选项 B：保留 `0.3` 默认值，与默认值相等即视为未指定。代价：配置里显式写 0.3 想收窄走廊时被当成未指定，静默失效。
