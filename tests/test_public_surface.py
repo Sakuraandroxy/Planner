@@ -234,8 +234,6 @@ ENTRIES = ("domain", "ports", "algorithms", "runtime", "workflows", "assembly")
 STILL_OPEN = {
     "domain": "R21 削面未落地：A 类 115 个仍在入口；entry 另导 16 个文档判搬出但仍有调用点的类型"
     "（`server.py` 9、`approach.py` 4、`streaming.py` 3）",
-    "ports": "R23 收口差 1 文件：`planner/ports/backend_worker.py` 仍在，"
-    "`assembly/controller/__init__.py` 两处注解在用；文件搬到 `simulator/worker_protocol.py` 才能到 13 个",
     "workflows": "阶段 5：任务包声明与 `common/` 未落地，入口仍未导出 `TASK_KIND` 一族",
     "assembly": "阶段 6：装配层 12 个名字的收口未落地",
 }
@@ -315,7 +313,7 @@ def test_hardcoded_sets_are_filled(entry):
     "entry",
     [
         pytest.param(entry)
-        if entry in CALIBRATED
+        if entry not in STILL_OPEN
         else pytest.param(
             entry, marks=pytest.mark.xfail(strict=True, reason=STILL_OPEN[entry])
         )

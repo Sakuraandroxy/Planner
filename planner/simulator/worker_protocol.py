@@ -1,4 +1,8 @@
-"""Backend worker port: the only component allowed to touch the vehicle."""
+"""后端 worker 的内部协议：装配层按这组方法驱动进程栈，不关心实现形态。
+
+线程 worker 与子进程 worker 都实现它。这是进程栈的协议，不是载具能力，
+所以不留在 ``planner/ports/``。
+"""
 
 from __future__ import annotations
 

@@ -28,9 +28,8 @@ from ...domain import (
     TaskSubmission,
     default_view_for,
 )
-from ...ports import BackendWorker
 from ...runtime import LogBuffer
-from ...simulator import registry
+from ...simulator import BackendWorker, registry
 from .commands import CommandChannel
 from .models import ModelSwitcher
 from .profiles import ProfileSwitcher

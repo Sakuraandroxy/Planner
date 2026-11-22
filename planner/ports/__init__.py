@@ -1,6 +1,5 @@
 """Ports are structural interfaces: simulator adapters need only match them."""
 
-from .backend_worker import BackendWorker
 from .capabilities import (
     AppearanceModelControl,
     FramePublisher,
@@ -26,7 +25,6 @@ from .vehicle import Vehicle
 
 __all__ = [
     "AppearanceModelControl",
-    "BackendWorker",
     "ControlledObservationSource",
     "FramePublisher",
     "GoalObserver",
