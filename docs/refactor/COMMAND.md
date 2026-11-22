@@ -36,14 +36,17 @@
 | tests | `impl/tests` | 已合并 | 三条守门测试，9 条 xfail 指向后续阶段 |
 | sec | `impl/sec` | 已合并 | `scripts/verify_stream.sh`、`docs/refactor/PROGRESS.md` |
 | req | `impl/req` | 已合并 | 任务包导出 `TASK_KIND`/`REQUIRED_PORTS`，`assembly/requirements.py` 汇总 |
-| contract | `impl/contract` | 进行中 | 阶段 2：运动模型、命令分型、`stream_command` |
-| tasks | `impl/tasks` | 进行中 | 阶段 5a：`workflows/common/` 抽结果校验与预算辅助 |
+| contract | `impl/contract` | 已合并 | 阶段 2：`MotionModel`、命令分型、`stream_command`、碰撞状态 |
+| tasks | `impl/tasks` | 已合并 | 阶段 5a：`workflows/common/{evidence,budget}.py` |
+| assembly | `impl/assembly` | 已合并 | `assembly/factories/` 四文件 |
+| docs | `impl/docs` | 已合并 | ARCHITECTURE、AGENT、DEPLOYMENT、README、运动模型文档的路径对齐 |
+| loop | `impl/loop` | 进行中 | 阶段 3：`ControlLoop`、`GuidedVehicle`、`QueueFollower` |
 | config | `impl/config` | 已合并 | `planner/config/` 八个文件，`config.py` 删除 |
 | prompts | `impl/prompts` | 已合并 | 提示词模板外置，渲染逐字一致 |
 | tools | `impl/tools` | 已合并 | `streaming_views.py` 移到 `scripts/` |
 | lint | `impl/lint` | 已合并 | 提交信息检查脚本与用例 |
 
-测试基线：主干 1135 通过、9 条 xfail。xfail 是未来阶段的守门条目，每个都写了等哪个阶段修。
+测试基线：主干 1168 通过、9 条 xfail。xfail 是未来阶段的守门条目，每个都写了等哪个阶段修。
 
 | xfail | 等哪个阶段 |
 | --- | --- |
