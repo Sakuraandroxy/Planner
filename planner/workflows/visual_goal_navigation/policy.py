@@ -1,7 +1,15 @@
-"""Preflight validation for static visual-goal navigation."""
+"""Per-task policy for visual-goal navigation: preflight admission and arrival evaluation."""
+import math
 from dataclasses import dataclass
 
+from planner.domain.approach import (
+    ApproachAssessment,
+    ApproachSettings,
+    ApproachStatus,
+    ApproachTarget,
+)
 from planner.domain.mission import MissionStage, TaskKind
+from planner.domain.pose import WorldPose
 from planner.domain.visual_goal import VisualGoalNavigationParameters
 from planner.domain.visual_goal_completion import VisualGoalTriggerRules
 from planner.domain.visual_goal_limits import VisualGoalLimits
@@ -25,3 +33,22 @@ class VisualGoalStageValidator:
             self.limits.validate_arrival_radius(self.trigger_rules.radius_m)
         except ValueError as exc:
             raise ProtocolError(str(exc)) from exc
+
+
+class TargetApproach:
+    @staticmethod
+    def distance_within_radius(distance_m: float | None, settings: ApproachSettings) -> bool:
+        try:
+            valid = (not isinstance(distance_m, bool) and isinstance(distance_m, (int, float))
+                     and math.isfinite(distance_m))
+        except OverflowError:
+            valid = False
+        return bool(valid and distance_m >= 0 and distance_m+settings.uncertainty_margin_m <= settings.arrival_radius_m)
+
+    def assess(self, pose: WorldPose, target: ApproachTarget, settings: ApproachSettings) -> ApproachAssessment:
+        if not target.reliable or target.position_world is None:
+            return ApproachAssessment(ApproachStatus.UNCONFIRMED, None, "target position is unavailable")
+        distance = math.dist((pose.x, pose.y, pose.z), target.position_world)
+        inside = self.distance_within_radius(distance, settings)
+        return ApproachAssessment(ApproachStatus.WITHIN_RADIUS if inside else ApproachStatus.APPROACHING,
+            distance, "inside arrival radius; completion is separate" if inside else "outside arrival radius")

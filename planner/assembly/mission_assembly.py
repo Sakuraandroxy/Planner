@@ -17,9 +17,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from ..algorithms.approach import TargetApproach
+from ..workflows.visual_goal_navigation.policy import TargetApproach
 from ..workflows.visual_goal_navigation.completion import VisualGoalCompletion
-from ..algorithms.targeting.bbox_goal_observation import BBoxGoalObserver
+from ..workflows.visual_goal_navigation.targeting import BBoxGoalObserver
 from ..workflows.basic_motion.policy import BasicMotionStageValidator
 from ..workflows.free_navigation.policy import FreeNavigationStageValidator
 from ..workflows.visual_goal_navigation.policy import (

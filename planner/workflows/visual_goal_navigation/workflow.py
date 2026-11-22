@@ -16,7 +16,7 @@ from planner.algorithms.targeting.association import (
     bound_target_goal,
 )
 from planner.algorithms.targeting.depth_geometry import DepthGeometry
-from planner.algorithms.targeting.visual_goal_refresh import VisualGoalRefresh
+from planner.workflows.visual_goal_navigation.targeting import VisualGoalRefresh
 from planner.domain.execution import ExecutionBudget, StopResult
 from planner.domain.mission import MissionStage
 from planner.domain.motion import ContinuousTrackingSettings, MotionLimits

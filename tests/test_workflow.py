@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from planner.algorithms.approach import TargetApproach
+from planner.workflows.visual_goal_navigation.policy import TargetApproach
 from planner.workflows.visual_goal_navigation.completion import VisualGoalCompletion
 from planner.algorithms.planning import GeometricTargetPlanner
 from planner.algorithms.targeting import DepthGeometry

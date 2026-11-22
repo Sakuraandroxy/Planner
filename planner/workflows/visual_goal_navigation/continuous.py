@@ -7,7 +7,7 @@ from planner.algorithms.targeting.association import (
     bound_target_geometry,
     bound_target_goal,
 )
-from planner.algorithms.targeting.visual_goal_refresh import VisualGoalRefresh
+from planner.workflows.visual_goal_navigation.targeting import VisualGoalRefresh
 from planner.domain.motion import ContinuousTrackingSettings
 from planner.domain.pose import RelativePoseDelta
 from planner.domain.streaming import QueueObservationAnchor

@@ -40,11 +40,11 @@ from planner.assembly.factories import (
     build_geometry,
     build_planner,
 )
-from planner.algorithms.approach import TargetApproach
+from planner.workflows.visual_goal_navigation.policy import TargetApproach
 from planner.workflows.visual_goal_navigation.completion import (
     VisualGoalCompletion,
 )
-from planner.algorithms.targeting.bbox_goal_observation import (
+from planner.workflows.visual_goal_navigation.targeting import (
     BBoxGoalObserver,
 )
 from planner.config import default_config_path, load_config

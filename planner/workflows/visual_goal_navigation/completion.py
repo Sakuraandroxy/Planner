@@ -6,7 +6,7 @@
 import math
 from dataclasses import replace
 
-from planner.algorithms.approach import TargetApproach
+from planner.workflows.visual_goal_navigation.policy import TargetApproach
 from planner.algorithms.target_coordinates import horizontal_distance
 from planner.domain.approach import ApproachSettings
 from planner.domain.pose import resolve_yaw_delta_deg, wrap_yaw_deg
