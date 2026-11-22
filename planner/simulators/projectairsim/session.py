@@ -26,7 +26,6 @@ from collections.abc import Callable
 
 import numpy as np
 from projectairsim import Drone, Rover
-from projectairsim.types import WeatherParameter
 
 from planner.assembly import MissionInputs, VehicleArm, require_application
 from ...config import AppConfig
@@ -35,9 +34,7 @@ from planner.domain import TaskSubmission
 from planner.domain import VIEW_MODES, cycle_delta, default_view_for, validate_view_mode
 from planner.domain import (
     WEATHER_CATALOG,
-    WEATHER_FIELDS,
     WeatherCatalog,
-    validate_weather_values,
 )
 from ...errors import ProtocolError
 from .connection import (
@@ -47,6 +44,7 @@ from .connection import (
 from .drone import ProjectAirSimDrone
 from .moving_source import BorrowedMovingSource
 from .rover import ProjectAirSimRover
+from .weather import apply_weather
 # The hide bookkeeping moved to ``vehicles``; both constants stay importable
 # from this module because the hide altitude is quoted off the session.
 from .vehicles import (
@@ -339,36 +337,8 @@ class ProjectAirSimMissionSession(VehicleRoster):
 
     def set_weather(self, fields) -> dict[str, float]:
         """Apply a complete eight-field weather state to the world."""
-        values = validate_weather_values(fields)
-        if self._connection is None or self._connection.world is None:
-            raise RuntimeError("the ProjectAirSim session is closed")
-        self._connection.reset_weather_effects()
-        if all(value == 0.0 for value in values.values()):
-            if not self._connection.disable_weather_effects():
-                raise ProtocolError("simulator refused to disable weather effects")
-            self._weather = values
-            self._log("Weather cleared; all visual effects disabled.")
-            return dict(values)
-        if not self._connection.enable_weather_effects():
-            raise ProtocolError("simulator refused to enable weather effects")
-        for name in WEATHER_FIELDS:
-            value = values[name]
-            if value == 0.0:
-                continue
-            parameter = int(getattr(WeatherParameter, name.upper()))
-            if not self._connection.set_weather_parameter(parameter, value):
-                raise ProtocolError(
-                    f"simulator refused weather.{name}={value:.2f}"
-                )
+        values = apply_weather(self._connection, fields, self._log)
         self._weather = values
-        self._log(
-            "Weather applied: "
-            + ", ".join(
-                f"{name}={values[name]:.2f}"
-                for name in WEATHER_FIELDS
-                if values[name] > 0.0
-            )
-        )
         return dict(values)
 
     def set_view_mode(self, mode: str) -> str:
