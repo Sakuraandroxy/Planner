@@ -234,7 +234,6 @@
 
 没覆盖的：
 
-- `CameraMountPose`、`Point3`（`planner/domain/pose.py:139`、`:143`）无任何引用，见 Qdomain03。
 - `ExecutionRecord.signed_yaw_deg`（`planner/domain/execution.py:107`）无调用点、无测试。
 - `WeatherField`、`WeatherPreset` 没有 `__post_init__`，错误线格式只在 `weather_catalog_from_payload` 处暴露为 `KeyError`，无负例测试。
 - `WeatherCatalog.to_payload` 与 `weather_catalog_from_payload` 没有往返测试；`tests/test_weather_domain.py:48` 只测字段与标签。
@@ -253,7 +252,7 @@
 
 - Qdomain01 层：domain 结论：契约层里放了渲染、编解码与 YAML 解析的实现，不只是类型。依据：`planner/domain/depth_visualization.py:16`（34 行 numpy 渲染）、`planner/domain/trajectory_telemetry.py:71`/`:116`（快照编解码约 90 行）、`planner/domain/engine_family.py:242`（YAML 解析）。影响：是
 - Qdomain02 层：domain 结论：`engine_family.py` 306 行是 `config/simulators.yaml` 的配置 schema，不是跨层运行期契约，层外只有 `config/loader.py:127` 与 `adapters/http/schemas.py` 用它。依据：`planner/domain/engine_family.py:229` 的 `KNOWN_FAMILY_KEYS` 与 `:90` 的 `SimulatorFamily`。影响：是
-- Qdomain03 层：domain 结论：`CameraMountPose` 与 `Point3` 是全仓库无引用的死代码，也不在入口导出。依据：`planner/domain/pose.py:139`、`:143`。影响：否
+- Qdomain03 层：domain 结论：`CameraMountPose` 与 `Point3` 已在本轮删除，全仓无引用。依据：提交 `refactor(domain): 删除 CameraMountPose 与 Point3`。影响：否
 - Qdomain04 层：domain 结论：`HeadingHoldSettings` 的 docstring 指向 `services/position_hold.py`，该包已改名 `runtime`。依据：`planner/domain/motion.py:175`。影响：否
 - Qdomain05 层：domain 结论：`pose.py` 与 `observation.py` 用 CARLA 解释坐标系与内参，仓库里没有 CARLA 引擎实现，只有 airsim 与 projectairsim。依据：`planner/domain/pose.py:13`、`planner/domain/observation.py:46`、`:94`。影响：否
 - Qdomain06 层：domain 结论：`MotionLimits` 的回落值在 `config/loader.py:224` 与 `planner/domain/motion.py:217` 各写一份，两处都无出处注释，且与 `config/core/default/base.yaml:29` 的 5.0 不一致。依据：`planner/config/loader.py:224`、`planner/domain/motion.py:217`。影响：否
@@ -264,3 +263,36 @@
 - Qdomain11 层：domain 结论：`weather_catalog_from_payload` 缺字段时抛 `KeyError` 且不包装，与 `snapshot_from_payload` 统一转 `ValueError` 的做法不一致。依据：`planner/domain/weather.py:93`、`planner/domain/trajectory_telemetry.py:162`。影响：否
 - Qdomain12 层：domain 结论：`VIEW_LABELS`、`VEHICLE_FRONT_VIEW`、`VEHICLE_DEFAULT_VIEW`、`front_view_for`、`view_index`、`FAR_VALID_PIXEL_VALUE`、`SHARED_DEPTH_MAPPING`、`WEATHER_LABELS`、`default_weather`、`VehicleSnapshot`、`TrajectoryPointSnapshot` 只有测试引用，产品代码无调用点，是否该留在入口需要判断。依据：`planner/domain/view.py:32`、`planner/domain/trajectory_telemetry.py:32`。影响：否
 - Qdomain13 层：domain 结论：`MotionModel` 不在 `__all__` 的 116 个名字里，但被 algorithms、runtime、simulators 通过 `from planner.domain import` 取用，`tests/test_public_surface.py` 的「A 类」名单也漏了它。依据：`planner/domain/__init__.py:48` 导入、`:148` 的 `__all__` 无此项、`planner/algorithms/motion/corridor.py:5`。影响：是
+
+## 10 已知缺口
+
+契约层不是纯类型层：三个模块带着实现，另外绝大多数数值默认值是没有标定记录的经验值。两项都按现状写在下面，逐条给调用点与影响。
+
+### 10.1 带实现的三个模块（M1）
+
+`planner/domain/depth_visualization.py`（34 行）：`render_depth`（`:16`）用 numpy 把米制深度渲成三通道显示图。层外调用点：`planner/simulators/airsim/observation_source.py`、`planner/simulators/projectairsim/observation.py`、`scripts/smoke_projectairsim_drone.py`；测试 `tests/test_depth_visualization.py`。风险：渲染语义变化会同时改两个引擎发给模型的图像。
+
+`planner/domain/trajectory_telemetry.py`（213 行）：`snapshot_to_payload`（`:71`）、`snapshot_from_payload`（`:116`）、`build_queue_snapshot`（`:165`）是快照构造与线格式编解码。层外调用点：`planner/runtime/trajectory_hub.py:106`、`planner/simulator/mission_child.py:245`、`planner/simulator/subprocess_worker.py:106`、`planner/adapters/http/server_api.py`、`planner/simulator/telemetry_relay.py`。风险：改字段即改跨进程线格式，两个进程必须同批上线。
+
+`planner/domain/engine_family.py`（306 行）：`SimulatorFamily`（`:90`）、`FamilyCatalog`（`:189`）、`parse_family_catalog`（`:242`）是 `config/simulators.yaml` 的 schema 与解析器。层外调用点：`planner/config/loader.py:127`、`planner/config/vehicles.py`、`planner/adapters/http/schemas.py`。风险：改键名等于改配置文件格式，`parse_family_catalog` 对未知键直接报错，旧配置会启动失败。
+
+搬迁待办已按裁决记入 `docs/TODO.md`（由指挥层写，本层不代办）。
+
+### 10.2 阈值是经验值（M7）
+
+除航向环以外，本层所有数值默认值都没有标定记录，取值来自试飞观察，标注为「经验值，未标定」。
+
+| 类型 | 默认取值 | 影响 |
+| --- | --- | --- |
+| `MotionLimits`（`motion.py:209`） | 限速 3.0 m/s、加速度 1.5 m/s²、偏航角速度 30 °/s、偏航角加速度 60 °/s²、`control_hz` 20、位置增益 1.0、偏航增益 2.0、位置容差 0.3 m、偏航容差 2.0°、超车走廊 0.3 m、停稳速度 0.15 m/s、停稳角速度 2.0 °/s、稳定时间 0.3 s、最短段时长 1.0 s | 决定段时长下限、停稳判据与「已驶过端点」走廊；走廊过窄会让阿克曼车在端点反复倒车 |
+| `HeadingHoldSettings`（`motion.py:174`） | 增益 0.4、阻尼 0.0、死区 0.5°、角速度死区 1.5 °/s | 唯一有出处的组：`config/core/default/base.yaml` 注释指向 `docs/archive/measurements.md` 的「偏航执行链」 |
+| `CollisionRecoverySettings`（`motion.py:114`） | 退避 3.0 m、最多 3 次、累计前进 20.0 m 清零 | 退避距离按次数线性放大，超过 3 次转 `ExecutionError` |
+| `ContinuousTrackingSettings`（`motion.py:144`） | 前瞻 0.6 s、0.3-1.5 m、平移加加速度 3.0 m/s³、偏航加加速度 60 °/s³ | 前瞻决定跟线超前量，加加速度决定速度变化率上限 |
+| `SlidingWindowSettings`（`sliding_window.py:11`） | 补点 3、时延余量 1.5 s、任务上限 600 s、连续失败 2、观测年龄 120 s、规划间隔 5 s、缓冲 10 | 规划间隔决定模型调用频率，观测年龄决定何时丢弃旧帧 |
+| `VisualGoalLimits`（`visual_goal_limits.py:7`） | 21 个字段，关键值：距离余量 0.3 m、确认 2 次、确认间隔 0.5 s、搜索步长 30°、半幅 90°、任务上限 600 s、模型超时 20 s、观测年龄 45 s、锚点漂移 0.3 m、目标刷新 5 s | 搜索步数与半幅决定扫视覆盖，确认次数决定误判率 |
+| `VisualGoalTriggerRules`（`visual_goal_completion.py:10`） | 完成半径 4.0 m、重触发位移 0.5 m、重触发偏航 10°、检查上限 10 次 | 完成半径直接决定停在哪里 |
+| `DepthForegroundSettings`（`depth_foreground.py:6`） | 半径 3 px、跳变比 4.0 | 决定哪些像素被判为背景，影响表面点数量 |
+
+生效方式：这些默认值只在配置文件缺键时生效。`planner/config/loader.py:224` 起对 `MotionLimits` 的字段逐个给回落值，`planner/config/loader.py:260`、`:368` 用 `**raw` 构造，缺键即取 dataclass 默认；引擎侧 `motion=None` 时也取默认（`planner/simulators/projectairsim/drone.py:88`）。因此改默认值会静默改变缺键配置的行为，也可能与 `config/core/*/base.yaml` 的值不一致，见 Qdomain06。
+
+标定待办已按裁决记入 `docs/TODO.md`。
