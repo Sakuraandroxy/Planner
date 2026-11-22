@@ -290,12 +290,27 @@ UE4 侧一次：启动场景后确认巡航出现在能力位里（R18 取消了
 
 数值底线：数值动作位置误差不劣于现状（直行 5 m 0.05 m、倒车 2 m 0.03 m，`docs/archive/measurements.md:48-49`）；连续链路控制采样条数与重构前差不超过 1 拍。
 
+## 八之二、删除安全核对
+
+对计划中风险最高的几个删除，逐条查了运行期调用方：
+
+| 删除对象 | 运行期调用方 | 结论 |
+| --- | --- | --- |
+| `segment_motion.plan_segment` | 0；只有 `services/__init__.py` 的再导出与 `tests/test_motion.py` 的 4 个用例 | 删。连带删 4 条用例，已写进验收例外 |
+| `domain.trajectory.SegmentResult` | 0；只有 `domain/__init__.py` 的再导出 | 删 |
+| `ports` 里的 `TaskCompletion` | 0 出现；实现类由工厂直接构造 | 删 |
+| `simulators/projectairsim/streaming_views.py` | 0；只有 `tests/test_streaming_views.py` 导入 | 移到 `scripts/`；`domain/view.py:18` 的注释要同步改路径 |
+| `services/continuous_execution.py` | 两个 workflow 的 continuous 与测试 | 拆进 `runtime` 后删，行为由 `ControlLoop.run_stream` 承担 |
+| `simulators/*/motion_tracker.py`、`projectairsim/motion.py` 的律段 | 三个载具类 | 律进 `algorithms` 与 `runtime/motion`，载具类只留执行器 |
+
+跨层深层 import 实测 460 条、162 个文件（原估 470 条）。
+
 ## 九、迁移阶段
 
 | 阶段 | 内容 | 验收 |
 | --- | --- | --- |
 | 0 | 删除俯视任务 | 已完成（`8273ef7`） |
-| 1 | 改名与搬家：三个包改名、`domain/runtime.py` 改 `engine_family.py`、纯函数进 `algorithms/`、`MotionLimits` 合一份、滑窗线程进 `runtime/window/`、任务判定进任务包、删 `lane_reference`；跨层 import 改走包入口（约 470 条、162 个文件）；按各层 B 表删除历史残留（合计约 3800 行） | `pytest tests/ -q` 全绿；`test_layering.py` 与 `test_layer_entries.py` 通过；用例数不减 |
+| 1 | 改名与搬家：三个包改名、`domain/runtime.py` 改 `engine_family.py`、纯函数进 `algorithms/`、`MotionLimits` 合一份、滑窗线程进 `runtime/window/`、任务判定进任务包、删 `lane_reference`；跨层 import 改走包入口（实测 460 条、162 个文件）；按各层 B 表删除历史残留（合计约 3800 行） | `pytest tests/ -q` 全绿；`test_layering.py` 与 `test_layer_entries.py` 通过；用例数不减 |
 | 2 | 契约扩展：加 `MotionModel`/`MotionCapability`/两个命令/`CollisionState`/`CollisionRecoverySettings`；三个适配层实现 `motion_capability()` 与 `stream_command`（旧名保留一版别名）；`motion.collision` 配置段；删 `enabled_tasks` 与各引擎 `ENABLED_TASKS`，能力矩阵改为纯槽位推导（R18） | 契约、端口与能力矩阵测试全绿；UE4 巡航出现在能力位里 |
 | 3 | 循环上移：`ControlLoop` 外壳先委派旧实现，再把律搬进 `runtime/motion/`，删两个 tracker 的律，`GuidedVehicle` 填槽 | UE5 数值动作精度不劣化；连续遥测差 ≤1 拍 |
 | 4 | 被动安全：`CollisionRecovery` 接 `_guard`，删巡航与目标接近里的两处镜像退避与碰撞预检分支 | 假载具接触三任务都触发；次数超限报错 |
@@ -327,7 +342,7 @@ UE4 侧一次：启动场景后确认巡航出现在能力位里（R18 取消了
 | R16 | `StreamGoalSource` 放哪 | 新增 `ports/goal_source.py`；Sink 名不建文件 | `ports/` 回到 14 个文件 |
 | R17 | 越点走廊取值 | 阿克曼 1.0 m（原 0.6 m 实测失败率偏高），配置只能抬高 | 车更早起下一个航点，越点后轨迹更宽松 |
 | R18 | 可跑任务由什么决定 | 只由 `REQUIRED_PORTS` ⊆ 已填槽位；删 `enabled_tasks` 与 `ENABLED_TASKS` | 未实跑过的组合也会被承诺，出问题要从引擎查 |
-| R19 | 层间怎么解耦 | 层一个公开入口；输入只收契约类型或本层 `Protocol`；跨层不见实现类 | 包入口要导出全部公开名，约 470 条深层 import 要改 |
+| R19 | 层间怎么解耦 | 层一个公开入口；输入只收契约类型或本层 `Protocol`；跨层不见实现类 | 包入口要导出全部公开名，460 条深层 import 要改 |
 | R20 | 契约层包入口导出范围 | `domain/`、`ports/` 两个 `__init__` 导出全部公开名字，`errors.py` 作第三个入口 | 导出面变宽，新增类型必须同步入口 |
 | R21 | 对外名字是否都必要 | 逐个给出层外运行期调用点；没有就内部化或删除；找不到就删，只要测试在用的不保留 | 约 144 个名字被内部化或删除 |
 | R22 | HTTP 生命周期与目标接近类型留在契约层吗 | 搬出：生命周期进装配层，worker 协议进进程栈，目标接近类型进任务包 | 契约层少 12 个名字、`domain/` 26 → 22 个文件 |
