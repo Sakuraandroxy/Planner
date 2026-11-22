@@ -88,6 +88,7 @@ docs/        文档
 | [架构说明](docs/ARCHITECTURE.md) | 分层、模块职责、能力从哪来、一次任务怎么走完                 |
 | [目标架构](docs/TARGET_ARCHITECTURE.md) | 代码归属的判据、六类分层、改五类东西的改动面              |
 | [重构方案](docs/REFACTOR.md) | 目标目录、文件级清单、迁移阶段与验收标准                       |
+| [重构分层方案](docs/refactor/) | 六层各自的设计、层间契约与裁决记录                          |
 | [代码清单](docs/CODE_INVENTORY.md) | 按任务执行顺序逐个文件说明                          |
 | [开发约定](docs/AGENT.md)        | 给接手的开发者和 agent：约定、怎么扩展、验收要求             |
 | [待办](docs/TODO.md)             | 已知的缺口，最多十条                                         |

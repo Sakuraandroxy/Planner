@@ -101,6 +101,9 @@ planner/
 | `runtime/window/worker.py` | 现 `capabilities/sliding_window/worker.py` 77 行 | 惰性模型 worker，带 `threading.Condition` |
 | `runtime/window/inflight.py` | 现 `capabilities/sliding_window/planning.py` 135 行 | 在途请求集合，结果永不自动授权 |
 | `runtime/motion/tracking.py` | 新建 | 世界位姿跟踪律：定时 profile、速度与偏航反馈、限幅。引擎只提供执行器 |
+| `runtime/motion/loop.py` | 新建 | `ControlLoop`：段执行 30 ms、速度流 20 Hz 两条通道共用骨架，`_guard` 是停止、预算、碰撞的唯一入口 |
+| `runtime/motion/follower.py` | 新建 | `QueueFollower`：实现 `StreamGoalSource`，含队列消耗与航点超时（裁决 R4） |
+| `runtime/guided_vehicle.py` | 新建 | `GuidedVehicle(streaming, loop)`：兑换 `ports.Vehicle` 的 `execute_segment`（裁决 R1） |
 | `runtime/motion/` 其余 | 现 `services/motion/` 8 个文件 | 五次多项式段规划、连续跟随、航向伺服、位置交接 |
 | `runtime/{frame_hub,trajectory_hub,log_buffer,model_calls,observation_snapshot,moving_observations,position_hold,continuous_execution,stream_timeline,background_operation,resource_cleanup}.py` | 现 `services/` 下同名文件 | 保持职责不变 |
 | `services/{target_coordinates,trajectory_transform,free_space,trajectory_validation}.py` | 已有 | 移到 `algorithms/`，原文件删除 |
@@ -137,9 +140,9 @@ planner/
 | `assembly/controller/commands.py` | 同上，命令队列部分 | 命令队列与 worker 投递 |
 | `assembly/controller/world.py` | 同上，换图部分 | 选图、起停引擎、换图后的会话重建 |
 | `assembly/controller/models.py` | 同上，外观部分 | 车型清单与切换 |
-| `assembly/controller/weather.py` | 同上，天气部分 | 天气参数合并与下发 |
+| `assembly/controller/weather.py` | 同上，天气与机位部分 | `EnvironmentChannel`：天气参数合并下发、机位切换与重放（裁决 R12） |
 | `assembly/controller/profiles.py` | 同上，配置档部分 | 配置档列举与切换 |
-| `assembly/factories/` | 现 `application/factories.py` 250 行 | `planners.py`、`detectors.py`、`parsers.py`、`completion.py` 四个文件，同一套解析规则 |
+| `assembly/factories/` | 现 `application/factories.py` 250 行 | `planners.py`、`detectors.py`、`parsers.py`、`completion.py` 四个文件，同一套解析规则；`SwitchRefused` 由控制器抛出、入口层映射 409 |
 | `assembly/{application,mission_runner,mission_validator,workflow_router}.py` | 现 `application/` 下同名文件 | 解析 → 校验 → 路由 → 执行，保持 |
 
 ### 入口与端口实现 `planner/adapters/`
@@ -195,7 +198,7 @@ planner/
 
 **控制权。** `runtime/execution.py`。任一时刻每台载具一个 owner，owner 是线程标识；取用、释放、停止都校验 owner。观测采集与位置保持临时取用控制权。破坏表现为后台循环在暂停期间继续发速度指令。
 
-**碰撞退避。** `runtime/collision_recovery.py`，由 `ExecutionService.checkpoint()` 触发。接触发生时依次做：记录对方名称与位姿、用运动律后退（距离按次数递增）、清空队列、把控制权交还任务、继续执行。恢复次数超上限才抛 `ExecutionError`。参数在 `domain/motion.py` 的 `CollisionRecoverySettings`，值来自 `config`。开车与飞行共用一套，因为退避只依赖载具端口。
+**碰撞退避。** `runtime/collision_recovery.py`，由 `ControlLoop._guard` 触发（裁决 R5：`ExecutionService.checkpoint()` 只管停止与预算）。接触发生时依次做：记录对方名称与位姿、用运动律后退（距离按次数递增）、清空队列、把控制权交还任务、继续执行。恢复次数超上限才抛 `ExecutionError`。参数在 `domain/motion.py` 的 `CollisionRecoverySettings`，值来自 `config`。开车与飞行共用一套，因为退避只依赖载具端口。
 
 **滑窗执行。** `runtime/window/` 持有状态，`algorithms/sliding_window/scheduler.py` 提供补点策略。任务层只调 `begin / submit / poll / commit / pause_for_completion / end`，看不到线程与队列。
 
