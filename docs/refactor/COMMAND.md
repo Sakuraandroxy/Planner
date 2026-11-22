@@ -125,3 +125,12 @@ git merge --no-ff impl/<流> -m "<流> finished"
 | `algorithms` 入口多一个名字 | 文档 §8.1.1 列的 `corridor_default`、`passed_lateral_corridor`、`bounded`、`reached` 已落地；入口按实际 12 名导出，多出的 `world_pose_delta_in_reference_frame` 文档 §1.3 判私有，但 prompts 仍在调用。`BackgroundCall` 属执行层（`03-runtime.md`），不在本层表里 | 文档已标注差额 |
 
 视觉目标连续路径不并入的理由：每次取帧对应一次确认与重规划，节拍与巡航不同；硬并会让节拍与遥测无法验证。
+
+## 九、收尾结论
+
+```
+主干 561f3be 之后：1217 条用例通过，9 条 xfail 全部转绿，112 条提交信息通过检查，
+跨层深层 import 清零，无未合并分支，无残留工作树。
+```
+
+验收命令：`bash scripts/verify_stream.sh /roxy/kedior/Planner`。
