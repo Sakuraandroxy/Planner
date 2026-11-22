@@ -47,11 +47,11 @@
    地面与空中载荷不同就各给一个解码器。
 4. **工作流。** `planner/workflows/<kind>/workflow.py`，实现 `prepare / run / close`。
    `run` 必须返回带确认完成证据的 `StageResult`，否则 runner 判失败。
-5. **阶段校验器。** `planner/capabilities/task_validation/<kind>.py`，
+5. **阶段校验器。** `planner/workflows/<kind>/policy.py`，
    在 `mission_assembly.build_vehicle_arm` 的 `stage_validators` 里注册。
 6. **接线。** 同文件的 `workflows` 字典加一项；无界任务同时加进 `terminal_kinds`。
    提示词的"允许类型"来自 `router.supported_kinds`，接上工作流就自动生效。
-7. **能力表。** `planner/simulator/ports.py` 的 `TASK_REQUIREMENTS` 加一行，写它必需哪些端口。
+7. **能力表。** `planner/assembly/requirements.py` 的 `TASK_REQUIREMENTS` 加一行，写它必需哪些端口。
    未实测的仿真器在各自 `runtime.py` 的 `ENABLED_TASKS` 里单独控制。
 
 测试：解码器（含非法载荷）、校验器、工作流、能力推导（缺端口时该类型消失）。

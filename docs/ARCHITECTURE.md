@@ -8,7 +8,7 @@
 
 1. **并列件不构造并列件。** 规划器（模型端点适配）与仿真器是并列中间件。仿真器会话只交出端口，不接收检测器、
    规划器或遥测汇。它报 `mission_inputs()`，装配层还它 `attach_arms()`。
-2. **只有装配层知道全部。** `application/mission_assembly.py` 是唯一同时认识仿真器与任务管线的地方。
+2. **只有装配层知道全部。** `planner/assembly/mission_assembly.py` 是唯一同时认识仿真器与任务管线的地方。
    少接一根线在构造期报错，不静默降级。
 3. **能力门只描述引擎能不能做这个动作。** 遥测、日志、任务列表、指令卡是服务自己提供的，不进端口包。
    否则一个通用功能会变成按仿真器授权的开关。
@@ -23,14 +23,14 @@
   console/                                   静态页面，按能力位渲染控件
 ──────────────── HTTP 边界 ────────────────
   adapters/http/server_api.py                路由、状态码、能力门 → 501
-  application/server_controller.py           状态机、命令队列、事件处理、换图/换模型/退出
+  assembly/controller/                       状态机、命令队列、事件处理、换图/换模型/退出
   server_bootstrap.py                        装配：模型适配、帧汇、轨迹汇、controller
 ──────────────── 任务编排 ────────────────
-  application/mission_assembly.py            唯一同时认识两边的装配器
-  application/{application,mission_runner,mission_validator,workflow_router}
+  assembly/mission_assembly.py               唯一同时认识两边的装配器
+  assembly/{application,mission_runner,mission_validator,workflow_router}
   workflows/{basic_motion,visual_goal_navigation,free_navigation}
-  services/{execution,motion,continuous_execution,planning_window,trajectory_hub,frame_hub}
-  capabilities/{planning,targeting,completion,approach,sliding_window,viewing}
+  runtime/{execution,motion,continuous_execution,window,trajectory_hub,frame_hub}
+  algorithms/{planning,targeting,sliding_window}
 ──────────────── 外部适配 ────────────────
   adapters/{task_parser,target_detection,trajectory_planner,task_completion}
 ──────────────── 仿真器 ──────────────────
@@ -51,10 +51,10 @@
 | ---------------------------- | -------------------------------------------------------------------------------------------------- |
 | `planner/domain/`            | 位姿、任务、观测、轨迹、天气、机位、状态等纯数据与不变量校验                                       |
 | `planner/ports/`             | 载具、观测源、流式载具、相机、天气、机位、外观模型、帧流、解析器、检测器、完成判定、轨迹规划等协议 |
-| `planner/services/`          | 执行服务（运动段、停止检查点、预算）、同步与连续运动、滑窗、帧汇、轨迹汇、日志缓冲                 |
-| `planner/capabilities/`      | 不碰设备的算法：深度几何、目标关联、完成判定、几何规划器、滑窗调度                                 |
+| `planner/runtime/`           | 执行服务（运动段、停止检查点、预算）、同步与连续运动、滑窗、帧汇、轨迹汇、日志缓冲                 |
+| `planner/algorithms/`        | 不碰设备的算法：深度几何、目标关联、完成判定、几何规划器、滑窗调度                                 |
 | `planner/workflows/`         | 三类任务的阶段实现与生命周期（prepare/run）                                                        |
-| `planner/application/`       | 解析→校验→路由→执行，会话装配，服务控制器                                                          |
+| `planner/assembly/`          | 解析→校验→路由→执行，会话装配，服务控制器                                                          |
 | `planner/adapters/`          | 与推理服务、浏览器打交道；`http/` 是路由与 MJPEG                                                   |
 | `planner/simulator/`         | 两套仿真器共用的进程栈、注册表、worker、地图标记                                                   |
 | `planner/simulators/<name>/` | 每套仿真器一个包，只有这里有仿真器客户端库的 import                                                |
@@ -89,7 +89,7 @@
 
 ### 4.2 任务需求与控件映射
 
-`planner/simulator/ports.py` 的两张表是唯一的分支来源：
+`planner/assembly/requirements.py` 的两张表是唯一的分支来源：
 
 ```python
 TASK_REQUIREMENTS = {
@@ -319,16 +319,16 @@ Xvfb 由 xpra 自己拉起。
 
 ## 11 运动与航向控制
 
-航向只有一个实现：`planner/services/motion/heading_servo.py`。它收偏航误差与实测偏航角速度，给一个角速度，
+航向只有一个实现：`planner/runtime/motion/heading_servo.py`。它收偏航误差与实测偏航角速度，给一个角速度，
 不认识仿真器，也不区分载具。
 
 三个运动阶段都走它：
 
 | 阶段     | 调用点                                                                      | 前馈来源             |
 | -------- | --------------------------------------------------------------------------- | -------------------- |
-| 连续跟进 | `services/motion/continuous.py`                                             | 路径给出的参考角速度 |
+| 连续跟进 | `runtime/motion/continuous.py`                                              | 路径给出的参考角速度 |
 | 段式运动 | `simulators/projectairsim/motion.py`、`simulators/airsim/motion_tracker.py` | 参考轨迹自带的角速度 |
-| 位置保持 | `services/position_hold.py`                                                 | 无                   |
+| 位置保持 | `runtime/position_hold.py`                                                  | 无                   |
 
 载具差异落在参数上，参数集中在配置的 `motion` 段。
 路径跟随与位置保持各用一组增益：一个追参考轨迹， 一个抵消实测漂移，执行链延迟对两者的影响不同。
