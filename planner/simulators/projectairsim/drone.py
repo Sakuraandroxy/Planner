@@ -29,7 +29,14 @@ from planner.domain import TimedVehicleState
 from ...errors import ExecutionError
 from planner.runtime import SMOOTH_PROFILE
 from planner.runtime import PositionHold
-from planner.domain import MotionLimits
+from planner.domain import (
+    CollisionContact,
+    CollisionState,
+    MotionCapability,
+    MotionCommand,
+    MotionLimits,
+    MotionModel,
+)
 from .async_bridge import AsyncBridge
 from .collision import CollisionEvent, CollisionMonitor
 from .connection import ProjectAirSimConnection
@@ -91,6 +98,12 @@ class ProjectAirSimDrone:
         self._clock = clock
         self._sleep = sleep
         self._tracking = tracking_limits(motion or MotionLimits())
+        self._capability = MotionCapability(
+            MotionModel.HOLONOMIC,
+            max_lateral_speed_mps=self._tracking.max_speed_mps,
+            min_turn_radius_m=None,
+            allows_reverse=True,
+        )
         self._hold_tracking = tracking or ContinuousTrackingSettings()
         self._period = 1.0 / self._tracking.control_hz
         self._cancel = threading.Event()
@@ -519,13 +532,19 @@ class ProjectAirSimDrone:
     def wait_hold(self, *, budget=None, checkpoint=None) -> None:
         self._holding.wait(budget=budget, checkpoint=checkpoint)
 
-    def collision_state(self) -> bool:
+    def motion_capability(self) -> MotionCapability:
+        """The quadrotor translates freely in the world frame."""
+        return self._capability
+
+    def collision_state(self) -> CollisionState:
         """Consume the latched non-ground contact, if any."""
         event = self._collisions.consume()
         if event is not None:
             self._last_collision = event
-            return True
-        return False
+            return CollisionState(
+                True, CollisionContact(event.object_name, time.monotonic())
+            )
+        return CollisionState(False)
 
     @property
     def last_collision(self) -> CollisionEvent | None:
@@ -553,14 +572,11 @@ class ProjectAirSimDrone:
             yaw_rate_deg_s=yaw_rate_deg_from_kinematics(kinematics),
         )
 
-    def stream_velocity(
-        self,
-        velocity_world: tuple[float, float, float],
-        yaw_rate_deg_s: float,
-        duration_s: float,
-    ) -> None:
+    def stream_command(self, command: MotionCommand, duration_s: float) -> None:
         self._holding.release()
-        self.hold_velocity(velocity_world, yaw_rate_deg_s, duration_s)
+        self.hold_velocity(
+            (command.vx, command.vy, command.vz), command.yaw_rate_deg_s, duration_s
+        )
 
     def hold_velocity(
         self,

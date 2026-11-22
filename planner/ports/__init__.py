@@ -8,7 +8,6 @@ from .capabilities import (
     StreamingViews,
     WeatherControl,
 )
-from .collision_check import CollisionCheck
 from .goal_observer import GoalObserver
 from .observation_source import (
     ControlledObservationSource,
@@ -27,7 +26,6 @@ from .vehicle import Vehicle
 __all__ = [
     "AppearanceModelControl",
     "BackendWorker",
-    "CollisionCheck",
     "ControlledObservationSource",
     "FramePublisher",
     "GoalObserver",

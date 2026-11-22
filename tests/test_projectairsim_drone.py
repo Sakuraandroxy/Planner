@@ -7,7 +7,7 @@ from projectairsim.drone import YawControlMode
 from projectairsim.types import LandedState
 
 from planner.config import CameraSettings, DepthSettings
-from planner.domain import WorldPose
+from planner.domain import HolonomicCommand, WorldPose
 from planner.errors import ExecutionError
 from planner.domain import MotionLimits as ConfiguredMotionLimits
 from planner.simulators.projectairsim.drone import ProjectAirSimDrone
@@ -455,12 +455,12 @@ def test_prepare_takes_off_again_after_a_lagging_land():
     drone.close()
 
 
-def test_stream_velocity_sends_move_by_velocity_and_advances_one_step():
+def test_stream_command_sends_move_by_velocity_and_advances_one_step():
     drone, connection, robot, _ = make_drone()
     drone.start()
     connection.requests.clear()
     connection.advances.clear()
-    drone.stream_velocity((2.0, 0.0, 0.0), 30.0, 0.05)
+    drone.stream_command(HolonomicCommand(2.0, 0.0, 0.0, 30.0), 0.05)
     command = robot.commands[-1]
     assert command["velocity"] == (2.0, 0.0, 0.0)
     assert command["duration"] == pytest.approx(0.05)
@@ -472,41 +472,39 @@ def test_stream_velocity_sends_move_by_velocity_and_advances_one_step():
     drone.close()
 
 
-def test_stream_velocity_reports_an_interrupted_command():
+def test_stream_command_reports_an_interrupted_command():
     drone, _, _robot, _ = make_drone(velocity_result=False)
     drone.start()
     with pytest.raises(ExecutionError, match="interrupted"):
-        drone.stream_velocity((1.0, 0.0, 0.0), 0.0, 0.05)
+        drone.stream_command(HolonomicCommand(1.0, 0.0, 0.0, 0.0), 0.05)
     drone.close()
 
 
-def test_stream_velocity_requires_api_control():
+def test_stream_command_requires_api_control():
     drone, _, _, _ = make_drone()
     with pytest.raises(ExecutionError, match="start"):
-        drone.stream_velocity((1.0, 0.0, 0.0), 0.0, 0.05)
+        drone.stream_command(HolonomicCommand(1.0, 0.0, 0.0, 0.0), 0.05)
     drone.close()
 
 
-def test_stream_velocity_rejects_bad_requests():
+def test_stream_command_rejects_bad_requests():
     drone, _, _, _ = make_drone()
     drone.start()
     with pytest.raises(ExecutionError):
-        drone.stream_velocity((float("nan"), 0.0, 0.0), 0.0, 0.05)
+        drone.stream_command(HolonomicCommand(float("nan"), 0.0, 0.0, 0.0), 0.05)
     with pytest.raises(ExecutionError):
-        drone.stream_velocity((1.0, 0.0, 0.0), 0.0, 0.0)
-    with pytest.raises(ExecutionError):
-        drone.stream_velocity((1.0, 0.0), 0.0, 0.05)
+        drone.stream_command(HolonomicCommand(1.0, 0.0, 0.0, 0.0), 0.0)
     drone.close()
 
 
-def test_stream_velocity_releases_the_position_hold():
+def test_stream_command_releases_the_position_hold():
     drone, _, robot, _ = make_drone()
     drone.start()
     robot.landed = int(LandedState.FLYING)
     robot.z = -3.0
     drone.hover()
     assert drone._holding.active is True
-    drone.stream_velocity((0.5, 0.0, 0.0), 0.0, 0.05)
+    drone.stream_command(HolonomicCommand(0.5, 0.0, 0.0, 0.0), 0.05)
     assert drone._holding.active is False
     drone.close()
 
@@ -606,7 +604,7 @@ def test_collision_state_latches_one_non_ground_contact():
             "penetration_depth": 0.0,
         },
     )
-    assert drone.collision_state() is False
+    assert drone.collision_state().in_contact is False
     callback(
         None,
         {
@@ -617,8 +615,10 @@ def test_collision_state_latches_one_non_ground_contact():
             "penetration_depth": 0.2,
         },
     )
-    assert drone.collision_state() is True
-    assert drone.collision_state() is False
+    contact = drone.collision_state()
+    assert contact.in_contact is True
+    assert contact.last_contact.counterpart == "Building_3"
+    assert drone.collision_state().in_contact is False
     assert drone.last_collision.object_name == "Building_3"
     assert drone.last_collision.timestamp_ns == 500
     drone.close()

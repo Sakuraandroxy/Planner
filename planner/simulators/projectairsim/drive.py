@@ -27,6 +27,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from planner.domain import CarCommand
+
 
 def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
@@ -168,3 +170,31 @@ def controls_from_reference(
         brake = _clamp(-error * model.brake_gain, 0.0, 1.0)
     steering = model.steering_for(yaw_rate_deg_s, measured)
     return RoverControls(engine=engine, steering=steering, brake=brake)
+
+
+def controls_from_command(
+    model: RoverDriveModel,
+    pid: SpeedPid,
+    command: CarCommand,
+    measured_velocity_world: tuple[float, float, float],
+    yaw_deg: float,
+    dt_s: float,
+) -> RoverControls:
+    """Convert one stream command; a car has no lateral degree of freedom.
+
+    车只能沿车头方向走，所以这里只收 ``CarCommand``：横向分量不再被静默投影掉。
+    走到这里说明调用方跳过了能力校验，按不符处理。
+    """
+    if not isinstance(command, CarCommand):
+        raise ValueError(
+            f"a rover executes CarCommand only, got {type(command).__name__}"
+        )
+    return controls_from_reference(
+        model,
+        pid,
+        (command.forward_speed_mps, 0.0, 0.0),
+        command.yaw_rate_deg_s,
+        measured_velocity_world,
+        yaw_deg,
+        dt_s,
+    )

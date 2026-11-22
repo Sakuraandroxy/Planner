@@ -247,9 +247,6 @@ def build_vehicle_arm(
         trigger_rules=settings.completion_rules,
         sliding_window=config.sliding_window,
         motion_limits=vehicle.tracking_limits,
-        collision_check=(
-            vehicle.collision_state if settings.collision_check_enabled else None
-        ),
         moving_observation_source=moving_source,
         stream_speed_mps=config.motion.max_speed_mps,
         stream_waypoint_timeout_s=60.0,

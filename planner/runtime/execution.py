@@ -21,7 +21,6 @@ from planner.domain import (
 )
 from planner.domain import MotionTrajectory, RelativeTrajectory
 from planner.errors import BudgetExceeded, ExecutionError, MotionPaused
-from planner.ports import CollisionCheck
 from planner.ports import Vehicle
 
 
@@ -36,8 +35,6 @@ class ExecutionService:
         self._stop_requested = threading.Event()
         self._observation_checkpoint = self._cancel_observations = None
         self._executing = False
-        self._collision_check: CollisionCheck | None = None
-        self._collision_seen = False
         self._hold_checkpoint = None
 
     def bind_hold_checkpoint(self, checkpoint):
@@ -54,16 +51,13 @@ class ExecutionService:
         if threading.get_ident() != self._owner:
             raise ExecutionError("flight execution may only run on its owner thread")
 
-    def acquire_flight(self, owner, *, collision_check: CollisionCheck | None = None):
+    def acquire_flight(self, owner):
         self._assert_owner()
         if self._flight_owner is not None:
             raise ExecutionError("another flight session is already active")
         if self._pending_cleanup is not None and self._pending_cleanup():
             raise ExecutionError("a previous request is still running; flight handover refused")
-        if collision_check is not None and not callable(collision_check):
-            raise ValueError("collision_check must be callable or None")
         self._pending_cleanup, self._flight_owner = None, owner
-        self._collision_check, self._collision_seen = collision_check, False
 
     def release_flight(self, owner, pending_cleanup=None):
         self._assert_owner()
@@ -72,7 +66,6 @@ class ExecutionService:
         self.clear_deadline()
         self._pending_cleanup = pending_cleanup if pending_cleanup is not None and pending_cleanup() else None
         self._flight_owner = None
-        self._collision_check, self._collision_seen = None, False
 
     def stop_if_owner(self, owner):
         self._assert_owner()
@@ -235,20 +228,13 @@ class ExecutionService:
         return self.vehicle.current_pose()
 
     def collision_state(self):
-        """Whether the active optional check blocks flight, not proof of no contact.
+        """Always no contact: the vehicle collision port is no longer wired here.
 
-        Disabled sessions perform no read. Enabled sessions latch the first event
-        until release, including when the simulator consumes events on read.
+        碰撞读取从执行服务移到控制循环（``ControlLoop._guard`` 调
+        ``CollisionRecovery.poll``），这一层只保留停止与预算检查。
         """
         self.check_deadline()
-        if self._collision_check is None:
-            return False
-        if not self._collision_seen:
-            detected = self._collision_check()
-            if not isinstance(detected, bool):
-                raise ExecutionError("collision check must return a boolean")
-            self._collision_seen = detected
-        return self._collision_seen
+        return False
 
     def stop(self) -> StopResult:
         self._assert_owner()

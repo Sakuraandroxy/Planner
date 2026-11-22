@@ -24,6 +24,7 @@ from planner.domain import FreeNavigationParameters, FreeNavigationStatus
 from planner.domain import MissionStage, TaskKind
 from planner.domain import MotionLimits
 from planner.domain import CameraIntrinsics, Observation
+from planner.domain import CollisionState, MotionCapability, MotionModel
 from planner.domain import RelativePoseDelta, WorldPose
 from planner.domain import QueuedWaypoint, SlidingWindowSettings
 from planner.domain import QueueObservationAnchor
@@ -425,6 +426,9 @@ def test_prepare_rejects_a_closed_workflow():
 # --- Continuous (sliding-window) execution ---------------------------------
 
 
+HOLONOMIC = MotionCapability(MotionModel.HOLONOMIC, 2.0, None, True)
+
+
 class FakeClock:
     def __init__(self):
         self.now = 0.0
@@ -571,8 +575,9 @@ class FakeStreamingExecution:
     def __init__(self, *, vehicle=None):
         self.vehicle = vehicle or SimpleNamespace(
             stream_state=lambda: None,
-            stream_velocity=lambda *args: None,
-            collision_state=lambda: False,
+            stream_command=lambda *args: None,
+            motion_capability=lambda: HOLONOMIC,
+            collision_state=lambda: CollisionState(False),
             hover=lambda: None,
         )
         self.checkpoints = 0
@@ -694,8 +699,9 @@ def test_continuous_collision_backs_off_clears_queue_and_replans(monkeypatch):
     collisions = iter([False, True, False, False, False, False])
     vehicle = SimpleNamespace(
         stream_state=lambda: None,
-        stream_velocity=lambda *args: None,
-        collision_state=lambda: next(collisions, False),
+        stream_command=lambda *args: None,
+        motion_capability=lambda: HOLONOMIC,
+        collision_state=lambda: CollisionState(next(collisions, False)),
         hover=lambda: None,
     )
     controller, execution, stream, frames = _continuous_controller(
@@ -737,8 +743,9 @@ def test_continuous_discards_a_contact_latched_before_the_stage(monkeypatch):
     collisions = iter([True, False, False])
     vehicle = SimpleNamespace(
         stream_state=lambda: None,
-        stream_velocity=lambda *args: None,
-        collision_state=lambda: next(collisions, False),
+        stream_command=lambda *args: None,
+        motion_capability=lambda: HOLONOMIC,
+        collision_state=lambda: CollisionState(next(collisions, False)),
         hover=lambda: None,
         last_collision=SimpleNamespace(object_name="Rover1"),
     )
@@ -768,8 +775,9 @@ def test_continuous_collision_recovery_budget_exhausts(monkeypatch):
     stream = FakeContinuousStream(stop_after=10)
     vehicle = SimpleNamespace(
         stream_state=lambda: None,
-        stream_velocity=lambda *args: None,
-        collision_state=lambda: True,
+        stream_command=lambda *args: None,
+        motion_capability=lambda: HOLONOMIC,
+        collision_state=lambda: CollisionState(True),
         hover=lambda: None,
     )
     controller, execution, stream, _frames = _continuous_controller(
@@ -799,8 +807,9 @@ def test_continuous_collision_backoff_escalates_per_recovery(monkeypatch):
     stream = FakeContinuousStream()
     vehicle = SimpleNamespace(
         stream_state=lambda: None,
-        stream_velocity=lambda *args: None,
-        collision_state=lambda: True,
+        stream_command=lambda *args: None,
+        motion_capability=lambda: HOLONOMIC,
+        collision_state=lambda: CollisionState(True),
         hover=lambda: None,
     )
     controller, execution, stream, _frames = _continuous_controller(
@@ -839,8 +848,9 @@ def test_continuous_collision_budget_resets_after_progress(monkeypatch):
     collisions = iter([False, True, False, False, True, False])
     vehicle = SimpleNamespace(
         stream_state=lambda: None,
-        stream_velocity=lambda *args: None,
-        collision_state=lambda: next(collisions, False),
+        stream_command=lambda *args: None,
+        motion_capability=lambda: HOLONOMIC,
+        collision_state=lambda: CollisionState(next(collisions, False)),
         hover=lambda: None,
     )
     controller, execution, stream, _frames = _continuous_controller(

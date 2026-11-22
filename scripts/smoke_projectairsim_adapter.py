@@ -144,12 +144,12 @@ def main() -> int:
                     moving.append(rover.capture_moving())
                 except ObservationError:
                     pass
-            if rover.collision_state():
+            if rover.collision_state().in_contact:
                 collisions.append(rover.last_collision)
         set_controls(connection, robot, engine=0.4, steering_angle=0.8, brake=0.0)
         for _ in range(int(args.turn_s * 20)):
             connection.advance_for_sim_time(0.05)
-            if rover.collision_state():
+            if rover.collision_state().in_contact:
                 collisions.append(rover.last_collision)
             if collisions:
                 break
