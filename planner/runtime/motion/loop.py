@@ -520,7 +520,17 @@ class ControlLoop:
                 steps += 1
 
     def sample(self):
-        """读一次实测状态并记进时间线；任务层的取帧与窗口都读这一次。"""
+        """读一次实测状态并记进时间线；任务层的取帧与窗口都读这一次。
+
+        前置条件：本阶段必须先调 ``self.recorder.begin(queue, stage_token)``。
+        时间线要按模拟器时间记下当时的队列修订，没绑定队列就没有可记的修订。
+        未调 ``begin`` 就调本方法抛 ``RuntimeError``。
+        """
+        if self.recorder.queue is None:
+            raise RuntimeError(
+                "control loop sample needs StreamRecorder.begin(queue, stage_token) "
+                "called once at stage start"
+            )
         self.execution.checkpoint()
         state = self.streaming.stream_state()
         self.recorder.sample(state)

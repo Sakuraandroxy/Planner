@@ -91,10 +91,3 @@ class CollisionRecovery:
             return
         self.attempts = 0
         self._baseline_m = None
-
-    def reset(self) -> None:
-        """任务边界：次数、已处理事件与基线一起清空。"""
-        self.attempts = 0
-        self.active = None
-        self._handled = None
-        self._baseline_m = None

@@ -55,19 +55,6 @@ class WorldWaypointQueue:
         self._items.clear()
         self._revision += 1
 
-    def load_batch(self, world: WorldTrajectory) -> None:
-        self.check_owner()
-        if self._items or len(world.poses) != 5:
-            raise ProtocolError("authorize exactly five new points only at an empty batch boundary")
-        previous = world.start
-        for index, end in enumerate(world.poses):
-            delta = None if world.yaw_deltas_deg is None else world.yaw_deltas_deg[index]
-            yaw = resolve_yaw_delta_deg(previous.yaw_deg, end.yaw_deg, delta)
-            self._next_id += 1
-            self._items.append(QueuedWaypoint(self._next_id, previous, end, yaw))
-            previous = end
-        self._revision += 1
-
     def pending(self, anchor: WorldPose) -> RelativeTrajectory:
         self.check_owner()
         if not self._items:
@@ -83,7 +70,9 @@ class WorldWaypointQueue:
         return relative
 
     def load_prefix(self, world: WorldTrajectory) -> None:
-        """Authorize a locally checked 1..5-point prefix; load_batch stays five-only."""
+        """Authorize a locally checked 1..5-point prefix at an empty batch boundary."""
+        # 模型续点必须恰好五点，这条约束在 ``BackgroundContinuationPlanner.poll``
+        # 里校验；本地几何规划可以只授权安全前缀，所以这里是 1..5。
         self.check_owner()
         if self._items or not 1 <= len(world.poses) <= 5:
             raise ProtocolError("authorize a nonempty safe prefix only at an empty batch boundary")
