@@ -6,6 +6,10 @@ advances. Moving capture reads the newest published pair without commanding the
 world; the control loop owns stepping. In both cases the observation pose is
 recovered from the camera pose published with the frame (the reference AirSim
 convention), not from a separately sampled kinematics response.
+
+A vehicle that has to be still before a stopped frame passes its own settle
+hook: ``capture_settled`` runs it before the frame request, so the caller only
+asks for an observation.
 """
 
 from __future__ import annotations
@@ -65,9 +69,11 @@ class ProjectAirSimObservationSource:
         depth: DepthSettings,
         camera_id: str,
         frame_sink=None,
+        settle=None,
     ):
         self._connection = connection
         self._camera_id = str(camera_id)
+        self._settle = settle
         self._depth_settings = depth
         self.intrinsics = intrinsics_from_camera(
             camera.width, camera.height, camera.hfov_deg
@@ -124,6 +130,22 @@ class ProjectAirSimObservationSource:
                 raise ObservationError(
                     "no synchronized RGB/depth frame arrived after the capture request"
                 )
+
+    def capture_settled(
+        self, *, budget=None, timeout_s: float = 2.0
+    ) -> Observation:
+        """Take a stopped observation, after the vehicle has settled.
+
+        ``stopped`` has to be true at image time, not at request time. A pause
+        that fires mid-flight leaves several metres of coasting: the frame
+        source would hand out an image whose pose no longer matches the vehicle
+        a second later, and the caller discards it as a changed anchor. The
+        UE4 adapter gets this guarantee from its observation gate; here the
+        vehicle's settle hook is the gate.
+        """
+        if self._settle is not None:
+            self._settle(budget=budget)
+        return self.capture(budget=budget, timeout_s=timeout_s)
 
     def capture_moving(self, *, budget: ExecutionBudget | None = None) -> Observation:
         """Read the newest published pair; the control loop advances the clock."""
