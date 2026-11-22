@@ -13,12 +13,12 @@ from planner.adapters.trajectory_planner.prompts import (
     VisualGoalTrajectoryPrompt,
 )
 from planner.assembly import (
-    build_completion_checker,
     build_free_navigation_planner,
     build_planner,
-    build_task_parser,
-    build_trace_factory,
 )
+from planner.assembly.factories import build_completion_checker
+from planner.assembly.factories import build_task_parser
+from planner.assembly.factories import build_trace_factory
 from planner.config import load_config
 from planner.domain import TaskKind
 from tests.support import write_config

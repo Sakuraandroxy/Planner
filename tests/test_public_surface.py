@@ -92,6 +92,25 @@ CALIBRATED = {
             "require_confirmed",
         }
     ),
+    # 文档 §8.1 的 12 个里 `StageValidator`、`WorkerFactory`、`SimulatorSupervisor`、
+    # `SwitchRefused`、`build_resources` 尚未落地；`capabilities_for` 与四个 `build_*` 有层外
+    # 运行期调用点，文档判内联进 `build_resources`，内联未做，名字留在入口。
+    "assembly": frozenset(
+        {
+            "MissionInputs",
+            "MissionResources",
+            "ServerController",
+            "VehicleArm",
+            "assemble_missions",
+            "build_detector",
+            "build_free_navigation_planner",
+            "build_geometry",
+            "build_planner",
+            "capabilities_for",
+            "require_application",
+            "task_finish_events",
+        }
+    ),
 }
 
 #: 契约层两个包的期望集合，出处见文件头。
@@ -247,7 +266,6 @@ STILL_OPEN = {
     "（`server.py` 9、`approach.py` 4、`streaming.py` 3）",
     "ports": "R23 收口差 1 文件：`planner/ports/backend_worker.py` 仍在，"
     "`assembly/controller/__init__.py` 两处注解在用；文件搬到 `simulator/worker_protocol.py` 才能到 13 个",
-    "assembly": "阶段 6：装配层 12 个名字的收口未落地",
 }
 
 NAME_RE = re.compile(r"`([A-Za-z_][A-Za-z0-9_]*)`")

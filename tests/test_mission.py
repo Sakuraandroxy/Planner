@@ -1,10 +1,10 @@
 import pytest
 
-from planner.assembly import PlannerApplication
-from planner.assembly import MissionRunner
-from planner.assembly import MissionValidator
-from planner.assembly import mission_report
-from planner.assembly import WorkflowRouter
+from planner.assembly.application import PlannerApplication
+from planner.assembly.mission_runner import MissionRunner
+from planner.assembly.mission_validator import MissionValidator
+from planner.assembly.reporting import mission_report
+from planner.assembly.workflow_router import WorkflowRouter
 from planner.workflows.basic_motion import BasicMotionStageValidator
 from planner.workflows.free_navigation import FreeNavigationStageValidator
 from planner.workflows.visual_goal_navigation import VisualGoalStageValidator
