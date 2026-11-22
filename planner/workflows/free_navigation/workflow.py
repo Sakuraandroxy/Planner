@@ -73,7 +73,6 @@ class FreeNavigationWorkflow:
         maximum_collision_recoveries: int = 3,
         collision_recovery_reset_m: float = 20.0,
         continuous_tracking: ContinuousTrackingSettings = ContinuousTrackingSettings(),
-        lane_reference_provider=None,
         telemetry=None,
         vertical_motion: bool = True,
     ):
@@ -122,7 +121,6 @@ class FreeNavigationWorkflow:
         self.max_consecutive_stalls = max_consecutive_stalls
         self.telemetry = telemetry
         self.vertical_motion = bool(vertical_motion)
-        self.lane_reference_provider = lane_reference_provider
         self.model_calls = ModelCallService(clock)
         self._closed = False
         self.window = None
@@ -161,7 +159,6 @@ class FreeNavigationWorkflow:
                     sliding_window.max_consecutive_plan_failures + 1
                 ),
                 tracking_settings=continuous_tracking,
-                lane_reference_provider=lane_reference_provider,
                 telemetry=telemetry,
                 vertical_motion=self.vertical_motion,
             )
@@ -259,7 +256,6 @@ class FreeNavigationWorkflow:
                         None if last is None else last.start
                     ),
                     current_guidance=None,
-                    task_context=self._lane_context(observation.pose),
                     budget=None,
                     timeout_s=self.model_request_timeout_s,
                 )
@@ -372,23 +368,6 @@ class FreeNavigationWorkflow:
             f"{status.value}: {reason}",
             summary,
         )
-
-    def _lane_context(self, pose):
-        """Measure the HD-map lane prior; never fail the task for it.
-
-        The provider is optional and map projection is best-effort: an
-        unavailable lane (junction, overlapping road, adapter error) becomes
-        ``None`` and the prompt falls back to its free-space rules.
-        """
-        if self.lane_reference_provider is None:
-            return None
-        try:
-            return self.lane_reference_provider.lane_reference(pose)
-        except Exception as exc:
-            logger.warning(
-                "[FreeNavigation] lane reference unavailable: %s", exc
-            )
-            return None
 
     def _capture_stopped(self):
         try:

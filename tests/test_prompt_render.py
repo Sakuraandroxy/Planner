@@ -28,7 +28,6 @@ from planner.adapters.trajectory_planner.prompts import (
     build_aerial_base_user_prompt,
     build_base_user_prompt,
 )
-from planner.domain.lane_reference import LaneLookaheadPoint, LaneReference
 from planner.domain.observation import CameraIntrinsics, Observation
 from planner.domain.pose import RelativePoseDelta, WorldPose
 from planner.domain.trajectory import RelativeTrajectory
@@ -81,24 +80,6 @@ def _previous_trajectory() -> RelativeTrajectory:
 
 def _pending_trajectory() -> RelativeTrajectory:
     return _trajectory((1.0, 0.2, 0.0, 3.0))
-
-
-def _lane_reference() -> LaneReference:
-    return LaneReference(
-        road_id=45,
-        lane_id=-4,
-        lane_width_m=3.5,
-        lateral_offset_m=0.42,
-        heading_error_deg=6.25,
-        distance_to_left_boundary_m=1.95,
-        distance_to_right_boundary_m=1.33,
-        lookahead=(
-            LaneLookaheadPoint(5.0, 4.9, 0.4, 4.7, 3.5),
-            LaneLookaheadPoint(12.0, 11.8, 0.9, 4.4, 5.0),
-            LaneLookaheadPoint(24.0, 23.5, 1.6, 3.9, 7.5),
-            LaneLookaheadPoint(36.0, 35.0, 2.4, 3.9, 9.0),
-        ),
-    )
 
 
 def _visual_context(*, keep_target_in_view: bool = True) -> VisualGoalPlanningContext:
@@ -162,16 +143,6 @@ def _cases() -> dict[str, str]:
         ),
         "aerial_base_user_prompt_continuing": build_aerial_base_user_prompt(
             instruction, observation, 5, **execution_context
-        ),
-        "free_navigation_user_prompt": FreeNavigationTrajectoryPrompt().build_user_prompt(
-            "follow the road", observation, 5,
-            task_context=_lane_reference(), **execution_context,
-        ),
-        "aerial_free_navigation_user_prompt": FreeNavigationTrajectoryPrompt(
-            aerial=True
-        ).build_user_prompt(
-            "follow the road", observation, 5,
-            task_context=_lane_reference(), **execution_context,
         ),
         "free_navigation_user_prompt_without_lane": (
             FreeNavigationTrajectoryPrompt().build_user_prompt(

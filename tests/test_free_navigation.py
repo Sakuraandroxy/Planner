@@ -26,7 +26,6 @@ from planner.domain.free_navigation import (
     FreeNavigationParameters,
     FreeNavigationStatus,
 )
-from planner.domain.lane_reference import LaneLookaheadPoint, LaneReference
 from planner.domain.mission import MissionStage, TaskKind
 from planner.domain.motion import MotionLimits
 from planner.domain.observation import CameraIntrinsics, Observation
@@ -81,27 +80,6 @@ def _stage():
         "stage_1",
         TaskKind.FREE_NAVIGATION,
         FreeNavigationParameters("keep driving along the road"),
-    )
-
-
-def _lane_reference():
-    return LaneReference(
-        road_id=45,
-        lane_id=-4,
-        lane_width_m=3.5,
-        lateral_offset_m=2.47,
-        heading_error_deg=-47.4,
-        distance_to_left_boundary_m=4.22,
-        distance_to_right_boundary_m=-0.72,
-        lookahead=(
-            LaneLookaheadPoint(
-                distance_m=5.0,
-                forward_m=4.2,
-                right_m=-2.7,
-                bearing_deg=-32.7,
-                yaw_delta_deg=-40.0,
-            ),
-        ),
     )
 
 
@@ -307,7 +285,6 @@ def test_aerial_system_prompt_keeps_road_rules_with_flight_wording():
     assert "within about 5 deg of the cumulative lane yaw" in prompt
     assert "Weave counterexample" in prompt
     assert "left-right weave" in prompt
-    assert "Never apply the pending turn a second time" in prompt
     assert "Lane-centring steering procedure" in prompt
     assert "Step-length default (open lane)" in prompt
     assert "Open-lane worked example" in prompt
@@ -325,71 +302,10 @@ def test_user_prompt_carries_the_instruction_and_rejects_task_context():
     prompt = FreeNavigationTrajectoryPrompt()
     text = prompt.build_user_prompt("follow the road", _observation(), 5)
     assert "follow the road" in text
-    assert "Lane reference" in text
-    assert "unavailable at the planning anchor" in text
     with pytest.raises(ProtocolError):
         prompt.build_user_prompt(
             "follow the road", _observation(), 5, task_context=object()
         )
-
-
-def test_user_prompt_formats_a_measured_lane_reference():
-    prompt = FreeNavigationTrajectoryPrompt()
-    text = prompt.build_user_prompt(
-        "follow the road",
-        _observation(),
-        5,
-        task_context=_lane_reference(),
-    )
-    assert "Lane reference (measured from the simulator HD map" in text
-    assert "road 45, lane -4" in text
-    assert "width 3.50 m" in text
-    assert "Lateral offset: +2.47 m" in text
-    assert "Lane heading error: -47.4 deg" in text
-    assert "left lane boundary: 4.22 m" in text
-    assert "right lane boundary: -0.72 m" in text
-    assert "cumulative lane yaw -40.0 deg" in text
-    assert "Steering aim at the anchor" in text
-    assert "lane-centre point is at bearing -32.7 deg" in text
-    assert "Final-heading check" in text
-    assert "within about 5 deg of the cumulative lane yaw at the reach" in text
-    assert "near bearing is only the early aim" in text
-    assert "first one or two actions must turn toward the" in text
-    assert "Tight space at the anchor" in text
-    assert "short pivot-like steps" in text
-    assert "Open lane at the anchor" not in text
-    assert "already includes the effect of the pending actions" in text
-    assert "Metric free-space profile" in text
-
-
-def test_user_prompt_uses_normal_steps_on_an_open_lane():
-    reference = LaneReference(
-        road_id=45,
-        lane_id=-4,
-        lane_width_m=3.5,
-        lateral_offset_m=0.1,
-        heading_error_deg=1.0,
-        distance_to_left_boundary_m=1.7,
-        distance_to_right_boundary_m=1.8,
-        lookahead=(
-            LaneLookaheadPoint(
-                distance_m=6.0,
-                forward_m=6.0,
-                right_m=0.17,
-                bearing_deg=1.6,
-                yaw_delta_deg=1.0,
-            ),
-        ),
-    )
-    text = FreeNavigationTrajectoryPrompt().build_user_prompt(
-        "follow the road",
-        _observation(),
-        5,
-        task_context=reference,
-    )
-    assert "Open lane at the anchor" in text
-    assert "Use normal 4-5 m forward steps" in text
-    assert "Tight space at the anchor" not in text
 
 
 def test_workflow_replans_with_the_previous_batch_and_validates_both_frames():
@@ -424,47 +340,6 @@ def test_workflow_replans_with_the_previous_batch_and_validates_both_frames():
     assert len(validator.world) == 1
     assert len(motion.created) == 1
     assert execution.stops == 1
-
-
-def test_workflow_supplies_the_measured_lane_reference_to_every_plan():
-    reference = _lane_reference()
-    poses = []
-
-    class Provider:
-        def lane_reference(self, pose):
-            poses.append(pose)
-            return reference
-
-    planner = FakePlanner(
-        _trajectory(), fail_at=2, error=ProtocolError("planner stopped")
-    )
-    workflow, _, _, _, _, _ = _workflow(
-        planner=planner, lane_reference_provider=Provider()
-    )
-
-    workflow.run(_stage())
-
-    assert poses == [START, START]
-    assert all(
-        call[2]["task_context"] is reference for call in planner.calls
-    )
-
-
-def test_workflow_lane_reference_failure_degrades_to_unavailable():
-    class Provider:
-        def lane_reference(self, pose):
-            raise RuntimeError("map projection failed")
-
-    planner = FakePlanner(
-        _trajectory(), fail_at=1, error=ProtocolError("planner stopped")
-    )
-    workflow, _, _, _, _, _ = _workflow(
-        planner=planner, lane_reference_provider=Provider()
-    )
-
-    workflow.run(_stage())
-
-    assert planner.calls[0][2]["task_context"] is None
 
 
 def test_workflow_acquires_flight_and_releases_pending_cleanup():
@@ -742,7 +617,6 @@ def _continuous_controller(
     motion=None,
     maximum_collision_recoveries=3,
     collision_recovery_reset_m=20.0,
-    lane_reference_provider=None,
 ):
     stream = stream or FakeContinuousStream()
     frames = frames or FakeMovingFrames()
@@ -770,7 +644,6 @@ def _continuous_controller(
         collision_recovery_reset_m=collision_recovery_reset_m,
         model_request_timeout_s=5.0,
         stall_timeout_s=stall_timeout_s,
-        lane_reference_provider=lane_reference_provider,
         telemetry=telemetry,
     )
     return controller, execution, stream, frames
@@ -814,102 +687,6 @@ def test_continuous_loop_submits_stopped_and_moving_frames(monkeypatch):
     )
     assert execution.executed == 0
     assert controller.planning_calls == 2
-
-
-def test_continuous_loop_attaches_the_measured_lane_reference(monkeypatch):
-    reference = _lane_reference()
-    poses = []
-
-    class Provider:
-        def lane_reference(self, pose):
-            poses.append(pose)
-            return reference
-
-    moving = _observation(
-        stopped=False, capture_id="moving", timestamp_ns=2
-    )
-    stream = FakeContinuousStream(stop_after=2)
-    frames = FakeMovingFrames(frames=[moving], delay=1)
-    controller, _, stream, frames = _continuous_controller(
-        monkeypatch,
-        stream=stream,
-        frames=frames,
-        clock=FakeClock(),
-        lane_reference_provider=Provider(),
-    )
-    window = FakePlanningWindow()
-
-    with pytest.raises(KeyboardInterrupt):
-        controller.run(
-            FreeNavigationParameters("follow the road"),
-            _observation(),
-            window,
-        )
-
-    assert poses == [START, START]
-    assert all(item[1] is reference for item in window.submissions)
-
-
-def test_continuous_lane_reference_uses_the_pending_queue_tail(monkeypatch):
-    reference = _lane_reference()
-    tail = WorldPose(2.0, 0.0, 0.0, 10.0)
-    pending = QueuedWaypoint(1, START, tail, 10.0)
-    poses = []
-
-    class Provider:
-        def lane_reference(self, pose):
-            poses.append(pose)
-            return reference
-
-    class PendingTimeline:
-        def at(self, timestamp_ns, stage_token):
-            return QueueObservationAnchor(
-                stage_token, 3, timestamp_ns, (pending,)
-            )
-
-    stream = FakeContinuousStream(stop_after=1)
-    stream.timeline = PendingTimeline()
-    controller, _, _, _ = _continuous_controller(
-        monkeypatch,
-        stream=stream,
-        clock=FakeClock(),
-        lane_reference_provider=Provider(),
-    )
-    window = FakePlanningWindow()
-
-    with pytest.raises(KeyboardInterrupt):
-        controller.run(
-            FreeNavigationParameters("follow the road"),
-            _observation(),
-            window,
-        )
-
-    assert poses == [tail]
-    assert window.submissions[0][4].items == (pending,)
-
-
-def test_continuous_lane_reference_failure_degrades_to_unavailable(monkeypatch):
-    class Provider:
-        def lane_reference(self, pose):
-            raise RuntimeError("map projection failed")
-
-    stream = FakeContinuousStream(stop_after=1)
-    controller, _, _, _ = _continuous_controller(
-        monkeypatch,
-        stream=stream,
-        clock=FakeClock(),
-        lane_reference_provider=Provider(),
-    )
-    window = FakePlanningWindow()
-
-    with pytest.raises(KeyboardInterrupt):
-        controller.run(
-            FreeNavigationParameters("follow the road"),
-            _observation(),
-            window,
-        )
-
-    assert window.submissions[0][1] is None
 
 
 def test_continuous_collision_backs_off_clears_queue_and_replans(monkeypatch):

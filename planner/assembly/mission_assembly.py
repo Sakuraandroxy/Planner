@@ -303,7 +303,6 @@ def build_vehicle_arm(
             ),
             collision_recovery_reset_m=config.free_navigation.collision_recovery_reset_m,
             continuous_tracking=config.continuous,
-            lane_reference_provider=None,
             telemetry=telemetry,
             vertical_motion=is_drone,
         )

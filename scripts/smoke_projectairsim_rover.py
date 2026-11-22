@@ -179,7 +179,6 @@ def main() -> int:
                     config.free_navigation.collision_recovery_reset_m
                 ),
                 continuous_tracking=config.continuous,
-                lane_reference_provider=None,
             )
             free_workflow.prepare()
             stop_event = threading.Event()
