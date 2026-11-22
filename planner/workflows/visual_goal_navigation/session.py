@@ -3,7 +3,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from planner.algorithms.completion.visual_goal_trigger import VisualGoalRadiusTrigger
+from planner.workflows.visual_goal_navigation.completion import VisualGoalRadiusTrigger
 from planner.domain.execution import ExecutionBudget
 from planner.domain.planning_window import PlanningWindowInput
 from planner.domain.pose import WorldPose

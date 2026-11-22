@@ -4,16 +4,12 @@ import numpy as np
 import pytest
 
 from planner.algorithms.approach import TargetApproach
-from planner.algorithms.completion.visual_goal import VisualGoalCompletion
-from planner.algorithms.completion.visual_goal_request import (
-    require_visual_completion_evidence,
-)
-from planner.algorithms.completion.visual_goal_retained_motion import (
-    retained_world_trajectory,
-)
-from planner.algorithms.completion.visual_goal_trigger import VisualGoalRadiusTrigger
-from planner.algorithms.completion.visual_goal_verification import (
+from planner.workflows.visual_goal_navigation.completion import (
+    VisualGoalCompletion,
+    VisualGoalRadiusTrigger,
     VisualGoalVerification,
+    require_visual_completion_evidence,
+    retained_world_trajectory,
 )
 from planner.domain.approach import ApproachSettings, ApproachStatus, ApproachTarget
 from planner.domain.execution import ExecutionBudget

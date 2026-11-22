@@ -41,7 +41,7 @@ from planner.assembly.factories import (
     build_planner,
 )
 from planner.algorithms.approach import TargetApproach
-from planner.algorithms.completion.visual_goal import (
+from planner.workflows.visual_goal_navigation.completion import (
     VisualGoalCompletion,
 )
 from planner.algorithms.targeting.bbox_goal_observation import (

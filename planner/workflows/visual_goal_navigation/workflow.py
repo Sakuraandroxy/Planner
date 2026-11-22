@@ -6,9 +6,9 @@ from collections.abc import Callable
 from dataclasses import replace
 from functools import partial
 
-from planner.algorithms.completion.visual_goal import VisualGoalCompletion
-from planner.algorithms.completion.visual_goal_trigger import VisualGoalRadiusTrigger
-from planner.algorithms.completion.visual_goal_verification import (
+from planner.workflows.visual_goal_navigation.completion import (
+    VisualGoalCompletion,
+    VisualGoalRadiusTrigger,
     VisualGoalVerification,
 )
 from planner.algorithms.targeting.association import (
