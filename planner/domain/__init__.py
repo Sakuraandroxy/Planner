@@ -189,6 +189,7 @@ __all__ = [
     "MotionCapability",
     "MotionCommand",
     "MotionLimits",
+    "MotionModel",
     "MotionSegment",
     "MotionTrajectory",
     "NormalizedBoundingBox",

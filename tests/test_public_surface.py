@@ -191,6 +191,7 @@ HARDCODED = {
             "MotionCapability",
             "MotionCommand",
             "MotionLimits",
+            "MotionModel",
             "MotionSegment",
             "MotionTrajectory",
             "NormalizedBoundingBox",

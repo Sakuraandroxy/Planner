@@ -5,7 +5,7 @@
 
 ## 1 一句话职责
 
-`planner/domain/` 是全栈的公共词汇表：25 个模块 2692 行，导出 116 个名字（75 个类、23 个函数、18 个常量与别名），只依赖标准库与 numpy。
+`planner/domain/` 是全栈的公共词汇表：25 个模块 2678 行，导出 117 个名字（76 个类、23 个函数、18 个常量与别名），只依赖标准库与 numpy。
 
 ## 2 边界
 
@@ -26,7 +26,7 @@
 
 ## 3 输入与输出
 
-- 入口：`planner/domain/__init__.py`，`__all__` 116 个名字。`MotionModel` 被入口 import 且被 `planner/algorithms/motion/corridor.py:5`、`planner/runtime/motion/tracking.py:17` 按入口路径取用，但它不在 `__all__` 里，见 Qdomain13。`tests/test_public_surface.py:149` 的 `HARDCODED["domain"]` 与入口逐名比对（`:273` 把它登记为 `CALIBRATED`，`:362` 执行比对），多一个或少一个都失败。
+- 入口：`planner/domain/__init__.py`，`__all__` 117 个名字。`MotionModel` 被入口 import 且被 `planner/algorithms/motion/corridor.py:5`、`planner/runtime/motion/tracking.py:17` 按入口路径取用，已补进 `__all__`。`tests/test_public_surface.py:149` 的 `HARDCODED["domain"]` 与入口逐名比对（`:273` 把它登记为 `CALIBRATED`，`:362` 执行比对），多一个或少一个都失败。
 - 契约类型形态：`@dataclass(frozen=True)` 与 `class X(str, Enum)`。可变字段一律在 `__post_init__` 里用 `object.__setattr__` 归一（`planner/domain/observation.py:110`、`:137`）。
 - 返回：纯值对象，无副作用，无 I/O。例外是 `parse_family_catalog` 接收已解析的 YAML 字典（`planner/domain/engine_family.py:242`），以及 `snapshot_from_payload` 接收 `dict`（`planner/domain/trajectory_telemetry.py:116`）。
 - 异常：只有 `ValueError`。ctor 校验失败、`require_supported` 命令与能力不符（`planner/domain/motion.py:102`）、`validate_view_mode` 未知视图（`planner/domain/view.py:66`）都是 `ValueError`。
@@ -230,7 +230,7 @@
 
 跑法：`~/miniconda3/envs/vln/bin/python -m pytest -q tests/test_motion_contract.py tests/test_weather_domain.py tests/test_view_catalog.py tests/test_depth_visualization.py tests/test_intrinsics_validation.py tests/test_target_detection.py tests/test_public_surface.py tests/test_layer_entries.py tests/test_layering.py tests/test_runtime_catalog.py tests/test_motion.py`，本轮结果 158 passed。
 
-覆盖到的：`tests/test_motion_contract.py` 逐条打 `MotionCapability`、`CarCommand`、`require_supported`、`HeadingHoldSettings`、`CollisionState` 的拒绝分支与冻结性；`tests/test_weather_domain.py` 覆盖八字段顺序、预设、合并与拒绝；`tests/test_view_catalog.py` 覆盖环下标与前向步数；`tests/test_depth_visualization.py` 覆盖两套映射的灰度区间；`tests/test_intrinsics_validation.py` 覆盖内参边界；`tests/test_target_detection.py` 覆盖框与表面点约束；`tests/test_runtime_catalog.py:43` 起覆盖 `parse_family_catalog` 的未知键、`capabilities` 块、`script` driver、空目录；`tests/test_trajectory_hub.py` 与 `tests/test_subprocess_worker.py` 覆盖快照编解码；`tests/test_public_surface.py` 锁定 116 个导出名；`tests/test_layer_entries.py` 与 `tests/test_layering.py` 锁定 import 只能指向包入口。
+覆盖到的：`tests/test_motion_contract.py` 逐条打 `MotionCapability`、`CarCommand`、`require_supported`、`HeadingHoldSettings`、`CollisionState` 的拒绝分支与冻结性；`tests/test_weather_domain.py` 覆盖八字段顺序、预设、合并与拒绝；`tests/test_view_catalog.py` 覆盖环下标与前向步数；`tests/test_depth_visualization.py` 覆盖两套映射的灰度区间；`tests/test_intrinsics_validation.py` 覆盖内参边界；`tests/test_target_detection.py` 覆盖框与表面点约束；`tests/test_runtime_catalog.py:43` 起覆盖 `parse_family_catalog` 的未知键、`capabilities` 块、`script` driver、空目录；`tests/test_trajectory_hub.py` 与 `tests/test_subprocess_worker.py` 覆盖快照编解码；`tests/test_public_surface.py` 锁定 117 个导出名；`tests/test_layer_entries.py` 与 `tests/test_layering.py` 锁定 import 只能指向包入口。
 
 没覆盖的：
 
@@ -262,7 +262,7 @@
 - Qdomain10 层：domain 结论：`snapshot_to_payload` 不带 `updated_monotonic`，跨进程还原后该字段恒为 0，编解码不是往返等价；`tests/test_trajectory_hub.py:132` 记录了原因，但类型注释没写。依据：`planner/domain/trajectory_telemetry.py:71`、`:64`。影响：是
 - Qdomain11 层：domain 结论：`weather_catalog_from_payload` 缺字段时抛 `KeyError` 且不包装，与 `snapshot_from_payload` 统一转 `ValueError` 的做法不一致。依据：`planner/domain/weather.py:93`、`planner/domain/trajectory_telemetry.py:162`。影响：否
 - Qdomain12 层：domain 结论：`VIEW_LABELS`、`VEHICLE_FRONT_VIEW`、`VEHICLE_DEFAULT_VIEW`、`front_view_for`、`view_index`、`FAR_VALID_PIXEL_VALUE`、`SHARED_DEPTH_MAPPING`、`WEATHER_LABELS`、`default_weather`、`VehicleSnapshot`、`TrajectoryPointSnapshot` 只有测试引用，产品代码无调用点，是否该留在入口需要判断。依据：`planner/domain/view.py:32`、`planner/domain/trajectory_telemetry.py:32`。影响：否
-- Qdomain13 层：domain 结论：`MotionModel` 不在 `__all__` 的 116 个名字里，但被 algorithms、runtime、simulators 通过 `from planner.domain import` 取用，`tests/test_public_surface.py` 的「A 类」名单也漏了它。依据：`planner/domain/__init__.py:48` 导入、`:148` 的 `__all__` 无此项、`planner/algorithms/motion/corridor.py:5`。影响：是
+- Qdomain13 层：domain 结论：`MotionModel` 曾被入口 import 却不在 `__all__`，已补进导出与测试期望集。依据：`planner/domain/__init__.py:48`、`:192`。影响：否
 
 ## 10 已知缺口
 

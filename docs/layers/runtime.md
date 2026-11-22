@@ -33,7 +33,7 @@ grep -rn "planner.workflows\|planner.assembly\|planner.adapters\|planner.simulat
 
 ## 3 输入与输出
 
-入口 `planner/runtime/__init__.py`，导出 25 个名字（`__all__` 在 planner/runtime/__init__.py:25-50）。
+入口 `planner/runtime/__init__.py`，导出 24 个名字（`__all__` 在 planner/runtime/__init__.py:25-50）。
 
 典型输入：`MotionTrajectory` / `MotionSegment`（段执行）、`StreamGoalSource`（流执行的目标源）、`WorldTrajectory`（授权批量）、`PlanningSnapshot`（模型请求快照）、`MovingObservationSource`（移动帧源）、`CollisionState`、`ExecutionBudget`。
 
