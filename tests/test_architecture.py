@@ -132,11 +132,9 @@ def test_airsim_slots_are_backed_by_real_code():
     """PORT_SLOTS may not claim a capability nothing implements."""
     from dataclasses import fields as dc_fields
 
-    from planner.ports.capabilities import CameraView
     from planner.ports.streaming_vehicle import StreamingVehicle
     from planner.ports.vehicle import Vehicle
     from planner.simulator.ports import SimulatorPorts
-    from planner.simulators.airsim.above_camera import AirSimCameraView
     from planner.simulators.airsim.vehicle import AirSimVehicle
 
     known = {item.name for item in dc_fields(SimulatorPorts)}
@@ -145,23 +143,9 @@ def test_airsim_slots_are_backed_by_real_code():
         unknown = [slot for slot in module.PORT_SLOTS if slot not in known]
         assert not unknown, f"{simulator} declares slots the bundle has no field for: {unknown}"
 
-    for port, cls in ((Vehicle, AirSimVehicle), (StreamingVehicle, AirSimVehicle),
-                      (CameraView, AirSimCameraView)):
+    for port, cls in ((Vehicle, AirSimVehicle), (StreamingVehicle, AirSimVehicle)):
         for name, value in vars(port).items():
             if callable(value) and not name.startswith("_") and name != "__subclasshook__":
                 assert hasattr(cls, name), f"AirSim {cls.__name__} lost {port.__name__}.{name}"
 
 
-def test_look_down_support_lives_in_the_shared_layer():
-    """The above-view task logic is not simulator code; only the port is."""
-    for module in (
-        "planner.domain.visual_goal_above",
-        "planner.domain.above_polygon",
-        "planner.ports.camera_view",
-        "planner.ports.top_detector",
-        "planner.capabilities.viewing.bbox_top_view",
-        "planner.capabilities.targeting.top_geometry",
-        "planner.capabilities.completion.visual_goal_above",
-    ):
-        __import__(module)
-    assert (ROOT / "config" / "core" / "default" / "tasks" / "visual_goal_above.yaml").is_file()

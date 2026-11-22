@@ -62,7 +62,6 @@ def test_derived_airsim_capabilities():
     assert caps.view_modes == ()
     assert caps.actions == ("weather",)
     assert not caps.supports("home") and not caps.supports("models")
-    assert "visual_goal_above" in caps.task_kinds
     assert "free_navigation" not in caps.task_kinds
     # The single AirSim spelling difference is carried by the adapter module.
     assert caps.weather_fields["road_wetness"] == "roadwetness"
@@ -74,8 +73,6 @@ def test_derived_projectairsim_capabilities():
     assert len(caps.view_modes) == 4
     assert set(caps.actions) == {"home", "models", "video", "weather"}
     assert "free_navigation" in caps.task_kinds
-    # No camera_view port means no look-down task, with nothing to configure.
-    assert "visual_goal_above" not in caps.task_kinds
     assert caps.weather_fields["road_wetness"] == "road_wetness"
 
 
@@ -286,5 +283,5 @@ def test_port_slots_match_the_shipped_yaml_drivers():
     assert raw["airsim"]["ports"]["rpc"] == 41451
     assert raw["projectairsim"]["ports"]["topics"] == 8991
     assert pas_runtime.PORT_SLOTS and airsim_runtime.PORT_SLOTS
-    assert "camera_view" in airsim_runtime.PORT_SLOTS
-    assert "camera_view" not in pas_runtime.PORT_SLOTS
+    assert "controlled_capture" in pas_runtime.PORT_SLOTS
+    assert "controlled_capture" not in airsim_runtime.PORT_SLOTS

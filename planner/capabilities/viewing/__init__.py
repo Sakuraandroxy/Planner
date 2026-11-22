@@ -1,1 +1,0 @@
-"""Temporary camera viewing capabilities."""

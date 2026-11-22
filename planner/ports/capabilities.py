@@ -2,7 +2,7 @@
 
 A simulator either implements one of these or leaves it out of its
 ``SimulatorPorts``. Absence is a normal state, not an error: it is what makes
-"UE4 can look down, UE5 can swap appearance models" a data-free statement about
+"UE4 can switch weather, UE5 can swap appearance models" a data-free statement about
 which interfaces each simulator actually wrote.
 
 Do not add methods to ``planner.ports.vehicle`` or ``backend_worker`` to express
@@ -15,28 +15,6 @@ implementer could only answer them by raising or returning nothing.
 from __future__ import annotations
 
 from typing import Protocol
-
-
-class CameraView(Protocol):
-    """Repoint a body-mounted camera. AirSim exposes this, ProjectAirSim does not.
-
-    The six methods are the surface ``adapters/airsim/above_camera.py`` already
-    implements: save the factory mount, aim, restore.
-    """
-
-    def read_mount(self) -> object: ...
-
-    def point(self, pitch_deg: float, yaw_deg: float = 0.0) -> None: ...
-
-    def point_at_world(self, point: tuple[float, float, float]) -> None: ...
-
-    def point_direction_world(
-        self, direction: tuple[float, float, float]
-    ) -> None: ...
-
-    def point_down(self) -> None: ...
-
-    def restore(self, mount: object) -> None: ...
 
 
 class ReturnHome(Protocol):

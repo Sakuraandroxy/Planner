@@ -1,10 +1,6 @@
 """ProjectAirSim (UE5) simulator: which ports it fills, and how to describe them.
 
-``PORT_SLOTS`` mirrors what ``session.py`` already wires together. ``visual_goal_above``
-is absent because there is no ``camera_view``: ProjectAirSim exposes
-``World.switch_streaming_view()`` for a preset camera cycle and no way to write a
-body-mounted camera pose, so the task cannot be offered here regardless of what
-any config file says.
+``PORT_SLOTS`` mirrors what ``session.py`` already wires together.
 """
 
 from __future__ import annotations
@@ -28,9 +24,6 @@ PORT_SLOTS: tuple[str, ...] = (
 
 #: Empty means every task whose ports are present may be offered. UE5 has been
 #: flown with all three of its task kinds, so nothing is withheld here.
-#: ``visual_goal_above`` still drops out, because ``camera_view`` is not in
-#: PORT_SLOTS. That is the design point: the gap is a missing interface, not a
-#: disabled feature flag.
 ENABLED_TASKS: tuple[str, ...] = ()
 
 VEHICLES: tuple[str, ...] = ("rover", "drone")

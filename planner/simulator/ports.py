@@ -26,7 +26,6 @@ from dataclasses import dataclass, fields
 from ..domain.runtime import Capabilities
 from ..ports.capabilities import (
     AppearanceModelControl,
-    CameraView,
     FramePublisher,
     ReturnHome,
     StreamingViews,
@@ -46,7 +45,6 @@ TASK_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "basic_motion": ("vehicle",),
     "visual_goal_navigation": ("vehicle", "observation"),
     "free_navigation": ("vehicle", "observation", "streaming"),
-    "visual_goal_above": ("vehicle", "observation", "camera_view"),
 }
 
 #: Port slot -> the ``actions`` flag it unlocks. Only engine-dependent controls
@@ -68,7 +66,6 @@ class SimulatorPorts:
     streaming: StreamingVehicle | None = None
     controlled_capture: ControlledObservationSource | None = None
     moving_capture: MovingObservationSource | None = None
-    camera_view: CameraView | None = None
     weather: WeatherControl | None = None
     views: StreamingViews | None = None
     models: AppearanceModelControl | None = None
@@ -151,7 +148,6 @@ class SimulatorPorts:
             streaming=_Slot("streaming") if "streaming" in present else None,
             controlled_capture=_Slot("controlled_capture") if "controlled_capture" in present else None,
             moving_capture=_Slot("moving_capture") if "moving_capture" in present else None,
-            camera_view=_Slot("camera_view") if "camera_view" in present else None,
             weather=weather,
             views=views,
             models=_Slot("models") if "models" in present else None,

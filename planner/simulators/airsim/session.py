@@ -37,7 +37,6 @@ from planner.domain.weather import WEATHER_CATALOG, validate_weather_values
 from planner.errors import ProtocolError
 from planner.services.execution import ExecutionService
 
-from .above_camera import AirSimCameraView
 from .connection import AirSimConnection
 from .observation_gate import ObservationGate
 from .observation_source import AirSimObservationSource
@@ -145,12 +144,10 @@ class AirSimMissionSession:
         self.build_capture_source = build_capture_source
         self.observation.capture_worker_factory = build_capture_source
 
-        self.camera_view = AirSimCameraView(self.connection, family.camera_id)
         self.weather = AirSimWeather(self.connection, WEATHER_FIELDS, WEATHER_PRESETS)
         self.ports = build_ports(
             vehicle=control,
             observation=self.observation,
-            camera_view=self.camera_view,
             weather=self.weather,
         )
 

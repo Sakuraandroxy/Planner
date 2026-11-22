@@ -37,7 +37,7 @@
   simulator/{registry,router,xpra_start,processes,argv,marker,
              worker,subprocess_worker,mission_child,telemetry_relay,ports}
   simulators/projectairsim/                   UE5：连接、双载具会话、坐标、观测、相机、天气、机位
-  simulators/airsim/                          UE4：RPC 连接、载具、观测、俯视相机、天气、会话
+  simulators/airsim/                          UE4：RPC 连接、载具、观测、天气、会话
 ──────────────── 契约 ────────────────────
   domain/    纯数据，不依赖任何人
   ports/     接口协议，不依赖任何人
@@ -78,7 +78,6 @@
 | `StreamingVehicle`            | 速度流与状态流，连续执行用             | 否   |
 | `ControlledObservationSource` | 暂停轨迹后按需采一帧                   | 否   |
 | `MovingObservationSource`     | 运动中取帧                             | 否   |
-| `CameraView`                  | 读写机体相机位姿（俯视）               | 否   |
 | `WeatherControl`              | 应用并描述天气参数                     | 否   |
 | `StreamingViews`              | 在固定相机之间循环机位                 | 否   |
 | `AppearanceModelControl`      | 切换载具外观网格                       | 否   |
@@ -97,7 +96,6 @@ TASK_REQUIREMENTS = {
     "basic_motion":            ("vehicle",),
     "visual_goal_navigation":  ("vehicle", "observation"),
     "free_navigation":         ("vehicle", "observation", "streaming"),
-    "visual_goal_above":       ("vehicle", "observation", "camera_view"),
 }
 
 ACTION_PORTS = {"home": "home", "models": "models", "video": "frames", "weather": "weather"}
@@ -113,14 +111,13 @@ ACTION_PORTS = {"home": "home", "models": "models", "video": "frames", "weather"
 | `streaming`               | 有                  | 有                                                            |
 | `controlled_capture`      | 有                  | —                                                             |
 | `moving_capture`          | 有                  | 有                                                            |
-| `camera_view`             | —                   | 有                                                            |
 | `weather`                 | 有                  | 有                                                            |
 | `views`                   | 有（4 个机位）      | —                                                             |
 | `models`                  | 有                  | —                                                             |
 | `frames`                  | 有                  | —                                                             |
 | `home`                    | 有                  | —                                                             |
 | `vehicles`                | `rover`, `drone`    | `drone`                                                       |
-| `enabled_tasks`           | 空（全部可跑）      | `basic_motion`、`visual_goal_navigation`、`visual_goal_above` |
+| `enabled_tasks`           | 空（全部可跑）      | `basic_motion`、`visual_goal_navigation`                      |
 
 `enabled_tasks` 是验证状态，不是引擎上限。UE4 的 `free_navigation` 技术上是通的，但从没飞过，所以不在名单里。
 空表示"不需要额外限制"。
@@ -131,17 +128,14 @@ ACTION_PORTS = {"home": "home", "models": "models", "video": "frames", "weather"
 
 | 输出         | 依据                                               | UE5                          | UE4                      |
 | ------------ | -------------------------------------------------- | ---------------------------- | ------------------------ |
-| `task_kinds` | `TASK_REQUIREMENTS` ∩ 已实现端口 ∩ `enabled_tasks` | 数值动作、视觉目标、自由导航 | 数值动作、视觉目标、俯视 |
+| `task_kinds` | `TASK_REQUIREMENTS` ∩ 已实现端口 ∩ `enabled_tasks` | 数值动作、视觉目标、自由导航 | 数值动作、视觉目标       |
 | `actions`    | `ACTION_PORTS`                                     | home、models、video、weather | weather                  |
 | `vehicles`   | `vehicles`                                         | rover、drone                 | drone                    |
 | `view_modes` | `views.view_modes()`                               | 四个                         | 空                       |
 | `weather_*`  | `weather`                                          | 8 参数 + 预设                | 8 参数 + 预设            |
 
-两点代码事实：
-
-- UE5 的 `visual_goal_above` 因缺 `camera_view` 自动消失，不需要开关。
-- UE4 的能力位宣告了 `visual_goal_above`，但共享层还没有这个 `TaskKind`，也没有对应工作流与解码器，
-  所以它当前不可执行。`basic_motion` 与 `visual_goal_navigation` 已实测跑通。
+UE4 的 `basic_motion` 与 `visual_goal_navigation` 已实测跑通，`free_navigation` 未飞过，
+所以留在 `enabled_tasks` 之外。
 
 ## 5 任务管线
 

@@ -54,7 +54,6 @@ def test_status_publishes_the_active_simulator(client):
     live, controller = client
     payload = live.get("/api/status").json()
     assert payload["simulator"] == "projectairsim"
-    assert "visual_goal_above" not in payload["capabilities"]["task_kinds"]
 
     controller.map = AIRSIM_MAP
     payload = live.get("/api/status").json()
@@ -62,7 +61,6 @@ def test_status_publishes_the_active_simulator(client):
     assert payload["capabilities"]["vehicles"] == ["drone"]
     assert payload["capabilities"]["view_modes"] == []
     assert payload["capabilities"]["actions"] == ["weather"]
-    assert "visual_goal_above" in payload["capabilities"]["task_kinds"]
 
 
 def test_world_options_map_every_scene_to_a_simulator(client):

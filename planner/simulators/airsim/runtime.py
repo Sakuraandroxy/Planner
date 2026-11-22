@@ -19,7 +19,6 @@ PORT_SLOTS: tuple[str, ...] = (
     "observation",
     "streaming",
     "moving_capture",
-    "camera_view",
     "weather",
 )
 
@@ -31,7 +30,6 @@ PORT_SLOTS: tuple[str, ...] = (
 ENABLED_TASKS: tuple[str, ...] = (
     "basic_motion",
     "visual_goal_navigation",
-    "visual_goal_above",
 )
 
 VEHICLES: tuple[str, ...] = ("drone",)
@@ -41,7 +39,6 @@ def build_ports(
     *,
     vehicle,
     observation,
-    camera_view,
     weather,
     moving_capture=None,
 ) -> SimulatorPorts:
@@ -60,7 +57,6 @@ def build_ports(
         observation=observation,
         streaming=vehicle,                 # AirSimVehicle implements stream_velocity
         moving_capture=moving_capture if moving_capture is not None else observation,
-        camera_view=camera_view,
         weather=weather,
         vehicles=VEHICLES,
         enabled_tasks=ENABLED_TASKS,
