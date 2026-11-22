@@ -53,7 +53,7 @@ MAIN_PROCESS_MODULES = (
     "planner.config",
     "planner.server_bootstrap",
     "planner.adapters.http.server_api",
-    "planner.assembly.server_controller",
+    "planner.assembly.controller",
 )
 
 
