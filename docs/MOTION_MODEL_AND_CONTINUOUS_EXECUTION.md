@@ -37,11 +37,11 @@
   self.stream = ContinuousExecution(execution, execution.vehicle, motion_limits, speed_mps, clock, ...)
   ```
 
-`ContinuousExecution`（`planner/services/continuous_execution.py:19`）内部持有 `ContinuousFollower`（`…:24`），而 `ContinuousFollower` 是纯算法（`planner/services/motion/continuous.py`），不认识仿真器、也不区分载具。它每拍产出 `(velocity_world, yaw_rate)`，交给 `self.vehicle.stream_velocity(velocity, rate, dt)`（`continuous_execution.py:124-125`）。
+`ContinuousExecution`（`planner/runtime/continuous_execution.py:19`）内部持有 `ContinuousFollower`（`…:24`），而 `ContinuousFollower` 是纯算法（`planner/runtime/motion/continuous.py`），不认识仿真器、也不区分载具。它每拍产出 `(velocity_world, yaw_rate)`，交给 `self.vehicle.stream_velocity(velocity, rate, dt)`（`continuous_execution.py:124-125`）。
 
 所以"规划器→轨迹队列→跟随→下发"这整条链，**无人机与无人车、两种任务完全一致**。载具差异全部收敛到 `self.vehicle` 这个端口对象上。
 
-装配层确认这一点：`planner/application/mission_assembly.py:220`
+装配层确认这一点：`planner/assembly/mission_assembly.py:220`
 ```python
 execution = ExecutionService(vehicle) if execution is None else execution
 ```
@@ -106,11 +106,11 @@ task = await self._robot.move_by_velocity_async(
 
 ### 4.1 跟随器是全向的
 
-`planner/services/motion/continuous.py:70`：
+`planner/runtime/motion/continuous.py:70`：
 ```python
 error = tuple(v - p for v, p in zip(reference.position, (pose.x, pose.y, pose.z)))
 ```
-`planner/services/motion/continuous.py:87`：
+`planner/runtime/motion/continuous.py:87`：
 ```python
 desired = tuple(v/norm*speed for v in error) if norm else (0.0, 0.0, 0.0)
 ```
@@ -144,9 +144,9 @@ desired = tuple(v/norm*speed for v in error) if norm else (0.0, 0.0, 0.0)
 - 无人车执行器取前向投影：`0.036·cos(−6°) + 0.340·sin(−6°) ≈ 0.000` → **engine ≈ 0**。
 - 车不会横移（阿克曼），也没油门前进 → **原地不动**。
 
-同时，航点弹出判据 `reached()`（`planner/services/motion/continuous.py:12-23`）要求"距端点 ≤ `position_tolerance`（默认 0.3 m，`planner/domain/motion.py:47`）**或** 已驶过端点且横向 ≤ 0.3 m"，且朝向对齐。残差 0.388 m、横向 0.37 m，**两条都过不了**，队列头永远弹不掉。
+同时，航点弹出判据 `reached()`（`planner/runtime/motion/continuous.py:12-23`）要求"距端点 ≤ `position_tolerance`（默认 0.3 m，`planner/domain/motion.py:47`）**或** 已驶过端点且横向 ≤ 0.3 m"，且朝向对齐。残差 0.388 m、横向 0.37 m，**两条都过不了**，队列头永远弹不掉。
 
-结果：靠 `planner/services/continuous_execution.py:121-122` 的到达超时（`waypoint_timeout_s`，默认 60 s，本任务日志里累计约 70 s）抛出 `execution_error`。
+结果：靠 `planner/runtime/continuous_execution.py:121-122` 的到达超时（`waypoint_timeout_s`，默认 60 s，本任务日志里累计约 70 s）抛出 `execution_error`。
 
 ### 4.4 空转的视觉来源
 
