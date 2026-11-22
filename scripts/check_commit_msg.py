@@ -81,6 +81,34 @@ VERBS = (
     "回退",
     "恢复",
     "支持",
+    "核对",
+    "对账",
+    "重审",
+    "复核",
+    "审阅",
+    "评审",
+    "搬迁",
+    "移动",
+    "移出",
+    "外置",
+    "下沉",
+    "上移",
+    "收敛",
+    "扩展",
+    "扩充",
+    "收口",
+    "收紧",
+    "放宽",
+    "限定",
+    "登记",
+    "标注",
+    "转换",
+    "跟随",
+    "归位",
+    "划分",
+    "重算",
+    "重挂",
+    "重排",
 )
 
 BANNED_WORDS = ("和", "以及", "同时")
@@ -110,6 +138,8 @@ def _check_title(title: str) -> list[str]:
         )
     if not description.startswith(VERBS):
         errors.append(f"标题：描述未以动词开头：{description}")
+    if "，" in description or "," in description:
+        errors.append("标题：描述里只能写一件事，不要用逗号并列")
     return errors
 
 

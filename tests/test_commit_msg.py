@@ -53,3 +53,15 @@ def test_rejects_co_author_trailer(tmp_path):
     result = _check(tmp_path, message)
     assert result.returncode == 1
     assert "Co-Authored-By" in result.stderr
+
+
+def test_rejects_comma_bundled_title(tmp_path):
+    result = _check(tmp_path, "test(lint): 新增检查，登记例外\n")
+    assert result.returncode == 1
+    assert "只能写一件事" in result.stderr
+
+
+def test_accepts_extended_verbs(tmp_path):
+    for verb in ("核对", "对账", "重审", "搬迁", "移出", "外置", "归位"):
+        result = _check(tmp_path, f"docs: {verb}某个说明\n")
+        assert result.returncode == 0, result.stderr
