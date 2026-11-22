@@ -46,6 +46,8 @@
 
 ## 六类代码
 
+下文说现有位置时用当前目录名。重构后的包名：`capabilities` 改 `algorithms`，`services` 改 `runtime`，`application` 改 `assembly`，见 `docs/REFACTOR.md`。
+
 ### 契约层 `planner/domain/`、`planner/ports/`
 
 放全栈共用的定义：位姿与坐标系约定、观测样本、轨迹与运动段、任务与阶段、能力名、载具声明、完成证据、异常分类，以及全部端口的 `Protocol`。
@@ -58,7 +60,7 @@
 
 代价是这一层被所有模块引用，任何改动波及其他五层。所以准入要严格：看不懂是不是类型定义的东西，不放进来。
 
-### 计算层 `planner/capabilities/` 的纯函数部分
+### 计算层 `planner/algorithms/`（现 `planner/capabilities/` 的纯函数部分）
 
 相同输入得到相同结果，不读时钟、不开线程、不碰设备与网络。内容包括几何变换与深度反投影、运动律（插值、航向指令、转弯限速、加减速限幅）、序列合法性校验、从观测中量出距离与角度。
 
@@ -66,7 +68,7 @@
 
 运动律里唯一按载具分叉的地方是能否横移。无人机走全向分支，无人车走前后加转向分支，越点走廊在车这一侧放宽到 0.6 m。这个数值现在写在 `simulators/projectairsim/rover.py` 的 `ROVER_PASSED_LATERAL_TOLERANCE_M` 里，目标位置是本层。
 
-### 执行层 `planner/services/`、`planner/simulator/`
+### 执行层 `planner/runtime/`、`planner/simulator/`（现 `planner/services/`）
 
 有状态、读时钟，但不认识任何具体任务。内容是控制权、执行器、航点队列、续规划滑窗、位置保持、碰撞退避、帧与遥测的汇、受限的后台任务。只依赖契约层的端口声明，端口实现由装配层插进来。
 
@@ -84,7 +86,7 @@
 
 现在没有这一层。碰撞恢复在两个任务里各写了一份镜像代码，原因就在这里：可选项只有复制，或者让两个任务互相引用，而后者被禁止。
 
-### 装配层 `planner/application/`
+### 装配层 `planner/assembly/`（现 `planner/application/`）
 
 唯一同时拿到任务和引擎的地方。四件事：确定本次跑什么（任务、载具、地图、规划器）、把请求路由到对应工作流、管后端状态机与命令队列、按配置造外部端点与检测器。
 
@@ -167,26 +169,27 @@
 | 步骤 | 做什么 | 前置与风险 |
 | --- | --- | --- |
 | 1 | 把端口声明集中到一处，写清每个端口的语义，以及"没实现它意味着什么" | 后面所有边界都以这一步为参照 |
-| 2 | 把纯函数搬到计算层，同时把越点走廊的默认值按载具类别放进运动律 | 必须排在第一步之后，纯函数的归属要按端口语义定。做完之后"计算层不依赖执行层"才能写成自动检查 |
+| 2 | 把纯函数搬到计算层，同时把越点走廊的默认值按载具类别放进运动律；三个包在同一步改名 | 必须排在第一步之后，纯函数的归属要按端口语义定。搬迁与改名合并，import 行只改一遍 |
 | 3 | 抽取公共编排，把两个任务里镜像的连续跟随与碰撞恢复合成一份，任务包只留差异 | 依赖前两步 |
 | 4 | 把 `TASK_REQUIREMENTS` 从引擎包搬到任务包 | 风险最高，会改装配期的校验逻辑，要等前三步稳定 |
 
 ## 目录对照
 
-| 现有位置 | 归属 |
-| --- | --- |
-| `planner/domain`、`planner/ports` | 契约层 |
-| `planner/capabilities` 的几何、测量、运动律 | 计算层 |
-| `planner/capabilities` 的完成判定、参数准入、目标关联 | 任务层 |
-| `planner/capabilities/sliding_window/worker.py` | 执行层 |
-| `planner/services` | 执行层，其中的纯几何工具进计算层 |
-| `planner/simulator` | 执行层（进程栈与 worker） |
-| `planner/workflows` | 任务层，公共部分上移到公共编排 |
-| `planner/application` | 装配层 |
-| `planner/adapters/http`、`console` | 入口层 |
-| `planner/adapters` 的模型端点与提示词 | 端口实现 |
-| `planner/simulators/<名称>` | 引擎实现 |
-| `config` | 数据，由装配层读取 |
+| 现有位置 | 归属 | 目标包 |
+| --- | --- | --- |
+| `planner/domain`、`planner/ports` | 契约层 | `domain/`、`ports/` |
+| `planner/domain/runtime.py` | 契约层 | `domain/engine_family.py` |
+| `planner/capabilities` 的几何、测量、运动律 | 计算层 | `algorithms/` |
+| `planner/capabilities` 的完成判定、参数准入、目标关联 | 任务层 | `workflows/<task>/policy.py` |
+| `planner/capabilities/sliding_window/worker.py` | 执行层 | `runtime/window/` |
+| `planner/services` | 执行层 | `runtime/` |
+| `planner/services` 中的纯几何工具 | 计算层 | `algorithms/` |
+| `planner/workflows` | 任务层，公共部分上移到公共编排 | `workflows/`、`workflows/common/` |
+| `planner/application` | 装配层 | `assembly/` |
+| `planner/adapters/http`、`console` | 入口层 | `adapters/http/`、`console/` |
+| `planner/adapters` 的模型端点与提示词 | 端口实现 | `adapters/` |
+| `planner/simulators/<名称>` | 引擎实现 | `simulators/<名称>/` |
+| `config` | 数据 | `config/` |
 
 ## 当前状态
 
