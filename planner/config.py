@@ -17,7 +17,7 @@ from .domain.sliding_window import SlidingWindowSettings
 from .domain.view import VIEW_MODES
 from .domain.visual_goal_completion import VisualGoalTriggerRules
 from .domain.visual_goal_limits import VisualGoalLimits
-from .runtime.segment_motion import MotionLimits
+from .domain.motion import MotionLimits
 
 
 @dataclass(frozen=True)
@@ -1499,9 +1499,9 @@ def load_config(path: str | Path) -> AppConfig:
 
     motion = MotionLimits(
         max_speed_mps=float(motion_raw.get("max_speed_mps", 3.0)),
-        max_accel_mps2=float(motion_raw.get("max_accel_mps2", 1.5)),
-        max_yaw_rate_dps=float(motion_raw.get("max_yaw_rate_dps", 30.0)),
-        max_yaw_accel_dps2=float(motion_raw.get("max_yaw_accel_dps2", 60.0)),
+        max_acceleration_mps2=float(motion_raw.get("max_accel_mps2", 1.5)),
+        max_yaw_rate_deg_s=float(motion_raw.get("max_yaw_rate_dps", 30.0)),
+        max_yaw_acceleration_deg_s2=float(motion_raw.get("max_yaw_accel_dps2", 60.0)),
         control_hz=float(motion_raw.get("control_hz", 20.0)),
         min_duration_s=float(motion_raw.get("min_duration_s", 1.0)),
         passed_lateral_tolerance_m=float(motion_raw.get("passed_lateral_tolerance_m", 0.3)),

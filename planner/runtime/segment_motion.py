@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from ..domain.motion import MotionLimits
 from ..domain.pose import (
     RelativePoseDelta,
     WorldPose,
@@ -15,81 +16,6 @@ from ..domain.pose import (
 # Peak values of the normalized quintic 10t^3 - 15t^4 + 6t^5.
 _QUINTIC_PEAK_VELOCITY = 1.875
 _QUINTIC_PEAK_ACCELERATION = 5.773502691896258
-
-
-@dataclass(frozen=True)
-class MotionLimits:
-    max_speed_mps: float = 3.0
-    max_accel_mps2: float = 1.5
-    max_yaw_rate_dps: float = 30.0
-    max_yaw_accel_dps2: float = 60.0
-    control_hz: float = 20.0
-    min_duration_s: float = 1.0
-    #: “已驶过端点”横向走廊；映射进 domain tracking limits。默认与位置容差同宽，
-    #: 全向载具行为不变；无人车适配构造期会放宽（见 rover.rover_tracking_limits）。
-    passed_lateral_tolerance_m: float = 0.3
-    #: 航向伺服的四个参数，含义见 planner/runtime/motion/heading_servo.py。
-    heading_hold_gain: float = 0.4
-    heading_rate_damping: float = 0.0
-    heading_deadband_deg: float = 0.5
-    heading_rate_deadband_dps: float = 1.5
-
-    #: 允许取零的参数：零表示关掉该项。
-    OPTIONAL = frozenset(
-        {"heading_rate_damping", "heading_deadband_deg", "heading_rate_deadband_dps"}
-    )
-    #: 必须为正的参数，单独列出以便校验时区分。
-    POSITIVE = frozenset({"heading_hold_gain", "passed_lateral_tolerance_m"})
-
-    def __post_init__(self) -> None:
-        for name in (
-            "max_speed_mps",
-            "max_accel_mps2",
-            "max_yaw_rate_dps",
-            "max_yaw_accel_dps2",
-            "control_hz",
-        ):
-            if getattr(self, name) <= 0:
-                raise ValueError(f"{name} must be positive")
-        if self.min_duration_s < 0:
-            raise ValueError("min_duration_s must be non-negative")
-        for name in self.OPTIONAL:
-            value = getattr(self, name)
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                raise ValueError(f"{name} must be numeric")
-            if value < 0:
-                raise ValueError(f"{name} must be non-negative")
-        for name in self.POSITIVE:
-            value = getattr(self, name)
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                raise ValueError(f"{name} must be numeric")
-            if value <= 0:
-                raise ValueError(f"{name} must be positive")
-
-    def to_tracking_limits(self):
-        """Convert this configured envelope into the domain tracking limits.
-
-        Two classes are named ``MotionLimits`` here: this one carries what
-        ``config/core/<profile>/base.yaml`` states (``max_accel_mps2``, ``max_yaw_rate_dps``), and
-        ``planner/domain/motion.py`` carries what the motion trackers and the
-        position hold read (``max_acceleration_mps2``, ``max_yaw_rate_deg_s``, plus
-        the tolerances). Every simulator needs the second, so the mapping lives with
-        the first instead of being re-derived per simulator package.
-        """
-        from ..domain.motion import MotionLimits as TrackingLimits
-
-        return TrackingLimits(
-            max_acceleration_mps2=self.max_accel_mps2,
-            max_yaw_rate_deg_s=self.max_yaw_rate_dps,
-            max_yaw_acceleration_deg_s2=self.max_yaw_accel_dps2,
-            control_hz=self.control_hz,
-            min_duration_s=max(self.min_duration_s, 1e-3),
-            passed_lateral_tolerance_m=self.passed_lateral_tolerance_m,
-            heading_hold_gain=self.heading_hold_gain,
-            heading_rate_damping=self.heading_rate_damping,
-            heading_deadband_deg=self.heading_deadband_deg,
-            heading_rate_deadband_dps=self.heading_rate_deadband_dps,
-        )
 
 
 @dataclass(frozen=True)
@@ -113,16 +39,16 @@ def duration_for(delta: RelativePoseDelta, limits: MotionLimits) -> float:
         )
         durations.append(
             math.sqrt(
-                _QUINTIC_PEAK_ACCELERATION * distance / limits.max_accel_mps2
+                _QUINTIC_PEAK_ACCELERATION * distance / limits.max_acceleration_mps2
             )
         )
     if yaw > 0.0:
         durations.append(
-            _QUINTIC_PEAK_VELOCITY * yaw / limits.max_yaw_rate_dps
+            _QUINTIC_PEAK_VELOCITY * yaw / limits.max_yaw_rate_deg_s
         )
         durations.append(
             math.sqrt(
-                _QUINTIC_PEAK_ACCELERATION * yaw / limits.max_yaw_accel_dps2
+                _QUINTIC_PEAK_ACCELERATION * yaw / limits.max_yaw_acceleration_deg_s2
             )
         )
     return max(durations)

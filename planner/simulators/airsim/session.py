@@ -76,11 +76,9 @@ class AirSimMissionSession:
             motion_timeout_s=config.drone.move_timeout_s + 2,
             vehicle_name=family.vehicle_name,
         )
-        # ``config.motion`` is the configured envelope; the position hold and the
-        # motion tracker below read the domain tracking limits, whose fields are
-        # spelled differently. Converting once here is what lets one ``limits`` object
-        # be handed to all three without either class guessing.
-        limits = config.motion.to_tracking_limits()
+        # ``config.motion`` 就是跟踪侧那份包络：位置保持、运动跟踪器与段规划器
+        # 读同一组字段，这里不再转换。
+        limits = config.motion
         self.server = ServerVehicle(
             self.connection,
             limits,

@@ -3,9 +3,9 @@ import math
 
 import pytest
 
+from planner.domain.motion import MotionLimits
 from planner.domain.pose import RelativePoseDelta, WorldPose
 from planner.runtime.segment_motion import (
-    MotionLimits,
     duration_for,
     plan_segment,
     quintic,
@@ -24,7 +24,7 @@ def test_quintic_is_monotonic():
 
 
 def test_duration_respects_minimum():
-    limits = MotionLimits(min_duration_s=1.0, max_speed_mps=3.0, max_accel_mps2=1.5)
+    limits = MotionLimits(min_duration_s=1.0, max_speed_mps=3.0, max_acceleration_mps2=1.5)
     duration = duration_for(RelativePoseDelta(dx=0.01), limits)
     assert duration >= 1.0
 
