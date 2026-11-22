@@ -352,14 +352,14 @@ StreamSink = CommandSink
 
 `StreamGoalSource` 由 `ports/goal_source.py` 声明（裁决 R16），`runtime/motion/follower.py` 的 `QueueFollower` 实现它，`ControlLoop.run_stream` 的 `goals` 参数标注就是这个类型。`next` 的 `unwrapped_yaw_deg` 参数是在 `00-boundaries.md` 的 `next(state)` 上多出来的：偏航必须用不折返的连续角，`WorldPose.yaw_deg` 会跨 ±180 跳变。
 
-`segment_sink()` 与 `stream_sink()` 是 `vehicle.stream_command` 的绑定，返回同一个可调用对象（裁决 R26）；任务层把它们的返回值传给 `run_segment` / `run_stream` 的 `sink` 参数。`SegmentSink`、`StreamSink` 只是本层私有类型别名（`Callable[[MotionCommand, float], None]`），不导出、不是跨层名字。
+`segment_sink()` 与 `stream_sink()` 是 `vehicle.stream_command` 的绑定，返回同一个可调用对象（裁决 R26）；**任务层只能把它们回传给 `run_segment` / `run_stream` 的 `sink` 参数，不得自己调它下发命令**：伺服、限幅、预算与碰撞检查都在循环内，取到 sink 直接调就绕过了这一层（裁决 R27）。`SegmentSink`、`StreamSink` 只是本层私有类型别名（`Callable[[MotionCommand, float], None]`），不导出、不是跨层名字。`StreamGoalSource.next(state: TimedVehicleState, unwrapped_yaw_deg: float)` 的签名已统一（裁决 R27，`00-boundaries.md` 已同步）。
 
 ### 3.2 我要求相邻层提供什么
 
 | 相邻层 | 我要求的东西 | 形状 |
 | --- | --- | --- |
 | `domain/` | `MotionModel`、`MotionCapability`、`HolonomicCommand`、`CarCommand`、`MotionCommand`、`CollisionContact`、`CollisionState`、`CollisionRecoverySettings`、`ExecutionBudget`、`ExecutionReceipt`、`ExecutionRecord`、`StopResult`、`MotionSegment`、`MotionTrajectory`、`WorldPose`、`resolve_yaw_delta_deg`、`wrap_yaw_deg`、`TimedVehicleState`、`QueuedWaypoint`、`PlanningSnapshot`、`SlidingWindowSettings`、`ContinuousTrackingSettings`、`MotionLimits`（只留一份） | `00-boundaries.md` 第四节与契约层方案；`PlanningWindowInput` 已内部化（裁决 R26） |
-| `ports/` | `Vehicle.current_pose/motion_capability/execute_segment/cancel/hover/collision_state -> CollisionState`（裁决 R1：槽最终由 runtime 的 `GuidedVehicle(streaming, loop)` 兑现，引擎侧只提供 `current_pose`/`motion_capability`/`collision_state`/`cancel`/`hover` 与 `stream_command`）；`StreamingVehicle.stream_state/stream_command`；`PositionHoldVehicle.stream_state/cancel/hold_velocity`（裁决 R7：`hold_velocity` 内部转调 `stream_command`）；`StreamGoalSource.next`（裁决 R16，文件 `ports/goal_source.py`）；`TrajectoryPlanner.plan`；`ObservationSource.capture`；`MovingObservationSource.capture_moving` | 端口文件 14 个；`collision_check.py` 删除（裁决 R5）后 13 个，新增 `goal_source.py`（裁决 R16）后回到 14 个 |
+| `ports/` | `Vehicle.current_pose/motion_capability/execute_segment/cancel/hover/collision_state -> CollisionState`（裁决 R1：槽最终由 runtime 的 `GuidedVehicle(streaming, loop)` 兑现，引擎侧只提供 `current_pose`/`motion_capability`/`collision_state`/`cancel`/`hover` 与 `stream_command`）；`StreamingVehicle.stream_state/stream_command`；`PositionHoldVehicle.stream_state/cancel/hold_velocity`（裁决 R7：`hold_velocity` 内部转调 `stream_command`）；`StreamGoalSource.next(state: TimedVehicleState, unwrapped_yaw_deg: float)`（裁决 R16、R27）；`TrajectoryPlanner.plan`；`ObservationSource.capture`；`MovingObservationSource.capture_moving` | 端口文件 14 → 13：删 `collision_check.py`（裁决 R5），加 `goal_source.py`（裁决 R16），再把 `backend_worker.py` 迁出到 `simulator/worker_protocol.py`（裁决 R27），结果 13 个 |
 | `algorithms/` | `corridor_for(model, limits)`（裁决 R6、R17：`ACKERMANN_PASSED_LATERAL_TOLERANCE_M = 1.0`，`HOLONOMIC` 取 `MotionLimits.position_tolerance_m`；配置只能抬高不能压低）、`heading_rate_deg_s`、`braking_speed`、`planned_speed`、`corner_speed`、`reached`、`duration_for`、`sample_segment`、`translation_handoff`、`ContinuousPathReference`、`world_to_relative`、`relative_to_world`、`require_execution_anchor`、`RefillScheduler` | 现 `services/motion/` 与 `capabilities/sliding_window/scheduler.py` 的纯函数部分，加 `algorithms/motion/corridor.py` |
 | `workflows/` | 实现或组装 `StreamGoalSource`（默认直接用 `QueueFollower`，只补暂停策略钩子，裁决 R4）；声明 `MovingCapture`（`request`/`poll`/`discard`/`busy`/`close`）由装配层注入运行时实现（裁决 R22）；每阶段只给观测、上下文与指令（规划请求参数本层内部构造，裁决 R26）；调 `window` 六个方法；把 `delay`、`maximum_rounds` 交给 `window.begin` | 见任务层方案 |
 | `assembly/` | 按载具造一套 `ControlLoop`：`capability = vehicle.motion_capability()`、`limits` 从 `config.motion` 一次构造、`tracking` 从 `config.continuous`、`recovery` 从 `config.motion.collision`（开关只有 `motion.collision.enabled`，默认 true；删 `visual_goal_navigation.collision_check_enabled`，裁决 R8）、注入 `clock`/`sleep`；用 `GuidedVehicle(streaming, loop)` 填 `Vehicle` 槽（裁决 R1） | 见装配层方案 |
@@ -401,7 +401,7 @@ StreamSink = CommandSink
 
 | 名字 | 形状 | 由谁消费 | 稳定性 |
 | --- | --- | --- | --- |
-| `ControlLoop.run_segment` / `run_stream` / `segment_sink` / `stream_sink` | 方法签名，见 3.1（sink 由本层给出，不作为输入面） | 任务层 | 稳定 |
+| `ControlLoop.run_segment` / `run_stream` / `segment_sink` / `stream_sink` | 方法签名，见 3.1（sink 由本层给出，不作为输入面；`segment_sink` / `stream_sink` 的返回值只能回传给 `run_segment` / `run_stream`，不得在任务层直接调用下发，裁决 R27） | 任务层 | 稳定 |
 | `ExecutionReceipt` / `ExecutionRecord` / `StopResult` | `domain/` dataclass | 任务层 | 稳定 |
 | `PlanningWindow` 六个公开方法 | 见 3.1 | 任务层 | 稳定 |
 | `ExecutionService` 公开方法 | 见 3.1 | 任务层、装配层 | 稳定 |

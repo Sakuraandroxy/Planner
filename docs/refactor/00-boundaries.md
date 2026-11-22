@@ -53,6 +53,7 @@ planner/
 4. `workflows/` 只 import `domain/`、`ports/`、`algorithms/`、`runtime/`。任务包之间不互相 import。
 5. `assembly/` 可以 import 以上全部加 `simulators/`，是唯一同时认识任务与引擎的位置。
 6. `adapters/` 的端口实现只 import `domain/`、`ports/`、`algorithms/`；`adapters/http/` 只 import `assembly/` 与 `domain/`。
+6.1 `planner.errors` 是契约层的第三个模块，任何层都可以 import 它；测试的依赖规则要把它当作契约层的一部分放行。
 7. `simulators/<name>/` 只 import `domain/`、`ports/`、 `simulator/`，以及自己的客户端库。
 8. `simulator/` 不 import `simulators/`。
 
@@ -135,7 +136,7 @@ class ControlLoop:
 ```
 
 - `SegmentSink.apply(command: MotionCommand, duration_s: float)`：引擎侧唯一需要实现的动作接口，由适配层包在 `execute_segment` 内。
-- `StreamGoalSource.next(state) -> MotionCommand | None`：任务层提供目标，执行层负责伺服与限幅。
+- `StreamGoalSource.next(state, unwrapped_yaw_deg) -> MotionCommand | None`：任务层提供目标，执行层负责伺服与限幅。第二个参数是不折返的连续偏航，`WorldPose.yaw_deg` 跨 ±180 会跳变。
 - 30 ms 与 50 ms 两个周期都由 `ControlLoop` 决定，引擎不决定节奏。
 
 ### 执行层提供的滑窗

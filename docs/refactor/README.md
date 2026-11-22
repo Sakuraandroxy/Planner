@@ -32,7 +32,7 @@ planner/
 
 | 编号 | 规则 | 例外 |
 | --- | --- | --- |
-| D1 | `domain/`、`ports/` 不 import 其他层 | 无 |
+| D1 | `domain/`、`ports/` 不 import 其他层 | `planner.errors` 是契约层的第三个模块，所有层可 import |
 | D2 | `algorithms/` 只 import `domain/`、`ports/` | 当前不需要 `ports/` |
 | D3 | `runtime/` 只 import `domain/`、`ports/`、`algorithms/` | 无 |
 | D4 | `workflows/` 只 import 上述四层，任务包之间零 import | 无 |
@@ -106,7 +106,7 @@ REQUIRED_PORTS: tuple[str, ...]
 
 十四条形状约定：
 
-1. 命令下发只有一个签名 `stream_command(command, duration_s)`。任务层不自己造 sink：它调 `ControlLoop.segment_sink()` 或 `stream_sink()` 拿到可调用对象再传回循环。`SegmentSink`、`StreamSink` 只是执行层内部类型别名，不导出、不是跨层名字（R26）。
+1. 命令下发只有一个签名 `stream_command(command, duration_s)`。任务层不自己造 sink：它调 `ControlLoop.segment_sink()` 或 `stream_sink()` 拿到可调用对象再传回循环，**不得自行调用**——伺服与限幅都在循环内完成，直接调用会绕过限幅。`SegmentSink`、`StreamSink` 只是执行层内部类型别名，不导出、不是跨层名字（R26）。
 2. `execute_segment` 由 `runtime` 的 `GuidedVehicle(streaming, loop)` 兑现，引擎类不实现它（R1）。过渡期允许引擎留三行委派。
 3. `run_stream` 的正常返回只有一种：`goals.next` 返回 `None`。deadline 到期抛 `BudgetExceeded`（R3）。
 4. 目标源由 `runtime/motion/follower.py` 的 `QueueFollower` 实现，含队列消耗与航点超时；`PlanningWindow` 只提供队列视图、`consume` 与六个方法（R4）。
@@ -127,7 +127,7 @@ REQUIRED_PORTS: tuple[str, ...]
 
 ```text
 任务包  构造 MotionSegment（或由五个航点转五段）
-runtime/execution.execute_with_receipt -> ControlLoop.run_segment
+ControlLoop.run_segment（逐段；execute_with_receipt 已从 ExecutionService 移出）
 每 30 ms: _guard（停止/预算/碰撞）-> stream_state -> 采样五次曲线
           -> MotionSynthesizer（按 MotionCapability 分型）-> CommandLimiter
           -> StreamingVehicle.stream_command(cmd, 0.030)
@@ -150,7 +150,7 @@ runtime/execution.execute_with_receipt -> ControlLoop.run_segment
 controller  准入：state 必须 IDLE，否则 409；置 connecting
 controller  arm_old.execution.request_stop()     # 只置事件
 owner       下一检查点抛 ExecutionError -> stop()（cancel + hover）-> release_flight
-controller  旧载具 park（抬到 1 km 钉住）-> session.activate(new)
+controller  session.activate_vehicle(new)：引擎侧原子完成 park、hide、recover、home、机位
 controller  换 VehicleArm、换机位、重算能力位与控件
 controller  position_hold.start() -> IDLE
 失败        回滚选择与机位，返回 SwitchRefused -> 409
@@ -186,23 +186,23 @@ controller  position_hold.start() -> IDLE
 
 - 职责：持有状态与时间，不认识任何具体任务。
 - 输入：契约层类型；`ports` 的 `Vehicle`、`StreamingVehicle`、`PositionHoldVehicle`、`ObservationSource`、`MovingObservationSource`、`TrajectoryPlanner`、`StreamGoalSource`；`algorithms` 的纯函数；`clock` 与 `sleep` 两个可替换调用。
-- 输出：`ControlLoop`（两条通道，加 `segment_sink()`、`stream_sink()` 两个取 sink 的方法）、`ExecutionService`（控制权与预算）、`PlanningWindow`（六个方法）、`CollisionRecovery`、`QueueFollower`、`GuidedVehicle`、`PositionHold`、`FrameHub`、`TrajectoryHub`、`LogBuffer`、`ModelCallService`、`MovingObservations`、`BackgroundOperation`、`StreamTimeline`、`close_resources`。
+- 输出（10 个）：`ControlLoop`（两条通道，带 `segment_sink()`、`stream_sink()`）、`ExecutionService`、`PlanningWindow`、`QueueFollower`、`GuidedVehicle`、`PositionHold`、`FrameHub`、`TrajectoryHub`、`LogBuffer`、`BackgroundCall`。`CollisionRecovery`、`StreamTimeline`、`MovingObservations`、`close_resources` 已内部化，不进对外面。
 - 不暴露：`WorldWaypointQueue`、`SlowPlannerWorker`、`BackgroundContinuationPlanner`、`StreamRecorder`、`MotionSynthesizer`、`CommandLimiter`、两个周期常量、`_guard`。
 - 细节：`03-runtime.md` §3.4。
 
 ### 任务 `workflows/`
 
 - 职责：认识任务，不认识引擎。
-- 输入：契约层类型与异常；`ports` 的 `Vehicle`、`StreamingVehicle`、`ObservationSource`、`ControlledObservationSource`、`MovingObservationSource`、`GoalObserver`、`TrajectoryPlanner`、`TaskCompletionChecker`、`TaskTrace`；`algorithms` 的纯函数与走廊常量；`runtime` 的 `ControlLoop`、`PlanningWindow`、`ExecutionService`、`QueueFollower`、`ModelCallService`、`MovingObservations`、`BackgroundOperation`、`close_resources`；本层声明 `MotionControl`、`ExecutionControl`、`PlanningQueue`、`MovingCapture` 四个 `Protocol`。
-- 输出：`TASK_PACKAGES`（三条 `TaskDeclaration`）、三个 `Workflow` 实现、三份 `StageAdmission`、`require_confirmed`。
+- 输入：契约层类型与异常；`ports` 的 `Vehicle`、`StreamingVehicle`、`ObservationSource`、`ControlledObservationSource`、`MovingObservationSource`、`GoalObserver`、`TrajectoryPlanner`、`TaskCompletionChecker`、`TaskTrace`；`algorithms` 的纯函数与走廊常量；`runtime` 的对象一律经本层声明的四个 `Protocol` 使用（`MotionControl`、`ExecutionControl`、`PlanningQueue`、`MovingCapture`），不 import 其具体类（D11/D12）。
+- 输出：三个任务包各自导出的 `TASK_KIND` 与 `REQUIRED_PORTS`（装配层按二级包入口逐个读）、三个 `Workflow` 实现、三份 `StageAdmission`。`TASK_PACKAGES`、`TaskDeclaration`、`require_confirmed` 不对外。
 - 不暴露：`TaskLoop`、`StageEvidence`、`CycleContext`、`Channel` 实现、`TargetTracker`、`CompletionGate`、`StallWatch`、各任务策略类。
 - 细节：`04-workflows.md` §3 末（输入面与输出面）。
 
 ### 装配 `assembly/`
 
 - 职责：唯一同时认识任务与引擎的位置，负责构造期接线与运行期路由。
-- 输入：`planner.workflows` 的 `TASK_PACKAGES`（内含每个任务包的 `TASK_KIND` 与 `REQUIRED_PORTS`）；`planner.config` 的配置对象；引擎会话交出的 `MissionInputs`（`SimulatorPorts` 与端口对象）；`adapters` 造的解析器、检测器、规划器、完成判定。
-- 输出：`ServerController`（入口层唯一依赖）、`assemble_missions`、`VehicleArm`、`available_kinds`、`capabilities_for`、`require_application`、`PlannerApplication`、`MissionRunner`、`MissionValidator`、`WorkflowRouter`、六个工厂函数、`SwitchRefused`。
+- 输入：三个任务包子包入口的 `TASK_KIND` 与 `REQUIRED_PORTS`；`planner.config` 的配置对象；引擎会话交出的 `MissionInputs`（`SimulatorPorts` 与端口对象）；`adapters` 造的解析器、检测器、规划器、完成判定。
+- 输出（12 个）：`ServerController`（入口层唯一依赖，能力通过 `controller.capabilities()` 取）、`assemble_missions`、`VehicleArm`、`require_application`、`build_resources`、`SwitchRefused` 等；全表见 `05-assembly.md` §8.3。`capabilities_for`、`PlannerApplication`、`MissionRunner`、`MissionValidator`、`WorkflowRouter` 已内部化。
 - 不暴露：六个控制器协作者（`LifecycleState`、`CommandChannel`、`WorldSwitcher`、`ModelSwitcher`、`EnvironmentChannel`、`ProfileSwitcher`）的内部方法；配置包的解析细节。
 - 细节：`05-assembly.md` §3.3。
 
@@ -271,7 +271,7 @@ controller  position_hold.start() -> IDLE
 | --- | --- |
 | `tests/test_layering.py` | D1–D9 依赖规则，含 `simulator/` 白名单与"只有 assembly 同时 import 任务与引擎" |
 | `tests/test_layer_entries.py` | D10–D12：跨层 import 只落在包入口；输入参数类型是契约类型或本层 `Protocol`；跨层签名里不出现对方具体类 |
-| `tests/test_public_surface.py` | 每层包入口的 `__all__` 与该层文档 A 表逐名一致；二级入口只导出本组名字 |
+| `tests/test_public_surface.py` | 每层包入口的 `__all__` 与该层文档 A 表中处置为「保留」的名字逐名一致（内部化与删除的行不参与比对）；二级入口只导出本组名字 |
 | `tests/test_capability_matrix.py` | R18：可跑任务 = `REQUIRED_PORTS` ⊆ 已填槽位；`SimulatorPorts` 无 `enabled_tasks`；UE4 填了 `streaming` 因此巡航在结果里 |
 | `tests/test_motion_contract.py` | 五个新类型的 `__post_init__` 负例、命令分型、`require_supported` |
 | `tests/test_vehicle_port.py` | 三个适配层的 `motion_capability()` 取值；给车喂横向命令必须抛错且引擎调用计数为 0 |
@@ -311,9 +311,9 @@ UE4 侧一次：启动场景后确认巡航出现在能力位里（R18 取消了
 | --- | --- | --- |
 | 0 | 删除俯视任务 | 已完成（`8273ef7`） |
 | 1 | 改名与搬家：三个包改名、`domain/runtime.py` 改 `engine_family.py`、纯函数进 `algorithms/`、`MotionLimits` 合一份、滑窗线程进 `runtime/window/`、任务判定进任务包、删 `lane_reference`；跨层 import 改走包入口（实测 460 条、162 个文件）；按各层 B 表删除历史残留（合计约 3800 行） | `pytest tests/ -q` 全绿；`test_layering.py` 与 `test_layer_entries.py` 通过；用例数不减 |
-| 2 | 契约扩展：加 `MotionModel`/`MotionCapability`/两个命令/`CollisionState`/`CollisionRecoverySettings`；三个适配层实现 `motion_capability()` 与 `stream_command`（旧名保留一版别名）；`motion.collision` 配置段；删 `enabled_tasks` 与各引擎 `ENABLED_TASKS`，能力矩阵改为纯槽位推导（R18） | 契约、端口与能力矩阵测试全绿；UE4 巡航出现在能力位里 |
+| 2 | 契约扩展：加 `MotionModel`/`MotionCapability`/两个命令/`CollisionState`/`CollisionRecoverySettings`；三个适配层实现 `motion_capability()` 与 `stream_command`（旧名保留一版别名）；`motion.collision` 配置段 | 契约与端口测试全绿；行为不变 |
 | 3 | 循环上移：`ControlLoop` 外壳先委派旧实现，再把律搬进 `runtime/motion/`，删两个 tracker 的律，`GuidedVehicle` 填槽 | UE5 数值动作精度不劣化；连续遥测差 ≤1 拍 |
-| 4 | 被动安全：`CollisionRecovery` 接 `_guard`，删巡航与目标接近里的两处镜像退避与碰撞预检分支 | 假载具接触三任务都触发；次数超限报错 |
+| 4 | 被动安全：`CollisionRecovery` 接 `_guard`，删巡航与目标接近里的两处镜像退避与碰撞预检分支；此时才删 `enabled_tasks` 与 `ENABLED_TASKS`，能力矩阵改为纯槽位推导（R18） | 假载具接触三任务都触发；次数超限报错；UE4 巡航出现在能力位里且能跑 |
 | 5 | 任务层收口：`common/{loop,evidence,budget,streaming}`、三包 `policy.py`、`TASK_KIND`/`REQUIRED_PORTS`、巡航单一路径 | 通道选择与包隔离测试；镜像代码 AST 测试 |
 | 6 | 装配与配置拆分：`controller/` 六协作者、`factories/` 四文件、`planner/config/` 七文件、`requirements.py`、`SwitchRefused` | `/api/status` 与 `/api/world/options` 逐字段一致；68 例控制器测试 |
 | 7 | 引擎与提示词收口：`session.py` 拆分、提示词模板化、端口自检、`CameraIntrinsics` 断言、`streaming_views` 归位 | UE5 三类任务实跑；UE4 数值动作与目标接近；渲染逐字一致 |
@@ -339,13 +339,13 @@ UE4 侧一次：启动场景后确认巡航出现在能力位里（R18 取消了
 | R13 | 提示词外置范围 | 只三个大文件 | 四份小提示词仍在 Python |
 | R14 | 相机内参半像素差 | 两份都留，加断言 | 长期存在两套主点 |
 | R15 | `streaming_views.py` | **作废**，见 R22（移出到 `scripts/`） | — |
-| R16 | `StreamGoalSource` 放哪 | 新增 `ports/goal_source.py`；Sink 名不建文件 | `ports/` 回到 14 个文件 |
+| R16 | `StreamGoalSource` 放哪 | 新增 `ports/goal_source.py`；Sink 名不建文件 | `ports/` 最终 13 个文件（含删 `backend_worker.py`） |
 | R17 | 越点走廊取值 | 阿克曼 1.0 m（原 0.6 m 实测失败率偏高），配置只能抬高 | 车更早起下一个航点，越点后轨迹更宽松 |
 | R18 | 可跑任务由什么决定 | 只由 `REQUIRED_PORTS` ⊆ 已填槽位；删 `enabled_tasks` 与 `ENABLED_TASKS` | 未实跑过的组合也会被承诺，出问题要从引擎查 |
 | R19 | 层间怎么解耦 | 层一个公开入口；输入只收契约类型或本层 `Protocol`；跨层不见实现类 | 包入口要导出全部公开名，460 条深层 import 要改 |
 | R20 | 契约层包入口导出范围 | `domain/`、`ports/` 两个 `__init__` 导出全部公开名字，`errors.py` 作第三个入口 | 导出面变宽，新增类型必须同步入口 |
 | R21 | 对外名字是否都必要 | 逐个给出层外运行期调用点；没有就内部化或删除；找不到就删，只要测试在用的不保留 | 约 144 个名字被内部化或删除 |
-| R22 | HTTP 生命周期与目标接近类型留在契约层吗 | 搬出：生命周期进装配层，worker 协议进进程栈，目标接近类型进任务包 | 契约层少 12 个名字、`domain/` 26 → 22 个文件 |
+| R22 | HTTP 生命周期与目标接近类型留在契约层吗 | 搬出：生命周期进装配层，worker 协议进进程栈，目标接近类型进任务包 | 契约层少 12 个名字、`domain/` 26 → 21 个文件 |
 | R23 | 契约层还能不能压到 34 | 压到 34 需要拆掉构造期校验，保留 44 并逐条给 import 行反证 | 契约层仍是六层里对外名字最多的 |
 | R25 | 收尾一致性：`approach.py` 与 `COMMAND_FOR_MODEL` | `domain/approach.py` 整体迁出任务包；不新增 `COMMAND_FOR_MODEL`，适配层用 `require_supported` 校验 | 契约层少一个文件 |
 | R26 | sink 是不是跨层名字 | 不是。`ControlLoop.segment_sink()`/`stream_sink()` 提供 `stream_command` 的绑定，两个 Sink 类型别名留在执行层内部 | 任务层多两次方法调用 |
@@ -382,10 +382,10 @@ UE4 侧一次：启动场景后确认巡航出现在能力位里（R18 取消了
 
 | 文件 | 层 | 行数 |
 | --- | --- | --- |
-| `00-boundaries.md` | 共同约束与初始契约 | 192 |
+| `00-boundaries.md` | 共同约束与初始契约 | 193 |
 | `01-contracts.md` | 契约层 `domain/`、`ports/` | 420 |
 | `02-algorithms.md` | 计算层 `algorithms/` | 955 |
 | `03-runtime.md` | 执行层 `runtime/` | 687 |
 | `04-workflows.md` | 任务层 `workflows/` | 391 |
 | `05-assembly.md` | 装配层 `assembly/` 与 `config/` | 459 |
-| `06-adapters-engines.md` | 端口实现、引擎实现、进程栈 | 452 |
+| `06-adapters-engines.md` | 端口实现、引擎实现、进程栈 | 454 |

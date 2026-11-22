@@ -29,10 +29,10 @@
 | `adapters/trajectory_planner/prompts/free_navigation.py` | `free_navigation_system_prompt(*, aerial=False)`、`FreeNavigationTrajectoryPrompt.build_user_prompt`、`format_free_space_profile` | 596 → 约 150 | 现有；删 `format_lane_reference` 与 `LaneReference` 参数 |
 | `adapters/trajectory_planner/prompts/visual_goal_navigation.py` | `visual_goal_system_prompt(*, aerial=False)`、`VisualGoalTrajectoryPrompt.build_user_prompt`、`_target_side_rule`、`_new_trajectory_reference` | 305 → 约 150 | 现有，正文外置 |
 | `adapters/trajectory_planner/prompts/__init__.py` | 41 个名字的再导出 | 45 | 现有，名字不变 |
-| `adapters/http/server_api.py` | `create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAPI` | 511 → 约 505 | 现有，改 `capabilities()` 与 `simulator_labels` 的取法 |
+| `adapters/http/server_api.py` | `create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAPI` | 511 → 约 505 | 现有，能力位改读 `ServerController.capabilities()`，删 `simulator_label` 直取（裁决 R27） |
 | `adapters/http/video.py`、`adapters/http_errors.py`、`multimodal_chat.py`、`chat_request_options.py`、`image_encoding.py`、`model_visual_inputs.py`、`diagnostics/visual_goal_trace.py` | 现状签名 | 不变 | 现有，不改 |
 
-`adapters/http/` 当前从 `planner.simulator` import `registry`（`capabilities_for` 与 `labels`），违反 00 第六节规则 6。改动只有一处：改成 `from ...assembly.requirements import capabilities_for, simulator_labels`。路由、字段、状态码、`/api/video` 的门都不动。
+`adapters/http/` 当前从 `planner.simulator` import `registry`（`capabilities_for` 与 `labels`），违反 00 第六节规则 6。改动：能力位改读 `ServerController.capabilities()`，simulator 标签也由 controller 给，该 import 整行删除（裁决 R27）。路由、字段、状态码、`/api/video` 的门都不动。
 
 ### `planner/simulators/projectairsim/`
 
@@ -166,7 +166,7 @@ UE4：`capture()` → `ObservationGate.capture()`（自称 owner、`begin_observ
 # ProjectAirSimRover
 def stream_command(self, command: MotionCommand, duration_s: float) -> None:
     self._require_started()
-    self._require_command(command, CarCommand)          # 失败抛 ProtocolError
+    self._require_command(command, CarCommand)          # 不符抛 ValueError
     _require_finite(command, duration_s)                 # 失败抛 ExecutionError
     state = self.stream_state()
     forward = heading_vector(state.pose.yaw_deg)        # drive.py 的 NED 车头轴
@@ -183,16 +183,16 @@ def stream_command(self, command: MotionCommand, duration_s: float) -> None:
 # ProjectAirSimDrone / AirSimVehicle
 def stream_command(self, command: MotionCommand, duration_s: float) -> None:
     self._require_started()
-    self._require_command(command, HolonomicCommand)     # 失败抛 ProtocolError
+    self._require_command(command, HolonomicCommand)     # 不符抛 ValueError
     _require_finite(command, duration_s)
     ...  # drone: _bridge.run(_velocity_exchange(...))；airsim: connection.call_streaming("moveByVelocityAsync", ...)
 ```
 
 校验规则，三条，全部在适配层：
 
-1. 命令类型必须与载具的 `motion_capability()` 相符，校验用 `require_supported(command, self._capability)`（适配层自己的函数，不建模型→命令类型的映射表），不符抛 `ProtocolError`。无人机收 `CarCommand`、车收 `HolonomicCommand` 都在这一句上炸。
+1. 命令类型必须与载具的 `motion_capability()` 相符，校验用 `require_supported(command, self._capability)`（适配层自己的函数，不建模型→命令类型的映射表），不符抛 `ValueError`，不新增异常类（裁决 R27）。无人机收 `CarCommand`、车收 `HolonomicCommand` 都在这一句上炸。
 2. 所有字段与 `duration_s` 有限且 `duration_s > 0`，否则 `ExecutionError`（沿用现有文案）。
-3. `command.reverse is True` 且 `allows_reverse is False` 时 `ProtocolError`。
+3. `command.reverse is True` 且 `allows_reverse is False` 时 `ValueError`。
 
 阿克曼车收到 `HolonomicCommand` 一律拒收，不检查横向分量大小：横向分量的存在本身就说明调用方按全向载具算的，这一拍就该炸，而不是让 `drive.py` 把分量投影掉再跑到超时。`hold_velocity(velocity_world, yaw_rate_deg_s, duration_s)` 保留，作为 `PositionHoldVehicle` 端口实现，函数体转调 `stream_command(HolonomicCommand(*velocity_world, yaw_rate_deg_s), duration_s)`。
 
@@ -206,9 +206,9 @@ def stream_command(self, command: MotionCommand, duration_s: float) -> None:
 | `runtime/motion/tracking.py` | 现 `SteppedMotionTracker` 与 `AirSimMotionTracker` 的律：参考采样、速度与偏航反馈、`limit_vector`、加速限幅、settle 判定、"从实测位姿恢复"（现只 UE4 有） | 引擎删律，行为由这里统一 |
 | `runtime`（`ExecutionService` 经包入口暴露） | 控制权唯一性、检查点、`request_stop`（裁决 R19a） | 引擎不判 owner |
 | `runtime`（位置保持） | 位置保持走 `PositionHoldVehicle`（`stream_state`/`cancel`/`hold_velocity`） | 引擎只提供端口 |
-| `assembly`（`requirements`，裁决 R19a） | `TASK_REQUIREMENTS`、`available_tasks(ports)`、`capabilities_for(simulator) -> Capabilities`、`simulator_labels() -> dict[str, str]` | `adapters/http/` 与 `SimulatorPorts.capabilities()` 的唯一来源 |
+| `assembly`（`requirements`，裁决 R19a） | `TASK_REQUIREMENTS`、`available_tasks(ports)`；能力位与 simulator 标签由 `ServerController.capabilities()` 提供，不再导出 `capabilities_for`/`simulator_labels`（裁决 R27） | `adapters/http/` 与 `SimulatorPorts.capabilities()` 的来源 |
 | `assembly`（`mission_assembly`） | 按 `REQUIRED_PORTS` 装配，并构造 `GuidedVehicle` 填 `vehicle` 槽（裁决 R1、R19b） | 引擎不认识任务 |
-| `domain/` + `ports/` | `MotionModel`、`MotionCapability`、`HolonomicCommand`、`CarCommand`、`MotionCommand`、`CollisionState`、`CollisionContact`；`ports/vehicle.py` 增加 `motion_capability()`；`ports/streaming_vehicle.py` 用 `stream_command` 替掉 `stream_velocity`（不新增 `COMMAND_FOR_MODEL`，契约层不加名字） | 00 第四节已定，这里只实现 |
+| `domain/` + `ports/` | `MotionModel`、`MotionCapability`、`HolonomicCommand`、`CarCommand`、`MotionCommand`、`CollisionState`、`CollisionContact`；`ports/vehicle.py` 增加 `motion_capability()`；`ports/streaming_vehicle.py` 用 `stream_command` 替掉 `stream_velocity`；不新增 `COMMAND_FOR_MODEL`，契约层不加名字。`ports/` 最终 13 个文件：`backend_worker.py` 迁 `simulator/worker_protocol.py`、新增 `goal_source.py`、删 `collision_check.py`（裁决 R27） | 00 第四节已定，这里只实现 |
 
 ### 构造期端口自检
 
@@ -267,7 +267,7 @@ def stream_command(self, command: MotionCommand, duration_s: float) -> None:
 
 | 情形 | 谁抛 | 谁捕获 | 结果与恢复 |
 | --- | --- | --- | --- |
-| 命令类型与载具运动模型不符 | `stream_command` 的 `_require_command` | `ControlLoop` 上抛，`ExecutionService` 记一次失败 | `ProtocolError`；这是编程错误，不重试 |
+| 命令类型与载具运动模型不符 | `stream_command` 的 `_require_command`（即 `require_supported`） | `ControlLoop` 上抛，`ExecutionService` 记一次失败 | `ValueError`（裁决 R27）；这是编程错误，不重试 |
 | 非有限数值或 `duration_s<=0` | `stream_command` | 同上 | `ExecutionError`，任务转 `StageResult(False)` |
 | 声明槽位与实物不符 | `verify_ports` | 无（构造期） | `ProtocolError`，会话不成立，`/api/status` 停在 `disconnected` |
 | 连接已关闭 | `ProjectAirSimConnection.request` 的 `_require_client` | `worker` 或 `mission_child` | `RuntimeError`，子进程按任务失败上报，进程存活等下一条命令 |
@@ -310,7 +310,9 @@ ProjectAirSim 的所有服务请求经 `ProjectAirSimConnection` 的一把锁串
 
 ### 切换载具的交接
 
-`DualVehicleWorld.activate_vehicle(vehicle)` 的顺序固定，任一步失败即中止并回滚 `active_vehicle`：
+切换载具由引擎侧原子完成（裁决 R27）：controller 不单独 park、不单独 hide，也不分步调用，唯一入口是 `DualVehicleWorld.activate_vehicle(new)`；它内部依次 park、hide、recover、home、切机位，中途失败就回滚 `active_vehicle`，不存在“controller 已经 park 过、引擎又 park 一次”的双重步骤。
+
+顺序固定，任一步失败即中止并回滚 `active_vehicle`：
 
 1. `park(other)`：无人机 `park()`（释放位置保持、`cancel_last_task`），车 `hover()`（抱刹）。返回 `False` 直接中止。
 2. `hide(other)`：向上平移 1000 m 并记下停放位姿。
@@ -328,7 +330,7 @@ UE4 只有一台载具，`AirSimMissionSession.run` 对非 `drone` 的请求抛 
 | 测试文件 | 断言对象 |
 | --- | --- |
 | `tests/test_engine_command_contract.py`（新） | 三台载具的 `motion_capability()` 取值；`require_supported` 的接受/拒绝两支与 `ACCEPTS` 一致；`min_turn_radius_m` 由 `RoverDriveModel` 常量算出（改标定则断言值跟着变） |
-| 同上，负例 | 车收 `HolonomicCommand` → `ProtocolError`；无人机收 `CarCommand` → `ProtocolError`；`duration_s=0`、`nan` 字段 → `ExecutionError`；`allows_reverse=False` 的假载具收 `reverse=True` → `ProtocolError` |
+| 同上，负例 | 车收 `HolonomicCommand` → `ValueError`；无人机收 `CarCommand` → `ValueError`；`duration_s=0`、`nan` 字段 → `ExecutionError`；`allows_reverse=False` 的假载具收 `reverse=True` → `ValueError` |
 | `tests/test_ports_selfcheck.py`（新） | 两个 `verify_ports` 在真端口上通过；少填 `weather` 槽位 → `ProtocolError`；`PORT_SLOTS` 多声明一个槽 → `ProtocolError`；`vehicle` 与 `streaming` 不是同一对象 → `ProtocolError` |
 | `tests/test_airsim_session.py`（现有 13 例） | 增加 `session.ports.capabilities() == runtime.describe().capabilities()`；`AirSimVehicle` 有 `stream_command` 与 `motion_capability` |
 | `tests/test_projectairsim_session.py`（现有 34 例） | 增加活包与 `describe()` 的能力相等；`mission_inputs()` 的 `vehicles` 键与 `VEHICLES` 一致 |
@@ -352,11 +354,11 @@ UE4 只有一台载具，`AirSimMissionSession.run` 对非 `drone` 的请求抛 
 | 步 | 做什么 | 验收 |
 | --- | --- | --- |
 | 1 | 提示词外置：先用一次性脚本把三个模块的系统提示词与用户提示词按固定输入导出成基线文件，再写 `templates/*.md` 与 `render.py`，三个模块正文改为渲染 | `test_prompt_rendering.py` 与 `test_trajectory_prompts.py` 全绿，基线逐字一致 |
-| 2 | 契约上线：`ports/vehicle.py` 加 `motion_capability()`，不加映射表；三台载具实现 `motion_capability()` 与 `require_supported`；`stream_command` 以新名增加，`stream_velocity` 暂时保留为转调 | 给车喂 `HolonomicCommand` 必须抛错（测试断言 `ProtocolError`）；`pytest tests/ -q` 全绿（此步不改行为） |
+| 2 | 契约上线：`ports/vehicle.py` 加 `motion_capability()`，不加映射表；三台载具实现 `motion_capability()` 与 `require_supported`；`stream_command` 以新名增加，`stream_velocity` 暂时保留为转调 | 给车喂 `HolonomicCommand` 必须抛错（测试断言 `ValueError`，裁决 R27）；`pytest tests/ -q` 全绿（此步不改行为） |
 | 3 | 律进 `runtime`：新建 `runtime/motion/tracking.py` 与 `runtime/motion/loop.py`，载具构造接收 `segment_runner`，`execute_segment` 改三行委派，删 `SteppedMotionTracker`、`AirSimMotionTracker`、`_apply_reference` | `test_motion.py`、`test_projectairsim_motion.py`、`test_airsim_vehicle.py` 通过；UE5 数值动作实机一次 |
 | 4 | 命令类型化落地：删 `stream_velocity`；车拒收 `HolonomicCommand`；`hold_velocity` 转调 `stream_command` | 负例测试通过；UE5 巡航与目标接近各一次，UE4 数值动作一次 |
 | 5 | `session.py` 拆分：`vehicles.py`、`weather.py`、`views.py`；UE5 新增 `build_ports` 与 `verify_ports`，UE4 加自检 | `test_projectairsim_session.py`、`test_airsim_session.py`、`test_vehicle_switch.py`、`test_hidden_pin.py` 全绿，无实机 |
-| 6 | 进程栈与入口：`TASK_REQUIREMENTS` 迁 `assembly/requirements.py`；`SimulatorPorts.capabilities` 收参数；`adapters/http` 改从 assembly 取能力与标签；`mission_child`/`registry` 改 import 前缀 | `test_server_api.py`(56)、`test_capability_gating.py`(9)、`test_runtime_catalog.py`(18)、`test_family_router.py`(3) 全绿 |
+| 6 | 进程栈与入口：`TASK_REQUIREMENTS` 迁 `assembly/requirements.py`；`SimulatorPorts.capabilities` 收参数；`adapters/http` 删 `simulator.registry` import，能力位与标签改读 `ServerController.capabilities()`（裁决 R27）；`mission_child`/`registry` 改 import 前缀 | `test_server_api.py`(56)、`test_capability_gating.py`(9)、`test_runtime_catalog.py`(18)、`test_family_router.py`(3) 全绿；`test_layer_entries.py` 断言 `adapters/http` 不 import `planner.simulator` |
 | 7 | UE4 实机回归：数值动作、目标接近；`free_navigation` 登开跑一次（它的 `streaming` 槽位已经存在，按裁决 R18 已开放） | 三类任务在 UE4 上各跑一次，`/api/status` 的 `task_kinds` 由槽位交集自动得出，不靠白名单 |
 
 第 1 步与引擎无关，可以最先合。第 3 步是唯一会影响实机时序的一步，出问题退回第 2 步。
@@ -395,7 +397,7 @@ UE4 只有一台载具，`AirSimMissionSession.run` 对非 `drone` 的请求抛 
 | `build_session()`（两个引擎） | 2 定义 | `mission_child.py:254`、`server_bootstrap.py:98`，经 `registry.py:41` | 保留 | 唯一造会话入口 |
 | `VEHICLES`（两个引擎） | 3 | `registry.py` → `describe` | 保留，上提到包入口 | 载体清单来源 |
 | `SimulatorPorts` | 18 | `registry.py:27,41`、`server_bootstrap.py`、`simulator/worker.py` | 保留 | 构造期不变量校验与接口契约 |
-| `capabilities_for` | 6 | `adapters/http/server_api.py:165`、`config.py:1285` | 保留 | HTTP 能力门与配置校验在读 |
+| `capabilities_for` | 6 | `config.py:1285`（HTTP 侧不再读，改读 `ServerController.capabilities()`，裁决 R27） | 保留 | 配置校验在读；HTTP 能力门经 controller |
 | `ports_for` | 4 | 无（只有 `registry.py:38` 同文件用） | 内部化 | 同层引用不算 |
 | `ACTION_PORTS` | 2 | 无（`ports.py:52` 定义 + `capabilities()` 同文件） | 内部化 | 同上 |
 | `TASK_REQUIREMENTS` | 2 | 无（`ports.py:44` 定义 + `available_tasks()` 同文件） | 迁出 `assembly/requirements.py` | 裁决 R10 |

@@ -119,7 +119,7 @@
 用于"路径由规划器持续给出"的目标接近与无终点巡航。
 
 1. `runtime/motion/loop.py` 的 `ControlLoop.run_stream(goals, sink, deadline_monotonic)` 每 `1 / MotionLimits.control_hz` 一拍（默认 50 ms，裁决 R9）。
-2. `goals` 是 `runtime/motion/follower.py` 的 `QueueFollower`，它实现 `StreamGoalSource.next(measured_state) -> MotionCommand | None`，负责队列消耗与 waypoint 超时。`PlanningWindow` 只提供队列视图、`consume` 与六个公开方法，不实现 `StreamGoalSource`，也不承担伺服（裁决 R4）。
+2. `goals` 是 `runtime/motion/follower.py` 的 `QueueFollower`，它实现 `StreamGoalSource.next(state: TimedVehicleState, unwrapped_yaw_deg: float) -> MotionCommand | None`（签名与 `00-boundaries.md` 一致，裁决 R27），负责队列消耗与 waypoint 超时。`PlanningWindow` 只提供队列视图、`consume` 与六个公开方法，不实现 `StreamGoalSource`，也不承担伺服（裁决 R4）。
 3. `require_supported(command, capability)` 通过后调 `sink(command, duration_s)`，`sink` 就是 `stream_command` 签名，一次下发并请求引擎推进一拍（裁决 R2）。
 4. 每拍 `streaming.stream_state()` 读实测，写 `runtime/stream_timeline.py`。
 5. `PlanningWindow.poll_stream(measured, checkpoint)` 按 `SlidingWindowSettings.planning_interval_s`（5.0 s）提交续规划；返回 `True` 表示有新航点进队列，下一拍 `QueueFollower.next` 才能看到。
@@ -234,7 +234,7 @@
 | 碰撞接触 | 端口不抛，返回 `CollisionState(in_contact=True)` | — | `runtime/motion/loop.py` 的 `ControlLoop._guard` 调 `CollisionRecovery.poll`（裁决 R5） | 后退、清队列、继续；恢复次数超 `maximum_recoveries` 才抛 `ExecutionError` |
 | 端口读失败（客户端库异常） | 适配层 | `SimulatorConnectionError` 或库异常 | 任务层 | 阶段失败，原异常进 `StageResult.error` |
 
-新增异常类：零个。`require_supported` 抛 `ValueError`，不加 `UnsupportedMotionCommand`，因为段执行路径的兜底已经把任何 `Exception` 包成带回执的 `ExecutionError`，多一个类只是多一处映射。
+新增异常类：零个。`require_supported` 抛 `ValueError`，不加 `UnsupportedMotionCommand`（裁决 R27 写死），因为段执行路径的兜底已经把任何 `Exception` 包成带回执的 `ExecutionError`，多一个类只是多一处映射。
 
 ## 五 并发与所有权
 

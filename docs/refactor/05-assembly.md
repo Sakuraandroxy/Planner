@@ -14,7 +14,7 @@
 | --- | --- | --- | --- |
 | `assembly/__init__.py` | 导出 12 个跨层名字：`assemble_missions`、`MissionInputs`、`MissionResources`、`VehicleArm`、`require_application`、`task_finish_events`、`ServerController`、`SwitchRefused`、`StageValidator`、`WorkerFactory`、`SimulatorSupervisor`、`build_resources` | 30 | 新写，转发现同级模块。跨层 import 只能指向这个文件（裁决 R19a）；名字集由 §8 削面复核定 |
 | `assembly/mission_assembly.py` | `MissionResources`、`MissionInputs`、`VehicleArm`、`assemble_missions(config, *, inputs, resources, log) -> dict[str, VehicleArm]`、`build_vehicle_arm(config, *, common, vehicle, vehicle_id, detector, geometry, telemetry, moving_source_factory, execution, observation_source, log) -> VehicleArm`、`require_application(arm) -> PlannerApplication` | 320 | `application/mission_assembly.py`（359 行）。删 `lane_reference_provider=None`（:306）；工作流集合计算（:281-290）移进 `requirements.py`，可跑任务只由槽位交集推导（裁决 R18）；新增 `Vehicle` 槽填充：`GuidedVehicle(streaming, loop)`（裁决 R1） |
-| `assembly/requirements.py` | `EXECUTABLE_PACKAGES`、`PortsView`、`declared_requirements() -> dict[TaskKind, tuple[str, ...]]`、`ports_view(*, slots, vehicles) -> PortsView`、`missing_slots(view, kind) -> tuple[str, ...]`、`available_kinds(view) -> frozenset[TaskKind]`、私有 `capabilities_for(view, *, view_modes, weather_fields, weather_presets) -> Capabilities`、`assert_constructible(view, vehicle_id) -> None` | 120 | 新建。从一张显式元组 `EXECUTABLE_PACKAGES` 逐个 import 任务包 `__init__`，读 `TASK_KIND` 与 `REQUIRED_PORTS`（与 `docs/refactor/04-workflows.md` 同名）；吸收 `simulator/ports.py:44` 的 `TASK_REQUIREMENTS` 与 `:85` 的 `available_tasks()`；没有 `enabled_tasks` 参数（裁决 R18） |
+| `assembly/requirements.py` | `EXECUTABLE_PACKAGES: tuple[str, ...]`、`PortsView`、`declared_requirements() -> dict[TaskKind, tuple[str, ...]]`、`ports_view(*, slots, vehicles) -> PortsView`、`missing_slots(view, kind) -> tuple[str, ...]`、`available_kinds(view) -> frozenset[TaskKind]`、私有 `capabilities_for(view, *, view_modes, weather_fields, weather_presets) -> Capabilities`、`assert_constructible(view, vehicle_id) -> None` | 120 | 新建。`EXECUTABLE_PACKAGES` 是包名元组，逐个 import 三个任务包的二级入口（`planner.workflows.basic_motion`、`planner.workflows.visual_goal_navigation`、`planner.workflows.free_navigation`）取 `TASK_KIND` 与 `REQUIRED_PORTS`；`TASK_PACKAGES` 与 `TaskDeclaration` 不再存在（裁决 R27）。吸收 `simulator/ports.py:44` 的 `TASK_REQUIREMENTS` 与 `:85` 的 `available_tasks()`；没有 `enabled_tasks` 参数（裁决 R18） |
 | `assembly/application.py` | `PlannerApplication.__init__(task_parser, validator, runner, *, parse_call)`、`prepare(instruction)`、`execute_plan(plan)`、`execute(instruction)` | 41 | `application/application.py`，不拆 |
 | `assembly/mission_runner.py` | `MissionRunner.__init__(router)`、`prepare(plan)`、`run(plan) -> MissionResult` | 48 | `application/mission_runner.py`，不拆 |
 | `assembly/mission_validator.py` | `StageValidator`、`MissionValidator.__init__(validators, *, terminal_kinds)`、`supported_kinds`、`validate(plan)` | 68 | `application/mission_validator.py`，不拆 |
@@ -155,7 +155,7 @@ POST /api/tasks                                          server_api.py:211
 | ACTIVE（切载具） | 新载具 arm 的交集 | `/api/status.capabilities` 立即变 | `controller/commands.py` 的 Handoff 成功回调 |
 | 换图 / 换模型 / 换配置 | 新地图的 `PORT_SLOTS` 或新会话 | 整组能力位与控件 | READY 分支复用 |
 
-`server_api.py:159` 现在自己调 `registry.capabilities_for`，入口层因此 import 了 `simulator/registry`（`:25`）。目标形态是 `ServerController.capabilities()`，入口层只读它，删掉那条 import。
+入口层取能力只有一个入口：`ServerController.capabilities()`。`server_api.py:159` 现在自己调 `registry.capabilities_for`，因此 import 了 `simulator/registry`（`:25`）；`capabilities_for` 内部化后这两行都删，`/api/world/options` 的 `simulator_labels` 同样改由 controller 给（现读 `registry.labels()`，`server_api.py:322`）。与 `06-adapters-engines.md` 的"删 registry 依赖"是同一条（裁决 R27）。
 
 ## 3. 跨层接口
 
@@ -179,7 +179,7 @@ POST /api/tasks                                          server_api.py:211
 
 | 层 | 名字 | 用途 |
 | --- | --- | --- |
-| 任务层 `workflows/` | `TASK_KIND: TaskKind`、`REQUIRED_PORTS: tuple[str, ...]` | 能力求交的唯一来源。`workflows/__init__.py` 再导出三个包的这两个常量，`requirements.py` 只 import 层入口（裁决 R19a）。缺这两个常量或 `REQUIRED_PORTS` 里的名字不是 `SimulatorPorts` 的槽位 → 构造期 `ProtocolError` |
+| 任务层 `workflows/` | 三个二级入口（`planner.workflows.basic_motion` 等）各自的 `TASK_KIND: TaskKind`、`REQUIRED_PORTS: tuple[str, ...]` | 能力求交的唯一来源。装配层直接 import 这三个二级入口读常量，不经 `workflows/__init__.py`，也不存在 `TASK_PACKAGES`/`TaskDeclaration`（裁决 R27）。缺这两个常量或 `REQUIRED_PORTS` 里的名字不是 `SimulatorPorts` 的槽位 → 构造期 `ProtocolError` |
 | 任务层 | `Workflow.prepare() / run(stage) / close()`（`workflows/base.py:8-11`）、各任务 `policy.py` 的 `StageValidator` 实现 | 路由与准入 |
 | 执行层 `runtime/` | `ExecutionService(vehicle)`、`bind_hold_checkpoint(checkpoint)`、`ExecutionError`、`StopResult` | 每台载具一个执行服务；停止请求经检查点上抛 |
 | 执行层 | `ControlLoop(...)`（构造期收 `MotionCapability`，由它选律）、`ControlLoop.run_segment(segment, sink, *, budget)`、`run_stream(goals, sink, *, deadline_monotonic)`、`ControlLoop.segment_sink()`、`ControlLoop.stream_sink()`、`PlanningWindow.begin/submit/poll_stream/pause_for_completion/complete/end`、`GuidedVehicle(streaming, loop)` | `ControlLoop` 与 `GuidedVehicle` 都在 `build_vehicle_arm` 里构造；`GuidedVehicle` 拿去填 `Vehicle` 槽（裁决 R1），`ControlLoop` 注入任务包；`run_segment`/`run_stream` 与滑窗六个方法的调用方是任务包。sink 不是独立名字：任务包用 `ControlLoop.segment_sink()` 与 `stream_sink()` 取到可调用对象，再传回 `run_segment`/`run_stream`，装配层不碰 sink（裁决 R26）。这些名字只从 `runtime/__init__.py` 取（裁决 R19a） |
@@ -205,7 +205,7 @@ POST /api/tasks                                          server_api.py:211
 | `WorkerFactory` | 本层 Protocol：`__call__(MapSelection) -> BackendWorker` | 组合根 | 否 |
 | `SimulatorSupervisor` | 本层 Protocol：`running()`、`preflight()`、`start(entry)`、`restart(entry)`、`stop()` | 组合根（`FamilyRouter` 的实例） | 否；传 `None` 时地图命令直接 `ValueError` |
 | `BackendWorker` | 契约层 Protocol | 进程栈 | 否 |
-| `TASK_KIND`、`REQUIRED_PORTS` | `TaskKind` 与 `tuple[str, ...]` | `workflows` 层入口 | 否 |
+| `TASK_KIND`、`REQUIRED_PORTS` | `TaskKind` 与 `tuple[str, ...]` | 三个任务包的二级入口（`planner.workflows.basic_motion` 等，裁决 R27） | 否 |
 | `ExecutionService`、`ControlLoop`、`GuidedVehicle` | runtime 层入口导出的类，装配只构造不收 | `runtime` 层入口 | 否 |
 | `clock` | 本层 Protocol：`__call__() -> float` | 组合根 / 测试 | 是；默认 `time.monotonic` |
 
@@ -223,7 +223,7 @@ POST /api/tasks                                          server_api.py:211
 | `WorkerFactory`、`SimulatorSupervisor` | Protocol | 组合根结构实现 | 稳定 |
 | `task_finish_events` | 函数，返回 `(lines, WorkerEvent)` | `simulator/worker`、`mission_child` | 稳定 |
 
-不暴露什么：四个控制器协作者（`LifecycleState`、`CommandChannel`、`SessionSwitcher`、`EnvironmentChannel`）、`Handoff`、`PortsView`、`EXECUTABLE_PACKAGES`、`build_vehicle_arm`、`PlannerApplication`、`MissionValidator`、`MissionRunner`、`WorkflowRouter`、`mission_report`、六个工厂私有函数都不出 `assembly/__init__.py`，同层内部随便 import。反例：runtime 的 `WorldWaypointQueue` 不在本层表里，装配也不认识 `PlanningWindow` 的内部队列。
+不暴露什么：四个控制器协作者（`LifecycleState`、`CommandChannel`、`SessionSwitcher`、`EnvironmentChannel`）、`Handoff`、`PortsView`、`EXECUTABLE_PACKAGES`、`build_vehicle_arm`、`PlannerApplication`、`MissionValidator`、`MissionRunner`、`WorkflowRouter`、`mission_report`、工厂子包的私有构建函数都不出 `assembly/__init__.py`，同层内部随便 import。反例：runtime 的 `WorldWaypointQueue` 不在本层表里，装配也不认识 `PlanningWindow` 的内部队列。
 
 ## 4. 错误与失败路径
 
@@ -309,7 +309,7 @@ POST /api/tasks                                          server_api.py:211
 | `tests/test_assembly_requirements.py` | `declared_requirements()` 等于三个任务包的 `REQUIRED_PORTS`；`available_kinds` 在 `{vehicle, observation}` 上给出 `{basic_motion, visual_goal_navigation}`，加 `streaming` 给出三个；两台载具给不同槽位得到不同集合；`SimulatorPorts` 不再有 `enabled_tasks` 字段（裁决 R18） | 槽位名不在 `SimulatorPorts` 里 → `ProtocolError`；交集为空 → `ProtocolError`；两包同 `TASK_KIND` → `ProtocolError`；`REQUIRED_PORTS` 缺失 → `ProtocolError`；给 UE4 的声明槽位集（含 `streaming`）断言 `free_navigation` 在结果里（R18：无白名单） |
 | `tests/test_assembly_handoff.py` | 提交期切载具的调用序：`FakeWorker.activations == ["rover"]` 且 `tasks` 在 `activations` 之后；同载具提交不产生 activate；ACTIVE 成功后才 `state == RUNNING` | ACTIVE 失败：`tasks == []`、`state == IDLE`、`_vehicle` 未变、抛 `SwitchRefused`；ACTIVE 永不返回：超时后同上；RUNNING 中 `activate` → `BackendUnavailable` |
 | `tests/test_assembly_capabilities.py` | `ServerController.capabilities()` 在无会话时来自 `PORT_SLOTS`，READY 后被会话上报值覆盖，ACTIVE 后被新载具交集覆盖 | 入口层不再 import `planner.simulator`（AST 断言）；端口缺失时该 action 不在 `Capabilities.actions` 里 |
-| `tests/test_assembly_controller_split.py` | 六个协作者的公开方法名与 §1.2 表一致；`ServerController` 的构造签名不含已删除的字段 | 在 `LifecycleState` 之外写 `_state`、`_weather`、`_view_mode` 抛 `AttributeError`（属性只读），确保状态改写只能经 `on_event` |
+| `tests/test_assembly_controller_split.py` | 四个协作者的公开方法名与 §1.2 表一致；`ServerController` 的构造签名不含已删除的字段 | 在 `LifecycleState` 之外写 `_state`、`_weather`、`_view_mode` 抛 `AttributeError`（属性只读），确保状态改写只能经 `on_event` |
 | `tests/test_config_package.py` | `planner.config` 的公开名字集合与拆分前一致（现 `tests/test_config.py` 的 import 清单）；`profiles_root()` 指向仓库根 `config/core` | `load_vehicle_models` 在没有任何 scene variant 时的行为；地图声明了不存在的 variant → `ValueError` |
 | `tests/test_layer_entries.py` | 每层入口 `__init__.py` 导出的名字集合与 §3.3 输出表一致；跨层 import 的模块路径停在包名（函数参数或返回值里出现别层具体类也算违规）（裁决 R19a、R19b） | `from planner.runtime.motion.loop import ControlLoop` 这类深层路径 → 失败；`ServerController` 的 `simulator`/`worker_factory` 参数换成别层具体类 → 失败 |
 
@@ -333,7 +333,7 @@ POST /api/tasks                                          server_api.py:211
 - `tests/test_architecture.py:126`（声明槽位与 `build_ports` 一致）与 `:137-140`（`SimulatorPorts` 字段名）继续守住"槽位名是唯一词表"，`REQUIRED_PORTS` 的校验复用同一份字段集合。
 - `tests/test_runtime_catalog.py:60`、`:71`：能力位由端口推导，不读配置文件。删 `enabled_tasks` 后两张能力矩阵的期望值跟着改：UE4 的 `streaming` 槽有值，`task_kinds` 从两项变三项（裁决 R18）。
 - `tests/test_capability_gating.py`：控制台控件从能力位推导，通过 `create_api(controller)` 打到入口层。能力位改由 controller 提供后，`tests/test_server_api.py` 的 `FakeController` 需要实现同一个 `capabilities()`，断言不变。
-- `tests/test_factories.py`：拆分后六个构建函数同名同签名，测试不改。
+- `tests/test_factories.py`：直调 `build_detector`/`build_geometry`/`build_planner` 的用例改为断言 `build_resources` 产出的对象类型；对外只剩 `build_resources` 一个入口（§8.4），"测试不改"在这里不成立。
 
 ## 7. 迁移步骤
 
@@ -343,11 +343,11 @@ POST /api/tasks                                          server_api.py:211
 | --- | --- | --- |
 | 1 | `planner/application/` 改 `planner/assembly/`，包内 import 全改；`tests/` 与 `scripts/` 同步改 import 路径。不动任何函数体 | `pytest tests/ -q` 用例数不变、全绿 |
 | 2 | 新增 `assembly/requirements.py`；三个任务包补 `TASK_KIND` 与 `REQUIRED_PORTS`；删 `simulator/ports.py:44` 的 `TASK_REQUIREMENTS` 与 `:85` 的 `available_tasks()`；`mission_assembly.py:281-290` 的过滤改调 `requirements.available_kinds` | `tests/test_assembly_requirements.py` 新绿；`test_runtime_catalog.py`、`test_capability_gating.py` 不改断言通过 |
-| 3 | 拆控制器：先 `commands.py`（队列 + worker 生命周期），再 `world.py`，再 `models.py`/`weather.py`/`profiles.py`，最后 `state.py` 与 `controller/__init__.py` 门面。每步 `ServerController` 公开签名不变 | 每步跑 `tests/test_server_controller.py` 68 个用例，只改 import 行，断言不动 |
+| 3 | 拆控制器，最终 4 个协作者：先 `commands.py`（`CommandChannel`，队列 + worker 生命周期），再 `world.py`（`SessionSwitcher`，收地图、外观、配置三条命令），再 `weather.py`（`EnvironmentChannel`，天气与机位），最后 `state.py` 与 `controller/__init__.py` 门面。`models.py`、`profiles.py` 不单独成文件（裁决 R27）。每步 `ServerController` 公开签名不变 | 每步跑 `tests/test_server_controller.py` 68 个用例，只改 import 行，断言不动 |
 | 4 | 提交期切载具改阻塞交接 + `SwitchRefused`；`ServerSettings` 加 `handoff_timeout_s`；入口层加一条 `except SwitchRefused → 409` | `tests/test_assembly_handoff.py` 新绿；`test_server_api.py` 56 个用例不改通过 |
 | 5 | 能力位改由 `ServerController.capabilities()` 提供，`/api/world/options` 的 `simulator_labels` 一并改由 controller 提供（现读 `registry.labels()`，`server_api.py:322`）；删 `server_api.py:25` 的 `from ...simulator import registry` | 两个端点的 JSON 与重构前逐字段比对（golden 快照），只有 `task_kinds` 在切载具后收窄属预期差异；`tests/test_architecture.py` 全绿 |
-| 6 | 拆 `assembly/factories/` 为四个文件（`__init__`、`resources`、`planners`、`parsers`）；`build_detector`/`build_geometry`/`build_completion_checker` 内联成 `resources.py` 的私有函数，`build_free_navigation_planner` 并入 `build_planner`；`server_bootstrap` 与 `mission_child` 两边改调 `build_resources` | `tests/test_factories.py` 不改通过；两份资源构造的字段逐项一致 |
-| 7 | 拆 `planner/config/` 包；`_project_root()` 层级改为 `parents[2]`；`load_vehicle_models` 去掉 `registry` 依赖 | `tests/test_config.py`、`test_profiles.py`、`test_reference_config.py` 不改通过；`scripts/check_profiles.py` 输出为空 |
+| 6 | 拆 `assembly/factories/` 为四个文件（`__init__`、`resources`、`planners`、`parsers`）；`build_detector`/`build_geometry`/`build_completion_checker` 内联成 `resources.py` 的私有函数，`build_free_navigation_planner` 并入 `build_planner`；`server_bootstrap` 与 `mission_child` 两边改调 `build_resources` | `tests/test_factories.py` 的直调用例改断言 `build_resources` 产出；两份资源构造的字段逐项一致 |
+| 7 | 拆 `planner/config/` 为 5 个文件（`__init__`、`profiles`、`sections`、`maps`、`loader`）；`_project_root()` 层级改为 `parents[2]`；`load_vehicle_models` 去掉 `registry` 依赖（裁决 R27） | `tests/test_config.py`、`test_profiles.py`、`test_reference_config.py` 不改通过；`scripts/check_profiles.py` 输出为空 |
 | 8 | 加 `tests/test_layering.py` 的五条规则、§6.1 的构造期负例，以及 `tests/test_layer_entries.py` 的包入口与输入面规则（裁决 R19a、R19b） | 新测试绿；`pytest tests/ -q` 用例数只增不减 |
 
 ## 8. 削面复核
