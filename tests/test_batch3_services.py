@@ -25,7 +25,7 @@ from planner.errors import (
     ResourceCleanupError,
 )
 from planner.runtime.moving_observations import MovingObservations
-from planner.runtime.planning_window import PlanningWindow
+from planner.runtime.window import PlanningWindow
 from planner.runtime.resource_cleanup import close_resources
 from planner.algorithms.trajectory_validation import TrajectoryValidator
 from tests.support import ue_camera_matrix

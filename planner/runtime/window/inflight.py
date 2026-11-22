@@ -11,10 +11,10 @@ from planner.domain.sliding_window import (
 )
 from planner.errors import ExecutionError, ProtocolError
 from planner.ports.trajectory_planner import TrajectoryPlanner
+from planner.algorithms.sliding_window.scheduler import RefillScheduler
 from planner.algorithms.trajectory_transform import relative_to_world
 from planner.algorithms.trajectory_validation import TrajectoryValidator
 
-from .scheduler import RefillScheduler
 from .worker import SlowPlannerWorker
 
 logger = logging.getLogger(__name__)

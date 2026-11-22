@@ -42,7 +42,7 @@ from planner.errors import (
 from planner.runtime.execution import ExecutionService
 from planner.runtime.model_calls import ModelCallService
 from planner.runtime.observation_snapshot import freeze_observation
-from planner.runtime.planning_window import PlanningWindow
+from planner.runtime.window import PlanningWindow
 from planner.runtime.resource_cleanup import close_resources
 from planner.algorithms.trajectory_transform import relative_to_world
 
