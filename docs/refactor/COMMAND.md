@@ -32,13 +32,15 @@
 | 流 | 分支 | 状态 | 产物 |
 | --- | --- | --- | --- |
 | stage1 | `impl/stage1` | 进行中 | 三包改名、纯函数进 algorithms、MotionLimits 合一份、`runtime/window/`、删 lane |
-| controller | `impl/controller` | 进行中 | 把 1132 行的 `server_controller.py` 拆成 `assembly/controller/` |
+| controller | `impl/controller` | 已合并 | `assembly/controller/` 六个协作者，1132 行的 server_controller 删除 |
 | config | `impl/config` | 已合并 | `planner/config/` 八个文件，`config.py` 删除 |
 | prompts | `impl/prompts` | 已合并 | 提示词模板外置，渲染逐字一致 |
 | tools | `impl/tools` | 已合并 | `streaming_views.py` 移到 `scripts/` |
 | lint | `impl/lint` | 已合并 | 提交信息检查脚本与用例 |
 
 测试基线：主干 1110 条全绿。
+
+合并记录：controller 以 `4218de6 controller finished` 合入，冲突三处（测试 import、bootstrap import、config.py 与 server_controller 的删除），按分支侧或主干侧分别解掉后跑绿。
 
 ## 四、阶段 1 剩余
 
