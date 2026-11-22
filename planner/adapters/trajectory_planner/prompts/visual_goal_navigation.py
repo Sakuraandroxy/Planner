@@ -14,7 +14,7 @@ from .base import (
     build_base_user_prompt,
 )
 from .free_navigation import format_free_space_profile
-from .render import load, render
+from .render import load, load_fragment, render
 
 VISUAL_GOAL_SYSTEM_PROMPT = (
     BASE_TRAJECTORY_SYSTEM_PROMPT + "\n\n" + load("visual_goal_rules")
@@ -38,17 +38,12 @@ def _target_side_rule(target_vector) -> str:
     # zero turn stays available so straight motion is never blocked.
     forward, right, _ = target_vector
     if math.hypot(forward, right) <= 1e-6:
-        return ("The target horizontal direction is undefined here; no dyaw_deg side "
-                "restriction applies.")
+        return load_fragment("target_side_rule_undefined")
     if right > 0:
-        return ("The target is currently on the RIGHT side. Negative dyaw_deg (turning left, "
-                "away from the target) is forbidden in this NEW trajectory; dyaw_deg = 0 "
-                "is allowed.")
+        return load_fragment("target_side_rule_right")
     if right < 0:
-        return ("The target is currently on the LEFT side. Positive dyaw_deg (turning right, "
-                "away from the target) is forbidden in this NEW trajectory; dyaw_deg = 0 "
-                "is allowed.")
-    return "The target is directly ahead or behind; no dyaw_deg side restriction applies."
+        return load_fragment("target_side_rule_left")
+    return load_fragment("target_side_rule_ahead")
 
 
 def _new_trajectory_reference(target_vector, has_pending):
@@ -57,21 +52,16 @@ def _new_trajectory_reference(target_vector, has_pending):
     bearing = (f"{math.degrees(math.atan2(right, forward)):+.2f} degrees"
                if math.hypot(forward, right) > 1e-6
                else "undefined (target horizontal distance is near zero; do not infer a turn)")
-    start = (
-        "The existing pending actions are already scheduled and will execute first.\n"
-        "Start your NEW trajectory AFTER all pending actions, at their predicted final pose.\n"
-        "Do not return or replace the pending actions."
-        if has_pending else
-        "Pending is empty. Start your NEW trajectory at the current observation pose."
-    )
+    start = load_fragment(
+        "new_trajectory_start_pending" if has_pending else "new_trajectory_start_empty")
     return render(
-        load("new_trajectory_reference"),
+        load_fragment("new_trajectory_reference"),
         start=start,
         target_vector_json=json.dumps(
             [round(value, 4) for value in target_vector], separators=(",", ":")),
         bearing=bearing,
         side_rule=_target_side_rule(target_vector),
-    ).removesuffix("\n")
+    )
 
 
 VISUAL_GOAL_OUTPUT_GUIDANCE = "\n" + load("visual_goal_output_guidance")
@@ -142,8 +132,9 @@ class VisualGoalTrajectoryPrompt:
         }
         if payload["target_age_at_planning_observation_s"] is not None and payload["target_age_at_planning_observation_s"] < 0:
             raise ProtocolError("target estimate is newer than the planning observation")
-        user = base + "\nVisual goal context (estimated evidence, not target ground truth):\n" + json.dumps(
-            payload, ensure_ascii=False, separators=(",", ":"),
+        user = base + "\n" + render(
+            load_fragment("visual_goal_context"),
+            payload_json=json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
         )
         if task_context.keep_target_in_view:
             user += "\n" + VISUAL_GOAL_VIEW_GUIDANCE.strip()

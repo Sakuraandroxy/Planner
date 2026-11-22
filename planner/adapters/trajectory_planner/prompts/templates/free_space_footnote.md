@@ -1,0 +1,1 @@
+Use these measured distances and bearings instead of estimating scale from the RGB image. A clear sector has no measured above-ground surface inside the report range; it does not prove unseen space is obstacle-free.

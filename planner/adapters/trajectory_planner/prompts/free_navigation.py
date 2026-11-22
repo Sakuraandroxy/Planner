@@ -14,7 +14,7 @@ from .base import (
     build_aerial_base_user_prompt,
     build_base_user_prompt,
 )
-from .render import load
+from .render import load, load_fragment, render
 
 FREE_NAVIGATION_SYSTEM_PROMPT = (
     BASE_TRAJECTORY_SYSTEM_PROMPT + "\n\n" + load("free_navigation_rules")
@@ -90,54 +90,57 @@ class FreeNavigationTrajectoryPrompt:
 
 def format_free_space_profile(profile: FreeSpaceProfile) -> str:
     lines = [
-        "Metric free-space profile (measured from the aligned metric depth at this observation):",
-        "- Units are metres in the current body horizontal frame; bearing is measured from the current forward axis and is positive to the right.",
-        f"- Each sector lists the nearest surface at least {profile.min_height_above_ground_m:.2f} m above the local ground, within {profile.max_range_m:.1f} m.",
+        render(
+            load_fragment("free_space_profile_head"),
+            min_height_m=f"{profile.min_height_above_ground_m:.2f}",
+            max_range_m=f"{profile.max_range_m:.1f}",
+        )
     ]
     for sector in profile.sectors:
         label = _bearing_label(sector.bearing_deg)
         if not sector.ground_available:
-            lines.append(f"  {label} deg: unknown (no ground reference in view)")
+            lines.append(render(load_fragment("free_space_sector_unknown"), label=label))
         elif sector.distance_m is None:
-            lines.append(
-                f"  {label} deg: clear beyond {profile.max_range_m:.1f} m"
-            )
+            lines.append(render(
+                load_fragment("free_space_sector_clear"),
+                label=label,
+                max_range_m=f"{profile.max_range_m:.1f}",
+            ))
         else:
-            lines.append(
-                f"  {label} deg: {sector.distance_m:.1f} m "
-                f"(forward {sector.forward_m:.1f} m, "
-                f"right {sector.right_m:+.1f} m)"
-            )
+            lines.append(render(
+                load_fragment("free_space_sector_distance"),
+                label=label,
+                distance_m=f"{sector.distance_m:.1f}",
+                forward_m=f"{sector.forward_m:.1f}",
+                right_m=f"{sector.right_m:+.1f}",
+            ))
     ahead = min(
         profile.sectors, key=lambda sector: abs(sector.bearing_deg), default=None
     )
     if ahead is not None:
         label = _bearing_label(ahead.bearing_deg)
         if not ahead.ground_available:
-            lines.append(
-                f"- Nearest obstacle directly ahead ({label} deg): unknown."
-            )
+            lines.append(render(load_fragment("free_space_ahead_unknown"), label=label))
         elif ahead.distance_m is None:
-            lines.append(
-                f"- Nearest obstacle directly ahead ({label} deg): clear "
-                f"beyond {profile.max_range_m:.1f} m."
-            )
+            lines.append(render(
+                load_fragment("free_space_ahead_clear"),
+                label=label,
+                max_range_m=f"{profile.max_range_m:.1f}",
+            ))
         else:
-            lines.append(
-                f"- Nearest obstacle directly ahead ({label} deg): "
-                f"{ahead.distance_m:.1f} m."
-            )
+            lines.append(render(
+                load_fragment("free_space_ahead_distance"),
+                label=label,
+                distance_m=f"{ahead.distance_m:.1f}",
+            ))
     window = profile.clear_window_deg
     if window is not None:
-        lines.append(
-            "- Longest clear bearing window: "
-            f"{_bearing_label(window[0])} to {_bearing_label(window[1])} deg."
-        )
-    lines.append(
-        "Use these measured distances and bearings instead of estimating scale "
-        "from the RGB image. A clear sector has no measured above-ground surface "
-        "inside the report range; it does not prove unseen space is obstacle-free."
-    )
+        lines.append(render(
+            load_fragment("free_space_window"),
+            start_deg=_bearing_label(window[0]),
+            end_deg=_bearing_label(window[1]),
+        ))
+    lines.append(load_fragment("free_space_footnote"))
     return "\n".join(lines)
 
 

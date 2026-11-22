@@ -1,0 +1,1 @@
+- Nearest obstacle directly ahead (${label} deg): ${distance_m} m.

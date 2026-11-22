@@ -7,35 +7,62 @@ from planner.workflows.visual_goal_navigation import require_visual_completion_e
 from planner.domain import depth_display_description
 from planner.domain import VisualGoalCompletionInput
 
+from .render import load_fragment, render
+
 
 def _binding_evidence(request: VisualGoalCompletionInput) -> str:
     """Stage binding and detector claims are labelled; neither is ground truth."""
     target_state = request.target_state
-    lines = ["- 本阶段已建立目标绑定；当前画面不必独立重新识别完整目标。" if target_state else
-             "- 本次目标关联来自当前检测观测，未提供本阶段的位置绑定。"]
+    lines = [
+        load_fragment(
+            "binding_evidence_bound" if target_state else "binding_evidence_unbound"
+        )
+    ]
     evidence = request.target_observation
     observation = request.observation
     if (evidence is None or evidence.stage_id != request.stage_id
             or evidence.timestamp_ns > observation.timestamp_ns
             or evidence.captured_monotonic > observation.captured_monotonic):
-        lines.append("- 未提供可对应本阶段的近期检测结果；当前停稳图像仍可结合已有绑定判断。")
-        return '\n'.join(lines)
+        lines.append(load_fragment("binding_evidence_missing"))
+        return "\n".join(lines)
     encode = lambda value: json.dumps(value, ensure_ascii=False, allow_nan=False)
     goal = evidence.goal
-    lines.extend((f"- 最近检测来源观测ID：{evidence.capture_id}；距当前观测{observation.captured_monotonic-evidence.captured_monotonic:.3f}秒。",
-        f"- 最近检测与本次停稳图像是否同一观测：{str(evidence.capture_id == observation.capture_id).lower()}。",
-        f"- 检测器报告状态：{goal.status.value}；声称同一目标：{str(goal.same_target).lower()}。",
-        f"- 检测器报告描述：{goal.description}；关联来源：{goal.association_source}。",
-        f"- 检测器报告依据：{goal.evidence}",
-        f"- 该检测观测中的归一化目标框：{encode(goal.bbox)}；仅属于该观测，不能直接套用到其他图像。"))
+    lines.extend((
+        render(
+            load_fragment("binding_evidence_source_id"),
+            capture_id=evidence.capture_id,
+            age_s=f"{observation.captured_monotonic-evidence.captured_monotonic:.3f}",
+        ),
+        render(
+            load_fragment("binding_evidence_same_observation"),
+            same_observation=str(evidence.capture_id == observation.capture_id).lower(),
+        ),
+        render(
+            load_fragment("binding_evidence_detector_status"),
+            status=goal.status.value,
+            same_target=str(goal.same_target).lower(),
+        ),
+        render(
+            load_fragment("binding_evidence_detector_description"),
+            description=goal.description,
+            association_source=goal.association_source,
+        ),
+        render(load_fragment("binding_evidence_detector_detail"), evidence=goal.evidence),
+        render(load_fragment("binding_evidence_bbox"), bbox_json=encode(goal.bbox)),
+    ))
     if goal.surface_points is not None:
-        lines.append(f"- 该检测观测中模型选择的表面像素：{encode(goal.surface_points)}；不是完整目标边界。")
+        lines.append(render(
+            load_fragment("binding_evidence_surface_points"),
+            surface_points_json=encode(goal.surface_points),
+        ))
     if evidence.position_update_rejection is not None:
-        lines.append(f"- 该次坐标更新未接受：{evidence.position_update_rejection}；继续使用原绑定位置。"
-                     "该检测仅为待核实的辅助证据，不能当作已确认同一目标；坐标偏移也不直接证明目标已改变。")
+        lines.append(render(
+            load_fragment("binding_evidence_rejected_update"),
+            rejection=evidence.position_update_rejection,
+        ))
     else:
-        lines.append("- 该次位置估计已被本地接受；这不等于任务已完成。")
-    return '\n'.join(lines)
+        lines.append(load_fragment("binding_evidence_accepted_update"))
+    return "\n".join(lines)
 
 
 class VisualGoalCompletionPrompt:
@@ -50,10 +77,7 @@ class VisualGoalCompletionPrompt:
 
     @staticmethod
     def system_prompt():
-        return ("你是视觉目标导航任务完成判断器。综合本阶段目标绑定、当前观测和本地测量判断指定阶段。"
-                "接近目标时允许局部、背面及近距离表面视图，不要求当前画面独立重新识别完整目标。"
-                "全部必需条件满足才能返回true；不满足或无法确认返回false。"
-                "不把未执行轨迹当成完成证据。只输出小写true或false，禁止解释或代码块。")
+        return load_fragment("system")
 
     @staticmethod
     def build_user_prompt(request: VisualGoalCompletionInput):
@@ -62,88 +86,69 @@ class VisualGoalCompletionPrompt:
         radius_met = geometry.distance_m+request.uncertainty_margin_m <= request.rules.radius_m
         height_met = (request.height_tolerance_m is None or
                       abs(pose.z-request.initial_pose.z) <= request.height_tolerance_m)
-        height_description = ("未额外限制相对起点高度。"
+        height_description = (load_fragment("height_description_unlimited")
             if request.height_tolerance_m is None else
-            f"相对阶段起点的世界z变化不超过{request.height_tolerance_m}米。")
-        reference_input = "- 图片3：首次绑定的目标参考图，只用于确认同一目标。" if request.reference_rgb is not None else ""
+            render(load_fragment("height_description_tolerance"),
+                   height_tolerance_m=request.height_tolerance_m))
+        reference_input = (load_fragment("reference_input")
+                           if request.reference_rgb is not None else "")
         required = "\n".join("- " + item for item in request.rules.required_conditions)
         encode = lambda value: json.dumps(value, ensure_ascii=False, allow_nan=False)
         target_state = request.target_state
-        source = ('本阶段已绑定的表面点深度估计；不是当前重新测得的目标表面距离。'
-                  if target_state else '当前提供表面像素对应的原始深度反投影估计，不是物体真实三维中心。')
-        source += f' 采样来源：{geometry.position_source}。'
-        direction_reference = '原始方向描述相对阶段起始视角；已绑定目标不得按当前画面重新排序。'
-        reference_rule = ('首次参考图是已有绑定的辅助依据，允许与当前局部或背面视图不同。' if request.reference_rgb is not None else
-                          '未提供本阶段参考图；结合已提供的目标关联、描述、位置及当前观测判断，不得假设存在参考图。')
-        distance_description = '到本阶段已绑定表面点集合的最小水平距离' if target_state else '到当前所选表面点的水平距离'
-        local_checks = ('停稳、到本阶段表面点集合的水平距离和已配置高度条件已通过；综合已有绑定及当前观测判断任务要求，不必重新证明完整外形。'
-                        if target_state else '当前表面点距离上限、目标关联和稳定条件已通过本地检查。')
-        position_evidence = (f'- 首次锁定世界坐标：{encode(target_state.anchor_world_point)}\n'
-            f'- 已绑定目标表面点集合：{encode(target_state.known_surfaces)}\n'
-            f'- 位置来源观测ID：{target_state.capture_id}\n'
-            f'- 位置估计距当前观测的年龄：{observation.captured_monotonic-target_state.captured_monotonic:.3f}秒。'
-            if target_state else f'- 本次关联目标框：{encode(request.goal.bbox)}')
-        return f"""请判断当前导航阶段是否已经完成。
-
-视觉输入：
-- 图片1：车辆暂停轨迹并定点保持后采集的当前前视RGB图像，允许观测容差内的小幅残余漂移。
-- 图片2：与当前RGB对应的前视深度可视化图像。
-{reference_input}
-- 深度显示协议：{depth_display_description(observation.depth_mapping, observation.depth_min_m, observation.depth_max_m)}
-- 深度可视化仅用于辅助理解场景。数值距离的来源和局限见下文。
-
-当前阶段：
-- 阶段编号：{request.stage_id}
-- 任务类型：visual_goal_navigation
-
-当前阶段的原始任务指令：
-{parameters.instruction}
-
-本阶段指定目标：
-- 目标描述：{parameters.target_description}
-- 目标引用：{request.reference_description}
-- 目标关联证据来源：{request.goal.association_source}。
-{position_evidence}
-- 目标世界坐标：{encode(geometry.world_point)}
-- 目标位置来源：{source}
-- 任务要求保持原目标在前视画面内：{str(parameters.keep_target_in_view).lower()}。
-- 阶段起始位姿[world x,y,z,yaw_deg]：{encode([request.initial_pose.x, request.initial_pose.y, request.initial_pose.z, request.initial_pose.yaw_deg])}
-- {direction_reference}
-
-本阶段目标绑定与当前观测：
-{_binding_evidence(request)}
-
-本地触发规则：
-- 触发方式：目标半径触发暂停。
-- 距离计算方式：当前保持位姿到已绑定表面点集合的最小水平距离，只使用世界x、y；高度差不计入半径。目标坐标是已知可见表面估计，不代表完整物体边界。
-- 急停触发半径：{request.rules.effective_pause_radius_m}米；用于触发暂停，与停稳后的完成距离上限分开。
-- 完成距离上限：{request.rules.radius_m}米；圈内位置均可，不要求停在边界。
-- 测距不确定性余量：{request.uncertainty_margin_m}米；距离加余量不得超过半径。
-- 高度约束：{height_description}
-
-停稳后的本地测量结果：
-- 当前车辆世界坐标：{encode([pose.x, pose.y, pose.z])}
-- 当前车辆偏航角：{pose.yaw_deg}度。
-- {distance_description}：{geometry.distance_m}米。
-- 完成距离上限条件满足：{str(radius_met).lower()}
-- 高度约束满足：{str(height_met).lower()}
-- 本地检查：{local_checks}
-- 独立新鲜观测确认次数：{request.confirmation_count}/{request.required_confirmation_count}。
-
-本阶段的全部必需完成条件：
-{required}
-
-针对当前导航任务的判断说明：
-- 对接近、到附近类任务，可延续本阶段已建立的目标身份，不必每次从当前画面重新识别完整目标。不得忽略当前证据与原目标的明确矛盾。
-- 进入本阶段绑定点半径是距离依据，不是单独的完成证明；{reference_rule}
-- 允许目标只露出局部、背面、车尾或近距离墙面、窗户；缺少完整轮廓本身不得作为返回false的理由。
-- 建筑等大型目标靠近后画面被局部表面占据，可结合已有绑定及位置记录判断；不得仅凭任意墙面或相似物体就认定是指定目标。
-- 若任务要求保持目标在视野内，当前图像中有可结合绑定证据关联的目标部分即可，不要求完整外形或居中；目标完全不可见则不满足该要求。
-- 以本地测量结果判断明确配置的距离和高度条件。
-- 如果原始任务明确要求看清某个部位、门牌、入口或目标全景，必须确认该项观察要求已经满足，不能用其他局部视图代替。
-- 如果任务没有要求额外观察，不得自行添加观察要求。
-- 圈内位置无需再靠近半径边界；仍须确认目标及全部必需条件。
-- 不得把尚未执行的轨迹或预测动作作为完成依据。
-- 任意必需条件未满足或无法确认，返回false。
-
-只输出true或false。"""
+        source = render(
+            load_fragment("source_bound" if target_state else "source_current"),
+            position_source=geometry.position_source)
+        direction_reference = load_fragment("direction_reference")
+        reference_rule = load_fragment(
+            "reference_rule_with_reference" if request.reference_rgb is not None
+            else "reference_rule_without_reference")
+        distance_description = load_fragment(
+            "distance_description_bound" if target_state else "distance_description_current")
+        local_checks = load_fragment(
+            "local_checks_bound" if target_state else "local_checks_current")
+        if target_state:
+            position_evidence = render(
+                load_fragment("position_evidence_bound"),
+                anchor_world_point=encode(target_state.anchor_world_point),
+                known_surfaces=encode(target_state.known_surfaces),
+                capture_id=target_state.capture_id,
+                age_s=f"{observation.captured_monotonic-target_state.captured_monotonic:.3f}",
+            )
+        else:
+            position_evidence = render(
+                load_fragment("position_evidence_current"),
+                bbox_json=encode(request.goal.bbox))
+        return render(
+            load_fragment("user_prompt"),
+            reference_input=reference_input,
+            depth_protocol=depth_display_description(
+                observation.depth_mapping, observation.depth_min_m, observation.depth_max_m),
+            stage_id=request.stage_id,
+            instruction=parameters.instruction,
+            target_description=parameters.target_description,
+            reference_description=request.reference_description,
+            association_source=request.goal.association_source,
+            position_evidence=position_evidence,
+            target_world_point=encode(geometry.world_point),
+            source=source,
+            keep_target_in_view=str(parameters.keep_target_in_view).lower(),
+            initial_pose_json=encode([request.initial_pose.x, request.initial_pose.y,
+                                      request.initial_pose.z, request.initial_pose.yaw_deg]),
+            direction_reference=direction_reference,
+            binding_evidence=_binding_evidence(request),
+            pause_radius_m=request.rules.effective_pause_radius_m,
+            radius_m=request.rules.radius_m,
+            uncertainty_margin_m=request.uncertainty_margin_m,
+            height_description=height_description,
+            pose_json=encode([pose.x, pose.y, pose.z]),
+            yaw_deg=pose.yaw_deg,
+            distance_description=distance_description,
+            distance_m=geometry.distance_m,
+            radius_met=str(radius_met).lower(),
+            height_met=str(height_met).lower(),
+            local_checks=local_checks,
+            confirmation_count=request.confirmation_count,
+            required_confirmation_count=request.required_confirmation_count,
+            required_conditions=required,
+            reference_rule=reference_rule,
+        )
