@@ -10,7 +10,7 @@ from .completion import VisualGoalCompletion
 from .completion import VisualGoalRadiusTrigger
 from .completion import VisualGoalVerification
 from planner.algorithms.targeting import bound_target_geometry, bound_target_goal
-from planner.algorithms.targeting import DepthGeometry
+from planner.algorithms.depth import DepthGeometry
 from .targeting import VisualGoalRefresh
 from planner.domain import ExecutionBudget, StopResult
 from planner.domain import MissionStage

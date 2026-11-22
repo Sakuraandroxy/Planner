@@ -11,7 +11,7 @@ import logging
 import math
 import time
 
-from planner.algorithms import BasicMotionConverter
+from planner.algorithms.targeting import BasicMotionConverter
 from planner.domain import BasicMotionResult, BasicMotionStatus
 from planner.domain import StopResult
 from planner.domain import MotionLimits
