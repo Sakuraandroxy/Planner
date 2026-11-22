@@ -172,12 +172,9 @@ class CommandChannel:
             )
             worker.activate(value)
         elif kind == "view" and state is ServerState.IDLE:
-            c.lifecycle.log(f"Applying streaming view: {value}.")
-            worker.set_view_mode(value)
-            c._applied_view = value
+            c.environment.apply_view(value, worker)
         elif kind == "weather" and state is ServerState.IDLE:
-            worker.set_weather(value)
-            c._weather_applied = True
+            c.environment.apply_weather(value, worker)
 
     def connect(self) -> None:
         c = self._c
@@ -275,9 +272,7 @@ class CommandChannel:
             elif event.kind is WorkerEventKind.CLOSED:
                 closed = True
             elif event.kind is WorkerEventKind.WEATHER:
-                with c._lock:
-                    if event.payload is not None:
-                        c._weather_catalog = event.payload
+                c.environment.accept_catalog(event)
         return closed
 
     def supervise(self) -> None:

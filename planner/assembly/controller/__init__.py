@@ -13,7 +13,6 @@ runs the service stays ``connecting`` and every other command is rejected.
 
 from __future__ import annotations
 
-import logging
 import queue
 import threading
 import time
@@ -21,27 +20,21 @@ from collections.abc import Callable
 
 from ...config import MapCatalog, MapEntry, ProfileInfo, VehicleModelCatalog
 from ...domain.server import (
-    BackendUnavailable,
     MapSelection,
     ServerState,
     ServerStatus,
     TaskSubmission,
 )
-from ...domain.view import (
-    default_view_for,
-    validate_view_mode,
-)
-from ...domain.weather import WEATHER_CATALOG, merge_weather
-from ...errors import SimulatorNotOwned, SimulatorRestartError
+from ...domain.view import default_view_for
+from ...domain.weather import WEATHER_CATALOG
 from ...ports.backend_worker import BackendWorker
 from ...runtime.log_buffer import LogBuffer
 from .commands import CommandChannel
-from .state import LifecycleState
 from .models import ModelSwitcher
 from .profiles import ProfileSwitcher
+from .state import LifecycleState
+from .weather import EnvironmentChannel
 from .world import SessionSwitcher
-
-logger = logging.getLogger(__name__)
 
 
 class ServerController:
@@ -73,6 +66,7 @@ class ServerController:
         self.world = SessionSwitcher(self)
         self.models = ModelSwitcher(self)
         self.profile_switcher = ProfileSwitcher(self)
+        self.environment = EnvironmentChannel(self)
         self._maps = maps
         self._simulator = simulator
         # Production starts disconnected: no worker is created and no socket
@@ -231,6 +225,18 @@ class ServerController:
         return self.models.request_models(updates)
 
     @property
+    def weather_catalog(self):
+        return self.environment.weather_catalog
+
+    def request_weather(self, values) -> dict[str, float]:
+        """Merge a partial update over the current weather and queue it."""
+        return self.environment.request_weather(values)
+
+    def request_view(self, mode: str) -> tuple[str, bool]:
+        """Select a streaming view; running tasks defer it to the task end."""
+        return self.environment.request_view(mode)
+
+    @property
     def profile(self) -> str:
         """The profile the next session will be built from.
 
@@ -254,48 +260,4 @@ class ServerController:
         With no session, only the name is recorded; the next scene start reads it.
         """
         return self.profile_switcher.request_profile(profile)
-
-    @property
-    def weather_catalog(self):
-        with self._lock:
-            return self._weather_catalog
-
-    def request_weather(self, values) -> dict[str, float]:
-        """Merge a partial update over the current weather and queue it."""
-        with self._lock:
-            if (
-                self._closing.is_set()
-                or self._state is not ServerState.IDLE
-                or self._worker is None
-                or not self._worker_ready
-            ):
-                raise BackendUnavailable(self._state)
-            merged = merge_weather(self._weather, values)
-            self._weather = merged
-            self._commands.put(("weather", self._generation, merged))
-        self.lifecycle.log(
-            "Weather request: "
-            + ", ".join(
-                f"{name}={value:.2f}"
-                for name, value in merged.items()
-                if value > 0.0
-            )
-        )
-        return merged
-
-    def request_view(self, mode: str) -> tuple[str, bool]:
-        """Select a streaming view; running tasks defer it to the task end."""
-        validated = validate_view_mode(mode)
-        with self._lock:
-            if self._closing.is_set() or self._worker is None:
-                raise BackendUnavailable(self._state)
-            if self._state is ServerState.IDLE and self._worker_ready:
-                self._view_mode = validated
-                self._view_pending = True
-                self._commands.put(("view", self._generation, validated))
-                return validated, False
-            if self._state in (ServerState.RUNNING, ServerState.STOPPING):
-                self._view_mode = validated
-                return validated, True
-            raise BackendUnavailable(self._state)
 

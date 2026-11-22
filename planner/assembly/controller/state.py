@@ -79,10 +79,8 @@ class LifecycleState:
                 return
             if event.kind is WorkerEventKind.LOG:
                 self.log(event.message, event.level)
-            elif event.kind is WorkerEventKind.WEATHER:
-                with c._lock:
-                    if event.payload is not None:
-                        c._weather_catalog = event.payload
+            elif c.environment.on_event(event):
+                pass
             elif event.kind is WorkerEventKind.READY:
                 with c._lock:
                     c._worker_ready = True
@@ -171,17 +169,6 @@ class LifecycleState:
                     self.log(
                         event.message or "Vehicle activation failed.",
                         "WARNING",
-                    )
-            elif event.kind is WorkerEventKind.VIEW:
-                with c._lock:
-                    c._view_pending = False
-                    if event.success:
-                        c._applied_view = event.vehicle or c._view_mode
-                    elif c._state is ServerState.IDLE:
-                        c._view_mode = c._applied_view
-                if not event.success:
-                    self.log(
-                        event.message or "View change failed.", "WARNING"
                     )
             elif event.kind is WorkerEventKind.ERROR:
                 c.commands.failed(
