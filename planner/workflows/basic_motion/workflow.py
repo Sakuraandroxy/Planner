@@ -22,7 +22,7 @@ from planner.errors import ExecutionError
 from planner.runtime import ControlLoop
 from planner.runtime import ExecutionService
 from planner.runtime import SMOOTH_PROFILE
-from planner.runtime.motion.synchronized import duration_for
+from planner.runtime.motion import duration_for
 
 logger = logging.getLogger(__name__)
 
