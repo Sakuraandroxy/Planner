@@ -178,6 +178,18 @@
 
 `POST /api/weather` 没有请求体模型，非法字段名由 `planner.domain.validate_weather_values` 抛 `ValueError` → 400（`server_api.py:241`、`wiring.py:41-49`）。
 
+### 6.1 已知缺口
+
+同一个"不支持视频"有两种状态码。`/api/video` 只在构造参数 `frames` 非 `None` 时注册（`planner/adapters/http/server_api.py:253`），因此"这台仿真器不发帧"在 hub 缺席时是 404，在 hub 存在但能力位缺 `video` 时是 501（`planner/adapters/http/wiring.py:69-79`）。客户端不能只用一套分支判断，得先看路由表再看 `capabilities`。
+
+能力位不可得时是**省略键**而不是 `null`：`/api/status` 只在 `caps is not None` 时写 `simulator` 与 `capabilities`（`server_api.py:66-71`），`/api/world/options` 同样（`:130-137`）。客户端必须区分"键不存在"与"值为空"，缺失只能解释为"当前地图还没有能力报告"。
+
+`/api/trajectory` 在 `trajectory_hub is None` 时返回空 `TrajectorySnapshot` 而不是报错（`server_api.py:76-79`）。装配层漏传 hub 时控制台只剩空面板，没有任何错误，这个事故模式在子进程装配注释里有记录（`planner/simulator/mission_child.py:236-247`）。
+
+提示词模板的读取时机有两种：轨迹类与检测类在**模块导入期**读（`planner/adapters/trajectory_planner/prompts/base.py:17`、`planner/adapters/target_detection/prompts/system.py:4`），缺文件则服务起不来；完成判定类在**首次请求**时读（`planner/adapters/task_completion/prompts/visual_goal_completion.py:79-80`），缺文件表现为运行期 500。文件缺失这一种故障因此有两种出现时机。
+
+跨层依赖例外两条。本层 import 装配层的状态枚举与异常类（`planner/adapters/http/wiring.py:19`、`planner/adapters/http/server_api.py:19`），也 import 工作流层的校验函数（`planner/adapters/task_completion/prompts/visual_goal_completion.py:6`）。`tests/test_layering.py` 的检查器只把 `algorithms`（`:129-131`）与 `runtime`（`:140`）当来源层，`planner/adapters/` 从不在被检集合里，所以这条依赖目前没有任何测试拦得住。
+
 ## 7 测试位置
 
 覆盖到的：

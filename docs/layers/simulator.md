@@ -151,6 +151,16 @@
 | `ChildProcessError("… stopped accepting commands …")` | 写 stdin 时 `BrokenPipeError`（`subprocess_worker.py:231-241`） | 同上；日志里应已有子进程退出记录 |
 | `SystemExit("this process is not a mission child: …")` | 手工启动 `mission_child`，环境变量缺失（`mission_child.py:79-85`） | 只能由父进程起，不要手跑 |
 
+### 6.1 已知缺口
+
+先读协议 fd 再读 stdout 的结构性风险：`SubprocessMissionWorker._pump` 在协议 fd 上 `readline` 到 EOF 之后才去排空子进程的 stdout/stderr（`planner/simulator/subprocess_worker.py:199-224` 与 `:225-242`）。子进程若往 stdout 写满管道缓冲（Linux 默认 64 KiB），自己会阻塞在写，而父进程还在等协议 fd，两边互等。触发条件是子进程或其依赖打印大量文本；正常路径下 stdout 只有零星输出。
+
+`ThreadedMissionWorker.terminate()` 没有强杀升级：它就是 `shutdown()` 的别名（`planner/simulator/worker.py:87-89`），而 `shutdown` 末尾只 `join(join_timeout_s=10.0)`（`:23`、`:91-93`）。会话卡在一条 RPC 里时，`join` 超时后线程继续活着，服务照样返回关闭成功。只有子进程版有 SIGTERM → SIGKILL 升级（`planner/simulator/subprocess_worker.py:315-345`）。
+
+同样的"超时即放走"还有两处：`_release_orphan_display` 之前的 `_wait_display_released` 到点返回布尔值而不抛（`planner/simulator/xpra_start.py:555-561`）；`SubprocessMissionWorker._wait_for_closed` 到点后把已取到的事件放回队列就返回，不区分"等到 CLOSED"与"只是超时"（`planner/simulator/subprocess_worker.py:272-295`）。
+
+槽位校验缺失：`registry.build_session` 建完会话只调 `attach_arms`，不比对声明槽位与实物槽位（`planner/simulator/registry.py:67-84`）。UE5 的端口在会话构造里内联填（`planner/simulators/projectairsim/session.py:139-150`），没有 `build_ports`，要做比对得先抽 builder；UE4 已有 `build_ports`（`planner/simulators/airsim/runtime.py:28-52`），补一条 `describe().implemented()` 的比对即可。
+
 ## 7 测试位置
 
 覆盖到的：
@@ -166,7 +176,7 @@
 - `SubprocessMissionWorker._pump` 的 stdout 缓冲死锁风险（见 Qsim3）没有测试。
 - `ThreadedMissionWorker.shutdown` 超时后线程仍活的路径没有测试。
 - `registry.ports_for` 没有生产调用者，只有测试在调（见 Qsim7）。
-- `projectairsim` 的 `describe()` 与真实 `build_ports` 之间没有比对测试；`airsim/runtime.py:4` 注释引用的 `tests/test_simulator_ports.py` 在仓库里不存在。
+- `projectairsim` 的 `describe()` 与真实端口之间没有比对测试；UE4 侧同样的比对也没有写（`airsim/runtime.py:28-52` 已有 `build_ports` 可用）。
 
 ## 8 与其他层的联动
 
@@ -182,7 +192,7 @@
 ## 9 疑问与争议
 
 - Qsim1 层：simulator 结论：`SimulatorPorts.vehicle` 与 `.observation` 声明为非可选，但 `from_slots` 在槽位缺失时传 `None`，类型与运行时不符。依据：`planner/simulator/ports.py:45-46` 与 `:88-90`。影响：否。
-- Qsim2 层：simulator 结论：`registry.build_session` 构造完会话后没有校验"声明槽位 = 实物槽位"，`airsim/runtime.py:4` 的注释声称有 `tests/test_simulator_ports.py` 保证，这个文件不存在；相对地 `projectairsim` 既没有 `build_ports` 也没有 `verify_ports`。依据：`planner/simulator/registry.py:67-84`、`planner/simulators/airsim/runtime.py:4`、`planner/simulators/projectairsim/runtime.py:74-81`。影响：是（simulators 文档）。
+- Qsim2 层：simulator 结论：`registry.build_session` 构造完会话后不校验"声明槽位 = 实物槽位"；过期注释已改，指回 `tests/test_architecture.py` 的真实守门测试，但那条测试只校验槽位名合法。依据：`planner/simulator/registry.py:67-84`、`planner/simulators/airsim/runtime.py:4-9`。影响：是（simulators 文档）。
 - Qsim3 层：simulator 结论：`_pump` 先把协议 fd 读到 EOF 才去读 stdout/stderr，子进程若把 stdout 写满 64 KiB 就会阻塞在写，而父进程仍在等协议 fd，形成死锁。依据：`planner/simulator/subprocess_worker.py:246-277`。影响：否。
 - Qsim4 层：simulator 结论：`ThreadedMissionWorker.terminate()` 只是 `shutdown()`，没有 subprocess 版的 SIGKILL 升级；一个卡在 RPC 里的会话会让 `join(10s)` 超时后线程继续活着。依据：`planner/simulator/worker.py:97-102`、`:104-106`。影响：否。
 - Qsim5 层：simulator 结论：`idle_tick()` 抛异常时 worker 线程直接 `return`，之后 `submit()` 仍会往队列里塞任务，永远不会被消费，也不会再报错。依据：`planner/simulator/worker.py:174-191`、`:49-50`。影响：是（assembly 的控制器需要看 CLOSED 判活）。

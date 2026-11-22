@@ -35,7 +35,7 @@
 | `describe()` | `airsim/runtime.py:73`、`projectairsim/runtime.py:74` | 声明式端口 bundle |
 | `AirSimMissionSession.run/idle_tick/close/set_weather/mission_inputs/attach_arms` | `airsim/session.py:188`、`:232`、`:246`、`:240`、`:148`、`:176` | worker 的鸭子协议 |
 | `ProjectAirSimMissionSession.run/idle_tick/close/set_weather/set_view_mode/commit` 等 | `projectairsim/session.py:255`、`:316`、`:446`、`:338`、`:344` | 同上，另加视图与载具切换 |
-| `<Vehicle>.stream_command(command, duration_s)` | `projectairsim/rover.py:267`、`projectairsim/drone.py:291`、`airsim/vehicle.py:222` | 引擎侧唯一数据面动作 |
+| `<Vehicle>.stream_command(command, duration_s)` | `projectairsim/rover.py:267`、`projectairsim/drone.py:291`、`airsim/vehicle.py:132` | 引擎侧唯一数据面动作 |
 | `VehicleRoster.activate_vehicle/return_home` | `projectairsim/vehicles.py:107`、`:77` | 控制台的载具切换与回原点 |
 
 ### 契约类型
@@ -48,7 +48,7 @@
 
 | 异常 | 抛出点 | 语义 |
 | --- | --- | --- |
-| `ExecutionError` | `rover.py:143-148`、`:286`、`drone.py:135-140`、`:161`、`airsim/vehicle.py:79`、`:89`、`:173`、`:184`、`projectairsim/flight.py:76`、`:97` | 引擎拒绝、未 `start()`、端点没走到、命令类型不符 |
+| `ExecutionError` | `rover.py:143-148`、`:286`、`drone.py:135-140`、`:161`、`airsim/vehicle.py:82-84`、`:99-101`、`:140-146`、`projectairsim/flight.py:76`、`:97` | 引擎拒绝、未 `start()`、端点没走到、命令类型不符 |
 | `SimulatorConnectionError` | `projectairsim/connection.py:119-124`、`:281`、`airsim/connection.py:96`、`airsim/server_vehicle.py:40` | 连接或传输失败、时钟停滞 |
 | `ProtocolError` | `projectairsim/weather.py:29`、`:33`、`:40`、`projectairsim/session.py:246`、`:373`、`airsim/session.py:181` | 引擎拒绝天气/视图、装配缺臂 |
 | `ObservationError` | `projectairsim/observation.py:218`、`airsim/observation_source.py:229` | 图像对时间戳或相机位姿不配 |
@@ -76,7 +76,6 @@
 | `CameraTopicStream` | 类 | UE5 topic 帧缓存 | `projectairsim/observation.py:96` |
 | `CollisionMonitor` | 类 | UE5 碰撞订阅 | `projectairsim/rover.py:117`、`drone.py:109` |
 | `AsyncBridge` | 类 | UE5 协程执行桥 | `projectairsim/drone.py:101` |
-| `CameraApiRecorder` | 类 | UE4 录像 | 无生产调用者，见 Qeng2 |
 
 ## 5 关键流程
 
@@ -105,7 +104,7 @@
 ### 5.3 段执行一拍
 
 - UE5：`stream_command` 校验命令类型（`require_supported`）→ 有限性 → 算控制量 → `advance_for_sim_time(duration_s)`（`rover.py:267-296`、`drone.py:291-296`）。rover 走 `controls_from_command` 把速度与角速度换成 engine/steering/brake（`drive.py:175-199`）；drone 走 `commands.move_by_velocity`，由 `AsyncBridge` 在独立线程跑一个 asyncio 事件循环（`commands.py:48-99`、`async_bridge.py:21-56`）。
-- UE4：`AirSimVehicle.stream_command` → `hold_velocity` → `connection.call_streaming("moveByVelocityAsync", …)`，只提交 Future，不推进时钟，靠后续 state RPC 泵 I/O（`airsim/vehicle.py:222-239`、`airsim/connection.py:119-137`）。
+- UE4：`AirSimVehicle.stream_command` → `hold_velocity` → `connection.call_streaming("moveByVelocityAsync", …)`，只提交 Future，不推进时钟，靠后续 state RPC 泵 I/O（`airsim/vehicle.py:132-147`、`airsim/connection.py:119-137`）。
 
 ### 5.4 停稳取帧
 
@@ -130,9 +129,9 @@
 | --- | --- | --- | --- |
 | 声明槽位 | vehicle、observation、streaming、controlled_capture、moving_capture、weather、views、models、frames、home | vehicle、observation、streaming、moving_capture、weather | `projectairsim/runtime.py:12-23`、`airsim/runtime.py:17-23` |
 | 载具 | `rover` + `drone` 双载具，可切换 | 只有 `drone` | `projectairsim/runtime.py:25`、`airsim/runtime.py:25`、`airsim/session.py:194-199` |
-| 运动模型 | rover `ACKERMANN`（最小转弯半径由标定反算）、drone `HOLONOMIC` | `HOLONOMIC` | `rover.py:56-59`、`:228-231`、`drone.py:80-87`、`airsim/vehicle.py:41-47` |
-| 时钟 | 可自由也可步进；`stream_command` 末尾自己推进 | 引擎自走；`stream_command` 只提交 Future | `connection.py:165-252`、`rover.py:295`、`airsim/vehicle.py:230-239` |
-| 流式命令落地 | rover `SetRoverControls`（engine/steering/brake）；drone `MoveByVelocity` 走 `AsyncBridge` | `moveByVelocityAsync`，`drivetrain=MaxDegreeOfFreedom`，`is_rate=True`，时长取 `max(duration, 0.2)` | `rover.py:387-398`、`drive.py:175-199`、`commands.py:48-99`、`airsim/vehicle.py:230-239` |
+| 运动模型 | rover `ACKERMANN`（最小转弯半径由标定反算）、drone `HOLONOMIC` | `HOLONOMIC` | `rover.py:56-59`、`:228-231`、`drone.py:80-87`、`airsim/vehicle.py:34-39` |
+| 时钟 | 可自由也可步进；`stream_command` 末尾自己推进 | 引擎自走；`stream_command` 只提交 Future | `connection.py:165-252`、`rover.py:295`、`airsim/vehicle.py:140-147` |
+| 流式命令落地 | rover `SetRoverControls`（engine/steering/brake）；drone `MoveByVelocity` 走 `AsyncBridge` | `moveByVelocityAsync`，`drivetrain=MaxDegreeOfFreedom`，`is_rate=True`，时长取 `max(duration, 0.2)` | `rover.py:387-398`、`drive.py:175-199`、`commands.py:48-99`、`airsim/vehicle.py:140-147` |
 | 相机来源 | topic 订阅（`CameraTopicStream`，RGB `BGR` + 深度 `16FC1`） | 拉取式 `simGetImages`（Scene + DepthPerspective） | `projectairsim/frames.py:29-30`、`:94-124`、`airsim/observation_source.py:156-180` |
 | 相机数量 | 三机位 + 流式视图环（`VIEW_MODES`） | 单相机 id，无视图切换 | `projectairsim/observation.py:44-60`、`session.py:344-373`、`airsim/runtime.py:17-23` |
 | 取帧并发 | 单连接、单订阅，rover 与 drone 各一条 topic | 每个 worker 一条只读 `AirSimConnection`，像素不进控制锁 | `projectairsim/connection.py:337-345`、`airsim/session.py:119-139` |
@@ -142,7 +141,7 @@
 | 天气开关 | `reset` → `enable`/`disable` + 逐字段 `set` | `simEnableWeather(any>0)` + 逐字段 `simSetWeatherParameter` | `projectairsim/weather.py:26-41`、`airsim/weather.py:47-60` |
 | 返回原点 | 有：teleport 到测得的地面位姿 | 无 home 槽位；关闭时降落 | `projectairsim/vehicles.py:77-105`、`airsim/runtime.py:17-23` |
 | 载具激活 | 有：park → hide → home → 切视图 | 无 | `projectairsim/vehicles.py:107-156` |
-| 碰撞 | topic 订阅 + 拉取式 latch（`consume`） | 每次 `collision_state()` 现查 | `projectairsim/collision.py:86-141`、`airsim/vehicle.py:205-207` |
+| 碰撞 | topic 订阅 + 拉取式 latch（`consume`） | 每次 `collision_state()` 现查 | `projectairsim/collision.py:86-141`、`airsim/vehicle.py:115-117` |
 | 着陆判定 | 控制器 flag 或 `z >= ground_z-0.1` | 控制器 flag 或 `z >= ground_z-0.25`，注释明确 `landed_state` 不可信 | `projectairsim/drone.py:339-350`、`airsim/session.py:49-52`、`airsim/server_vehicle.py:15-21` |
 | 子进程 | 主进程内（线程 worker） | 独立解释器（`runtime_python`），见 [simulator](simulator.md) | `planner/simulator/subprocess_worker.py:1-20` |
 
@@ -152,19 +151,19 @@
 
 | 方法 | 依据 | 说明 |
 | --- | --- | --- |
-| `AirSimVehicle.execute_basic_motion` | `airsim/vehicle.py:123`，仅 `tests/test_airsim_vehicle.py` 调用 | 段执行已改由 `ControlLoop` 走 `stream_command`；`_await_arrival`（`:89`）只被它调用 |
 | `ProjectAirSimRover.execute_segment` | `projectairsim/rover.py:164`，仅测试 | 过渡期委派残留，`attach_loop` 注入了 `_loop` 但没人调这个入口 |
 | `ProjectAirSimDrone.execute_segment` | `projectairsim/drone.py:198`，仅测试 | 同上 |
-| `AirSimVehicle.execute_segment` | `airsim/vehicle.py:74`，仅测试 | 同上 |
+| `AirSimVehicle.execute_segment` | `airsim/vehicle.py:67`，仅测试 | 同上 |
 | `ProjectAirSimDrone.hold_tick` | `projectairsim/drone.py:238` | 只有 UE4 的 `ObservationGate` 会用 `getattr(vehicle,"hold_tick")`；UE5 不走那个闸门 |
 | `ProjectAirSimDrone.begin_observation_hold` | `projectairsim/drone.py:254` | 同上 |
 | `ProjectAirSimDrone.wait_hold` | `projectairsim/drone.py:261` | 无调用者（UE4 侧用的名字是 `wait_for_observation`） |
 | `ProjectAirSimConnection.get_weather_parameters` | `projectairsim/connection.py:323` | 从未用于校验"天气真的设上了" |
 | `CameraTopicStream.last_delivered_ns` | `projectairsim/frames.py:89` | 无调用者 |
-| `CameraApiRecorder`（整个类） | `airsim/recording.py:18`，只在 `airsim/__init__.py:3` 导出 | 生产路径无实例化；`last_error`（`:40`）同样没用 |
 | `AirSimObservationSource.request_capture` | `airsim/observation_source.py:96` | 它转调 `ObservationGate.request_capture`，而 `planner/ports/observation_source.py:18` 声明的 `request_capture` 没有任何上层调用者 |
 | `ProjectAirSimMissionSession.view_mode` | `projectairsim/session.py:331` | 控制台读的是控制器自己的 `_view_mode`，这个属性没被任何地方读 |
 | `ProjectAirSimRover.last_collision` / `ProjectAirSimDrone.last_collision` | `rover.py:243`、`drone.py:279` | 只在诊断里可能有用，当前无读取者 |
+
+三行 `execute_segment` 同属一类：它是 `Vehicle` 端口要求的入口，生产路径改成 `GuidedVehicle` + `ControlLoop` 经 `stream_command` 之后不再有调用者，而 `attach_loop` 注入的 `_loop` 只被这个入口使用。结果是两套并存的形状：契约适配层（方法齐备、装配层用 `hasattr` 找得到）与生产路径（控制循环自己走 `stream_command`）。删任一侧都要同时改 `planner/assembly/mission_assembly.py:226-229` 的注入与 [ports](ports.md) 的声明，所以本轮不删。
 
 ## 6 失败模式
 
@@ -172,7 +171,7 @@
 | --- | --- | --- |
 | `ExecutionError("rover/drone API control is not enabled; call start() first")` | 会话构造未完就下发命令（`rover.py:381-385`、`drone.py:325-329`） | 装配顺序错误，不是运行时抖动 |
 | `ExecutionError("rover refused API control"/"refused arm")` | 引擎拒绝启用 API 或拒绝 arm（`rover.py:143-148`、`drone.py:135-140`） | 会话构造失败，整个栈要重启 |
-| `ValueError` from `require_supported` | 命令类型与 `motion_capability()` 不符（`domain` 侧实现，调用点在 `rover.py:268`、`drone.py:292`、`airsim/vehicle.py:223`） | 上游算错了命令类型，一拍就该炸 |
+| `ValueError` from `require_supported` | 命令类型与 `motion_capability()` 不符（`domain` 侧实现，调用点在 `rover.py:268`、`drone.py:292`、`airsim/vehicle.py:133`） | 上游算错了命令类型，一拍就该炸 |
 | `ExecutionError("non-finite streaming command or invalid duration")` | 速度或时长非有限、`duration_s<=0`（`rover.py:270-286`、`commands.py:56-70`） | 同上 |
 | `ExecutionError("ProjectAirSim velocity command was interrupted")` | `MoveByVelocity` 返回非 `True`（`commands.py:92-95`） | 一拍失败；上层按节拍继续或终止 |
 | `SimulatorConnectionError("simulator clock did not advance …")` | 自由时钟 2 s 内没动（`connection.py:253-286`） | 视为引擎卡死 |
@@ -186,19 +185,39 @@
 
 会话 `close` 的路径把异常降级为 WARNING 并继续释放传输：`session.py:446-508`（UE5）、`session.py:246-287`（UE4）。UE4 的 `close` 先降落并等高度回到地面记录，拿这个测量作为 `landed_on_ground` 传给 `connection.shutdown`（`airsim/session.py:256-287`、`:288-310`）。
 
+### 6.1 已知缺口
+
+锚点常量全部是"经验值，未标定"：取值只来自注释里的实测描述，仓库里没有标定脚本、数据文件或配置入口能复算。改动其中任何一个都会直接改变隐藏、停稳、着陆判定的行为。
+
+| 常量 | 值 | 位置 | 影响 |
+| --- | --- | --- | --- |
+| `HIDE_ALTITUDE_GAIN_M` | 1000.0 m | `projectairsim/vehicles.py:38` | 隐藏载具的抬升量；低于最高建筑就会在场景里可见 |
+| `HIDE_PIN_PERIOD_S` | 2.0 s | `projectairsim/vehicles.py:42` | 重贴周期；两贴之间载具自由下落约 20 m |
+| `SETTLE_DURATION_S` | 2.0 s | `projectairsim/rover.py:52` | 出生点落到路面的等待时长，短了 `measure_resting_pose` 量到半空 |
+| `RESTING_TOLERANCE_M` | 0.02 m | `projectairsim/rover.py:83` | 静止判定的窗口内允许的位移 |
+| `RESTING_WINDOW_S` | 0.5 s | `projectairsim/rover.py:84` | 静止窗口长度 |
+| `RESTING_TIMEOUT_S` | 6.0 s | `projectairsim/rover.py:85` | 量不出静止就返回最新读数 |
+| `TELEPORT_TOLERANCE_M` / `_DEG` | 0.01 m / 0.5° | `projectairsim/rover.py:75-76`、`projectairsim/commands.py:32-33` | 同一位姿重复下发时跳过 `SetObjectPose`，超了引擎会报 not movable |
+| `_is_landed` 触地阈值 | 0.1 m | `projectairsim/drone.py:339-350` | 着陆判定，与 UE4 的 0.25 m 不一致 |
+| `TOUCHDOWN_TOLERANCE_M` | 0.25 m | `airsim/session.py:49-52` | UE4 关闭前降落确认 |
+| `GROUND_TOLERANCE_M` | 0.25 m | `airsim/server_vehicle.py:15-21` | UE4 判断"还在地面"以便重新起飞 |
+| `MIN_CLIMB_M` | 0.5 m | `airsim/connection.py:20` | 起飞成功的爬升下限 |
+| `velocity_command_duration_s` | 0.2 s | `airsim/vehicle.py:28` | 流式命令的最短下发时长，见 Qeng11 |
+
+端口槽位没有构造期校验。`planner/simulator/registry.py:67-84` 建完会话只调 `attach_arms`，不比对声明槽位与实物槽位。UE4 已有 `build_ports`（`airsim/runtime.py:28-52`），拿 `describe().implemented()` 与它比对是一条低成本测试，目前没有。UE5 的端口在会话构造里内联填（`projectairsim/session.py:139-150`），没有 `build_ports`，要做同样的比对得先把构造拆成 builder。`tests/test_architecture.py:134-160` 只校验槽位名是 `SimulatorPorts` 的合法字段，测不出"声明了却没接"。
+
 ## 7 测试位置
 
 覆盖到的：
 
 - UE5：`tests/test_projectairsim_session.py`（构造顺序、载具切换回滚）、`tests/test_projectairsim_rover.py`（转向标定、teleport 容差、静止高度）、`tests/test_projectairsim_drone.py`（起飞/降落/`_is_landed`）、`tests/test_projectairsim_connection.py`（重连、时钟两种模式）、`tests/test_projectairsim_streaming.py`、`tests/test_projectairsim_geometry.py`、`tests/test_projectairsim_drive.py`。
-- UE4：`tests/test_airsim_session.py`、`tests/test_airsim_vehicle.py`、`tests/test_airsim_connection.py`、`tests/test_airsim_observation.py`、`tests/test_airsim_server_vehicle.py`、`tests/test_airsim_port_names.py`（用 AST 校验 `getattr` 用到的属性名真在目标类上）。
-- 横切：`tests/test_architecture.py:134-160`（`PORT_SLOTS` 名字必须是 `SimulatorPorts` 的字段；`Vehicle`/`StreamingVehicle` 的方法必须在三个载具类上存在）、`tests/test_camera*`/`test_intrinsics_validation.py`、`tests/test_motion_contract.py`。
+- UE4：`tests/test_airsim_session.py`（`test_airsim_vehicle.py` 删到只剩 2 条：`wait_for_observation` 的名字翻译与缺 hold 服务时的拒绝）、`tests/test_airsim_connection.py`、`tests/test_airsim_observation.py`、`tests/test_airsim_server_vehicle.py`、`tests/test_airsim_port_names.py`（用 AST 校验 `getattr` 用到的属性名真在目标类上）。
+- 横切：`tests/test_architecture.py:134-160`（`PORT_SLOTS` 名字必须是 `SimulatorPorts` 的字段，`Vehicle`/`StreamingVehicle` 的方法必须在三个载具类上存在；只做 `hasattr`，签名漂移测不出来）、`tests/test_camera*`/`test_intrinsics_validation.py`、`tests/test_motion_contract.py`。
 
 没覆盖的空白：
 
 - `CameraTopicStream`（`projectairsim/frames.py`，211 行）没有专门测试文件，只在 `test_projectairsim_streaming.py` 里被间接覆盖。
 - `AsyncBridge` 的超时与 `close` 路径没有直接测试。
-- `airsim/recording.py`（190 行）没有任何测试，也没有生产调用者。
 - `ProjectAirSimCommands.run_native`（`commands.py:100-137`）的 pump 循环只在测试里用替身跑过。
 - 第 5.8 节列出的未接线方法都没有测试断言其"不该被调用"。
 
@@ -217,9 +236,9 @@
 ## 9 疑问与争议
 
 - Qeng1 层：simulators 结论：`airsim` 与 `projectairsim` 的 `describe()` 与真实 `build_ports` 之间没有比对；UE4 有 `build_ports`（`airsim/runtime.py:28`），UE5 完全由 `session.py` 手工填端口、没有任何构造期比对，`PORT_SLOTS` 是唯一声明。依据：`airsim/runtime.py:28-52`、`projectairsim/runtime.py:74-81`、`projectairsim/session.py:79-227`。影响：是（simulator 与 assembly 文档）。
-- Qeng2 层：simulators 结论：`airsim/recording.py` 190 行整模块无生产调用者，只在包 `__init__` 里导出。依据：`planner/simulators/airsim/recording.py:18`、`planner/simulators/airsim/__init__.py:3-6`。影响：否。
-- Qeng3 层：simulators 结论：三个载具类都还留着 `execute_segment` + `_loop` 这套过渡委派，生产零调用，`attach_loop` 注入的 loop 只被测试的 `execute_segment` 用到。依据：`airsim/vehicle.py:70-85`、`projectairsim/rover.py:160-173`、`projectairsim/drone.py:194-215`、`planner/assembly/mission_assembly.py:226-229`。影响：是（assembly 的注入点）。
-- Qeng4 层：simulators 结论：`AirSimVehicle.execute_basic_motion` 与它的 `_await_arrival` 已被 `ControlLoop` 取代，`airsim/vehicle.py` 里仍有 60 行无人调用的运动实现，包含 `airsim.DrivetrainType` 的硬编码。依据：`airsim/vehicle.py:89-170`。影响：否。
+- Qeng2 层：simulators 结论：已处置，本轮删除 `airsim/recording.py` 整模块与 `airsim/__init__.py` 的两处重导。依据：`planner/simulators/airsim/__init__.py:1-6`。影响：否。
+- Qeng3 层：simulators 结论：三个载具类都还留着 `execute_segment` + `_loop` 这套过渡委派，生产零调用，`attach_loop` 注入的 loop 只被测试的 `execute_segment` 用到。依据：`airsim/vehicle.py:63-77`、`projectairsim/rover.py:160-173`、`projectairsim/drone.py:194-215`、`planner/assembly/mission_assembly.py:226-229`。影响：是（assembly 的注入点）。
+- Qeng4 层：simulators 结论：已处置，本轮删除 `AirSimVehicle.execute_basic_motion`、`_await_arrival` 与两个到达容差常量，`vehicle.py` 从 239 行降到 149 行。依据：`planner/simulators/airsim/vehicle.py:1-149`。影响：否。
 - Qeng5 层：simulators 结论：`ProjectAirSimDrone` 上有三个方法（`hold_tick`、`begin_observation_hold`、`wait_hold`）是为 UE4 那套 `ObservationGate` 协议准备的，UE5 不走闸门，方法永久悬空。依据：`projectairsim/drone.py:238-262`、`airsim/observation_gate.py:84-88`、`:145-151`。影响：否。
 - Qeng6 层：simulators 结论：`ObservationSource.request_capture` 这条契约（停稳采集 + Future 语义）在两套引擎里都实现了，但没有任何上层调用者；`controlled_capture` 槽位只有在 `ports.py` 与 `from_slots` 里出现，UE4 的 `build_ports` 没有填它。依据：`planner/ports/observation_source.py:18`、`airsim/observation_source.py:96-101`、`airsim/runtime.py:45-52`、`planner/simulator/ports.py:48`。影响：是（ports 与 runtime 文档）。
 - Qeng7 层：simulators 结论：`ProjectAirSimMissionSession.view_mode` 属性没有任何读取者，控制台的视图状态由控制器自己维护，同一个"当前视图"存在两份真相。依据：`projectairsim/session.py:331-333`、`planner/assembly/controller/state.py:50`、`:188-218`。影响：是（assembly 文档）。
