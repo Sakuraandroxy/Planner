@@ -1,11 +1,5 @@
 """Pure domain types: no simulator or network dependency."""
 
-from .approach import (
-    ApproachAssessment,
-    ApproachSettings,
-    ApproachStatus,
-    ApproachTarget,
-)
 from .basic_motion import BasicMotionParameters, BasicMotionResult, BasicMotionStatus
 from .depth import (
     FAR_VALID_PIXEL_VALUE,
@@ -154,10 +148,6 @@ from .weather import (
 )
 
 __all__ = [
-    "ApproachAssessment",
-    "ApproachSettings",
-    "ApproachStatus",
-    "ApproachTarget",
     "ArrivalRelation",
     "BasicMotionParameters",
     "BasicMotionResult",

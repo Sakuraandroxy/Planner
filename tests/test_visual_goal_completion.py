@@ -11,7 +11,7 @@ from planner.workflows.visual_goal_navigation import (
     require_visual_completion_evidence,
     retained_world_trajectory,
 )
-from planner.domain import ApproachSettings, ApproachStatus, ApproachTarget
+from planner.workflows.visual_goal_navigation import ApproachSettings, ApproachStatus, ApproachTarget
 from planner.domain import ExecutionBudget
 from planner.domain import CameraIntrinsics, Observation
 from planner.domain import WorldPose
