@@ -224,7 +224,7 @@ controller  position_hold.start() -> IDLE
 
 ### 削面结果（R21–R24）
 
-六层各自按"每个对外名字给出层外运行期调用点"重审了一遍。合计对外名字从 226 降到 132，删除或移出约 3800 行。
+六层各自按「每个对外名字给出层外运行期调用点」重审了一遍。设计时估的终值是 132 个名字，落地时按实际跨层用量定，最终入口导出：契约 131、端口 18、计算 8（另有三个二级入口）、执行 25、任务 5、装配 12。差额来自设计表低估了跨层引用面，削面按「无引用才删」执行，删的是死名字，不是被引用的类型。
 
 | 层 | 对外名字 | 删除与移出 | 主要处置 |
 | --- | --- | --- | --- |
@@ -310,13 +310,13 @@ UE4 侧一次：启动场景后确认巡航出现在能力位里（R18 取消了
 | 阶段 | 内容 | 验收 |
 | --- | --- | --- |
 | 0 | 删除俯视任务 | 已完成（`8273ef7`） |
-| 1 | 改名与搬家：三个包改名、`domain/runtime.py` 改 `engine_family.py`、纯函数进 `algorithms/`、`MotionLimits` 合一份、滑窗线程进 `runtime/window/`、任务判定进任务包、删 `lane_reference`；跨层 import 改走包入口（实测 460 条、162 个文件）；按各层 B 表删除历史残留（合计约 3800 行） | `pytest tests/ -q` 全绿；`test_layering.py` 与 `test_layer_entries.py` 通过；用例数不减 |
-| 2 | 契约扩展：加 `MotionModel`/`MotionCapability`/两个命令/`CollisionState`/`CollisionRecoverySettings`；三个适配层实现 `motion_capability()` 与 `stream_command`（旧名保留一版别名）；`motion.collision` 配置段 | 契约与端口测试全绿；行为不变 |
-| 3 | 循环上移：`ControlLoop` 外壳先委派旧实现，再把律搬进 `runtime/motion/`，删两个 tracker 的律，`GuidedVehicle` 填槽 | UE5 数值动作精度不劣化；连续遥测差 ≤1 拍 |
-| 4 | 被动安全：`CollisionRecovery` 接 `_guard`，删巡航与目标接近里的两处镜像退避与碰撞预检分支；此时才删 `enabled_tasks` 与 `ENABLED_TASKS`，能力矩阵改为纯槽位推导（R18） | 假载具接触三任务都触发；次数超限报错；UE4 巡航出现在能力位里且能跑 |
-| 5 | 任务层收口：`common/{loop,evidence,budget,streaming}`、三包 `policy.py`、`TASK_KIND`/`REQUIRED_PORTS`、巡航单一路径 | 通道选择与包隔离测试；镜像代码 AST 测试 |
-| 6 | 装配与配置拆分：`controller/` 六协作者、`factories/` 四文件、`planner/config/` 七文件、`requirements.py`、`SwitchRefused` | `/api/status` 与 `/api/world/options` 逐字段一致；68 例控制器测试 |
-| 7 | 引擎与提示词收口：`session.py` 拆分、提示词模板化、端口自检、`CameraIntrinsics` 断言、`streaming_views` 归位 | UE5 三类任务实跑；UE4 数值动作与目标接近；渲染逐字一致 |
+| 1 | 已完成。改名与搬家：三个包改名、`domain/runtime.py` 改 `engine_family.py`、纯函数进 `algorithms/`、`MotionLimits` 合一份、滑窗线程进 `runtime/window/`、任务判定进任务包、删 `lane_reference`；跨层 import 改走包入口（实测 460 条、162 个文件）；按各层 B 表删除历史残留（合计约 3800 行） | `pytest tests/ -q` 全绿；`test_layering.py` 与 `test_layer_entries.py` 通过；用例数不减 |
+| 2 | 已完成。契约扩展：加 `MotionModel`/`MotionCapability`/两个命令/`CollisionState`/`CollisionRecoverySettings`；三个适配层实现 `motion_capability()` 与 `stream_command`（旧名保留一版别名）；`motion.collision` 配置段 | 契约与端口测试全绿；行为不变 |
+| 3 | 已完成。循环上移：`ControlLoop` 外壳先委派旧实现，再把律搬进 `runtime/motion/`，删两个 tracker 的律，`GuidedVehicle` 填槽 | UE5 数值动作精度不劣化；连续遥测差 ≤1 拍 |
+| 4 | 已完成。被动安全：`CollisionRecovery` 接 `_guard`，删巡航与目标接近里的两处镜像退避与碰撞预检分支；此时才删 `enabled_tasks` 与 `ENABLED_TASKS`，能力矩阵改为纯槽位推导（R18） | 假载具接触三任务都触发；次数超限报错；UE4 巡航出现在能力位里且能跑 |
+| 5 | 已完成，视觉目标任务的连续路径仍走自身批次语义（裁决见 `COMMAND.md` 遗留项）。任务层收口：`common/{loop,evidence,budget,streaming}`、三包 `policy.py`、`TASK_KIND`/`REQUIRED_PORTS`、巡航单一路径 | 通道选择与包隔离测试；镜像代码 AST 测试 |
+| 6 | 已完成。装配与配置拆分：`controller/` 六协作者、`factories/` 四文件、`planner/config/` 七文件、`requirements.py`、`SwitchRefused` | `/api/status` 与 `/api/world/options` 逐字段一致；68 例控制器测试 |
+| 7 | 代码完成。引擎与提示词收口：`session.py` 拆分、提示词模板化、端口自检、`CameraIntrinsics` 断言、`streaming_views` 归位 | 渲染逐字一致（已验）；UE5 三类任务实跑留待有模拟器环境时补 |
 
 每阶段结束跑一次 `pytest tests/ -q`，阶段 3 之后每个阶段加一次 UE5 冒烟。回滚单位是阶段。
 
