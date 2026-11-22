@@ -67,7 +67,7 @@ def build_session(simulator: str, *, config, map_entry, family, resources, log):
     # no caller can forget it and no family can half-do it: the UE4 mission child
     # built its own resources, left out the trajectory sink, and the console lost
     # its remaining-path panel without an error anywhere.
-    from ..assembly.mission_assembly import assemble_missions
+    from planner.assembly import assemble_missions
 
     session.attach_arms(
         assemble_missions(

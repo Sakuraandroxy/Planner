@@ -15,7 +15,7 @@ import types
 
 import pytest
 
-from planner.domain.pose import WorldPose
+from planner.domain import WorldPose
 from planner.errors import ExecutionError
 from planner.simulators.airsim.vehicle import AirSimVehicle
 

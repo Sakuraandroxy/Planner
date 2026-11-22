@@ -2,9 +2,9 @@ from collections.abc import Callable
 
 from planner.assembly.mission_runner import MissionRunner
 from planner.assembly.mission_validator import MissionValidator
-from planner.domain.mission import MissionPlan
-from planner.domain.result import MissionResult
-from planner.ports.task_parser import TaskParser
+from planner.domain import MissionPlan
+from planner.domain import MissionResult
+from planner.ports import TaskParser
 
 
 # 一次任务执行的应用层入口：解析 → 校验 → 执行。

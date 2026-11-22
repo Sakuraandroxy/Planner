@@ -1,7 +1,7 @@
 """Polyline following with continuous velocity and independent signed yaw."""
 import math
 
-from planner.domain.motion import ContinuousTrackingSettings
+from planner.domain import ContinuousTrackingSettings
 
 from .command_smoothing import CommandSmoother
 from .continuous_reference import ContinuousPathReference, segment_length, xyz

@@ -5,18 +5,18 @@ from __future__ import annotations
 from pathlib import Path
 
 from .adapters.http.server_api import create_api
-from .assembly.factories import build_detector, build_geometry, build_planner
-from .assembly.mission_assembly import MissionResources
-from .assembly.controller import ServerController
+from planner.assembly import build_detector, build_geometry, build_planner
+from planner.assembly import MissionResources
+from planner.assembly import ServerController
 from .config import (
     AppConfig,
     load_config,
     profile_catalog,
     profile_config_path,
 )
-from .domain.server import MapSelection
-from .runtime.frame_hub import FrameHub
-from .runtime.trajectory_hub import TrajectoryHub
+from planner.domain import MapSelection
+from planner.runtime import FrameHub
+from planner.runtime import TrajectoryHub
 from .simulator import registry
 from .simulator.marker import read_map_marker
 from .simulator.router import FamilyRouter

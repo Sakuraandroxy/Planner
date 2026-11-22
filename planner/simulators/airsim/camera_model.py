@@ -5,7 +5,7 @@ from numbers import Integral
 
 import numpy as np
 
-from planner.domain.observation import CameraIntrinsics
+from planner.domain import CameraIntrinsics
 
 
 #根据图像尺寸 + 水平 FOV，算相机内参

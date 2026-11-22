@@ -12,7 +12,7 @@ from planner.adapters.trajectory_planner.prompts import (
     FreeNavigationTrajectoryPrompt,
     VisualGoalTrajectoryPrompt,
 )
-from planner.assembly.factories import (
+from planner.assembly import (
     build_completion_checker,
     build_free_navigation_planner,
     build_planner,
@@ -20,7 +20,7 @@ from planner.assembly.factories import (
     build_trace_factory,
 )
 from planner.config import load_config
-from planner.domain.mission import TaskKind
+from planner.domain import TaskKind
 from tests.support import write_config
 
 

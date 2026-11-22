@@ -12,9 +12,9 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from ...domain.pose import RelativePoseDelta
-from ...domain.trajectory import RelativeTrajectory
-from ...domain.visual_goal import VisualGoalPlanningContext
+from planner.domain import RelativePoseDelta
+from planner.domain import RelativeTrajectory
+from planner.domain import VisualGoalPlanningContext
 from ...errors import ProtocolError
 from ...algorithms.target_coordinates import point_in_horizontal_body
 from ...algorithms.trajectory_transform import relative_to_world

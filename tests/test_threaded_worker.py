@@ -2,14 +2,9 @@ import time
 
 import pytest
 
-from planner.domain.result import (
-    CompletionBasis,
-    MissionResult,
-    StageResult,
-    StageSummary,
-)
-from planner.domain.server import TaskSubmission, WorkerEventKind
-from planner.domain.weather import WEATHER_CATALOG
+from planner.domain import CompletionBasis, MissionResult, StageResult, StageSummary
+from planner.domain import TaskSubmission, WorkerEventKind
+from planner.domain import WEATHER_CATALOG
 from planner.simulator.worker import ThreadedMissionWorker
 
 

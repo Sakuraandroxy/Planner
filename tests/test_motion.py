@@ -3,13 +3,9 @@ import math
 
 import pytest
 
-from planner.domain.motion import MotionLimits
-from planner.domain.pose import RelativePoseDelta, WorldPose
-from planner.runtime.segment_motion import (
-    duration_for,
-    plan_segment,
-    quintic,
-)
+from planner.domain import MotionLimits
+from planner.domain import RelativePoseDelta, WorldPose
+from planner.runtime import duration_for, plan_segment, quintic
 
 
 def test_quintic_boundaries_and_midpoint():

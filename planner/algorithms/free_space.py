@@ -17,8 +17,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ..domain.depth import INVALID_DEPTH_SENTINEL_M
-from ..domain.observation import Observation
+from planner.domain import INVALID_DEPTH_SENTINEL_M
+from planner.domain import Observation
 
 
 @dataclass(frozen=True)

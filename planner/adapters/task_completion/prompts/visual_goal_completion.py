@@ -3,11 +3,9 @@ import json
 
 from planner.adapters.model_visual_inputs import aligned_depth_image
 from planner.adapters.task_completion.prompt import CompletionMessages
-from planner.algorithms.completion.visual_goal_request import (
-    require_visual_completion_evidence,
-)
-from planner.domain.depth import depth_display_description
-from planner.domain.visual_goal_completion import VisualGoalCompletionInput
+from planner.workflows.visual_goal_navigation import require_visual_completion_evidence
+from planner.domain import depth_display_description
+from planner.domain import VisualGoalCompletionInput
 
 
 def _binding_evidence(request: VisualGoalCompletionInput) -> str:

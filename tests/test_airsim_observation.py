@@ -16,7 +16,7 @@ import types
 import numpy as np
 import pytest
 
-from planner.domain.pose import WorldPose
+from planner.domain import WorldPose
 
 
 def _png_bytes(width=8, height=6, color=(10, 20, 30)):

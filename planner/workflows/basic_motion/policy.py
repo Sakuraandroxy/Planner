@@ -1,6 +1,6 @@
 """Validate task wiring only; numeric actions have no flight admission gates."""
-from planner.domain.basic_motion import BasicMotionParameters
-from planner.domain.mission import MissionStage, TaskKind
+from planner.domain import BasicMotionParameters
+from planner.domain import MissionStage, TaskKind
 from planner.errors import ProtocolError
 
 

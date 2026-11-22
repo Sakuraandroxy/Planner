@@ -1,7 +1,7 @@
 import pytest
 
-from planner.domain.execution import StopResult
-from planner.domain.visual_goal import (
+from planner.domain import StopResult
+from planner.domain import (
     ArrivalRelation,
     VisualGoalNavigationParameters,
     VisualGoalNavigationResult,

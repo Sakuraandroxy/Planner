@@ -9,9 +9,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from planner.domain.pose import WorldPose
+from planner.domain import WorldPose
 from planner.errors import ExecutionError
-from planner.workflows.visual_goal_navigation.continuous import VisualGoalContinuous
+from planner.workflows.visual_goal_navigation import VisualGoalContinuous
 
 
 class _Follower:

@@ -1,7 +1,7 @@
 """Bounded path preview and latched yaw alignment; never edits queue endpoints."""
 import math
 
-from planner.domain.motion import ContinuousReference
+from planner.domain import ContinuousReference
 
 
 def xyz(pose):

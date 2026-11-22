@@ -1,29 +1,29 @@
 import numpy as np
 import pytest
 
-from planner.algorithms.targeting.association import (
+from planner.algorithms.targeting import (
     accept_position,
     bound_target_geometry,
     make_reference,
 )
-from planner.algorithms.targeting.bbox_goal_observation import BBoxGoalObserver
-from planner.algorithms.targeting.depth_foreground import DepthForegroundFilter
-from planner.algorithms.targeting.depth_surface_sampling import sample_surface_depth
-from planner.algorithms.targeting.visual_goal_refresh import VisualGoalRefresh
-from planner.domain.depth_foreground import DepthForegroundSettings
-from planner.domain.execution import ExecutionBudget
-from planner.domain.observation import CameraIntrinsics, Observation
-from planner.domain.pose import WorldPose
-from planner.domain.target_detection import NormalizedBoundingBox, TargetDetection
-from planner.domain.target_state import TargetPositionState
-from planner.domain.visual_goal import (
+from planner.workflows.visual_goal_navigation import BBoxGoalObserver
+from planner.algorithms.targeting import DepthForegroundFilter
+from planner.algorithms.targeting import sample_surface_depth
+from planner.workflows.visual_goal_navigation import VisualGoalRefresh
+from planner.domain import DepthForegroundSettings
+from planner.domain import ExecutionBudget
+from planner.domain import CameraIntrinsics, Observation
+from planner.domain import WorldPose
+from planner.domain import NormalizedBoundingBox, TargetDetection
+from planner.domain import TargetPositionState
+from planner.domain import (
     GoalGeometry,
     GoalObservation,
     GoalReference,
     GoalVisibility,
     SurfacePointEstimate,
 )
-from planner.domain.visual_goal_limits import VisualGoalLimits
+from planner.domain import VisualGoalLimits
 from planner.errors import BudgetExceeded
 from tests.support import ue_camera_matrix
 

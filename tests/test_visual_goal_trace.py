@@ -5,11 +5,11 @@ import numpy as np
 import pytest
 
 from planner.adapters.diagnostics import VisualGoalTrace
-from planner.domain.depth_foreground import DepthForegroundResult
-from planner.domain.observation import CameraIntrinsics, Observation
-from planner.domain.pose import WorldPose
-from planner.domain.streaming import ControlTelemetry
-from planner.domain.visual_goal import (
+from planner.domain import DepthForegroundResult
+from planner.domain import CameraIntrinsics, Observation
+from planner.domain import WorldPose
+from planner.domain import ControlTelemetry
+from planner.domain import (
     GoalGeometry,
     GoalObservation,
     GoalVisibility,

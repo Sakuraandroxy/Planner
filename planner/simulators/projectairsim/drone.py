@@ -23,13 +23,13 @@ from projectairsim.drone import YawControlMode
 from projectairsim.types import LandedState
 
 from ...config import CameraSettings, DepthSettings
-from ...domain.observation import Observation
-from ...domain.pose import WorldPose
-from ...domain.streaming import TimedVehicleState
+from planner.domain import Observation
+from planner.domain import WorldPose
+from planner.domain import TimedVehicleState
 from ...errors import ExecutionError
-from ...runtime.motion.synchronized import SMOOTH_PROFILE
-from ...runtime.position_hold import PositionHold
-from ...domain.motion import MotionLimits
+from planner.runtime import SMOOTH_PROFILE
+from planner.runtime import PositionHold
+from planner.domain import MotionLimits
 from .async_bridge import AsyncBridge
 from .collision import CollisionEvent, CollisionMonitor
 from .connection import ProjectAirSimConnection
@@ -76,7 +76,7 @@ class ProjectAirSimDrone:
         clock=time.monotonic,
         sleep=time.sleep,
     ):
-        from ...domain.motion import ContinuousTrackingSettings
+        from planner.domain import ContinuousTrackingSettings
 
         self._connection = connection
         self._robot = robot

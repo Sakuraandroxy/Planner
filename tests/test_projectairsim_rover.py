@@ -3,9 +3,9 @@ import math
 import pytest
 
 from planner.config import CameraSettings, DepthSettings
-from planner.domain.pose import WorldPose
+from planner.domain import WorldPose
 from planner.errors import ExecutionError
-from planner.domain.motion import MotionLimits as ConfiguredMotionLimits
+from planner.domain import MotionLimits as ConfiguredMotionLimits
 from planner.simulators.projectairsim.rover import (
     SETTLE_DURATION_S,
     ProjectAirSimRover,

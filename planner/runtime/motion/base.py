@@ -1,6 +1,6 @@
 from typing import Protocol
 
-from planner.domain.trajectory import MotionTrajectory, WorldTrajectory
+from planner.domain import MotionTrajectory, WorldTrajectory
 
 
 class MotionPlanner(Protocol):

@@ -1,7 +1,7 @@
 """Measured velocity hold. Only the control owner calls this port."""
 from typing import Protocol
 
-from planner.domain.streaming import TimedVehicleState
+from planner.domain import TimedVehicleState
 
 
 class PositionHoldVehicle(Protocol):

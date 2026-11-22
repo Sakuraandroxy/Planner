@@ -2,9 +2,9 @@
 import math
 from dataclasses import dataclass
 
-from planner.domain.motion import MotionLimits
-from planner.domain.pose import WorldPose, resolve_yaw_delta_deg, wrap_yaw_deg
-from planner.domain.trajectory import MotionSegment, MotionTrajectory, WorldTrajectory
+from planner.domain import MotionLimits
+from planner.domain import WorldPose, resolve_yaw_delta_deg, wrap_yaw_deg
+from planner.domain import MotionSegment, MotionTrajectory, WorldTrajectory
 
 SMOOTH_PROFILE = "synchronized_quintic"
 

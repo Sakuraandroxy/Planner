@@ -7,10 +7,10 @@ import math
 import time
 from typing import Generic, TypeVar
 
-from planner.domain.execution import ExecutionBudget
-from planner.domain.observation import Observation
-from planner.domain.pose import WorldPose
-from planner.domain.trajectory import RelativeTrajectory
+from planner.domain import ExecutionBudget
+from planner.domain import Observation
+from planner.domain import WorldPose
+from planner.domain import RelativeTrajectory
 from planner.errors import BudgetExceeded, ProtocolError
 
 from ..model_visual_inputs import aligned_depth_image

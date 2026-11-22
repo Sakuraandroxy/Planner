@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 
-from ..domain.pose import WorldPose
+from planner.domain import WorldPose
 
 
 def horizontal_distance(

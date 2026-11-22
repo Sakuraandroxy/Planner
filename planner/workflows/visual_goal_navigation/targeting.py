@@ -1,21 +1,33 @@
-"""Stage-scoped target updates. Only the owner accepts data-only worker results."""
+"""Visual-goal targeting: background refresh of the target and bbox observation.
+
+只做检测与状态更新，不决定完成与否；完成判定在 completion.py。
+"""
 import logging
 import math
 import threading
+import time
 from functools import partial
 
-from planner.domain.target_state import TargetObservationEvidence
-from planner.domain.visual_goal_completion import VisualGoalTargetSnapshot
+from planner.algorithms.targeting import (
+    accept_position,
+    bound_target_geometry,
+    make_reference,
+)
+from planner.domain import ExecutionBudget
+from planner.domain import Observation
+from planner.domain import TargetDetectionInput
+from planner.domain import TargetObservationEvidence
+from planner.domain import GoalObservation, GoalReference, GoalVisibility
+from planner.domain import VisualGoalTargetSnapshot
 from planner.errors import (
     BudgetExceeded,
     ModelCallTimeout,
     ObservationError,
     ProtocolError,
 )
-from planner.runtime.background_operation import BackgroundOperation
-from planner.runtime.observation_snapshot import freeze_observation, freeze_reference
-
-from .association import accept_position, bound_target_geometry, make_reference
+from planner.ports import TargetDetector
+from planner.runtime import BackgroundOperation
+from planner.runtime import freeze_observation, freeze_reference
 
 logger = logging.getLogger(__name__)
 
@@ -131,3 +143,29 @@ class VisualGoalRefresh:
 
     def close(self):
         self.job.close()
+
+
+# Optional grounding observer; surface pixels are selected by the model.
+class BBoxGoalObserver:
+    def __init__(self, detector: TargetDetector, timeout_s: float = 20.0, clock=time.monotonic):
+        self.detector, self.timeout_s, self.clock = detector, timeout_s, clock
+
+    def observe(self, observation: Observation, target_description: str,
+                reference: GoalReference | None = None, *, budget: ExecutionBudget | None = None,
+                initial_pose=None, instruction: str | None = None) -> GoalObservation:
+        timeout = self.timeout_s if budget is None else min(self.timeout_s, budget.remaining(self.clock()))
+        if timeout <= 0:
+            raise BudgetExceeded("deadline before target detection")
+        request = TargetDetectionInput(observation, instruction or target_description,
+            target_description, reference.crop if reference is not None else None)
+        detection = self.detector.detect(request, timeout_s=timeout)
+        if budget is not None and budget.remaining(self.clock()) <= 0:
+            raise BudgetExceeded("late target detection discarded")
+        source = "model_reference_surface_points" if reference is not None else "model_surface_points"
+        if not detection.found:
+            return GoalObservation(GoalVisibility.NOT_VISIBLE, None, None, target_description,
+                "detector returned no certain bbox", False, source, surface_points=())
+        box = detection.bbox.coordinates
+        return GoalObservation(GoalVisibility.VISIBLE, box, None, target_description,
+            "model target association and visible surface samples; not persistent physical landmarks",
+            True, source, surface_points=detection.surface_points)

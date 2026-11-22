@@ -4,7 +4,7 @@ import time
 import numpy as np
 import pytest
 
-from planner.runtime.frame_hub import FrameHub
+from planner.runtime import FrameHub
 
 
 class FakeClock:

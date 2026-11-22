@@ -1,11 +1,11 @@
 import json
 from typing import Protocol, TypeVar
 
-from planner.domain.depth import depth_display_description
-from planner.domain.observation import Observation
-from planner.domain.pose import WorldPose
-from planner.domain.trajectory import RelativeTrajectory
-from planner.algorithms.trajectory_transform import world_pose_delta_in_reference_frame
+from planner.domain import depth_display_description
+from planner.domain import Observation
+from planner.domain import WorldPose
+from planner.domain import RelativeTrajectory
+from planner.algorithms import world_pose_delta_in_reference_frame
 
 from .render import load, render
 

@@ -11,8 +11,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from planner.domain.observation import Observation
-from planner.domain.visual_goal import GoalGeometry, GoalObservation
+from planner.domain import Observation
+from planner.domain import GoalGeometry, GoalObservation
 
 
 def _write_image(path: Path, image, *, quality: int | None = None) -> None:

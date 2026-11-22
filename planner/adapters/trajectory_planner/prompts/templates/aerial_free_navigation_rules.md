@@ -27,11 +27,6 @@ blocked. If the lane is blocked, take the shortest safe deviation and return to
 a travel lane as soon as possible.
 Keep right: when the intended lane is ambiguous, prefer the rightmost travel
 lane in the flight direction.
-When a measured lane reference is supplied, use its lateral offset, heading
-error and lane-centre lookahead as the primary lateral guide. The reference is
-measured at the planning anchor where your new actions begin (the end of the
-pending queue), so its heading error already includes every pending action.
-Never apply the pending turn a second time.
 Reduce the lateral offset and heading error smoothly across the five actions;
 do not overcorrect with a single large turn.
 
@@ -113,10 +108,6 @@ A clear bearing window is useful only inside the current lane. Never leave the
 lane to follow a wider gap.
 
 Mandatory aim check before output:
-The lane reference uses the same sign convention as dyaw_deg: positive is to
-the RIGHT of the UAV, negative is to the LEFT.
-This reference is measured at the anchor of your new actions; pending actions
-are already included, so never add their turn again.
 When the lateral offset is more than about 0.3 m or the near lane-centre
 bearing is clearly nonzero, the first one or two actions must turn toward that
 bearing; it is the early aim direction.

@@ -1,31 +1,25 @@
 import pytest
 
-from planner.assembly.application import PlannerApplication
-from planner.assembly.mission_runner import MissionRunner
-from planner.assembly.mission_validator import MissionValidator
-from planner.assembly.reporting import mission_report
-from planner.assembly.workflow_router import WorkflowRouter
-from planner.algorithms.task_validation.basic_motion import (
-    BasicMotionStageValidator,
-)
-from planner.algorithms.task_validation.free_navigation import (
-    FreeNavigationStageValidator,
-)
-from planner.algorithms.task_validation.visual_goal_navigation import (
-    VisualGoalStageValidator,
-)
-from planner.domain.basic_motion import BasicMotionParameters
-from planner.domain.free_navigation import FreeNavigationParameters
-from planner.domain.mission import MissionPlan, MissionStage, TaskKind
-from planner.domain.result import (
+from planner.assembly import PlannerApplication
+from planner.assembly import MissionRunner
+from planner.assembly import MissionValidator
+from planner.assembly import mission_report
+from planner.assembly import WorkflowRouter
+from planner.workflows.basic_motion import BasicMotionStageValidator
+from planner.workflows.free_navigation import FreeNavigationStageValidator
+from planner.workflows.visual_goal_navigation import VisualGoalStageValidator
+from planner.domain import BasicMotionParameters
+from planner.domain import FreeNavigationParameters
+from planner.domain import MissionPlan, MissionStage, TaskKind
+from planner.domain import (
     CompletionBasis,
     MissionResult,
     ResultMeasurement,
     StageResult,
     StageSummary,
 )
-from planner.domain.visual_goal import VisualGoalNavigationParameters
-from planner.domain.visual_goal_limits import VisualGoalLimits
+from planner.domain import VisualGoalNavigationParameters
+from planner.domain import VisualGoalLimits
 from planner.errors import ProtocolError
 
 

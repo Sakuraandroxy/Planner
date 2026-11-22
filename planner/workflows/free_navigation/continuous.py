@@ -11,23 +11,23 @@ from __future__ import annotations
 import logging
 import math
 
-from planner.domain.execution import ExecutionBudget
-from planner.domain.free_navigation import FreeNavigationParameters
-from planner.domain.motion import ContinuousTrackingSettings
-from planner.domain.planning_window import PlanningWindowInput
-from planner.domain.pose import RelativePoseDelta
-from planner.domain.streaming import QueueObservationAnchor
-from planner.domain.trajectory import RelativeTrajectory
-from planner.domain.trajectory_telemetry import MODE_CONTINUOUS
+from planner.domain import ExecutionBudget
+from planner.domain import FreeNavigationParameters
+from planner.domain import ContinuousTrackingSettings
+from planner.domain import PlanningWindowInput
+from planner.domain import RelativePoseDelta
+from planner.domain import QueueObservationAnchor
+from planner.domain import RelativeTrajectory
+from planner.domain import MODE_CONTINUOUS
 from planner.errors import (
     ExecutionError,
     FreeNavigationStalled,
     ObservationError,
     ProtocolError,
 )
-from planner.runtime.continuous_execution import ContinuousExecution
-from planner.runtime.moving_observations import MovingObservations
-from planner.algorithms.trajectory_transform import relative_to_world
+from planner.runtime import ContinuousExecution
+from planner.runtime import MovingObservations
+from planner.algorithms import relative_to_world
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,6 @@ class FreeNavigationContinuous:
         waypoint_timeout_s: float = 60.0,
         maximum_capture_failures: int = 3,
         tracking_settings: ContinuousTrackingSettings = ContinuousTrackingSettings(),
-        lane_reference_provider=None,
         telemetry=None,
         vertical_motion: bool = True,
     ):
@@ -88,7 +87,6 @@ class FreeNavigationContinuous:
         self.telemetry = telemetry
         self.vertical_motion = bool(vertical_motion)
         self.motion = motion
-        self.lane_reference_provider = lane_reference_provider
         self.collision_backoff_m = float(collision_backoff_m)
         self.maximum_collision_recoveries = maximum_collision_recoveries
         self.collision_recovery_reset_m = float(collision_recovery_reset_m)
@@ -411,18 +409,10 @@ class FreeNavigationContinuous:
         def on_request():
             self.planning_calls += 1
 
-        # New actions are anchored where the pending queue ends, so the lane
-        # prior must be measured at that pose. Measuring it at the older
-        # observation pose makes the model apply the already-queued turn a
-        # second time (observed as a heading error swinging from -50 to +50).
-        pending_items = anchor.items
-        anchor_pose = (
-            pending_items[-1].end if pending_items else observation.pose
-        )
         try:
             return window.submit_stream(
                 observation,
-                self._lane_context(anchor_pose),
+                None,
                 parameters.instruction,
                 planning,
                 anchor,
@@ -431,15 +421,3 @@ class FreeNavigationContinuous:
             )
         except ProtocolError:
             return False
-
-    def _lane_context(self, pose):
-        """Measure the HD-map lane prior; never fail the task for it."""
-        if self.lane_reference_provider is None:
-            return None
-        try:
-            return self.lane_reference_provider.lane_reference(pose)
-        except Exception as exc:
-            logger.warning(
-                "[FreeNavigation] lane reference unavailable: %s", exc
-            )
-            return None

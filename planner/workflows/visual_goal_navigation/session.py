@@ -3,23 +3,24 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from planner.algorithms.completion.visual_goal_trigger import VisualGoalRadiusTrigger
-from planner.domain.execution import ExecutionBudget
-from planner.domain.planning_window import PlanningWindowInput
-from planner.domain.pose import WorldPose
-from planner.domain.target_state import TargetObservationEvidence, TargetPositionState
-from planner.domain.trajectory import MotionTrajectory, RelativeTrajectory
-from planner.domain.visual_goal import (
+from .completion import VisualGoalRadiusTrigger
+from planner.domain import ExecutionBudget
+from planner.domain import PlanningWindowInput
+from planner.domain import WorldPose
+from planner.domain import TargetObservationEvidence, TargetPositionState
+from planner.domain import MotionTrajectory, RelativeTrajectory
+from planner.domain import (
     GoalGeometry,
     GoalReference,
     VisualGoalPlanningContext,
     VisualGoalStatus,
 )
 from planner.errors import BudgetExceeded, ModelCallTimeout
-from planner.runtime.model_calls import ModelCallService
-from planner.runtime.planning_window import PlanningWindow
+from planner.runtime import ModelCallService
+from planner.runtime import PlanningWindow
 
-from .termination import SearchPolicy, VisualGoalExitPolicy, VisualGoalFailure
+from planner.workflows.visual_goal_navigation.termination import SearchPolicy
+from .termination import VisualGoalExitPolicy, VisualGoalFailure
 
 
 @dataclass

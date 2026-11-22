@@ -5,8 +5,8 @@
 
 from __future__ import annotations
 
-from ...domain.view import VIEW_MODES
-from ...domain.weather import WEATHER_CATALOG, WEATHER_FIELDS
+from planner.domain import VIEW_MODES
+from planner.domain import WEATHER_CATALOG, WEATHER_FIELDS
 from ...simulator.ports import SimulatorPorts
 
 PORT_SLOTS: tuple[str, ...] = (

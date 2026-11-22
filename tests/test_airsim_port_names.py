@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from planner.runtime.position_hold import PositionHold
+from planner.runtime import PositionHold
 from planner.simulators.airsim.observation_gate import ObservationGate
 
 AIRSIM_PACKAGE = Path(__file__).resolve().parents[1] / "planner" / "simulators" / "airsim"

@@ -8,7 +8,7 @@ from planner.config import (
     load_config,
     load_map_catalog,
 )
-from planner.domain.visual_goal_completion import VisualGoalTriggerRules
+from planner.domain import VisualGoalTriggerRules
 from tests.support import write_config
 
 # One helper for every synthetic config directory in the suite.

@@ -2,8 +2,8 @@ import numpy as np
 import pytest
 
 from planner.adapters.model_visual_inputs import aligned_depth_image
-from planner.domain.observation import CameraIntrinsics, Observation
-from planner.domain.pose import WorldPose
+from planner.domain import CameraIntrinsics, Observation
+from planner.domain import WorldPose
 from planner.errors import ObservationError
 
 

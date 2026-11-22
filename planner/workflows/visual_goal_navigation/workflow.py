@@ -6,31 +6,21 @@ from collections.abc import Callable
 from dataclasses import replace
 from functools import partial
 
-from planner.algorithms.completion.visual_goal import VisualGoalCompletion
-from planner.algorithms.completion.visual_goal_trigger import VisualGoalRadiusTrigger
-from planner.algorithms.completion.visual_goal_verification import (
-    VisualGoalVerification,
-)
-from planner.algorithms.targeting.association import (
-    bound_target_geometry,
-    bound_target_goal,
-)
-from planner.algorithms.targeting.depth_geometry import DepthGeometry
-from planner.algorithms.targeting.visual_goal_refresh import VisualGoalRefresh
-from planner.domain.execution import ExecutionBudget, StopResult
-from planner.domain.mission import MissionStage
-from planner.domain.motion import ContinuousTrackingSettings, MotionLimits
-from planner.domain.pose import RelativePoseDelta, wrap_yaw_deg
-from planner.domain.result import (
-    CompletionBasis,
-    ResultMeasurement,
-    StageResult,
-    StageSummary,
-)
-from planner.domain.sliding_window import SlidingWindowSettings
-from planner.domain.trajectory import MotionTrajectory, RelativeTrajectory
-from planner.domain.trajectory_telemetry import MODE_STOPPED_BATCH
-from planner.domain.visual_goal import (
+from .completion import VisualGoalCompletion
+from .completion import VisualGoalRadiusTrigger
+from .completion import VisualGoalVerification
+from planner.algorithms.targeting import bound_target_geometry, bound_target_goal
+from planner.algorithms.targeting import DepthGeometry
+from .targeting import VisualGoalRefresh
+from planner.domain import ExecutionBudget, StopResult
+from planner.domain import MissionStage
+from planner.domain import ContinuousTrackingSettings, MotionLimits
+from planner.domain import RelativePoseDelta, wrap_yaw_deg
+from planner.domain import CompletionBasis, ResultMeasurement, StageResult, StageSummary
+from planner.domain import SlidingWindowSettings
+from planner.domain import MotionTrajectory, RelativeTrajectory
+from planner.domain import MODE_STOPPED_BATCH
+from planner.domain import (
     GoalVisibility,
     VisualGoalNavigationParameters,
     VisualGoalNavigationResult,
@@ -38,11 +28,8 @@ from planner.domain.visual_goal import (
     VisualGoalState,
     VisualGoalStatus,
 )
-from planner.domain.visual_goal_completion import (
-    VisualGoalCompletionInput,
-    VisualGoalTriggerRules,
-)
-from planner.domain.visual_goal_limits import VisualGoalLimits
+from planner.domain import VisualGoalCompletionInput, VisualGoalTriggerRules
+from planner.domain import VisualGoalLimits
 from planner.errors import (
     BudgetExceeded,
     ExecutionError,
@@ -50,25 +37,26 @@ from planner.errors import (
     ObservationError,
     ProtocolError,
 )
-from planner.ports.collision_check import CollisionCheck
-from planner.ports.goal_observer import GoalObserver
-from planner.ports.observation_source import MovingObservationSource, ObservationSource
-from planner.ports.task_completion import TaskCompletionChecker
-from planner.ports.task_trace import TaskTrace
-from planner.ports.trajectory_planner import TrajectoryPlanner
-from planner.runtime.execution import ExecutionService
-from planner.runtime.model_calls import ModelCallService
-from planner.runtime.motion.base import MotionPlanner
-from planner.runtime.observation_snapshot import freeze_observation
-from planner.runtime.planning_window import PlanningWindow
-from planner.runtime.resource_cleanup import close_resources
-from planner.algorithms.trajectory_transform import relative_to_world
-from planner.algorithms.trajectory_validation import TrajectoryValidator
+from planner.ports import CollisionCheck
+from planner.ports import GoalObserver
+from planner.ports import MovingObservationSource, ObservationSource
+from planner.ports import TaskCompletionChecker
+from planner.ports import TaskTrace
+from planner.ports import TrajectoryPlanner
+from planner.runtime import ExecutionService
+from planner.runtime import ModelCallService
+from planner.runtime import MotionPlanner
+from planner.runtime import freeze_observation
+from planner.runtime import PlanningWindow
+from planner.runtime import close_resources
+from planner.algorithms import relative_to_world
+from planner.algorithms import TrajectoryValidator
 
 from .approach import VisualGoalApproachPhase
 from .flight import VisualGoalFlightPhase
 from .session import VisualGoalSession, model_call
-from .termination import SearchPolicy, VisualGoalExitPolicy, VisualGoalFailure
+from planner.workflows.visual_goal_navigation.termination import SearchPolicy
+from .termination import VisualGoalExitPolicy, VisualGoalFailure
 
 logger = logging.getLogger(__name__)
 

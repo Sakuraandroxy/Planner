@@ -2,15 +2,10 @@
 import math
 from dataclasses import replace
 
-from planner.domain.observation import Observation
-from planner.domain.pose import WorldPose
-from planner.domain.target_state import TargetPositionState
-from planner.domain.visual_goal import (
-    GoalGeometry,
-    GoalObservation,
-    GoalReference,
-    GoalVisibility,
-)
+from planner.domain import Observation
+from planner.domain import WorldPose
+from planner.domain import TargetPositionState
+from planner.domain import GoalGeometry, GoalObservation, GoalReference, GoalVisibility
 from planner.algorithms.target_coordinates import horizontal_distance, nearest_surface
 
 

@@ -18,9 +18,9 @@ from planner.adapters.task_parser.task_factory import mission_from_dict
 from planner.adapters.task_parser.tasks import (
     builtin_task_codecs,
 )
-from planner.domain.basic_motion import BasicMotionParameters
-from planner.domain.free_navigation import FreeNavigationParameters
-from planner.domain.mission import TaskKind
+from planner.domain import BasicMotionParameters
+from planner.domain import FreeNavigationParameters
+from planner.domain import TaskKind
 from planner.errors import ProtocolError
 
 json_module = json

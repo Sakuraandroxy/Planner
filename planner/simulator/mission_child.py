@@ -28,16 +28,12 @@ import threading
 from collections.abc import Callable
 from pathlib import Path
 
-from ..assembly.factories import (
-    build_detector,
-    build_geometry,
-    build_planner,
-)
-from ..assembly.mission_assembly import MissionResources
-from ..assembly.reporting import task_finish_events
+from planner.assembly import build_detector, build_geometry, build_planner
+from planner.assembly import MissionResources
+from planner.assembly import task_finish_events
 from ..config import load_config
-from ..domain.server import TaskSubmission, WorkerEventKind
-from ..domain.trajectory_telemetry import snapshot_to_payload
+from planner.domain import TaskSubmission, WorkerEventKind
+from planner.domain import snapshot_to_payload
 from . import registry
 from .subprocess_worker import EVENT_FD_ENV
 from .telemetry_relay import RelayedTelemetry

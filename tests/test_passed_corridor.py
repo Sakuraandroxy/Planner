@@ -7,10 +7,10 @@ back to a point it cannot strafe onto.
 
 import pytest
 
-from planner.domain.pose import WorldPose
-from planner.domain.sliding_window import QueuedWaypoint
-from planner.runtime.motion.continuous import reached
-from planner.domain.motion import MotionLimits as ConfiguredMotionLimits
+from planner.domain import WorldPose
+from planner.domain import QueuedWaypoint
+from planner.runtime import reached
+from planner.domain import MotionLimits as ConfiguredMotionLimits
 from planner.simulators.projectairsim.rover import (
     ROVER_PASSED_LATERAL_TOLERANCE_M,
     rover_tracking_limits,

@@ -15,9 +15,9 @@ import types
 
 import pytest
 
-from planner.assembly.mission_assembly import MissionResources
+from planner.assembly import MissionResources
 from planner.config import default_config_path, load_config
-from planner.domain.weather import WEATHER_FIELDS
+from planner.domain import WEATHER_FIELDS
 from planner.errors import ProtocolError
 from planner.simulators.airsim import runtime as airsim_runtime
 
@@ -64,8 +64,8 @@ def _session():
     honest, because the UE4 mission child once skipped one of those resources
     and the console quietly lost its trajectory panel.
     """
-    from planner.assembly.mission_assembly import assemble_missions
-    from planner.runtime.trajectory_hub import TrajectoryHub
+    from planner.assembly import assemble_missions
+    from planner.runtime import TrajectoryHub
     from planner.simulators.airsim.session import AirSimMissionSession
 
     config = load_config(default_config_path())
@@ -108,7 +108,7 @@ def test_free_navigation_is_not_built_for_ue4():
 
 
 def test_ue4_refuses_a_vehicle_it_does_not_drive():
-    from planner.domain.server import TaskSubmission
+    from planner.domain import TaskSubmission
 
     session = _session()
     with pytest.raises(ProtocolError, match="drone only"):
@@ -187,7 +187,7 @@ def test_close_lands_before_it_releases_the_transport():
     engine died). The session owns the landing now: descend, confirm by height,
     then shut down, then release.
     """
-    from planner.domain.pose import WorldPose
+    from planner.domain import WorldPose
 
     session = _session()
     session._ground_z = 0.68
@@ -226,10 +226,7 @@ def test_assembly_refuses_to_run_without_a_trajectory_sink():
     console lost the remaining-path panel with no error anywhere -- and the
     capability list blamed the simulator instead.
     """
-    from planner.assembly.mission_assembly import (
-        MissionInputs,
-        assemble_missions,
-    )
+    from planner.assembly import MissionInputs, assemble_missions
 
     config = load_config(default_config_path())
     resources = MissionResources(

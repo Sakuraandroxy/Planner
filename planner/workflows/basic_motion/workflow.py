@@ -11,21 +11,17 @@ import logging
 import math
 import time
 
-from planner.algorithms.basic_motion_conversion import BasicMotionConverter
-from planner.domain.basic_motion import BasicMotionResult, BasicMotionStatus
-from planner.domain.execution import StopResult
-from planner.domain.motion import MotionLimits
-from planner.domain.pose import wrap_yaw_deg
-from planner.domain.result import (
-    CompletionBasis,
-    ResultMeasurement,
-    StageResult,
-    StageSummary,
-)
-from planner.domain.trajectory import MotionSegment, MotionTrajectory
+from planner.algorithms import BasicMotionConverter
+from planner.domain import BasicMotionResult, BasicMotionStatus
+from planner.domain import StopResult
+from planner.domain import MotionLimits
+from planner.domain import wrap_yaw_deg
+from planner.domain import CompletionBasis, ResultMeasurement, StageResult, StageSummary
+from planner.domain import MotionSegment, MotionTrajectory
 from planner.errors import ExecutionError
-from planner.runtime.execution import ExecutionService
-from planner.runtime.motion.synchronized import SMOOTH_PROFILE, duration_for
+from planner.runtime import ExecutionService
+from planner.runtime import SMOOTH_PROFILE
+from planner.runtime.motion.synchronized import duration_for
 
 logger = logging.getLogger(__name__)
 

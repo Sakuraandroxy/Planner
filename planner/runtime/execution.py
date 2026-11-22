@@ -7,22 +7,22 @@ import time
 from collections.abc import Callable
 from dataclasses import replace
 
-from planner.domain.execution import (
+from planner.domain import (
     ExecutionBudget,
     ExecutionReceipt,
     ExecutionRecord,
     StopResult,
 )
-from planner.domain.pose import (
+from planner.domain import (
     RelativePoseDelta,
     WorldPose,
     resolve_yaw_delta_deg,
     wrap_yaw_deg,
 )
-from planner.domain.trajectory import MotionTrajectory, RelativeTrajectory
+from planner.domain import MotionTrajectory, RelativeTrajectory
 from planner.errors import BudgetExceeded, ExecutionError, MotionPaused
-from planner.ports.collision_check import CollisionCheck
-from planner.ports.vehicle import Vehicle
+from planner.ports import CollisionCheck
+from planner.ports import Vehicle
 
 
 class ExecutionService:

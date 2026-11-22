@@ -1,6 +1,6 @@
 import pytest
 
-from planner.domain.view import (
+from planner.domain import (
     VEHICLE_DEFAULT_VIEW,
     VEHICLE_FRONT_VIEW,
     VIEW_LABELS,

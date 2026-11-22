@@ -1,9 +1,8 @@
-from planner.domain.lane_reference import LaneReference
-from planner.domain.observation import Observation
-from planner.domain.pose import WorldPose
-from planner.domain.trajectory import RelativeTrajectory
+from planner.domain import Observation
+from planner.domain import WorldPose
+from planner.domain import RelativeTrajectory
 from planner.errors import ProtocolError
-from planner.algorithms.free_space import (
+from planner.algorithms import (
     FreeSpaceProfile,
     FreeSpaceProfileSettings,
     measure_free_space,
@@ -63,11 +62,9 @@ class FreeNavigationTrajectoryPrompt:
         previous_trajectory: RelativeTrajectory | None = None,
         previous_trajectory_start: WorldPose | None = None,
         pending_trajectory: RelativeTrajectory | None = None,
-        task_context: LaneReference | None = None,
+        task_context: None = None,
     ) -> str:
-        if task_context is not None and not isinstance(
-            task_context, LaneReference
-        ):
+        if task_context is not None:
             raise ProtocolError(
                 "free navigation prompt does not support task context"
             )
@@ -87,139 +84,8 @@ class FreeNavigationTrajectoryPrompt:
         return (
             base
             + "\n\n"
-            + format_lane_reference(task_context)
-            + "\n\n"
             + format_free_space_profile(profile)
         )
-
-
-def format_lane_reference(reference: LaneReference | None) -> str:
-    lines = [
-        (
-            "Lane reference (measured from the simulator HD map at the planning "
-            "anchor for these new actions - the predicted pose after the pending "
-            "queue, or the current pose when nothing is pending):"
-        )
-    ]
-    if reference is None:
-        lines.append(
-            "- unavailable at the planning anchor (no aligned driving lane is "
-            "projected, or the vehicle is inside a junction)."
-        )
-        lines.append(
-            "- Fall back to the measured free-space profile and the visible "
-            "road edges; keep to the current road and do not invent a lane."
-        )
-        return "\n".join(lines)
-    lines.append(
-        f"- Current lane: road {reference.road_id}, lane {reference.lane_id}, "
-        f"width {reference.lane_width_m:.2f} m."
-    )
-    lines.append(
-        f"- Lateral offset: {reference.lateral_offset_m:+.2f} m "
-        "(positive is right of the lane centre). "
-        f"Lane heading error: {reference.heading_error_deg:+.1f} deg "
-        "(positive means the lane points right of the car)."
-    )
-    lines.append(
-        f"- Signed distance to the left lane boundary: "
-        f"{reference.distance_to_left_boundary_m:.2f} m; to the right lane "
-        f"boundary: {reference.distance_to_right_boundary_m:.2f} m "
-        "(negative means the vehicle is outside that boundary)."
-    )
-    if reference.lookahead:
-        lines.append("- Lane-centre lookahead in the current body frame:")
-        for point in reference.lookahead:
-            lines.append(
-                f"  {point.distance_m:.1f} m ahead: "
-                f"forward {point.forward_m:.1f} m, "
-                f"right {point.right_m:+.1f} m, "
-                f"bearing {_signed_deg(point.bearing_deg)} deg, "
-                f"cumulative lane yaw {_signed_deg(point.yaw_delta_deg)} deg"
-            )
-        near = reference.lookahead[0]
-        reach = min(
-            reference.lookahead,
-            key=lambda point: abs(point.distance_m - 25.0),
-        )
-        nearest_boundary_m = min(
-            reference.distance_to_left_boundary_m,
-            reference.distance_to_right_boundary_m,
-        )
-        lines.append(
-            f"- Steering aim at the anchor: the {near.distance_m:.1f} m "
-            f"lane-centre point is at bearing {_signed_deg(near.bearing_deg)} "
-            f"deg (its tangent is {_signed_deg(near.yaw_delta_deg)} deg). "
-            "Aim only the first one or two actions at this bearing; it "
-            "corrects the lateral offset. Matching only the tangent keeps the "
-            "car parallel but off-centre."
-        )
-        lines.append(
-            f"- Final-heading check: the sum of the five dyaw values must end "
-            f"within about 5 deg of the cumulative lane yaw at the reach, "
-            f"{_signed_deg(reach.yaw_delta_deg)} deg "
-            f"(measured at {reach.distance_m:.1f} m), not at the near-point "
-            "bearing. The near bearing is only the early aim and the later "
-            "actions must unwind to this reach tangent. A total that matches "
-            "the near bearing instead points the car across the lane and makes "
-            "the next plan reverse it (left-right weave)."
-        )
-        if (
-            nearest_boundary_m < 1.0
-            or abs(reference.heading_error_deg) > 20.0
-        ):
-            lines.append(
-                f"- Tight space at the anchor: nearest lane boundary "
-                f"{nearest_boundary_m:.2f} m, heading error "
-                f"{_signed_deg(reference.heading_error_deg)} deg, lateral "
-                f"offset {reference.lateral_offset_m:+.2f} m. Because each "
-                "step first moves along the current heading, it drifts "
-                "sideways by about dx * sin(heading error); keep that drift "
-                "smaller than the nearer boundary distance and start with "
-                "one or two short pivot-like steps (about 1 m) before "
-                "lengthening the later steps."
-            )
-        else:
-            lines.append(
-                f"- Open lane at the anchor: nearest lane boundary "
-                f"{nearest_boundary_m:.1f} m, heading error "
-                f"{_signed_deg(reference.heading_error_deg)} deg, lateral "
-                f"offset {reference.lateral_offset_m:+.2f} m. Use normal "
-                "4-5 m forward steps for all five actions (reach about "
-                "20-25 m). Do not copy the short 1-2 m first step from the "
-                "tight-space or large-heading-error examples; here it would "
-                "drain the waypoint queue."
-            )
-    else:
-        lines.append(
-            "- No lane-centre lookahead is available (the lane ends or "
-            "branches within the report range)."
-        )
-    if reference.junction_ahead:
-        lines.append(
-            "- The current lane ends or reaches a junction within the "
-            "lookahead; follow the road's natural continuation there and do "
-            "not use the widest gap."
-        )
-    lines.append(
-        "- Follow this measured lane centreline as the primary lateral guide: "
-        "aim at the near lane-centre bearing before settling onto the reach "
-        "tangent, and keep every predicted pose inside the lane boundaries."
-    )
-    lines.append(
-        "- The anchor is where your five new actions begin, so every value "
-        "above already includes the effect of the pending actions. Do not "
-        "subtract or re-apply pending yaw or translation."
-    )
-    lines.append(
-        "- Sign check: when the car is off-centre or the near-point bearing is "
-        "clearly nonzero, the first one or two actions must turn toward the "
-        "near-point bearing (positive right, negative left); the later actions "
-        "must unwind so the total is within about 5 deg of the reach tangent "
-        "above. Never mirror the sign and never use the near-point bearing as "
-        "the total turn."
-    )
-    return "\n".join(lines)
 
 
 def format_free_space_profile(profile: FreeSpaceProfile) -> str:

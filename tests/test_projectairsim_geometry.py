@@ -3,7 +3,7 @@ import math
 import numpy as np
 import pytest
 
-from planner.domain.pose import WorldPose
+from planner.domain import WorldPose
 from planner.simulators.projectairsim.camera import (
     assert_camera_matches_scene,
     capture_settings,

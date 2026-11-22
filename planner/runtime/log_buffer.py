@@ -6,7 +6,7 @@ import threading
 from collections import deque
 from datetime import datetime
 
-from ..domain.server import LogBatch, ServerLog
+from planner.domain import LogBatch, ServerLog
 
 
 class LogBuffer:

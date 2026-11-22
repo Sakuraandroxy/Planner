@@ -3,35 +3,31 @@ import time
 import numpy as np
 import pytest
 
-from planner.algorithms.approach import TargetApproach
-from planner.algorithms.completion.visual_goal import VisualGoalCompletion
-from planner.algorithms.completion.visual_goal_request import (
+from planner.workflows.visual_goal_navigation import TargetApproach
+from planner.workflows.visual_goal_navigation import (
+    VisualGoalCompletion,
+    VisualGoalRadiusTrigger,
+    VisualGoalVerification,
     require_visual_completion_evidence,
-)
-from planner.algorithms.completion.visual_goal_retained_motion import (
     retained_world_trajectory,
 )
-from planner.algorithms.completion.visual_goal_trigger import VisualGoalRadiusTrigger
-from planner.algorithms.completion.visual_goal_verification import (
-    VisualGoalVerification,
-)
-from planner.domain.approach import ApproachSettings, ApproachStatus, ApproachTarget
-from planner.domain.execution import ExecutionBudget
-from planner.domain.observation import CameraIntrinsics, Observation
-from planner.domain.pose import WorldPose
-from planner.domain.trajectory import MotionSegment, MotionTrajectory
-from planner.domain.visual_goal import (
+from planner.domain import ApproachSettings, ApproachStatus, ApproachTarget
+from planner.domain import ExecutionBudget
+from planner.domain import CameraIntrinsics, Observation
+from planner.domain import WorldPose
+from planner.domain import MotionSegment, MotionTrajectory
+from planner.domain import (
     GoalGeometry,
     GoalObservation,
     GoalVisibility,
     VisualGoalNavigationParameters,
 )
-from planner.domain.visual_goal_completion import (
+from planner.domain import (
     VisualGoalCompletionInput,
     VisualGoalTargetSnapshot,
     VisualGoalTriggerRules,
 )
-from planner.domain.visual_goal_limits import VisualGoalLimits
+from planner.domain import VisualGoalLimits
 from planner.errors import ProtocolError
 from tests.support import ue_camera_matrix
 
@@ -106,7 +102,7 @@ def test_visual_goal_completion_requires_stopped_reliable_evidence():
 
 
 def test_visual_goal_completion_binds_membership_of_known_surfaces():
-    from planner.domain.target_state import TargetPositionState
+    from planner.domain import TargetPositionState
     state = TargetPositionState("stage-1", (5.0, 0.0, 0.0), (5.0, 0.0, 0.0),
                                 "capture-0", 1.0, 5,
                                 anchor_surface_points_world=((5.0, 0.0, 0.0),),

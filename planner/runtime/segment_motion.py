@@ -5,13 +5,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from ..domain.motion import MotionLimits
-from ..domain.pose import (
-    RelativePoseDelta,
-    WorldPose,
-    relative_to_world,
-    wrap_deg,
-)
+from planner.domain import MotionLimits
+from planner.domain import RelativePoseDelta, WorldPose, relative_to_world, wrap_deg
 
 # Peak values of the normalized quintic 10t^3 - 15t^4 + 6t^5.
 _QUINTIC_PEAK_VELOCITY = 1.875

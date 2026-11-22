@@ -23,21 +23,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass, fields
 
-from ..domain.engine_family import Capabilities
-from ..ports.capabilities import (
+from planner.domain import Capabilities
+from planner.ports import (
     AppearanceModelControl,
     FramePublisher,
     ReturnHome,
     StreamingViews,
     WeatherControl,
 )
-from ..ports.observation_source import (
+from planner.ports import (
     ControlledObservationSource,
     MovingObservationSource,
     ObservationSource,
 )
-from ..ports.streaming_vehicle import StreamingVehicle
-from ..ports.vehicle import Vehicle
+from planner.ports import StreamingVehicle
+from planner.ports import Vehicle
 
 #: Task kind -> port slots it cannot run without. Keys are ``SimulatorPorts``
 #: field names, so adding a task means adding one row, not one branch.

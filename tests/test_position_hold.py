@@ -3,11 +3,11 @@ from dataclasses import replace
 
 import pytest
 
-from planner.domain.motion import ContinuousTrackingSettings, MotionLimits
-from planner.domain.pose import WorldPose
-from planner.domain.streaming import TimedVehicleState
+from planner.domain import ContinuousTrackingSettings, MotionLimits
+from planner.domain import WorldPose
+from planner.domain import TimedVehicleState
 from planner.errors import ExecutionError
-from planner.runtime.position_hold import PositionHold
+from planner.runtime import PositionHold
 
 LIMITS = MotionLimits(
     max_acceleration_mps2=1.5,

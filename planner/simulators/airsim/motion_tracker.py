@@ -6,13 +6,14 @@ from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import replace
 
-from planner.domain.execution import ExecutionBudget, PoseCheckpoint
-from planner.domain.motion import ContinuousTrackingSettings, MotionLimits
-from planner.domain.pose import WorldPose, resolve_yaw_delta_deg, wrap_yaw_deg
-from planner.domain.trajectory import MotionSegment
+from planner.domain import ExecutionBudget, PoseCheckpoint
+from planner.domain import ContinuousTrackingSettings, MotionLimits
+from planner.domain import WorldPose, resolve_yaw_delta_deg, wrap_yaw_deg
+from planner.domain import MotionSegment
 from planner.errors import BudgetExceeded, ExecutionError, MotionPaused
-from planner.runtime.motion.heading_servo import tracked_heading_rate_deg_s
-from planner.runtime.motion.synchronized import duration_for, sample_segment
+from planner.runtime import tracked_heading_rate_deg_s
+from planner.runtime import sample_segment
+from planner.runtime.motion.synchronized import duration_for
 
 logger = logging.getLogger(__name__)
 

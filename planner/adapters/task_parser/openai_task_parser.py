@@ -22,7 +22,7 @@ from planner.adapters.task_parser.tasks import (
     TaskCodec,
     builtin_task_codecs,
 )
-from planner.domain.mission import MissionPlan, TaskKind
+from planner.domain import MissionPlan, TaskKind
 from planner.errors import ProtocolError
 
 logger = logging.getLogger(__name__)

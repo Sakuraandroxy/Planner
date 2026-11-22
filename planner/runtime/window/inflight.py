@@ -4,17 +4,13 @@ import threading
 import time
 from concurrent.futures import Future
 
-from planner.domain.sliding_window import (
-    ContinuationCandidate,
-    PlanningOutput,
-    PlanningSnapshot,
-)
+from planner.domain import ContinuationCandidate, PlanningOutput, PlanningSnapshot
 from planner.errors import ExecutionError, ProtocolError
-from planner.ports.trajectory_planner import TrajectoryPlanner
-from planner.algorithms.trajectory_transform import relative_to_world
-from planner.algorithms.trajectory_validation import TrajectoryValidator
+from planner.ports import TrajectoryPlanner
+from planner.algorithms import RefillScheduler
+from planner.algorithms import relative_to_world
+from planner.algorithms import TrajectoryValidator
 
-from .scheduler import RefillScheduler
 from .worker import SlowPlannerWorker
 
 logger = logging.getLogger(__name__)

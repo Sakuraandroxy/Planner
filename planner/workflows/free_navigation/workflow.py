@@ -15,22 +15,17 @@ import math
 import time
 from functools import partial
 
-from planner.domain.execution import StopResult
-from planner.domain.free_navigation import (
+from planner.domain import StopResult
+from planner.domain import (
     FreeNavigationParameters,
     FreeNavigationResult,
     FreeNavigationStatus,
 )
-from planner.domain.mission import MissionStage
-from planner.domain.motion import ContinuousTrackingSettings, MotionLimits
-from planner.domain.result import (
-    CompletionBasis,
-    ResultMeasurement,
-    StageResult,
-    StageSummary,
-)
-from planner.domain.sliding_window import SlidingWindowSettings
-from planner.domain.trajectory_telemetry import MODE_STOPPED_BATCH
+from planner.domain import MissionStage
+from planner.domain import ContinuousTrackingSettings, MotionLimits
+from planner.domain import CompletionBasis, ResultMeasurement, StageResult, StageSummary
+from planner.domain import SlidingWindowSettings
+from planner.domain import MODE_STOPPED_BATCH
 from planner.errors import (
     BudgetExceeded,
     ExecutionError,
@@ -39,12 +34,12 @@ from planner.errors import (
     ObservationError,
     ProtocolError,
 )
-from planner.runtime.execution import ExecutionService
-from planner.runtime.model_calls import ModelCallService
-from planner.runtime.observation_snapshot import freeze_observation
-from planner.runtime.planning_window import PlanningWindow
-from planner.runtime.resource_cleanup import close_resources
-from planner.algorithms.trajectory_transform import relative_to_world
+from planner.runtime import ExecutionService
+from planner.runtime import ModelCallService
+from planner.runtime import freeze_observation
+from planner.runtime import PlanningWindow
+from planner.runtime import close_resources
+from planner.algorithms import relative_to_world
 
 from .continuous import FreeNavigationContinuous
 
@@ -73,7 +68,6 @@ class FreeNavigationWorkflow:
         maximum_collision_recoveries: int = 3,
         collision_recovery_reset_m: float = 20.0,
         continuous_tracking: ContinuousTrackingSettings = ContinuousTrackingSettings(),
-        lane_reference_provider=None,
         telemetry=None,
         vertical_motion: bool = True,
     ):
@@ -122,7 +116,6 @@ class FreeNavigationWorkflow:
         self.max_consecutive_stalls = max_consecutive_stalls
         self.telemetry = telemetry
         self.vertical_motion = bool(vertical_motion)
-        self.lane_reference_provider = lane_reference_provider
         self.model_calls = ModelCallService(clock)
         self._closed = False
         self.window = None
@@ -161,7 +154,6 @@ class FreeNavigationWorkflow:
                     sliding_window.max_consecutive_plan_failures + 1
                 ),
                 tracking_settings=continuous_tracking,
-                lane_reference_provider=lane_reference_provider,
                 telemetry=telemetry,
                 vertical_motion=self.vertical_motion,
             )
@@ -259,7 +251,6 @@ class FreeNavigationWorkflow:
                         None if last is None else last.start
                     ),
                     current_guidance=None,
-                    task_context=self._lane_context(observation.pose),
                     budget=None,
                     timeout_s=self.model_request_timeout_s,
                 )
@@ -372,23 +363,6 @@ class FreeNavigationWorkflow:
             f"{status.value}: {reason}",
             summary,
         )
-
-    def _lane_context(self, pose):
-        """Measure the HD-map lane prior; never fail the task for it.
-
-        The provider is optional and map projection is best-effort: an
-        unavailable lane (junction, overlapping road, adapter error) becomes
-        ``None`` and the prompt falls back to its free-space rules.
-        """
-        if self.lane_reference_provider is None:
-            return None
-        try:
-            return self.lane_reference_provider.lane_reference(pose)
-        except Exception as exc:
-            logger.warning(
-                "[FreeNavigation] lane reference unavailable: %s", exc
-            )
-            return None
 
     def _capture_stopped(self):
         try:

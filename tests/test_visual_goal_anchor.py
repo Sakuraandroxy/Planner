@@ -4,10 +4,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from planner.domain.pose import WorldPose
-from planner.domain.visual_goal import VisualGoalStatus
-from planner.domain.visual_goal_limits import VisualGoalLimits
-from planner.workflows.visual_goal_navigation.termination import (
+from planner.domain import WorldPose
+from planner.domain import VisualGoalStatus
+from planner.domain import VisualGoalLimits
+from planner.workflows.visual_goal_navigation import (
     VisualGoalExitPolicy,
     VisualGoalFailure,
 )

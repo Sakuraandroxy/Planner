@@ -10,10 +10,10 @@ from planner.adapters.trajectory_planner.prompts import (
     BaseTrajectoryPrompt,
     VisualGoalTrajectoryPrompt,
 )
-from planner.domain.observation import CameraIntrinsics, Observation
-from planner.domain.pose import RelativePoseDelta, WorldPose
-from planner.domain.trajectory import RelativeTrajectory
-from planner.domain.visual_goal import (
+from planner.domain import CameraIntrinsics, Observation
+from planner.domain import RelativePoseDelta, WorldPose
+from planner.domain import RelativeTrajectory
+from planner.domain import (
     GoalGeometry,
     GoalObservation,
     GoalVisibility,

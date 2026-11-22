@@ -34,9 +34,9 @@ import threading
 import time
 from collections.abc import Callable
 
-from ..domain.server import TaskSubmission, WorkerEvent, WorkerEventKind
-from ..domain.trajectory_telemetry import snapshot_from_payload
-from ..domain.weather import weather_catalog_from_payload
+from planner.domain import TaskSubmission, WorkerEvent, WorkerEventKind
+from planner.domain import snapshot_from_payload
+from planner.domain import weather_catalog_from_payload
 
 #: How long the child may take to exit after it is asked nicely.
 TERM_GRACE_S = 10.0

@@ -17,20 +17,18 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from ..algorithms.approach import TargetApproach
-from ..algorithms.completion.visual_goal import VisualGoalCompletion
-from ..algorithms.targeting.bbox_goal_observation import BBoxGoalObserver
-from ..algorithms.task_validation.basic_motion import BasicMotionStageValidator
-from ..algorithms.task_validation.free_navigation import FreeNavigationStageValidator
-from ..algorithms.task_validation.visual_goal_navigation import (
-    VisualGoalStageValidator,
-)
-from ..domain.mission import TaskKind
+from planner.workflows.visual_goal_navigation import TargetApproach
+from planner.workflows.visual_goal_navigation import VisualGoalCompletion
+from planner.workflows.visual_goal_navigation import BBoxGoalObserver
+from planner.workflows.basic_motion import BasicMotionStageValidator
+from planner.workflows.free_navigation import FreeNavigationStageValidator
+from planner.workflows.visual_goal_navigation import VisualGoalStageValidator
+from planner.domain import TaskKind
 from ..errors import ProtocolError
-from ..runtime.execution import ExecutionService
-from ..runtime.model_calls import ModelCallService
-from ..runtime.motion import SynchronizedMotionPlanner
-from ..algorithms.trajectory_validation import TrajectoryValidator
+from planner.runtime import ExecutionService
+from planner.runtime import ModelCallService
+from planner.runtime import SynchronizedMotionPlanner
+from planner.algorithms import TrajectoryValidator
 from ..workflows.basic_motion import BasicMotionWorkflow
 from ..workflows.free_navigation import FreeNavigationWorkflow
 from ..workflows.visual_goal_navigation import VisualGoalNavigationWorkflow
@@ -303,7 +301,6 @@ def build_vehicle_arm(
             ),
             collision_recovery_reset_m=config.free_navigation.collision_recovery_reset_m,
             continuous_tracking=config.continuous,
-            lane_reference_provider=None,
             telemetry=telemetry,
             vertical_motion=is_drone,
         )

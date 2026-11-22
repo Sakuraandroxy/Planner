@@ -5,18 +5,14 @@ import time
 import numpy as np
 import pytest
 
-from planner.algorithms.sliding_window.scheduler import RefillScheduler
-from planner.domain.execution import ExecutionBudget, ExecutionReceipt
-from planner.domain.motion import MotionLimits
-from planner.domain.observation import CameraIntrinsics, Observation
-from planner.domain.planning_window import PlanningWindowInput
-from planner.domain.pose import RelativePoseDelta, WorldPose
-from planner.domain.sliding_window import SlidingWindowSettings
-from planner.domain.trajectory import (
-    MotionSegment,
-    MotionTrajectory,
-    RelativeTrajectory,
-)
+from planner.algorithms import RefillScheduler
+from planner.domain import ExecutionBudget, ExecutionReceipt
+from planner.domain import MotionLimits
+from planner.domain import CameraIntrinsics, Observation
+from planner.domain import PlanningWindowInput
+from planner.domain import RelativePoseDelta, WorldPose
+from planner.domain import SlidingWindowSettings
+from planner.domain import MotionSegment, MotionTrajectory, RelativeTrajectory
 from planner.errors import (
     BudgetExceeded,
     ExecutionError,
@@ -24,10 +20,10 @@ from planner.errors import (
     ProtocolError,
     ResourceCleanupError,
 )
-from planner.runtime.moving_observations import MovingObservations
-from planner.runtime.planning_window import PlanningWindow
-from planner.runtime.resource_cleanup import close_resources
-from planner.algorithms.trajectory_validation import TrajectoryValidator
+from planner.runtime import MovingObservations
+from planner.runtime import PlanningWindow
+from planner.runtime import close_resources
+from planner.algorithms import TrajectoryValidator
 from tests.support import ue_camera_matrix
 
 

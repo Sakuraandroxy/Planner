@@ -32,7 +32,7 @@ from urllib.request import Request, urlopen
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_DIR))
 
-from planner.domain.view import VIEW_MODES
+from planner.domain import VIEW_MODES
 
 
 def _request_json(url: str, method: str = "GET", payload=None):
