@@ -10,7 +10,6 @@ from .controller.state import (
     BackendUnavailable,
     MapSelection,
     ServerState,
-    ServerStatus,
 )
 from .factories import (
     build_detector,
@@ -35,7 +34,6 @@ __all__ = [
     "MissionResources",
     "ServerController",
     "ServerState",
-    "ServerStatus",
     "VehicleArm",
     "assemble_missions",
     "build_detector",
