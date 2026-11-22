@@ -18,11 +18,15 @@ from .mission_assembly import (
 from .mission_runner import MissionRunner
 from .mission_validator import MissionValidator
 from .reporting import mission_report, task_finish_events
+from .requirements import capabilities_for, available_kinds, missing_slots
 from .controller import ServerController
 from .workflow_router import WorkflowRouter
 
 __all__ = [
     "MissionInputs",
+    "available_kinds",
+    "capabilities_for",
+    "missing_slots",
     "MissionResources",
     "MissionRunner",
     "MissionValidator",

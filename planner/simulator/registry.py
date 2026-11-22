@@ -37,7 +37,7 @@ def ports_for(simulator: str) -> SimulatorPorts:
 
 def capabilities_for(simulator: str):
     """Flags for a simulator id. The requirement table lives in the assembly."""
-    from ..assembly.requirements import capabilities_for as derive
+    from ..assembly import capabilities_for as derive
 
     return derive(ports_for(simulator))
 
