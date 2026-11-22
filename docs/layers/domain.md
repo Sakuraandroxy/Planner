@@ -1,5 +1,5 @@
 > 上级：[项目架构](../ARCHITECTURE.md)
-> 同层兄弟：[ports](./ports.md)、[algorithms](./algorithms.md)、[runtime](./runtime.md)、[workflows](./workflows.md)、[assembly](./assembly.md)、[adapters](./adapters.md)、[simulators](./simulators.md)
+> 同层兄弟：[ports](./ports.md)、[algorithms](./algorithms.md)、[runtime](./runtime.md)、[workflows](./workflows.md)、[assembly](./assembly.md)、[adapters](./adapters.md)、[simulator](./simulator.md)、[simulators](./simulators.md)
 
 # domain 层
 
