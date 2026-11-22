@@ -30,6 +30,7 @@ from planner.domain import (
     MotionModel,
     require_supported,
 )
+from planner.algorithms import passed_lateral_corridor
 from .collision import CollisionEvent, CollisionMonitor
 from .connection import ProjectAirSimConnection
 from .coordinates import (
@@ -50,11 +51,6 @@ from .observation import ProjectAirSimObservationSource
 # stable afterwards; hold a little longer so slower maps settle too.
 SETTLE_DURATION_S = 2.0
 
-#: 阿克曼车不能横移：冲过端点后横向残差收不到中心线。给“已驶过端点”判据一条
-#: 车宽量级的走廊（0.6 m），让“冲过一点但仍在走廊内”直接推进下一个航点，而不是
-#: 回头精确命中一个它够不到的点——后者会退化成身后的目标，触发倒车与原地卡死。
-ROVER_PASSED_LATERAL_TOLERANCE_M = 0.6
-
 #: 阿克曼车的最小转弯半径：由 drive 模型的标定值推出，v / ω 在打满方向盘且
 #: 纯前向时取最小，即 ``180 / (π · yaw_rate_per_steer_mps · max_steering)``。
 ROVER_MIN_TURN_RADIUS_M = 180.0 / (
@@ -67,9 +63,7 @@ def rover_tracking_limits(motion):
     limits = tracking_limits(motion)
     return replace(
         limits,
-        passed_lateral_tolerance_m=max(
-            limits.passed_lateral_tolerance_m, ROVER_PASSED_LATERAL_TOLERANCE_M
-        ),
+        passed_lateral_tolerance_m=passed_lateral_corridor(MotionModel.ACKERMANN, limits),
     )
 
 # ``SetObjectPose`` refuses ("Unable to move object ... not movable") when the

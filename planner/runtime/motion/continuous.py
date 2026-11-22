@@ -9,25 +9,6 @@ from .continuous_speed import braking_speed, corner_speed, planned_speed
 from .heading_servo import heading_rate_deg_s
 
 
-def reached(waypoint, pose, unwrapped_yaw, goal_yaw, position_tolerance, yaw_tolerance,
-            passed_lateral_tolerance=None):
-    a, b = waypoint.start, waypoint.end
-    delta = (b.x-a.x, b.y-a.y, b.z-a.z)
-    offset = (pose.x-a.x, pose.y-a.y, pose.z-a.z)
-    norm_sq = sum(v*v for v in delta)
-    distance = math.dist((pose.x, pose.y, pose.z), (b.x, b.y, b.z))
-    # The "passed" corridor is wider than the reach ball for non-holonomic
-    # vehicles: overshooting an endpoint with lateral drift should advance the
-    # queue, not send the car back to hit a point it cannot strafe onto.
-    corridor = position_tolerance if passed_lateral_tolerance is None else passed_lateral_tolerance
-    passed = False
-    if norm_sq > 1e-12:
-        projection = sum(x*y for x, y in zip(offset, delta))/norm_sq
-        lateral = math.sqrt(sum((x-projection*y)**2 for x, y in zip(offset, delta)))
-        passed = projection >= 1 and lateral <= corridor
-    return ((distance <= position_tolerance or passed) and abs(goal_yaw-unwrapped_yaw) <= yaw_tolerance)
-
-
 class ContinuousFollower:
     def __init__(self, speed_mps, limits, settings=ContinuousTrackingSettings()):
         if isinstance(speed_mps, bool) or not math.isfinite(speed_mps) or speed_mps <= 0:

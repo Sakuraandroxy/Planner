@@ -10,7 +10,8 @@ from planner.domain import WorldPose, wrap_yaw_deg
 from planner.domain import TimedVehicleState
 from planner.errors import BudgetExceeded, ExecutionError
 from planner.ports import PositionHoldVehicle
-from planner.runtime.motion.command_smoothing import CommandSmoother, bounded
+from planner.algorithms import bounded
+from planner.runtime.motion.command_smoothing import CommandSmoother
 from planner.runtime.motion.heading_servo import heading_rate_deg_s
 from planner.runtime.motion.hold_handoff import translation_handoff
 

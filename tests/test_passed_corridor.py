@@ -9,12 +9,9 @@ import pytest
 
 from planner.domain import WorldPose
 from planner.domain import QueuedWaypoint
-from planner.runtime import reached
+from planner.algorithms import reached
 from planner.domain import MotionLimits as ConfiguredMotionLimits
-from planner.simulators.projectairsim.rover import (
-    ROVER_PASSED_LATERAL_TOLERANCE_M,
-    rover_tracking_limits,
-)
+from planner.simulators.projectairsim.rover import rover_tracking_limits
 from planner.simulators.projectairsim.motion import tracking_limits
 
 
@@ -55,9 +52,10 @@ def test_overshoot_still_requires_aligned_yaw():
 
 def test_rover_tracking_limits_widen_the_corridor_drone_keeps_the_default():
     rover = rover_tracking_limits(None)
-    assert rover.passed_lateral_tolerance_m == pytest.approx(ROVER_PASSED_LATERAL_TOLERANCE_M)
+    # 裁决 R17：阿克曼默认走廊从 0.6 抬到 1.0。
+    assert rover.passed_lateral_tolerance_m == pytest.approx(1.0)
     # Config can only raise it, never narrow it below the physical rover width.
     narrowed = rover_tracking_limits(ConfiguredMotionLimits(passed_lateral_tolerance_m=0.2))
-    assert narrowed.passed_lateral_tolerance_m == pytest.approx(ROVER_PASSED_LATERAL_TOLERANCE_M)
+    assert narrowed.passed_lateral_tolerance_m == pytest.approx(1.0)
     # The holonomic path (drone) is untouched.
     assert tracking_limits(None).passed_lateral_tolerance_m == pytest.approx(0.3)

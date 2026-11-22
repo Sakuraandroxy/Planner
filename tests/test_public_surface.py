@@ -41,12 +41,18 @@ PARSED_COUNTS = {"algorithms": 11, "runtime": 9, "workflows": 7, "assembly": 12}
 
 #: 已按实际导出面校准的五层。差额逐条记在 `STILL_OPEN`。
 CALIBRATED = {
+    # 文档 §8.1.1 的 11 个里 `reached` 已随走廊一并落地；入口多导出
+    # `world_pose_delta_in_reference_frame`，文档 §1.3 判它私有，但 prompts 仍在调用。
     "algorithms": frozenset(
         {
             "RefillScheduler",
             "TrajectoryValidator",
+            "bounded",
+            "corridor_default",
             "horizontal_distance",
+            "passed_lateral_corridor",
             "point_in_horizontal_body",
+            "reached",
             "relative_to_world",
             "require_execution_anchor",
             "world_pose_delta_in_reference_frame",
@@ -79,7 +85,6 @@ CALIBRATED = {
             "heading_rate_deg_s",
             "plan_segment",
             "quintic",
-            "reached",
         }
     ),
     "ports": frozenset(

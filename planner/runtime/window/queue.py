@@ -6,7 +6,7 @@ from planner.domain import WorldPose, resolve_yaw_delta_deg
 from planner.domain import PlanningSnapshot, QueuedWaypoint, TimedVehicleState
 from planner.domain import RelativeTrajectory, WorldTrajectory
 from planner.errors import ExecutionError, ProtocolError
-from planner.runtime.motion.continuous import reached
+from planner.algorithms import reached
 from planner.algorithms import world_to_relative
 from planner.algorithms import require_execution_anchor
 
