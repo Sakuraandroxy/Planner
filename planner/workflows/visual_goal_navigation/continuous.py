@@ -23,7 +23,8 @@ from planner.runtime import freeze_observation, freeze_reference
 from planner.algorithms import point_in_horizontal_body
 from planner.algorithms import relative_to_world
 
-from .session import model_call
+from .session import model_failure
+from planner.workflows.common.budget import model_call, require_time
 from .termination import VisualGoalFailure
 
 logger = logging.getLogger(__name__)
@@ -94,7 +95,9 @@ class VisualGoalContinuous:
         operation = partial(self.targets.observer.observe, freeze_observation(observation),
             parameters.target_description, freeze_reference(session.reference),
             initial_pose=session.initial, budget=session.budget, instruction=parameters.instruction)
-        goal = model_call(operation, session, self.limits, clock=self.clock)
+        goal = model_call(operation, self.limits, budget=session.budget,
+            model_calls=session.model_calls, checkpoint=session.checkpoint,
+            on_error=model_failure, clock=self.clock)
         if goal.status is GoalVisibility.NOT_VISIBLE and not session.pending_motion.segments:
             self.search(observation, parameters, session, trace)
             return None
@@ -321,7 +324,7 @@ class VisualGoalContinuous:
         try:
             while True:
                 tick_started = self.clock()
-                session.require_time(self.clock)
+                require_time(session.budget, self.clock)
                 self.stream.sample()
                 window = session.window
                 window.record = self.stream.record

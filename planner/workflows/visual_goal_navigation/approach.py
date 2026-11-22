@@ -8,7 +8,8 @@ from planner.errors import ExecutionError
 from planner.runtime import freeze_observation
 from planner.algorithms import relative_to_world, world_to_relative
 
-from .session import model_call
+from .session import model_failure
+from planner.workflows.common.budget import model_call, require_time
 
 
 class VisualGoalApproachPhase:
@@ -27,8 +28,11 @@ class VisualGoalApproachPhase:
                 round_index=session.policy.planning_calls+1, initial_pose=session.initial,
                 previous_trajectory=session.previous, previous_trajectory_start=session.previous_start,
                 current_guidance=None, task_context=context, budget=session.budget)
-            relative = model_call(operation, session, self.limits, is_planning=True,
-                validate=self.validator.validate_relative, clock=self.clock)
+            relative = model_call(operation, self.limits, budget=session.budget,
+                model_calls=session.model_calls, checkpoint=session.checkpoint,
+                on_planning_call=session.policy.planning_call, on_error=model_failure,
+                is_planning=True, validate=self.validator.validate_relative,
+                clock=self.clock)
             world = relative_to_world(relative, observation.pose)
         self.validator.validate_world(world)
         if not session.policy.anchor_valid(observation, self.execution.current_pose(), self.clock()):
@@ -63,7 +67,7 @@ class VisualGoalApproachPhase:
             session.policy.planning_call, session.pending_motion, lambda: self.checkpoint(session))
 
     def checkpoint(self, session):
-        session.require_time(self.clock)
+        require_time(session.budget, self.clock)
         self.execution.checkpoint()
         if self.execution.collision_state():
             raise ExecutionError("collision during window model wait")

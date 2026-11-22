@@ -1,5 +1,4 @@
 """Run-local state and finite control-flow helpers for visual-goal navigation."""
-import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -15,7 +14,6 @@ from planner.domain import (
     VisualGoalPlanningContext,
     VisualGoalStatus,
 )
-from planner.errors import BudgetExceeded, ModelCallTimeout
 from planner.runtime import ModelCallService
 from planner.runtime import PlanningWindow
 
@@ -66,10 +64,6 @@ class VisualGoalSession:
         return PlanningWindowInput(self.initial, self.policy.limits.maximum_observation_age_s,
             self.policy.limits.model_request_timeout_s, self.previous, self.previous_start)
 
-    def require_time(self, clock=time.monotonic):
-        if self.budget.remaining(clock()) <= 0:
-            raise BudgetExceeded("task deadline exhausted")
-
     def fresh(self, observation):
         valid = bool(observation.capture_id) and observation.capture_id != self.last_capture_id
         if observation.timestamp_ns > 0 and observation.timestamp_ns <= self.last_timestamp_ns:
@@ -82,24 +76,6 @@ class VisualGoalSession:
         return valid
 
 
-def model_call(operation, session, limits, *, is_planning=False, validate=None, clock=time.monotonic):
-    for attempt in range(limits.model_retry_count+1):
-        session.require_time(clock)
-        if is_planning:
-            session.policy.planning_call()
-        try:
-            if session.model_calls is None:
-                value = operation()
-            else:
-                timeout = min(limits.model_request_timeout_s, session.budget.remaining(clock()))
-                value = session.model_calls.call(operation, timeout, session.checkpoint)
-            session.require_time(clock)
-            if validate is not None:
-                validate(value)
-            return value
-        except (BudgetExceeded, ModelCallTimeout):
-            raise
-        except Exception as exc:
-            if attempt >= limits.model_retry_count:
-                raise VisualGoalFailure(VisualGoalStatus.MODEL_ERROR, str(exc)) from exc
-    raise AssertionError("unreachable retry state")
+def model_failure(exc: Exception) -> VisualGoalFailure:
+    """把模型调用失败映射成本任务的异常类型。"""
+    return VisualGoalFailure(VisualGoalStatus.MODEL_ERROR, str(exc))

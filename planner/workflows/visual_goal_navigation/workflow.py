@@ -53,7 +53,8 @@ from planner.algorithms import TrajectoryValidator
 
 from .approach import VisualGoalApproachPhase
 from .flight import VisualGoalFlightPhase
-from .session import VisualGoalSession, model_call
+from .session import VisualGoalSession, model_failure
+from planner.workflows.common.budget import model_call, require_time
 from planner.workflows.visual_goal_navigation.termination import SearchPolicy
 from .termination import VisualGoalExitPolicy, VisualGoalFailure
 
@@ -213,12 +214,12 @@ class VisualGoalNavigationWorkflow:
                            None if success else f"{status.value}: {reason}", summary)
 
     def _capture(self, session):
-        session.require_time(self.clock)
+        require_time(session.budget, self.clock)
         if session.window is not None and session.paused_for_completion:
             session.window.pause_for_completion(lambda: self.approach.checkpoint(session))
             session.paused_for_completion = False
         observation = self.source.capture(budget=session.budget)
-        session.require_time(self.clock)
+        require_time(session.budget, self.clock)
         if not observation.stopped:
             raise ObservationError("task observation source did not verify stopped vehicle")
         self.geometry.validate(observation)
@@ -255,7 +256,7 @@ class VisualGoalNavigationWorkflow:
         deadline = min(session.budget.deadline_monotonic, self.clock()+self.limits.model_request_timeout_s)
         while self.has_pending_calls():
             self.execution.checkpoint()
-            session.require_time(self.clock)
+            require_time(session.budget, self.clock)
             if self.clock() >= deadline:
                 raise ModelCallTimeout('completed stage still has quarantined I/O; handover timed out')
             self.sleep(.01)
@@ -281,7 +282,9 @@ class VisualGoalNavigationWorkflow:
                 operation = partial(self.goal_observer.observe, freeze_observation(observation),
                     parameters.target_description, None, initial_pose=session.initial,
                     budget=session.budget, instruction=parameters.instruction)
-                observed_goal = model_call(operation, session, self.limits, clock=self.clock)
+                observed_goal = model_call(operation, self.limits, budget=session.budget,
+                    model_calls=session.model_calls, checkpoint=session.checkpoint,
+                    on_error=model_failure, clock=self.clock)
                 if not session.policy.anchor_valid(observation, self.execution.current_pose(), self.clock()):
                     continue
                 if observed_goal.status is GoalVisibility.NOT_VISIBLE:
@@ -371,7 +374,7 @@ class VisualGoalNavigationWorkflow:
         if session.pending_motion.segments:
             # Search rotation would change a retained flight's anchor and evidence.
             raise VisualGoalFailure(VisualGoalStatus.TARGET_LOST, "target lost while paused; retained flight remains suspended")
-        session.require_time(self.clock)
+        require_time(session.budget, self.clock)
         heading = session.search.next_heading(observation.pose, session.reference,
                                                parameters.target_description)
         relative = RelativeTrajectory((RelativePoseDelta(0, 0, 0, wrap_yaw_deg(heading-observation.pose.yaw_deg)),))
@@ -386,7 +389,7 @@ class VisualGoalNavigationWorkflow:
 
     def _wait(self, seconds, session):
         self.execution.wait(min(seconds, session.budget.remaining(self.clock())), sleep=self.sleep)
-        session.require_time(self.clock)
+        require_time(session.budget, self.clock)
 
     @staticmethod
     def _event(trace, name, **data):
