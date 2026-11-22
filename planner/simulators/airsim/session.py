@@ -100,7 +100,6 @@ class AirSimMissionSession:
         self.execution.bind_observation_checkpoint(
             self.gate.service_requests, self.gate.cancel_requests
         )
-        control.motion_tracker.observation_gate = self.gate
 
         self.observation = AirSimObservationSource(
             self.connection,
@@ -182,6 +181,9 @@ class AirSimMissionSession:
                 f"mission assembly returned no drone arm, got {sorted(arms)}"
             )
         self._arm = arms["drone"]
+        if self._arm.loop is not None:
+            # 段执行每拍经取帧门服务在途请求；恢复后从实测位姿重锚。
+            self._arm.loop.observation_gate = self.gate
 
     # -- worker protocol ---------------------------------------------------
     def run(

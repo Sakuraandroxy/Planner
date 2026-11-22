@@ -176,7 +176,7 @@ def _workflow(
         record=ExecutionRecord(START, START.offset(1.0, 0.0), _trajectory())
     )
     workflow = FreeNavigationWorkflow(
-        source, planner, validator, motion, execution, **kwargs
+        source, planner, validator, motion, execution, loop=execution, **kwargs
     )
     return workflow, source, planner, validator, motion, execution
 
@@ -453,34 +453,70 @@ class FakeTimeline:
         return QueueObservationAnchor(stage_token, 3, timestamp_ns, ())
 
 
-class FakeContinuousStream:
-    def __init__(self, *, stop_after=None):
-        self.limits = SimpleNamespace(control_hz=20.0)
-        self.state = SimpleNamespace(pose=START)
-        self.record = ExecutionRecord(START, START, RelativeTrajectory(()))
+class FakeStreamRecorder:
+    def __init__(self):
         self.path_length_m = 0.0
-        self.advance_per_tick = 0.0
-        self.ticks = 0
-        self.stop_after = stop_after
-        self.begun = []
+        self.record = ExecutionRecord(START, START, RelativeTrajectory(()))
         self.timeline = FakeTimeline()
-        self.follower = SimpleNamespace(reset=lambda *args: None)
-        self.goal_yaw = None
-        self.head_id = None
-        self.paused = None
-        self.holding = True
+        self.initial = START
+        self.actions = []
+        self.begun = []
 
     def begin(self, queue, stage_token):
         self.begun.append((queue, stage_token))
 
-    def sample(self):
-        pass
+    def sample(self, state):
+        return state
 
-    def tick(self, pause_reason, *, sample=True):
+
+class FakeQueueFollower:
+    def __init__(self, *args, **kwargs):
+        self.begun = []
+        self.resets = 0
+
+    def begin(self, queue):
+        self.begun.append(queue)
+
+    def reset(self):
+        self.resets += 1
+
+    def next(self, state, unwrapped_yaw_deg):
+        return None
+
+
+class FakeContinuousLoop:
+    """一拍推进 ``advance_per_tick`` 的控制循环替身。"""
+
+    def __init__(self, *, execution=None, stop_after=None):
+        self.execution = execution
+        self.limits = SimpleNamespace(control_hz=20.0)
+        self.recorder = FakeStreamRecorder()
+        self.state = SimpleNamespace(pose=START)
+        self.advance_per_tick = 0.0
+        self.ticks = 0
+        self.stop_after = stop_after
+        self.holding = True
+
+    @property
+    def period(self):
+        return 1 / self.limits.control_hz
+
+    def sample(self):
+        self.recorder.sample(self.state)
+        return self.state
+
+    def stream_sink(self):
+        return lambda command, duration_s: None
+
+    def run_stream(self, goals, sink, *, deadline_monotonic=None):
+        self.sample()
         self.ticks += 1
         if self.stop_after is not None and self.ticks > self.stop_after:
             raise KeyboardInterrupt
-        self.path_length_m += self.advance_per_tick
+        self.recorder.path_length_m += self.advance_per_tick
+
+    def execute(self, motion):
+        return self.execution.execute(motion)
 
 
 class FakeMovingFrames:
@@ -616,22 +652,24 @@ def _continuous_controller(
     maximum_collision_recoveries=3,
     collision_recovery_reset_m=20.0,
 ):
-    stream = stream or FakeContinuousStream()
     frames = frames or FakeMovingFrames()
     clock = clock or FakeClock()
+    execution = FakeStreamingExecution(vehicle=vehicle)
+    stream = stream or FakeContinuousLoop(execution=execution)
+    stream.execution = execution
     monkeypatch.setattr(
         free_continuous_module,
-        "ContinuousExecution",
-        lambda *args, **kwargs: stream,
+        "QueueFollower",
+        lambda *args, **kwargs: FakeQueueFollower(),
     )
     monkeypatch.setattr(
         free_continuous_module,
         "MovingObservations",
         lambda *args, **kwargs: frames,
     )
-    execution = FakeStreamingExecution(vehicle=vehicle)
     controller = FreeNavigationContinuous(
         execution,
+        stream,
         source or object(),
         MotionLimits(),
         2.0,
@@ -649,7 +687,7 @@ def _continuous_controller(
 
 def test_continuous_loop_submits_stopped_and_moving_frames(monkeypatch):
     clock = FakeClock()
-    stream = FakeContinuousStream(stop_after=2)
+    stream = FakeContinuousLoop(stop_after=2)
     moving = _observation(
         stopped=False, capture_id="moving", timestamp_ns=2
     )
@@ -674,7 +712,9 @@ def test_continuous_loop_submits_stopped_and_moving_frames(monkeypatch):
     assert window.submissions[1][4] == QueueObservationAnchor(
         window.background.stage_token, window.queue.revision, 2, ()
     )
-    assert stream.begun == [(window.queue, window.background.stage_token)]
+    assert stream.recorder.begun == [
+        (window.queue, window.background.stage_token)
+    ]
     assert frames.begun == 1
     assert frames.discarded == 1
     assert frames.requests
@@ -689,7 +729,7 @@ def test_continuous_loop_submits_stopped_and_moving_frames(monkeypatch):
 
 def test_continuous_collision_backs_off_clears_queue_and_replans(monkeypatch):
     clock = FakeClock()
-    stream = FakeContinuousStream(stop_after=2)
+    stream = FakeContinuousLoop(stop_after=2)
     recovered = _observation(
         stopped=True, capture_id="recovered", timestamp_ns=3
     )
@@ -730,8 +770,8 @@ def test_continuous_collision_backs_off_clears_queue_and_replans(monkeypatch):
     assert window.queue.cleared == 1
     assert source.captures == 1
     assert controller.collision_recoveries == 1
-    assert stream.initial == START
-    assert stream.actions == []
+    assert stream.recorder.initial == START
+    assert stream.recorder.actions == []
     assert window.submissions
     assert window.submissions[0][0].capture_id == "recovered"
     assert frames.discarded >= 1
@@ -739,7 +779,7 @@ def test_continuous_collision_backs_off_clears_queue_and_replans(monkeypatch):
 
 def test_continuous_discards_a_contact_latched_before_the_stage(monkeypatch):
     clock = FakeClock()
-    stream = FakeContinuousStream(stop_after=2)
+    stream = FakeContinuousLoop(stop_after=2)
     collisions = iter([True, False, False])
     vehicle = SimpleNamespace(
         stream_state=lambda: None,
@@ -772,7 +812,7 @@ def test_continuous_discards_a_contact_latched_before_the_stage(monkeypatch):
 
 def test_continuous_collision_recovery_budget_exhausts(monkeypatch):
     clock = FakeClock()
-    stream = FakeContinuousStream(stop_after=10)
+    stream = FakeContinuousLoop(stop_after=10)
     vehicle = SimpleNamespace(
         stream_state=lambda: None,
         stream_command=lambda *args: None,
@@ -804,7 +844,7 @@ def test_continuous_collision_recovery_budget_exhausts(monkeypatch):
 
 def test_continuous_collision_backoff_escalates_per_recovery(monkeypatch):
     clock = FakeClock()
-    stream = FakeContinuousStream()
+    stream = FakeContinuousLoop()
     vehicle = SimpleNamespace(
         stream_state=lambda: None,
         stream_command=lambda *args: None,
@@ -841,7 +881,7 @@ def test_continuous_collision_backoff_escalates_per_recovery(monkeypatch):
 
 def test_continuous_collision_budget_resets_after_progress(monkeypatch):
     clock = FakeClock()
-    stream = FakeContinuousStream(stop_after=3)
+    stream = FakeContinuousLoop(stop_after=3)
     stream.advance_per_tick = 2.0
     # Each recovery reads collision_state once more to clear the latch; the
     # leading False is the pre-task drain read.
@@ -878,7 +918,7 @@ def test_continuous_collision_budget_resets_after_progress(monkeypatch):
 
 def test_continuous_publishes_remaining_waypoint_telemetry(monkeypatch):
     telemetry = FakeTelemetry()
-    stream = FakeContinuousStream(stop_after=1)
+    stream = FakeContinuousLoop(stop_after=1)
     controller, _, _, _ = _continuous_controller(
         monkeypatch, stream=stream, telemetry=telemetry
     )
@@ -908,7 +948,7 @@ def test_continuous_publishes_remaining_waypoint_telemetry(monkeypatch):
 def test_continuous_watchdog_reports_a_stall_while_the_queue_is_not_draining(
     monkeypatch,
 ):
-    stream = FakeContinuousStream()
+    stream = FakeContinuousLoop()
     controller, _, stream, frames = _continuous_controller(
         monkeypatch, stream=stream, stall_timeout_s=0.1
     )
@@ -929,7 +969,7 @@ def test_continuous_watchdog_reports_a_stall_while_the_queue_is_not_draining(
 def test_continuous_watchdog_does_not_stall_while_waiting_for_planning(
     monkeypatch,
 ):
-    stream = FakeContinuousStream(stop_after=6)
+    stream = FakeContinuousLoop(stop_after=6)
     controller, _, stream, _ = _continuous_controller(
         monkeypatch, stream=stream, stall_timeout_s=0.1
     )
@@ -1039,12 +1079,14 @@ def _continuous_workflow(continuous_stack, **kwargs):
 
 def test_continuous_mode_requires_an_enabled_window_and_motion_limits():
     def build(**kwargs):
+        execution = FakeExecution()
         return FreeNavigationWorkflow(
             FakeSource(_observation()),
             FakePlanner(_trajectory()),
             FakeValidator(),
             FakeMotion(),
-            FakeExecution(),
+            execution,
+            loop=execution,
             **kwargs,
         )
 

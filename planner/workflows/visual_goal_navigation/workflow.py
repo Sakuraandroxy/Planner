@@ -42,6 +42,7 @@ from planner.ports import MovingObservationSource, ObservationSource
 from planner.ports import TaskCompletionChecker
 from planner.ports import TaskTrace
 from planner.ports import TrajectoryPlanner
+from planner.runtime import ControlLoop
 from planner.runtime import ExecutionService
 from planner.runtime import ModelCallService
 from planner.runtime import MotionPlanner
@@ -69,6 +70,7 @@ class VisualGoalNavigationWorkflow:
                  limits: VisualGoalLimits,
                  trace_factory: Callable[[], TaskTrace] | None = None,
                  clock=time.monotonic, sleep=time.sleep, *,
+                 loop: ControlLoop,
                  completion_checker: TaskCompletionChecker[VisualGoalCompletionInput] | None = None,
                  trigger_rules: VisualGoalTriggerRules = VisualGoalTriggerRules(),
                  sliding_window: SlidingWindowSettings = SlidingWindowSettings(),
@@ -79,6 +81,7 @@ class VisualGoalNavigationWorkflow:
                  telemetry=None, vertical_motion: bool = True):
         self.source, self.goal_observer, self.planner = observation_source, goal_observer, trajectory_planner
         self.validator, self.motion, self.execution = validator, motion_planner, execution
+        self.loop = loop
         self.geometry, self.completion, self.limits = geometry, completion, limits
         self.trace_factory, self.clock, self.sleep = trace_factory, clock, sleep
         self.trigger_rules = trigger_rules
@@ -90,7 +93,7 @@ class VisualGoalNavigationWorkflow:
         self.window = (PlanningWindow(trajectory_planner, validator, sliding_window, motion_limits, clock)
                        if sliding_window.enabled else None)
         self.verification = VisualGoalVerification(completion_checker, clock) if completion_checker is not None else None
-        self.flight = VisualGoalFlightPhase(execution, motion_planner, validator, limits,
+        self.flight = VisualGoalFlightPhase(execution, loop, motion_planner, validator, limits,
             trigger_rules, self.verification, clock, self._event)
         self.approach = VisualGoalApproachPhase(trajectory_planner, validator, motion_planner,
             execution, limits, self.flight, self._capture, clock, self._event)
@@ -99,7 +102,7 @@ class VisualGoalNavigationWorkflow:
             if self.window is None:
                 raise ProtocolError("continuous execution requires the enabled planning window")
             from .continuous import VisualGoalContinuous
-            self.continuous = VisualGoalContinuous(execution, moving_observation_source, limits,
+            self.continuous = VisualGoalContinuous(execution, loop, moving_observation_source, limits,
                 motion_limits, stream_speed_mps, goal_observer, geometry, completion, self.flight,
                 self._capture, self._search, clock, sleep, self._event, stream_waypoint_timeout_s,
                 target_updates=self.target_updates, tracking_settings=continuous_tracking,

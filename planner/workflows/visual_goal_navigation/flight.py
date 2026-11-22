@@ -13,9 +13,9 @@ from .termination import VisualGoalFailure
 
 
 class VisualGoalFlightPhase:
-    def __init__(self, execution, motion, validator, limits, trigger_rules,
+    def __init__(self, execution, loop, motion, validator, limits, trigger_rules,
                  verification, clock, event):
-        self.execution, self.motion, self.validator = execution, motion, validator
+        self.execution, self.loop, self.motion, self.validator = execution, loop, motion, validator
         self.limits, self.trigger_rules, self.verification = limits, trigger_rules, verification
         self.clock, self._event = clock, event
 
@@ -73,7 +73,8 @@ class VisualGoalFlightPhase:
             window.load(all_pending)
             receipt = self._execute_window(motion, retained_tail, session, round_budget, pause_when, prefetch)
         else:
-            receipt = self.execution.execute_with_receipt(motion, budget=round_budget, pause_when=pause_when)
+            receipt = self.loop.run_segment(motion, self.loop.segment_sink(),
+                                            budget=round_budget, pause_when=pause_when)
         session.pending_motion = receipt.remaining
         if window is not None:
             session.previous = window.record.actions
@@ -101,8 +102,8 @@ class VisualGoalFlightPhase:
             before = self.execution.current_pose()
             tail = (*motion.segments[index+1:], *retained_tail)
             try:
-                receipt = self.execution.execute_with_receipt(MotionTrajectory((segment,)),
-                    budget=budget, pause_when=pause_when)
+                receipt = self.loop.run_segment(MotionTrajectory((segment,)),
+                    self.loop.segment_sink(), budget=budget, pause_when=pause_when)
             except (ExecutionError, KeyboardInterrupt) as exc:
                 receipt = getattr(exc, "receipt", None)
                 if receipt is not None:

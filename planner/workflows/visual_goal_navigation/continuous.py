@@ -18,6 +18,7 @@ from planner.domain import (
 )
 from planner.errors import ExecutionError, ObservationError, ProtocolError
 from planner.runtime import ContinuousExecution
+from planner.runtime import ControlLoop
 from planner.runtime import MovingObservations
 from planner.runtime import freeze_observation, freeze_reference
 from planner.algorithms import point_in_horizontal_body
@@ -31,7 +32,8 @@ logger = logging.getLogger(__name__)
 
 
 class VisualGoalContinuous:
-    def __init__(self, execution, moving_source, limits, motion_limits, speed_mps, observer, geometry,
+    def __init__(self, execution, loop: ControlLoop, moving_source, limits, motion_limits, speed_mps,
+                 observer, geometry,
                  completion, flight, capture_stopped, search, clock, sleep, event, waypoint_timeout_s=60., *,
                  target_updates=None, tracking_settings=ContinuousTrackingSettings(), telemetry=None,
                  vertical_motion: bool = True, motion=None, collision_backoff_m: float = 3.0,
@@ -46,6 +48,7 @@ class VisualGoalContinuous:
         if type(maximum_collision_recoveries) is not int or maximum_collision_recoveries < 1:
             raise ValueError("continuous collision recovery budget must be a positive integer")
         self.execution, self.limits, self.completion = execution, limits, completion
+        self.loop = loop
         self.flight, self.capture_stopped, self.search = flight, capture_stopped, search
         self.clock, self.sleep, self.event = clock, sleep, event
         self.stream = ContinuousExecution(execution, execution.vehicle, motion_limits, speed_mps, clock,
@@ -286,7 +289,7 @@ class VisualGoalContinuous:
         self.frames.retry_at = 0.0
         pose = self.stream.state.pose
         backoff = RelativeTrajectory((RelativePoseDelta(dx=-backoff_m),))
-        self.execution.execute(self.motion.create_motion(relative_to_world(backoff, pose)))
+        self.loop.execute(self.motion.create_motion(relative_to_world(backoff, pose)))
         window.queue.clear()
         # Contacts made while still overlapping or reversing out are handled here.
         self.execution.vehicle.collision_state()

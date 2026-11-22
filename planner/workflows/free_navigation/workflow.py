@@ -34,6 +34,7 @@ from planner.errors import (
     ObservationError,
     ProtocolError,
 )
+from planner.runtime import ControlLoop
 from planner.runtime import ExecutionService
 from planner.runtime import ModelCallService
 from planner.runtime import freeze_observation
@@ -57,6 +58,7 @@ class FreeNavigationWorkflow:
         clock=time.monotonic,
         sleep=time.sleep,
         *,
+        loop: ControlLoop,
         model_request_timeout_s: float = 30.0,
         max_consecutive_stalls: int = 2,
         sliding_window: SlidingWindowSettings | None = None,
@@ -110,6 +112,7 @@ class FreeNavigationWorkflow:
         self.validator = validator
         self.motion = motion
         self.execution = execution
+        self.loop = loop
         self.clock = clock
         self.sleep = sleep
         self.model_request_timeout_s = float(model_request_timeout_s)
@@ -138,6 +141,7 @@ class FreeNavigationWorkflow:
             )
             self.continuous = FreeNavigationContinuous(
                 execution,
+                loop,
                 moving_observation_source,
                 motion_limits,
                 stream_speed_mps,
@@ -263,7 +267,7 @@ class FreeNavigationWorkflow:
                 self.validator.validate_relative(trajectory)
                 world = relative_to_world(trajectory, observation.pose)
                 self.validator.validate_world(world)
-                record = self.execution.execute(
+                record = self.loop.execute(
                     self.motion.create_motion(world)
                 )
                 last = record

@@ -25,7 +25,8 @@ from planner.errors import (
     ObservationError,
     ProtocolError,
 )
-from planner.runtime import ContinuousExecution
+from planner.runtime import ControlLoop
+from planner.runtime import QueueFollower
 from planner.runtime import MovingObservations
 from planner.algorithms import relative_to_world
 
@@ -36,6 +37,7 @@ class FreeNavigationContinuous:
     def __init__(
         self,
         execution,
+        loop: ControlLoop,
         moving_source,
         motion_limits,
         speed_mps,
@@ -83,6 +85,7 @@ class FreeNavigationContinuous:
                 "continuous collision recovery budget must be a positive integer"
             )
         self.execution = execution
+        self.loop = loop
         self.clock, self.sleep = clock, sleep
         self.telemetry = telemetry
         self.vertical_motion = bool(vertical_motion)
@@ -95,8 +98,7 @@ class FreeNavigationContinuous:
         self.source = moving_source
         self.model_request_timeout_s = float(model_request_timeout_s)
         self.stall_timeout_s = float(stall_timeout_s)
-        self.stream = ContinuousExecution(
-            execution,
+        self.follower = QueueFollower(
             execution.vehicle,
             motion_limits,
             speed_mps,
@@ -160,11 +162,12 @@ class FreeNavigationContinuous:
         self._discard_pretask_contact()
         observation = initial_observation
         self.frames.begin()
-        self.stream.begin(
+        self.loop.recorder.begin(
             window.queue, window.background.stage_token
         )
+        self.follower.begin(window.queue)
         used_capture = None
-        progress_m = self.stream.path_length_m
+        progress_m = self.loop.recorder.path_length_m
         progress_at = self.clock()
         try:
             while True:
@@ -172,16 +175,17 @@ class FreeNavigationContinuous:
                 if self.execution.vehicle.collision_state().in_contact:
                     observation = self._recover_from_collision(window)
                     used_capture = None
-                    progress_m = self.stream.path_length_m
+                    progress_m = self.loop.recorder.path_length_m
                     progress_at = self.clock()
-                self.stream.sample()
+                self.loop.run_stream(self.follower, self.loop.stream_sink())
+                state = self.loop.state
                 self._reset_recovery_budget_after_progress()
-                window.record = self.stream.record
+                window.record = self.loop.recorder.record
                 frame = self.frames.poll()
                 if frame is not None:
                     observation = frame
                 result = window.poll_stream(
-                    self.stream.state.pose, self.execution.checkpoint
+                    state.pose, self.execution.checkpoint
                 )
                 if result is not None:
                     logger.info(
@@ -194,7 +198,6 @@ class FreeNavigationContinuous:
                 progress_m, progress_at = self._check_progress(
                     window, progress_m, progress_at
                 )
-                self.stream.tick(None, sample=False)
                 if not window.queue.items:
                     # CARLA is synchronous: with no command the world would not
                     # advance, so a moving capture could never complete while
@@ -216,8 +219,7 @@ class FreeNavigationContinuous:
                 self.sleep(
                     max(
                         0.001,
-                        1 / self.stream.limits.control_hz
-                        - (self.clock() - tick_started),
+                        self.loop.period - (self.clock() - tick_started),
                     )
                 )
         finally:
@@ -228,9 +230,7 @@ class FreeNavigationContinuous:
         if self.telemetry is None:
             return
         pose = (
-            self.stream.state.pose
-            if self.stream.state is not None
-            else self.final_pose
+            self.loop.state.pose if self.loop.state is not None else self.final_pose
         )
         if pose is None:
             return
@@ -247,7 +247,7 @@ class FreeNavigationContinuous:
         )
 
     def _check_progress(self, window, progress_m, progress_at):
-        current = self.stream.path_length_m
+        current = self.loop.recorder.path_length_m
         now = self.clock()
         if not window.queue.items:
             return current, now
@@ -272,7 +272,7 @@ class FreeNavigationContinuous:
         baseline = self.collision_reset_baseline_m
         if baseline is None:
             return
-        progress_m = self.stream.path_length_m - baseline
+        progress_m = self.loop.recorder.path_length_m - baseline
         if progress_m < self.collision_recovery_reset_m:
             return
         logger.info(
@@ -303,9 +303,9 @@ class FreeNavigationContinuous:
         )
 
     def _update_measurements(self) -> None:
-        self.path_length_m = self.stream.path_length_m
-        if self.stream.record is not None:
-            self.final_pose = self.stream.record.end
+        self.path_length_m = self.loop.recorder.path_length_m
+        if self.loop.recorder.record is not None:
+            self.final_pose = self.loop.recorder.record.end
 
     def _recover_from_collision(self, window):
         """Back off, drop the authorized queue and let the loop replan.
@@ -339,31 +339,28 @@ class FreeNavigationContinuous:
         # not make the next planning observation fail immediately.
         self.frames.failures = 0
         self.frames.retry_at = 0.0
-        pose = self.stream.state.pose
+        pose = self.loop.state.pose
         backoff = RelativeTrajectory(
             (RelativePoseDelta(dx=-backoff_m),)
         )
-        self.execution.execute(
+        self.loop.execute(
             self.motion.create_motion(relative_to_world(backoff, pose))
         )
         window.queue.clear()
         # Contacts made while still overlapping or reversing out are already
         # handled by this recovery; do not start another one immediately.
         self.execution.vehicle.collision_state()
-        self.stream.goal_yaw = None
-        self.stream.head_id = None
-        self.stream.paused = None
-        self.stream.holding = True
-        self.stream.follower.reset()
-        self.stream.sample()
+        self.follower.reset()
+        self.loop.holding = True
+        state = self.loop.sample()
         # Start a fresh execution-history window at the recovered pose. Passing
         # the collided segment back as the model's previous trajectory anchors
         # replanning to the failed path. Cumulative path length is untouched so
         # telemetry and the stall watchdog keep their meaning.
-        self.stream.initial = self.stream.state.pose
-        self.stream.actions = []
-        self.stream.record = None
-        self.collision_reset_baseline_m = self.stream.path_length_m
+        self.loop.recorder.initial = state.pose
+        self.loop.recorder.actions = []
+        self.loop.recorder.record = None
+        self.collision_reset_baseline_m = self.loop.recorder.path_length_m
         deadline = self.clock() + self.model_request_timeout_s
         while self.frames.job.busy:
             if self.clock() >= deadline:
@@ -380,7 +377,7 @@ class FreeNavigationContinuous:
 
     def _submit(self, observation, parameters, window) -> bool:
         try:
-            anchor = self.stream.timeline.at(
+            anchor = self.loop.recorder.timeline.at(
                 observation.timestamp_ns,
                 window.background.stage_token,
             )
@@ -389,7 +386,7 @@ class FreeNavigationContinuous:
             if not observation.stopped or window.queue.items:
                 return False
             window.queue.require_anchor(
-                self.stream.state.pose, observation.pose
+                self.loop.state.pose, observation.pose
             )
             anchor = QueueObservationAnchor(
                 window.background.stage_token,
@@ -397,7 +394,7 @@ class FreeNavigationContinuous:
                 observation.timestamp_ns,
                 (),
             )
-        record = self.stream.record
+        record = self.loop.recorder.record
         planning = PlanningWindowInput(
             self.initial_pose,
             window.settings.max_observation_age_s,

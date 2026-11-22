@@ -25,7 +25,9 @@ from planner.workflows.free_navigation import FreeNavigationStageValidator
 from planner.workflows.visual_goal_navigation import VisualGoalStageValidator
 from planner.domain import TaskKind
 from ..errors import ProtocolError
+from planner.runtime import ControlLoop
 from planner.runtime import ExecutionService
+from planner.runtime import GuidedVehicle
 from planner.runtime import ModelCallService
 from planner.runtime import SynchronizedMotionPlanner
 from planner.algorithms import TrajectoryValidator
@@ -145,6 +147,7 @@ class VehicleArm:
     application: PlannerApplication | None
     model_calls: ModelCallService | None
     workflows: tuple
+    loop: ControlLoop | None = None
 
 
 def build_mission_common(config, *, planner, detector, log) -> MissionCommon:
@@ -216,6 +219,17 @@ def build_vehicle_arm(
     # AirSim passes an execution service it has already bound to the position hold and
     # the observation gate; every other caller gets a plain one.
     execution = ExecutionService(vehicle) if execution is None else execution
+    loop = ControlLoop(
+        execution,
+        vehicle,
+        limits=vehicle.tracking_limits,
+        tracking=config.continuous,
+        timeout_s=config.drone.move_timeout_s,
+    )
+    attach = getattr(vehicle, "attach_loop", None)
+    if attach is not None:
+        attach(loop)
+    guided = GuidedVehicle(vehicle, loop)
     source = vehicle if observation_source is None else observation_source
     motion = SynchronizedMotionPlanner(config.motion.max_speed_mps, vehicle.tracking_limits)
     goal_observer = BBoxGoalObserver(
@@ -242,6 +256,7 @@ def build_vehicle_arm(
         geometry,
         VisualGoalCompletion(limits, TargetApproach()),
         limits,
+        loop=loop,
         trace_factory=common.trace_factory,
         completion_checker=common.completion_checker,
         trigger_rules=settings.completion_rules,
@@ -255,9 +270,10 @@ def build_vehicle_arm(
         vertical_motion=is_drone,
     )
     basic = BasicMotionWorkflow(
-        vehicle,
+        guided,
         motion,
         execution,
+        loop=loop,
         limits=vehicle.tracking_limits,
         telemetry=telemetry,
     )
@@ -286,6 +302,7 @@ def build_vehicle_arm(
             validator,
             motion,
             execution,
+            loop=loop,
             model_request_timeout_s=config.trajectory_planner.timeout_s,
             sliding_window=config.sliding_window,
             motion_limits=vehicle.tracking_limits,
@@ -340,6 +357,7 @@ def build_vehicle_arm(
         application,
         model_calls,
         tuple(closed),
+        loop,
     )
 
 

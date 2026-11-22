@@ -9,6 +9,7 @@ from .capabilities import (
     WeatherControl,
 )
 from .goal_observer import GoalObserver
+from .goal_source import StreamGoalSource
 from .observation_source import (
     ControlledObservationSource,
     MovingObservationSource,
@@ -33,6 +34,7 @@ __all__ = [
     "ObservationSource",
     "PositionHoldVehicle",
     "ReturnHome",
+    "StreamGoalSource",
     "StreamingVehicle",
     "StreamingViews",
     "TargetDetector",

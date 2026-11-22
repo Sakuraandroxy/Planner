@@ -12,6 +12,7 @@ from planner.domain import RelativeTrajectory
 from planner.errors import ExecutionError
 from planner.ports import StreamingVehicle
 from planner.runtime.execution import ExecutionService
+from planner.runtime.motion.tracking import measured_action
 from planner.runtime.motion.continuous import ContinuousFollower
 from planner.runtime.motion.continuous_reference import is_rotation
 from planner.runtime.stream_timeline import StreamTimeline
@@ -63,7 +64,7 @@ class ContinuousExecution:
                 raise ExecutionError("simulator clock moved backwards during stream")
             delta = resolve_yaw_delta_deg(self.state.pose.yaw_deg, state.pose.yaw_deg)
             self.yaw += delta
-            action = ExecutionService._measured_action(self.state.pose, state.pose, delta)
+            action = measured_action(self.state.pose, state.pose, delta)
             if math.hypot(action.dx, action.dy, action.dz) > 1e-6 or abs(delta) > 1e-6:
                 self.actions.append(action)
                 self.path_length_m += math.hypot(action.dx, action.dy, action.dz)
