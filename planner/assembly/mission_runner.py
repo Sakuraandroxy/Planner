@@ -1,6 +1,7 @@
 from planner.assembly.workflow_router import WorkflowRouter
 from planner.domain import MissionPlan
-from planner.domain import MissionResult, StageResult, StageSummary
+from planner.domain import MissionResult, StageResult
+from planner.workflows import require_confirmed
 
 
 # MissionRunner 负责按顺序运行一份任务计划中的各个阶段，并汇总结果。
@@ -20,28 +21,9 @@ class MissionRunner:
     def run(self, plan: MissionPlan) -> MissionResult:
         results: list[StageResult[object]] = []
         for stage in plan.stages:
-            result = self.router.workflow_for(stage).run(stage)
-            if (
-                not isinstance(result, StageResult)
-                or result.stage_id != stage.stage_id
-                or (
-                    result.success
-                    and (
-                        result.summary is None
-                        or not result.summary.completion_confirmed
-                    )
-                )
-            ):
-                reason = (
-                    "workflow returned no confirmed stage completion evidence "
-                    "or mismatched stage ID"
-                )
-                result = StageResult(
-                    stage.stage_id,
-                    False,
-                    error=reason,
-                    summary=StageSummary("invalid_result", reason),
-                )
+            result = require_confirmed(
+                self.router.workflow_for(stage).run(stage), stage
+            )
             results.append(result)
             if not result.success:
                 return MissionResult(False, tuple(results), error=result.error)
