@@ -19,17 +19,17 @@ import time
 from collections.abc import Callable
 
 from ...config import MapCatalog, MapEntry, ProfileInfo, VehicleModelCatalog
-from ...domain import Capabilities
-from ...domain.server import (
+from ...domain import (
+    WEATHER_CATALOG,
+    Capabilities,
     MapSelection,
     ServerState,
     ServerStatus,
     TaskSubmission,
+    default_view_for,
 )
-from ...domain.view import default_view_for
-from ...domain.weather import WEATHER_CATALOG
-from ...ports.backend_worker import BackendWorker
-from ...runtime.log_buffer import LogBuffer
+from ...ports import BackendWorker
+from ...runtime import LogBuffer
 from ...simulator import registry
 from .commands import CommandChannel
 from .models import ModelSwitcher

@@ -17,7 +17,7 @@ from dataclasses import fields
 from importlib import import_module
 
 from ..domain import Capabilities, TaskKind
-from ..simulator.ports import SimulatorPorts
+from ..simulator import SimulatorPorts
 
 #: Task packages declaring ``TASK_KIND`` and ``REQUIRED_PORTS``. Order decides
 #: the order of ``capabilities.task_kinds``.

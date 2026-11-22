@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ...adapters.multimodal_chat import MultimodalChatClient
+from ...adapters import MultimodalChatClient
 from ...adapters.target_detection import (
     ManualTargetDetector,
     OpenAICompatibleTargetDetector,

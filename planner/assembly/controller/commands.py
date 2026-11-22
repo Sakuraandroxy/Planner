@@ -11,13 +11,13 @@ import queue
 import threading
 import time
 
-from ...domain.server import (
+from ...domain import (
     BackendUnavailable,
     ServerState,
     TaskSubmission,
     WorkerEventKind,
+    default_view_for,
 )
-from ...domain.view import default_view_for
 
 
 class CommandChannel:

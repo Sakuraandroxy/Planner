@@ -11,7 +11,7 @@ other command is rejected.
 from __future__ import annotations
 
 from ...config import MapCatalog, MapEntry
-from ...domain.server import (
+from ...domain import (
     BackendUnavailable,
     MapSelection,
     ServerState,
