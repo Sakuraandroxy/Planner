@@ -220,16 +220,9 @@ class SteppedMotionTracker:
 
 
 def tracking_limits(motion) -> MotionLimits:
-    """Convert the configured envelope into the domain tracking limits.
+    """Return the envelope as-is; configured and tracking limits are one type now.
 
-    The mapping itself lives on the envelope class, in
-    ``services/segment_motion.MotionLimits.to_tracking_limits``. This wrapper stays
-    because UE5's vehicles call it in three places. It also fixes their fallback:
-    the old default built the *domain* type and then read envelope fields off it,
-    so ``tracking_limits(None)`` would have raised -- now it returns the neutral
-    envelope converted once, like any other input.
+    The wrapper stays because UE5's vehicles call it in three places and pass
+    ``None`` when no envelope is configured.
     """
-    from ...runtime.segment_motion import MotionLimits as ConfiguredMotionLimits
-
-    return (motion if motion is not None else ConfiguredMotionLimits(
-    )).to_tracking_limits()
+    return motion if motion is not None else MotionLimits()
