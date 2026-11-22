@@ -2,7 +2,7 @@
 from planner.algorithms.approach import TargetApproach
 from planner.domain.visual_goal import GoalVisibility
 from planner.domain.visual_goal_limits import VisualGoalLimits
-from planner.runtime.target_coordinates import horizontal_distance
+from planner.algorithms.target_coordinates import horizontal_distance
 
 
 class VisualGoalCompletion:

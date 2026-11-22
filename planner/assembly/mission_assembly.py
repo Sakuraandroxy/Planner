@@ -30,7 +30,7 @@ from ..errors import ProtocolError
 from ..runtime.execution import ExecutionService
 from ..runtime.model_calls import ModelCallService
 from ..runtime.motion import SynchronizedMotionPlanner
-from ..runtime.trajectory_validation import TrajectoryValidator
+from ..algorithms.trajectory_validation import TrajectoryValidator
 from ..workflows.basic_motion import BasicMotionWorkflow
 from ..workflows.free_navigation import FreeNavigationWorkflow
 from ..workflows.visual_goal_navigation import VisualGoalNavigationWorkflow

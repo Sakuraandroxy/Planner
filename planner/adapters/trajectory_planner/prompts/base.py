@@ -5,7 +5,7 @@ from planner.domain.depth import depth_display_description
 from planner.domain.observation import Observation
 from planner.domain.pose import WorldPose
 from planner.domain.trajectory import RelativeTrajectory
-from planner.runtime.trajectory_transform import world_pose_delta_in_reference_frame
+from planner.algorithms.trajectory_transform import world_pose_delta_in_reference_frame
 
 # In this prompt, "original instruction" means the instruction of the current
 # MissionStage, not the user's complete multi-stage mission. "Previous

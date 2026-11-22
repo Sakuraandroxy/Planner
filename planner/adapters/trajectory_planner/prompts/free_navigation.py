@@ -3,7 +3,7 @@ from planner.domain.observation import Observation
 from planner.domain.pose import WorldPose
 from planner.domain.trajectory import RelativeTrajectory
 from planner.errors import ProtocolError
-from planner.runtime.free_space import (
+from planner.algorithms.free_space import (
     FreeSpaceProfile,
     FreeSpaceProfileSettings,
     measure_free_space,

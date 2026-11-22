@@ -27,7 +27,7 @@ from planner.errors import (
 from planner.runtime.moving_observations import MovingObservations
 from planner.runtime.planning_window import PlanningWindow
 from planner.runtime.resource_cleanup import close_resources
-from planner.runtime.trajectory_validation import TrajectoryValidator
+from planner.algorithms.trajectory_validation import TrajectoryValidator
 from tests.support import ue_camera_matrix
 
 

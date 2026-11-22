@@ -11,7 +11,7 @@ from planner.domain.visual_goal import (
     GoalReference,
     GoalVisibility,
 )
-from planner.runtime.target_coordinates import horizontal_distance, nearest_surface
+from planner.algorithms.target_coordinates import horizontal_distance, nearest_surface
 
 
 def accept_position(target_state: TargetPositionState | None, stage_id: str, observation: Observation,

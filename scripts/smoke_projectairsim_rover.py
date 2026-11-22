@@ -36,7 +36,7 @@ from planner.domain.free_navigation import FreeNavigationParameters
 from planner.domain.mission import MissionStage, TaskKind
 from planner.runtime.execution import ExecutionService
 from planner.runtime.motion import SynchronizedMotionPlanner
-from planner.runtime.trajectory_validation import TrajectoryValidator
+from planner.algorithms.trajectory_validation import TrajectoryValidator
 from planner.simulators.projectairsim.connection import (
     ProjectAirSimConnection,
     ProjectAirSimConnectionConfig,

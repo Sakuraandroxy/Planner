@@ -31,8 +31,8 @@ from planner.errors import (
 )
 from planner.ports.trajectory_planner import TrajectoryPlanner
 from planner.runtime.trajectory_queue import WorldWaypointQueue
-from planner.runtime.trajectory_transform import world_to_relative
-from planner.runtime.trajectory_validation import TrajectoryValidator
+from planner.algorithms.trajectory_transform import world_to_relative
+from planner.algorithms.trajectory_validation import TrajectoryValidator
 
 ContextT = TypeVar("ContextT")
 logger = logging.getLogger(__name__)
