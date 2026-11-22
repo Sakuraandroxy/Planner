@@ -37,6 +37,7 @@ from ...ports.backend_worker import BackendWorker
 from ...runtime.log_buffer import LogBuffer
 from .commands import CommandChannel
 from .state import LifecycleState
+from .models import ModelSwitcher
 from .world import SessionSwitcher
 
 logger = logging.getLogger(__name__)
@@ -69,6 +70,7 @@ class ServerController:
         self.lifecycle = LifecycleState(self)
         self.commands = CommandChannel(self)
         self.world = SessionSwitcher(self)
+        self.models = ModelSwitcher(self)
         self._maps = maps
         self._simulator = simulator
         # Production starts disconnected: no worker is created and no socket
@@ -215,7 +217,16 @@ class ServerController:
 
     @property
     def vehicle_models(self) -> VehicleModelCatalog | None:
-        return self._model_catalog
+        return self.models.vehicle_models
+
+    def request_models(self, updates: dict[str, str]) -> ServerState:
+        """Select appearance models and reload the scene (idle only).
+
+        The simulator process and the loaded cooked map stay untouched; only
+        the worker is restarted so the new session loads the matching scene
+        variant. Every vehicle resets to its spawn pose.
+        """
+        return self.models.request_models(updates)
 
     @property
     def profile(self) -> str:
@@ -275,63 +286,6 @@ class ServerController:
                 return validated, True
             raise BackendUnavailable(self._state)
 
-    def request_models(self, updates: dict[str, str]) -> ServerState:
-        """Select appearance models and reload the scene (idle only).
-
-        The simulator process and the loaded cooked map stay untouched; only
-        the worker is restarted so the new session loads the matching scene
-        variant. Every vehicle resets to its spawn pose.
-        """
-        catalog = self._model_catalog
-        if catalog is None:
-            raise ValueError("this deployment does not configure vehicle models")
-        if not isinstance(updates, dict) or not updates:
-            raise ValueError("models must name at least one vehicle")
-        cleaned: dict[str, str] = {}
-        for vehicle, model_id in updates.items():
-            vehicle_id = str(vehicle).strip()
-            group = catalog.group(vehicle_id)
-            if group is None:
-                raise ValueError(
-                    f"unknown vehicle '{vehicle_id}'; expected one of "
-                    f"{list(catalog.vehicles)}"
-                )
-            chosen = str(model_id).strip()
-            if group.option(chosen) is None:
-                raise ValueError(
-                    f"unknown {vehicle_id} model '{chosen}'; expected one of "
-                    f"{list(group.ids)}"
-                )
-            cleaned[vehicle_id] = chosen
-        with self._lock:
-            if (
-                self._closing.is_set()
-                or self._state is not ServerState.IDLE
-                or self._worker is None
-                or not self._worker_ready
-            ):
-                raise BackendUnavailable(self._state)
-            merged = dict(self._models)
-            merged.update(cleaned)
-            if merged == self._models:
-                return self._state
-            self._models = merged
-            self._models_switching = True
-            self._sim_error = None
-            self._active = None
-            self._instruction = ""
-            self._last_result = None
-            self._pending_activation = None
-            self._view_pending = False
-            self._state = ServerState.CONNECTING
-            self._commands.put(("models", self._generation, None))
-        self.lifecycle.log(
-            "Switching vehicle models to "
-            + ", ".join(f"{vehicle}={model}" for vehicle, model in cleaned.items())
-            + "; reloading the scene."
-        )
-        return ServerState.CONNECTING
-
     def request_profile(self, profile: str) -> ServerState:
         """Select a navigation profile.
 
@@ -384,26 +338,6 @@ class ServerController:
         return ServerState.CONNECTING
 
     # -- supervisor --------------------------------------------------------
-
-    def _switch_models(self) -> None:
-        """Worker CLOSED -> reconnect with the variant scene, same simulator."""
-        if not self.commands.close_worker(skip_landing=True):
-            self.commands.failed(
-                "The worker did not confirm shutdown for the vehicle-model "
-                "switch. Retrying the session."
-            )
-            return
-        with self._lock:
-            self._models_switching = False
-            self._selection = self.world.selection_for(self._map_id)
-        self.lifecycle.log(
-            "Vehicle models switched: "
-            + ", ".join(
-                f"{vehicle}={model}" for vehicle, model in self._models.items()
-            )
-            + f"; loading {self._selection.scene_file}."
-        )
-        self.commands.connect()
 
     def _switch_profile(self) -> None:
         """Worker CLOSED -> rebuild the session from the profile now selected."""
