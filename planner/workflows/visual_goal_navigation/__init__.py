@@ -1,5 +1,7 @@
 """Visual-goal navigation workflow."""
 
+from planner.domain import TaskKind
+
 from .completion import (
     VisualGoalCompletion,
     VisualGoalRadiusTrigger,
@@ -13,7 +15,14 @@ from .targeting import BBoxGoalObserver, VisualGoalRefresh
 from .termination import VisualGoalExitPolicy, VisualGoalFailure
 from .workflow import VisualGoalNavigationWorkflow
 
+#: Task kind this package implements.
+TASK_KIND = TaskKind.VISUAL_GOAL_NAVIGATION
+#: Port slots the task cannot run without; the assembly derives flags from them.
+REQUIRED_PORTS: tuple[str, ...] = ("vehicle", "observation")
+
 __all__ = [
+    "REQUIRED_PORTS",
+    "TASK_KIND",
     "BBoxGoalObserver",
     "TargetApproach",
     "VisualGoalCompletion",
