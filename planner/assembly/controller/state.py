@@ -184,10 +184,10 @@ class LifecycleState:
                         event.message or "View change failed.", "WARNING"
                     )
             elif event.kind is WorkerEventKind.ERROR:
-                c._failed_worker(
+                c.commands.failed(
                     event.message or "Worker preparation failed."
                 )
                 return
             elif event.kind is WorkerEventKind.CLOSED and not c._closing.is_set():
-                c._failed_worker("The worker closed the simulator session.")
+                c.commands.failed("The worker closed the simulator session.")
                 return

@@ -26,7 +26,6 @@ from ...domain.server import (
     ServerState,
     ServerStatus,
     TaskSubmission,
-    WorkerEventKind,
 )
 from ...domain.view import (
     default_view_for,
@@ -36,6 +35,7 @@ from ...domain.weather import WEATHER_CATALOG, merge_weather
 from ...errors import SimulatorNotOwned, SimulatorRestartError
 from ...ports.backend_worker import BackendWorker
 from ...runtime.log_buffer import LogBuffer
+from .commands import CommandChannel
 from .state import LifecycleState
 
 logger = logging.getLogger(__name__)
@@ -144,6 +144,33 @@ class ServerController:
         # Collaborators share the fields above; only the supervisor thread
         # mutates them, HTTP threads read through the properties below.
         self.lifecycle = LifecycleState(self)
+        self.commands = CommandChannel(self)
+
+    def start(self) -> None:
+        self.commands.start()
+
+    def submit(
+        self, instruction: str, vehicle: str | None = None
+    ) -> TaskSubmission:
+        return self.commands.submit(instruction, vehicle)
+
+    def stop(self) -> ServerState:
+        return self.commands.stop()
+
+    def home(self, vehicle: str | None = None) -> str:
+        """Teleport a vehicle back to its spawn pose; only while idle."""
+        return self.commands.home(vehicle)
+
+    def activate(self, vehicle: str) -> str:
+        """Console switch: park the other vehicle, home + show this one.
+
+        The status updates optimistically; a failed ACTIVE event restores the
+        previous selection and view.
+        """
+        return self.commands.activate(vehicle)
+
+    def close(self) -> None:
+        self.commands.close()
 
     @property
     def state(self) -> ServerState:
@@ -191,20 +218,6 @@ class ServerController:
         with self._lock:
             return self._weather_catalog
 
-    def start(self) -> None:
-        if self._thread is not None:
-            return
-        if not self._session_started:
-            self._stop_leftover_simulator()
-            self.lifecycle.log(
-                "No scene is loaded. Choose a map in the console to start "
-                "the simulator."
-            )
-        self._thread = threading.Thread(
-            target=self._run, name="planner-supervisor", daemon=True
-        )
-        self._thread.start()
-
     def _stop_leftover_simulator(self) -> None:
         """Stop a script-managed stack so a disconnected start shows no scene.
 
@@ -243,87 +256,6 @@ class ServerController:
             )
             return
         self.lifecycle.log("Leftover simulator stopped; the console starts blank.")
-
-    def submit(self, instruction: str, vehicle: str | None = None) -> TaskSubmission:
-        if not isinstance(instruction, str) or not instruction.strip():
-            raise ValueError("instruction must be non-empty text")
-        requested = self._vehicle if vehicle is None else str(vehicle).strip()
-        if requested not in self._vehicles:
-            raise ValueError(
-                f"unknown vehicle '{requested}'; expected one of "
-                f"{list(self._vehicles)}"
-            )
-        with self._lock:
-            if self._closing.is_set() or self._state is not ServerState.IDLE:
-                raise BackendUnavailable(self._state)
-            self._sequence += 1
-            task = TaskSubmission(
-                f"task_{self._sequence}",
-                instruction.strip(),
-                requested,
-            )
-            self._active = task.task_id
-            self._instruction = task.instruction
-            self._vehicle = requested
-            self._state = ServerState.RUNNING
-            self._commands.put(("task", self._generation, task))
-        return task
-
-    def stop(self) -> ServerState:
-        with self._lock:
-            if self._state is ServerState.RUNNING:
-                self._state = ServerState.STOPPING
-                self._commands.put(("stop", self._generation, None))
-            return self._state
-
-    def home(self, vehicle: str | None = None) -> str:
-        """Teleport a vehicle back to its spawn pose; only while idle."""
-        with self._lock:
-            if (
-                self._closing.is_set()
-                or self._state is not ServerState.IDLE
-                or self._worker is None
-                or not self._worker_ready
-            ):
-                raise BackendUnavailable(self._state)
-            requested = self._vehicle if vehicle is None else str(vehicle).strip()
-            if requested not in self._vehicles:
-                raise ValueError(
-                    f"unknown vehicle '{requested}'; expected one of "
-                    f"{list(self._vehicles)}"
-                )
-            self._commands.put(("home", self._generation, requested))
-            return requested
-
-    def activate(self, vehicle: str) -> str:
-        """Console switch: park the other vehicle, home + show this one.
-
-        The status updates optimistically; a failed ACTIVE event restores the
-        previous selection and view.
-        """
-        with self._lock:
-            if (
-                self._closing.is_set()
-                or self._state is not ServerState.IDLE
-                or self._worker is None
-                or not self._worker_ready
-            ):
-                raise BackendUnavailable(self._state)
-            requested = str(vehicle).strip()
-            if requested not in self._vehicles:
-                raise ValueError(
-                    f"unknown vehicle '{requested}'; expected one of "
-                    f"{list(self._vehicles)}"
-                )
-            self._pending_activation = {
-                "vehicle": self._vehicle,
-                "view_mode": self._view_mode,
-            }
-            self._vehicle = requested
-            self._view_mode = default_view_for(requested)
-            self._view_pending = True
-            self._commands.put(("activate", self._generation, requested))
-        return requested
 
     def request_weather(self, values) -> dict[str, float]:
         """Merge a partial update over the current weather and queue it."""
@@ -582,91 +514,6 @@ class ServerController:
                     scene_file = entry.scene.scene_for(model_id)
         return MapSelection(entry.id, scene_file, entry.sim_config_path)
 
-    def _connect(self) -> None:
-        try:
-            worker = self.worker_factory(self._selection)
-        except Exception as error:
-            self.lifecycle.log(
-                f"Worker construction failed: {type(error).__name__}: {error}",
-                "ERROR",
-            )
-            self._next_start = self.clock() + self.settings.reconnect_interval_s
-            return
-        with self._lock:
-            self._generation += 1
-            self._worker = worker
-            self._worker_ready = False
-            self._started_at = self.clock()
-            self._state = ServerState.CONNECTING
-        worker.start()
-
-    def _failed_worker(self, reason: str) -> None:
-        self.lifecycle.log(reason, "ERROR")
-        worker, self._worker = self._worker, None
-        if worker is not None:
-            try:
-                worker.terminate()
-            except Exception:
-                pass
-        with self._lock:
-            self._generation += 1
-            self._active = None
-            self._worker_ready = False
-            self._state = ServerState.CONNECTING
-            self._instruction = ""
-            self._weather_applied = False
-            self._pending_activation = None
-            self._view_pending = False
-            # A switch that died halfway must not leave the console reporting a
-            # switch forever: the retry rebuilds with whatever is already selected.
-            self._models_switching = False
-            self._profile_switching = False
-        self._next_start = self.clock() + self.settings.reconnect_interval_s
-
-    def _command(self, command) -> None:
-        kind, generation, value = command
-        with self._lock:
-            if generation != self._generation:
-                return
-            state, active = self._state, self._active
-            worker = self._worker
-        if kind == "world":
-            self._switch_world(value)
-            return
-        if kind == "models":
-            self._switch_models()
-            return
-        if kind == "profile":
-            self._switch_profile()
-            return
-        if kind == "stop_world":
-            self._stop_world()
-            return
-        if worker is None:
-            return
-        if kind == "task" and state is ServerState.RUNNING and value.task_id == active:
-            self.lifecycle.log(f"Task {value.task_id} accepted: {value.instruction}")
-            worker.submit(value)
-        elif kind == "stop" and state is ServerState.STOPPING:
-            self.lifecycle.log("Stopping the task; motion aborts between setpoints.")
-            worker.stop()
-        elif kind == "home" and state is ServerState.IDLE:
-            self.lifecycle.log(f"Returning the {value} to its start position.")
-            worker.home(value)
-        elif kind == "activate" and state is ServerState.IDLE:
-            self.lifecycle.log(
-                f"Activating the {value}: parking the other vehicle and "
-                "returning it home."
-            )
-            worker.activate(value)
-        elif kind == "view" and state is ServerState.IDLE:
-            self.lifecycle.log(f"Applying streaming view: {value}.")
-            worker.set_view_mode(value)
-            self._applied_view = value
-        elif kind == "weather" and state is ServerState.IDLE:
-            worker.set_weather(value)
-            self._weather_applied = True
-
     def _apply_simulator(self, entry: MapEntry, restart: bool) -> None:
         """Launch an absent stack, or restart the running one for a new map."""
         if restart:
@@ -679,7 +526,7 @@ class ServerController:
         with self._lock:
             self._pending_world = entry
             self._map_switching = True
-        if not self._close_worker(skip_landing=True):
+        if not self.commands.close_worker(skip_landing=True):
             with self._lock:
                 self._world_retry_at = (
                     self.clock() + self.settings.reconnect_interval_s
@@ -729,12 +576,12 @@ class ServerController:
             self._sim_error = None
             self._pending_world = None
         self.lifecycle.log(f"Map switched to '{entry.id}'.")
-        self._connect()
+        self.commands.connect()
 
     def _stop_world(self) -> None:
         """Worker CLOSED -> stack stop -> disconnected, owner thread."""
-        if not self._close_worker(skip_landing=True):
-            self._failed_worker(
+        if not self.commands.close_worker(skip_landing=True):
+            self.commands.failed(
                 "The worker did not confirm shutdown for the scene stop."
             )
             return
@@ -770,8 +617,8 @@ class ServerController:
 
     def _switch_models(self) -> None:
         """Worker CLOSED -> reconnect with the variant scene, same simulator."""
-        if not self._close_worker(skip_landing=True):
-            self._failed_worker(
+        if not self.commands.close_worker(skip_landing=True):
+            self.commands.failed(
                 "The worker did not confirm shutdown for the vehicle-model "
                 "switch. Retrying the session."
             )
@@ -786,12 +633,12 @@ class ServerController:
             )
             + f"; loading {self._selection.scene_file}."
         )
-        self._connect()
+        self.commands.connect()
 
     def _switch_profile(self) -> None:
         """Worker CLOSED -> rebuild the session from the profile now selected."""
-        if not self._close_worker(skip_landing=True):
-            self._failed_worker(
+        if not self.commands.close_worker(skip_landing=True):
+            self.commands.failed(
                 "The worker did not confirm shutdown for the profile switch. "
                 "Retrying the session."
             )
@@ -803,138 +650,7 @@ class ServerController:
             f"Navigation profile '{profile}' is active: its planner endpoint and "
             "navigation settings are wired into the new session."
         )
-        self._connect()
-
-    def _close_worker(self, *, skip_landing: bool = False) -> bool:
-        """Shut the worker down and wait for CLOSED before a restart."""
-        with self._lock:
-            worker = self._worker
-        if worker is None:
-            with self._lock:
-                self._worker_ready = False
-            self.lifecycle.reset_session_state()
-            return True
-        try:
-            worker.shutdown(skip_landing=skip_landing)
-        except Exception as error:
-            self.lifecycle.log(f"Worker shutdown failed: {error}", "ERROR")
-            try:
-                worker.terminate()
-            except Exception:
-                pass
-        if not self._wait_closed(worker):
-            return False
-        with self._lock:
-            if self._worker is worker:
-                self._worker = None
-            self._worker_ready = False
-        self.lifecycle.reset_session_state()
-        return True
-
-    def _wait_closed(self, worker) -> bool:
-        deadline = self.clock() + self._worker_shutdown_timeout_s
-        closed = False
-        while True:
-            if self._drain(worker):
-                closed = True
-            if closed:
-                return True
-            if self.clock() >= deadline:
-                return False
-            time.sleep(0.05)
-
-    def _drain(self, worker) -> bool:
-        """Consume available events; return True when CLOSED was seen."""
-        closed = False
-        for _ in range(100):
-            event = worker.poll()
-            if event is None:
-                break
-            if event.kind is WorkerEventKind.LOG:
-                self.lifecycle.log(event.message, event.level)
-            elif event.kind is WorkerEventKind.CLOSED:
-                closed = True
-            elif event.kind is WorkerEventKind.WEATHER:
-                with self._lock:
-                    if event.payload is not None:
-                        self._weather_catalog = event.payload
-        return closed
-
-    def _run(self) -> None:
-        try:
-            while not self._closing.is_set():
-                try:
-                    command = self._commands.get(timeout=0.05)
-                except queue.Empty:
-                    command = None
-                try:
-                    if command is not None:
-                        self._command(command)
-                    if (
-                        self._pending_world is not None
-                        and self.clock() >= self._world_retry_at
-                    ):
-                        self._switch_world(self._pending_world)
-                    if (
-                        self._session_started
-                        and self._worker is None
-                        and self.clock() >= self._next_start
-                    ):
-                        self._connect()
-                    self.lifecycle.on_event()
-                    if (
-                        self._worker is not None
-                        and not self._worker_ready
-                        and self.clock() - self._started_at
-                        >= self.settings.startup_timeout_s
-                    ):
-                        self._failed_worker(
-                            "Simulator session setup timed out. Retrying."
-                        )
-                except Exception as error:
-                    self._failed_worker(
-                        f"Backend lifecycle error: {type(error).__name__}: "
-                        f"{error}"
-                    )
-        finally:
-            self._shutdown_worker()
-
-    def _shutdown_worker(self) -> None:
-        worker, self._worker = self._worker, None
-        with self._lock:
-            self._worker_ready = False
-        if worker is None:
-            return
-        try:
-            worker.shutdown()
-        except Exception as error:
-            self.lifecycle.log(f"Worker shutdown failed: {error}", "ERROR")
-            try:
-                worker.terminate()
-            except Exception:
-                pass
-        if not self._drain(worker):
-            self.lifecycle.log(
-                "Worker did not confirm shutdown within the timeout.", "ERROR"
-            )
-
-    def close(self) -> None:
-        with self._lock:
-            if self._closing.is_set():
-                return
-            self._pending_activation = None
-            self._view_pending = False
-            self._state = ServerState.STOPPING
-            self._closing.set()
-        try:
-            if self._thread is not None:
-                self._thread.join(timeout=self.settings.startup_timeout_s + 8.0)
-                if self._thread.is_alive():
-                    raise RuntimeError("planner supervisor did not finish shutdown")
-        finally:
-            # Even when the monitor thread is wedged: at this point nothing is left to
-            # interrupt, and leaving a UE process holding the GPU is the worse failure.
-            self._stop_simulator()
+        self.commands.connect()
 
     def _stop_simulator(self) -> None:
         """Take the simulator stack down when the service goes.
