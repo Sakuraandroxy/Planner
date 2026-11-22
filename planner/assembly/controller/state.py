@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import logging
 
-from ...domain.server import (
+from ...domain import (
     ServerState,
     ServerStatus,
     WorkerEventKind,
+    default_view_for,
 )
-from ...domain.view import default_view_for
 
 logger = logging.getLogger(__name__)
 

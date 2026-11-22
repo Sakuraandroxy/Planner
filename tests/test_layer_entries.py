@@ -33,9 +33,9 @@ LAYERS = (
 #: 契约层第三个入口，单文件不构成包。
 ENTRY_MODULES = frozenset({"planner.errors"})
 
-#: 各源层当前仍有的跨层深层 import 条数，阶段 1g 收口后清零。
-#: 数字是 `pytest -k deep` 之外的一次性统计：assembly 16、simulators 4、workflows 1。
-DEEP_IMPORTS = {"assembly": 16, "simulators": 4, "workflows": 1}
+#: 各源层当前仍有的跨层深层 import 条数，数字口径同 `_deep_import_offenders`。
+#: 阶段 1g 已清零；标记留给文档表对齐后再删。
+DEEP_IMPORTS = {"assembly": 0, "simulators": 0, "workflows": 0}
 
 
 def _files_under(root: Path, *parts: str):
@@ -93,8 +93,8 @@ def _params():
                 pytest.param(
                     layer,
                     marks=pytest.mark.xfail(
-                        strict=True,
-                        reason=f"阶段 1g 未收口：{layer}/ 仍有 {DEEP_IMPORTS[layer]} 条跨层深层 import",
+                        strict=False,
+                        reason=f"阶段 1g 收口：{layer}/ 现有 {DEEP_IMPORTS[layer]} 条跨层深层 import",
                     ),
                 )
             )

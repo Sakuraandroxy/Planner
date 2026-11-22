@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 
-from ...adapters.multimodal_chat import MultimodalChatClient
+from ...adapters import MultimodalChatClient
 from ...adapters.trajectory_planner import QwenVLPlanner
 from ...adapters.trajectory_planner.prompts import (
     FreeNavigationTrajectoryPrompt,

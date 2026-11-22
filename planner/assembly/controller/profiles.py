@@ -7,7 +7,7 @@ The simulator process keeps running; only the session is rebuilt.
 from __future__ import annotations
 
 from ...config import ProfileInfo
-from ...domain.server import BackendUnavailable, ServerState
+from ...domain import BackendUnavailable, ServerState
 
 
 class ProfileSwitcher:

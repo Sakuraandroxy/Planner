@@ -7,13 +7,13 @@ runs the view change is deferred to the task end.
 
 from __future__ import annotations
 
-from ...domain.server import (
+from ...domain import (
     BackendUnavailable,
     ServerState,
     WorkerEventKind,
+    merge_weather,
+    validate_view_mode,
 )
-from ...domain.view import validate_view_mode
-from ...domain.weather import merge_weather
 
 
 class EnvironmentChannel:
