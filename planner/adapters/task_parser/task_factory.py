@@ -1,5 +1,5 @@
 from planner.adapters.task_parser.response_schema import validate_mission_envelope
-from planner.domain.mission import MissionPlan, MissionStage, TaskKind
+from planner.domain import MissionPlan, MissionStage, TaskKind
 from planner.errors import ProtocolError
 
 from .tasks import TaskCodec, builtin_task_codecs

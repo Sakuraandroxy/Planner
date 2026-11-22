@@ -11,8 +11,8 @@ from pathlib import Path
 
 from PIL import Image
 
-from planner.domain.observation import Observation
-from planner.ports.observation_source import ObservationSource
+from planner.domain import Observation
+from planner.ports import ObservationSource
 
 
 class CameraApiRecorder:

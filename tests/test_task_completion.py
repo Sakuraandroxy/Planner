@@ -3,18 +3,15 @@ import pytest
 
 from planner.adapters.task_completion import OpenAICompatibleTaskCompletionChecker
 from planner.adapters.task_completion.prompts import VisualGoalCompletionPrompt
-from planner.domain.observation import CameraIntrinsics, Observation
-from planner.domain.pose import WorldPose
-from planner.domain.visual_goal import (
+from planner.domain import CameraIntrinsics, Observation
+from planner.domain import WorldPose
+from planner.domain import (
     GoalGeometry,
     GoalObservation,
     GoalVisibility,
     VisualGoalNavigationParameters,
 )
-from planner.domain.visual_goal_completion import (
-    VisualGoalCompletionInput,
-    VisualGoalTriggerRules,
-)
+from planner.domain import VisualGoalCompletionInput, VisualGoalTriggerRules
 from planner.errors import ProtocolError
 from tests.support import ue_camera_matrix
 

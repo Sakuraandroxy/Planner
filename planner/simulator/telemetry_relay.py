@@ -17,7 +17,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 
-from ..domain.trajectory_telemetry import TrajectorySnapshot
+from planner.domain import TrajectorySnapshot
 from ..runtime.trajectory_hub import TrajectoryHub
 
 #: How often a snapshot may cross the pipe while a task is running.

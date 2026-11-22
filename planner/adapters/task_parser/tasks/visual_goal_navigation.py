@@ -1,8 +1,5 @@
 """Static visual-goal wire rules and strict decoding for a ground or aerial vehicle."""
-from planner.domain.visual_goal import (
-    ArrivalRelation,
-    VisualGoalNavigationParameters,
-)
+from planner.domain import ArrivalRelation, VisualGoalNavigationParameters
 from planner.errors import ProtocolError
 
 VISUAL_GOAL_RULES = """visual_goal_navigation: identify a specified STATIC object/landmark through a

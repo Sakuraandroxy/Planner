@@ -29,8 +29,8 @@ from ..algorithms.planning import GeometricTargetPlanner
 from ..algorithms.targeting import DepthGeometry
 from ..algorithms.targeting.depth_foreground import DepthForegroundFilter
 from ..config import AppConfig
-from ..domain.mission import TaskKind
-from ..domain.target_detection import NormalizedBoundingBox
+from planner.domain import TaskKind
+from planner.domain import NormalizedBoundingBox
 
 logger = logging.getLogger(__name__)
 

@@ -7,9 +7,9 @@ from projectairsim.drone import YawControlMode
 from projectairsim.types import LandedState
 
 from planner.config import CameraSettings, DepthSettings
-from planner.domain.pose import WorldPose
+from planner.domain import WorldPose
 from planner.errors import ExecutionError
-from planner.domain.motion import MotionLimits as ConfiguredMotionLimits
+from planner.domain import MotionLimits as ConfiguredMotionLimits
 from planner.simulators.projectairsim.drone import ProjectAirSimDrone
 from planner.simulators.projectairsim.moving_source import BorrowedMovingSource
 

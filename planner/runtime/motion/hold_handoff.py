@@ -1,7 +1,7 @@
 """Pure translation handoff before a stopped endpoint, in world NED meters."""
 import math
 
-from planner.domain.pose import WorldPose
+from planner.domain import WorldPose
 
 
 def translation_handoff(start: WorldPose, target: WorldPose, speed: float,

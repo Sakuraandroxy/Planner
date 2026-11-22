@@ -2,7 +2,7 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from planner.domain.mission import TaskKind, TaskParameters
+from planner.domain import TaskKind, TaskParameters
 
 from .basic_motion import (
     AERIAL_BASIC_MOTION_RULES,

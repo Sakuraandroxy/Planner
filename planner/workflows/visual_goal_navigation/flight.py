@@ -4,10 +4,10 @@ from dataclasses import replace
 from planner.workflows.visual_goal_navigation.completion import (
     retained_world_trajectory,
 )
-from planner.domain.execution import ExecutionReceipt
-from planner.domain.trajectory import MotionTrajectory, RelativeTrajectory
-from planner.domain.visual_goal import VisualGoalStatus
-from planner.domain.visual_goal_completion import VisualGoalCompletionInput
+from planner.domain import ExecutionReceipt
+from planner.domain import MotionTrajectory, RelativeTrajectory
+from planner.domain import VisualGoalStatus
+from planner.domain import VisualGoalCompletionInput
 from planner.errors import ExecutionError
 
 from .termination import VisualGoalFailure

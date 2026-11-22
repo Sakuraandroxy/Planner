@@ -14,18 +14,18 @@ from planner.workflows.free_navigation.policy import (
 from planner.workflows.visual_goal_navigation.policy import (
     VisualGoalStageValidator,
 )
-from planner.domain.basic_motion import BasicMotionParameters
-from planner.domain.free_navigation import FreeNavigationParameters
-from planner.domain.mission import MissionPlan, MissionStage, TaskKind
-from planner.domain.result import (
+from planner.domain import BasicMotionParameters
+from planner.domain import FreeNavigationParameters
+from planner.domain import MissionPlan, MissionStage, TaskKind
+from planner.domain import (
     CompletionBasis,
     MissionResult,
     ResultMeasurement,
     StageResult,
     StageSummary,
 )
-from planner.domain.visual_goal import VisualGoalNavigationParameters
-from planner.domain.visual_goal_limits import VisualGoalLimits
+from planner.domain import VisualGoalNavigationParameters
+from planner.domain import VisualGoalLimits
 from planner.errors import ProtocolError
 
 

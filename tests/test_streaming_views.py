@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from planner.domain.view import VIEW_MODES
+from planner.domain import VIEW_MODES
 from scripts.streaming_views import (
     MAX_UNMATCHED_SCORE,
     MIN_MATCH_SCORE,

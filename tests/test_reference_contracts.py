@@ -2,27 +2,20 @@ import math
 
 import pytest
 
-from planner.domain.approach import ApproachSettings, ApproachStatus
-from planner.domain.basic_motion import BasicMotionParameters
-from planner.domain.depth_foreground import (
-    DepthForegroundResult,
-    DepthForegroundSettings,
-)
-from planner.domain.free_navigation import FreeNavigationParameters
-from planner.domain.mission import (
-    MissionPlan,
-    MissionStage,
-    TaskKind,
-)
-from planner.domain.result import (
+from planner.domain import ApproachSettings, ApproachStatus
+from planner.domain import BasicMotionParameters
+from planner.domain import DepthForegroundResult, DepthForegroundSettings
+from planner.domain import FreeNavigationParameters
+from planner.domain import MissionPlan, MissionStage, TaskKind
+from planner.domain import (
     CompletionBasis,
     MissionResult,
     ResultMeasurement,
     StageResult,
     StageSummary,
 )
-from planner.domain.target_state import TargetPositionState
-from planner.domain.visual_goal import (
+from planner.domain import TargetPositionState
+from planner.domain import (
     GoalGeometry,
     GoalObservation,
     GoalReference,
@@ -31,8 +24,8 @@ from planner.domain.visual_goal import (
     VisualGoalPlanningContext,
     VisualGoalState,
 )
-from planner.domain.visual_goal_completion import VisualGoalTriggerRules
-from planner.domain.visual_goal_limits import VisualGoalLimits
+from planner.domain import VisualGoalTriggerRules
+from planner.domain import VisualGoalLimits
 from planner.errors import ExecutionError, ModelCallTimeout, ResourceCleanupError
 
 

@@ -1,7 +1,7 @@
 import json
 import math
 
-from planner.domain.visual_goal import VisualGoalPlanningContext
+from planner.domain import VisualGoalPlanningContext
 from planner.errors import ProtocolError
 from planner.algorithms.free_space import FreeSpaceProfileSettings, measure_free_space
 from planner.algorithms.target_coordinates import point_in_horizontal_body

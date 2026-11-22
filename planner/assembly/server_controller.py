@@ -20,7 +20,7 @@ import time
 from collections.abc import Callable
 
 from ..config import MapCatalog, MapEntry, ProfileInfo, VehicleModelCatalog
-from ..domain.server import (
+from planner.domain import (
     BackendUnavailable,
     MapSelection,
     ServerState,
@@ -28,13 +28,10 @@ from ..domain.server import (
     TaskSubmission,
     WorkerEventKind,
 )
-from ..domain.view import (
-    default_view_for,
-    validate_view_mode,
-)
-from ..domain.weather import WEATHER_CATALOG, merge_weather
+from planner.domain import default_view_for, validate_view_mode
+from planner.domain import WEATHER_CATALOG, merge_weather
 from ..errors import SimulatorNotOwned, SimulatorRestartError
-from ..ports.backend_worker import BackendWorker
+from planner.ports import BackendWorker
 from ..runtime.log_buffer import LogBuffer
 
 logger = logging.getLogger(__name__)

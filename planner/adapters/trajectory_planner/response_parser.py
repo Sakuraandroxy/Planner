@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 import re
 
-from ...domain.pose import RelativePoseDelta
-from ...domain.trajectory import RelativeTrajectory
+from planner.domain import RelativePoseDelta
+from planner.domain import RelativeTrajectory
 from ...errors import ProtocolError
 
 _ARRAY_PATTERN = re.compile(r"\[\s*\[.*?\]\s*\]", re.DOTALL)

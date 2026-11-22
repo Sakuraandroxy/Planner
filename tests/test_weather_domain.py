@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from planner.domain.weather import (
+from planner.domain import (
     WEATHER_CATALOG,
     WEATHER_FIELDS,
     WEATHER_LABELS,

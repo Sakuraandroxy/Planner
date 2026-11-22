@@ -2,15 +2,12 @@
 import pytest
 
 from planner.algorithms.basic_motion_conversion import BasicMotionConverter
-from planner.domain.basic_motion import (
-    BasicMotionParameters,
-    BasicMotionStatus,
-)
-from planner.domain.execution import StopResult
-from planner.domain.mission import MissionStage, TaskKind
-from planner.domain.motion import MotionLimits
-from planner.domain.pose import WorldPose
-from planner.domain.result import CompletionBasis
+from planner.domain import BasicMotionParameters, BasicMotionStatus
+from planner.domain import StopResult
+from planner.domain import MissionStage, TaskKind
+from planner.domain import MotionLimits
+from planner.domain import WorldPose
+from planner.domain import CompletionBasis
 from planner.workflows.basic_motion import BasicMotionWorkflow
 
 

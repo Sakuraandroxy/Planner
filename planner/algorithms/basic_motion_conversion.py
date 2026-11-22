@@ -1,8 +1,8 @@
 """Stateless semantic-axis conversion for a ground vehicle."""
 import math
 
-from planner.domain.basic_motion import BasicMotionParameters
-from planner.domain.pose import WorldPose, wrap_yaw_deg
+from planner.domain import BasicMotionParameters
+from planner.domain import WorldPose, wrap_yaw_deg
 
 
 class BasicMotionConverter:

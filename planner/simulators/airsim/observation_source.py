@@ -12,16 +12,16 @@ from functools import partial
 import numpy as np
 from PIL import Image
 
-from planner.domain.depth_visualization import render_depth
-from planner.domain.execution import ExecutionBudget
-from planner.domain.observation import Observation
+from planner.domain import render_depth
+from planner.domain import ExecutionBudget
+from planner.domain import Observation
 from planner.errors import (
     BudgetExceeded,
     ExecutionError,
     ObservationError,
     SimulatorConnectionError,
 )
-from planner.ports.vehicle import Vehicle
+from planner.ports import Vehicle
 from planner.runtime.background_operation import BackgroundOperation
 from planner.simulators.airsim.camera_model import (
     camera_matrix,
@@ -177,7 +177,7 @@ class AirSimObservationSource:
         q = camera_orientation
         rotation = quaternion_to_rotation(q.x_val, q.y_val, q.z_val, q.w_val)
         if moving:
-            from planner.domain.pose import WorldPose
+            from planner.domain import WorldPose
             body_rotation = np.asarray(rotation) @ self.mount_rotation.T
             body_position = np.array((camera_position.x_val, camera_position.y_val, camera_position.z_val))-body_rotation @ np.asarray(self.camera_mount_position_body_m)
             vehicle_pose = WorldPose(*map(float, body_position), math.degrees(math.atan2(body_rotation[1, 0], body_rotation[0, 0])))

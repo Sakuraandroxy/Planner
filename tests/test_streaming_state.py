@@ -1,8 +1,8 @@
 """The streamed state carries the measured yaw rate the heading servo damps with."""
 import pytest
 
-from planner.domain.pose import WorldPose
-from planner.domain.streaming import TimedVehicleState
+from planner.domain import WorldPose
+from planner.domain import TimedVehicleState
 
 
 def test_yaw_rate_defaults_to_none_and_accepts_a_measurement():

@@ -7,9 +7,9 @@ from planner.adapters.trajectory_planner.prompts.free_navigation import (
     FREE_NAVIGATION_SYSTEM_PROMPT,
     FreeNavigationTrajectoryPrompt,
 )
-from planner.domain.depth import INVALID_DEPTH_SENTINEL_M
-from planner.domain.observation import CameraIntrinsics, Observation
-from planner.domain.pose import WorldPose
+from planner.domain import INVALID_DEPTH_SENTINEL_M
+from planner.domain import CameraIntrinsics, Observation
+from planner.domain import WorldPose
 from planner.algorithms.free_space import (
     FreeSpaceProfileSettings,
     measure_free_space,

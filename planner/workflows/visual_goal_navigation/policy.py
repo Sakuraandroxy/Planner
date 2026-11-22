@@ -2,17 +2,17 @@
 import math
 from dataclasses import dataclass
 
-from planner.domain.approach import (
+from planner.domain import (
     ApproachAssessment,
     ApproachSettings,
     ApproachStatus,
     ApproachTarget,
 )
-from planner.domain.mission import MissionStage, TaskKind
-from planner.domain.pose import WorldPose
-from planner.domain.visual_goal import VisualGoalNavigationParameters
-from planner.domain.visual_goal_completion import VisualGoalTriggerRules
-from planner.domain.visual_goal_limits import VisualGoalLimits
+from planner.domain import MissionStage, TaskKind
+from planner.domain import WorldPose
+from planner.domain import VisualGoalNavigationParameters
+from planner.domain import VisualGoalTriggerRules
+from planner.domain import VisualGoalLimits
 from planner.errors import ProtocolError
 
 

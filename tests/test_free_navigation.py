@@ -20,20 +20,17 @@ from planner.adapters.trajectory_planner.prompts import (
 from planner.workflows.free_navigation.policy import (
     FreeNavigationStageValidator,
 )
-from planner.domain.basic_motion import BasicMotionParameters
-from planner.domain.execution import ExecutionBudget, ExecutionRecord, StopResult
-from planner.domain.free_navigation import (
-    FreeNavigationParameters,
-    FreeNavigationStatus,
-)
-from planner.domain.mission import MissionStage, TaskKind
-from planner.domain.motion import MotionLimits
-from planner.domain.observation import CameraIntrinsics, Observation
-from planner.domain.pose import RelativePoseDelta, WorldPose
-from planner.domain.sliding_window import QueuedWaypoint, SlidingWindowSettings
-from planner.domain.streaming import QueueObservationAnchor
-from planner.domain.trajectory import RelativeTrajectory
-from planner.domain.trajectory_telemetry import MODE_CONTINUOUS
+from planner.domain import BasicMotionParameters
+from planner.domain import ExecutionBudget, ExecutionRecord, StopResult
+from planner.domain import FreeNavigationParameters, FreeNavigationStatus
+from planner.domain import MissionStage, TaskKind
+from planner.domain import MotionLimits
+from planner.domain import CameraIntrinsics, Observation
+from planner.domain import RelativePoseDelta, WorldPose
+from planner.domain import QueuedWaypoint, SlidingWindowSettings
+from planner.domain import QueueObservationAnchor
+from planner.domain import RelativeTrajectory
+from planner.domain import MODE_CONTINUOUS
 from planner.errors import (
     ExecutionError,
     FreeNavigationStalled,

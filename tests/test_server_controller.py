@@ -14,17 +14,17 @@ from planner.config import (
     VehicleModelGroup,
     VehicleModelOption,
 )
-from planner.domain.pose import WorldPose
-from planner.domain.server import (
+from planner.domain import WorldPose
+from planner.domain import (
     BackendUnavailable,
     MapSelection,
     ServerState,
     WorkerEvent,
     WorkerEventKind,
 )
-from planner.domain.sliding_window import QueuedWaypoint
-from planner.domain.trajectory_telemetry import MODE_CONTINUOUS
-from planner.domain.weather import WEATHER_FIELDS
+from planner.domain import QueuedWaypoint
+from planner.domain import MODE_CONTINUOUS
+from planner.domain import WEATHER_FIELDS
 from planner.errors import SimulatorNotOwned
 from planner.runtime.trajectory_hub import TrajectoryHub
 

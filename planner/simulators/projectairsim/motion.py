@@ -16,10 +16,10 @@ import time
 from collections.abc import Callable
 from dataclasses import replace
 
-from ...domain.execution import ExecutionBudget, PoseCheckpoint
-from ...domain.motion import ContinuousTrackingSettings, MotionLimits
-from ...domain.pose import WorldPose, resolve_yaw_delta_deg, wrap_yaw_deg
-from ...domain.trajectory import MotionSegment
+from planner.domain import ExecutionBudget, PoseCheckpoint
+from planner.domain import ContinuousTrackingSettings, MotionLimits
+from planner.domain import WorldPose, resolve_yaw_delta_deg, wrap_yaw_deg
+from planner.domain import MotionSegment
 from ...errors import BudgetExceeded, ExecutionError, MotionPaused
 from ...runtime.motion.heading_servo import tracked_heading_rate_deg_s
 from ...runtime.motion.synchronized import duration_for, sample_segment

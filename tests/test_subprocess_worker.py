@@ -15,7 +15,7 @@ import time
 
 import pytest
 
-from planner.domain.server import TaskSubmission, WorkerEvent, WorkerEventKind
+from planner.domain import TaskSubmission, WorkerEvent, WorkerEventKind
 from planner.simulator.subprocess_worker import (
     ChildProcessError,
     SubprocessMissionWorker,
@@ -126,7 +126,7 @@ def test_the_weather_catalog_survives_the_pipe():
     ``catalog.fields`` off whichever arrived -- so the same request worked for UE5 and
     raised "'dict' object has no attribute 'fields'" for UE4.
     """
-    from planner.domain.weather import WEATHER_CATALOG
+    from planner.domain import WEATHER_CATALOG
 
     line = json.dumps({
         "kind": "weather",
@@ -155,7 +155,7 @@ def test_a_trajectory_snapshot_reaches_the_hub_and_not_the_event_queue():
     publish several times per control period -- that would starve READY and
     FINISHED out of the queue that carries them.
     """
-    from planner.domain.trajectory_telemetry import (
+    from planner.domain import (
         QueueSnapshot,
         TrajectoryPointSnapshot,
         TrajectorySnapshot,

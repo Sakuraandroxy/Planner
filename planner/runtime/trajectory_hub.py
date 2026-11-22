@@ -6,8 +6,8 @@ import threading
 import time
 from dataclasses import replace
 
-from ..domain.pose import WorldPose
-from ..domain.trajectory_telemetry import (
+from planner.domain import WorldPose
+from planner.domain import (
     MODE_IDLE,
     MODE_NO_QUEUE,
     MODE_PENDING,

@@ -25,7 +25,7 @@ from ..workflows.free_navigation.policy import FreeNavigationStageValidator
 from ..workflows.visual_goal_navigation.policy import (
     VisualGoalStageValidator,
 )
-from ..domain.mission import TaskKind
+from planner.domain import TaskKind
 from ..errors import ProtocolError
 from ..runtime.execution import ExecutionService
 from ..runtime.model_calls import ModelCallService

@@ -7,11 +7,7 @@ stand-in for visual grounding in the final system.
 
 from __future__ import annotations
 
-from ...domain.target_detection import (
-    NormalizedBoundingBox,
-    TargetDetection,
-    TargetDetectionInput,
-)
+from planner.domain import NormalizedBoundingBox, TargetDetection, TargetDetectionInput
 
 
 class ManualTargetDetector:

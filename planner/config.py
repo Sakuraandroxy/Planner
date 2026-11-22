@@ -9,15 +9,15 @@ from typing import Any
 
 import yaml
 
-from .domain.depth import validate_depth_protocol
-from .domain.depth_foreground import DepthForegroundSettings
-from .domain.motion import ContinuousTrackingSettings
-from .domain.engine_family import FamilyCatalog, parse_family_catalog
-from .domain.sliding_window import SlidingWindowSettings
-from .domain.view import VIEW_MODES
-from .domain.visual_goal_completion import VisualGoalTriggerRules
-from .domain.visual_goal_limits import VisualGoalLimits
-from .domain.motion import MotionLimits
+from planner.domain import validate_depth_protocol
+from planner.domain import DepthForegroundSettings
+from planner.domain import ContinuousTrackingSettings
+from planner.domain import FamilyCatalog, parse_family_catalog
+from planner.domain import SlidingWindowSettings
+from planner.domain import VIEW_MODES
+from planner.domain import VisualGoalTriggerRules
+from planner.domain import VisualGoalLimits
+from planner.domain import MotionLimits
 
 
 @dataclass(frozen=True)

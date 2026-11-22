@@ -1,7 +1,7 @@
 """Owner-recorded simulator-time queue history for delayed image observations."""
 from collections import deque
 
-from planner.domain.streaming import QueueObservationAnchor
+from planner.domain import QueueObservationAnchor
 from planner.errors import ProtocolError
 
 

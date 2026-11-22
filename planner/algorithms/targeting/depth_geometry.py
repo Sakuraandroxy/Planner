@@ -9,12 +9,8 @@ import math
 
 import numpy as np
 
-from planner.domain.observation import Observation
-from planner.domain.visual_goal import (
-    GoalGeometry,
-    GoalObservation,
-    SurfacePointEstimate,
-)
+from planner.domain import Observation
+from planner.domain import GoalGeometry, GoalObservation, SurfacePointEstimate
 
 from .depth_foreground import DepthForegroundFilter
 from .depth_surface_sampling import sample_surface_depth

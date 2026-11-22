@@ -105,7 +105,7 @@ class _FakeHold:
 
 
 def _vehicle(z, landed_state, climb_m=0.):
-    from planner.domain.motion import MotionLimits
+    from planner.domain import MotionLimits
 
     connection = _Connection(z, landed_state)
     vehicle = ServerVehicle(connection, MotionLimits(), 5.0, takeoff_climb_m=climb_m)

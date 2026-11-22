@@ -1,4 +1,4 @@
-from planner.domain.mission import TaskKind
+from planner.domain import TaskKind
 
 from .tasks import TaskCodec, builtin_task_codecs
 

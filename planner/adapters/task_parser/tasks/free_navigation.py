@@ -1,5 +1,5 @@
 """Open-ended road-following wire rules and strict decoding for a ground or aerial vehicle."""
-from planner.domain.free_navigation import FreeNavigationParameters
+from planner.domain import FreeNavigationParameters
 from planner.errors import ProtocolError
 
 FREE_NAVIGATION_RULES = """free_navigation: drive along the observed road or lane for an open-ended

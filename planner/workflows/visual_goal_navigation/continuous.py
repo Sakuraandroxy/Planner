@@ -8,12 +8,12 @@ from planner.algorithms.targeting.association import (
     bound_target_goal,
 )
 from planner.workflows.visual_goal_navigation.targeting import VisualGoalRefresh
-from planner.domain.motion import ContinuousTrackingSettings
-from planner.domain.pose import RelativePoseDelta
-from planner.domain.streaming import QueueObservationAnchor
-from planner.domain.trajectory import MotionSegment, MotionTrajectory, RelativeTrajectory
-from planner.domain.trajectory_telemetry import MODE_CONTINUOUS
-from planner.domain.visual_goal import (
+from planner.domain import ContinuousTrackingSettings
+from planner.domain import RelativePoseDelta
+from planner.domain import QueueObservationAnchor
+from planner.domain import MotionSegment, MotionTrajectory, RelativeTrajectory
+from planner.domain import MODE_CONTINUOUS
+from planner.domain import (
     GoalVisibility,
     VisualGoalPlanningContext,
     VisualGoalState,

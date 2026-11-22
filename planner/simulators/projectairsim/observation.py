@@ -17,9 +17,9 @@ import cv2
 import numpy as np
 
 from ...config import CameraSettings, DepthSettings
-from ...domain.depth_visualization import render_depth
-from ...domain.execution import ExecutionBudget
-from ...domain.observation import Observation
+from planner.domain import render_depth
+from planner.domain import ExecutionBudget
+from planner.domain import Observation
 from ...errors import BudgetExceeded, ObservationError
 from .camera import (
     assert_camera_matches_scene,

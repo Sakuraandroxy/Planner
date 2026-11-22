@@ -15,22 +15,17 @@ import math
 import time
 from functools import partial
 
-from planner.domain.execution import StopResult
-from planner.domain.free_navigation import (
+from planner.domain import StopResult
+from planner.domain import (
     FreeNavigationParameters,
     FreeNavigationResult,
     FreeNavigationStatus,
 )
-from planner.domain.mission import MissionStage
-from planner.domain.motion import ContinuousTrackingSettings, MotionLimits
-from planner.domain.result import (
-    CompletionBasis,
-    ResultMeasurement,
-    StageResult,
-    StageSummary,
-)
-from planner.domain.sliding_window import SlidingWindowSettings
-from planner.domain.trajectory_telemetry import MODE_STOPPED_BATCH
+from planner.domain import MissionStage
+from planner.domain import ContinuousTrackingSettings, MotionLimits
+from planner.domain import CompletionBasis, ResultMeasurement, StageResult, StageSummary
+from planner.domain import SlidingWindowSettings
+from planner.domain import MODE_STOPPED_BATCH
 from planner.errors import (
     BudgetExceeded,
     ExecutionError,

@@ -3,7 +3,7 @@ import threading
 from collections.abc import Callable
 from concurrent.futures import Future
 
-from planner.domain.sliding_window import PlanningOutput
+from planner.domain import PlanningOutput
 from planner.errors import ExecutionError
 
 

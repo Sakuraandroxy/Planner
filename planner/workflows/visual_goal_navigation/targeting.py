@@ -13,19 +13,19 @@ from planner.algorithms.targeting.association import (
     bound_target_geometry,
     make_reference,
 )
-from planner.domain.execution import ExecutionBudget
-from planner.domain.observation import Observation
-from planner.domain.target_detection import TargetDetectionInput
-from planner.domain.target_state import TargetObservationEvidence
-from planner.domain.visual_goal import GoalObservation, GoalReference, GoalVisibility
-from planner.domain.visual_goal_completion import VisualGoalTargetSnapshot
+from planner.domain import ExecutionBudget
+from planner.domain import Observation
+from planner.domain import TargetDetectionInput
+from planner.domain import TargetObservationEvidence
+from planner.domain import GoalObservation, GoalReference, GoalVisibility
+from planner.domain import VisualGoalTargetSnapshot
 from planner.errors import (
     BudgetExceeded,
     ModelCallTimeout,
     ObservationError,
     ProtocolError,
 )
-from planner.ports.target_detector import TargetDetector
+from planner.ports import TargetDetector
 from planner.runtime.background_operation import BackgroundOperation
 from planner.runtime.observation_snapshot import freeze_observation, freeze_reference
 

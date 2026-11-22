@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from ..domain.target_detection import TargetDetection, TargetDetectionInput
+from planner.domain import TargetDetection, TargetDetectionInput
 
 
 class TargetDetector(Protocol):

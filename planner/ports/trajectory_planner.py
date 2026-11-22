@@ -1,9 +1,9 @@
 from typing import Protocol, TypeVar
 
-from ..domain.execution import ExecutionBudget
-from ..domain.observation import Observation
-from ..domain.pose import WorldPose
-from ..domain.trajectory import RelativeTrajectory
+from planner.domain import ExecutionBudget
+from planner.domain import Observation
+from planner.domain import WorldPose
+from planner.domain import RelativeTrajectory
 
 ContextT = TypeVar("ContextT", contravariant=True)
 

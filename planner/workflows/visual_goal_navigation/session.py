@@ -4,12 +4,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from planner.workflows.visual_goal_navigation.completion import VisualGoalRadiusTrigger
-from planner.domain.execution import ExecutionBudget
-from planner.domain.planning_window import PlanningWindowInput
-from planner.domain.pose import WorldPose
-from planner.domain.target_state import TargetObservationEvidence, TargetPositionState
-from planner.domain.trajectory import MotionTrajectory, RelativeTrajectory
-from planner.domain.visual_goal import (
+from planner.domain import ExecutionBudget
+from planner.domain import PlanningWindowInput
+from planner.domain import WorldPose
+from planner.domain import TargetObservationEvidence, TargetPositionState
+from planner.domain import MotionTrajectory, RelativeTrajectory
+from planner.domain import (
     GoalGeometry,
     GoalReference,
     VisualGoalPlanningContext,

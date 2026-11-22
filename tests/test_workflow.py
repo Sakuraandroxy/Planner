@@ -8,20 +8,20 @@ from planner.workflows.visual_goal_navigation.policy import TargetApproach
 from planner.workflows.visual_goal_navigation.completion import VisualGoalCompletion
 from planner.algorithms.planning import GeometricTargetPlanner
 from planner.algorithms.targeting import DepthGeometry
-from planner.domain.mission import MissionStage, TaskKind
-from planner.domain.motion import MotionLimits
-from planner.domain.observation import CameraIntrinsics, Observation
-from planner.domain.pose import RelativePoseDelta, WorldPose
-from planner.domain.sliding_window import SlidingWindowSettings
-from planner.domain.trajectory import RelativeTrajectory
-from planner.domain.visual_goal import (
+from planner.domain import MissionStage, TaskKind
+from planner.domain import MotionLimits
+from planner.domain import CameraIntrinsics, Observation
+from planner.domain import RelativePoseDelta, WorldPose
+from planner.domain import SlidingWindowSettings
+from planner.domain import RelativeTrajectory
+from planner.domain import (
     GoalObservation,
     GoalVisibility,
     VisualGoalNavigationParameters,
     VisualGoalStatus,
 )
-from planner.domain.visual_goal_completion import VisualGoalTriggerRules
-from planner.domain.visual_goal_limits import VisualGoalLimits
+from planner.domain import VisualGoalTriggerRules
+from planner.domain import VisualGoalLimits
 from planner.errors import MotionPaused
 from planner.runtime.execution import ExecutionService
 from planner.runtime.motion import SynchronizedMotionPlanner

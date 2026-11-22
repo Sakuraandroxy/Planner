@@ -1,8 +1,8 @@
 from pathlib import Path
 from typing import Protocol
 
-from planner.domain.observation import Observation
-from planner.domain.visual_goal import GoalGeometry, GoalObservation
+from planner.domain import Observation
+from planner.domain import GoalGeometry, GoalObservation
 
 
 class TaskTrace(Protocol):

@@ -23,9 +23,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, field_validator
 from starlette.concurrency import run_in_threadpool
 
-from ...domain.server import BackendUnavailable, ServerState
-from ...domain.trajectory_telemetry import TrajectorySnapshot
-from ...domain.view import default_view_for
+from planner.domain import BackendUnavailable, ServerState
+from planner.domain import TrajectorySnapshot
+from planner.domain import default_view_for
 from ...simulator import registry
 from .video import BOUNDARY, mjpeg_chunks
 

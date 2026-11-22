@@ -6,17 +6,13 @@ import numpy as np
 import pytest
 
 from planner.algorithms.sliding_window.scheduler import RefillScheduler
-from planner.domain.execution import ExecutionBudget, ExecutionReceipt
-from planner.domain.motion import MotionLimits
-from planner.domain.observation import CameraIntrinsics, Observation
-from planner.domain.planning_window import PlanningWindowInput
-from planner.domain.pose import RelativePoseDelta, WorldPose
-from planner.domain.sliding_window import SlidingWindowSettings
-from planner.domain.trajectory import (
-    MotionSegment,
-    MotionTrajectory,
-    RelativeTrajectory,
-)
+from planner.domain import ExecutionBudget, ExecutionReceipt
+from planner.domain import MotionLimits
+from planner.domain import CameraIntrinsics, Observation
+from planner.domain import PlanningWindowInput
+from planner.domain import RelativePoseDelta, WorldPose
+from planner.domain import SlidingWindowSettings
+from planner.domain import MotionSegment, MotionTrajectory, RelativeTrajectory
 from planner.errors import (
     BudgetExceeded,
     ExecutionError,

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from ..domain.execution import ExecutionBudget, PoseCheckpoint
-from ..domain.pose import WorldPose
-from ..domain.trajectory import MotionSegment
+from planner.domain import ExecutionBudget, PoseCheckpoint
+from planner.domain import WorldPose
+from planner.domain import MotionSegment
 
 
 class Vehicle(Protocol):

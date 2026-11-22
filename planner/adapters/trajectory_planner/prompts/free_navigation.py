@@ -1,6 +1,6 @@
-from planner.domain.observation import Observation
-from planner.domain.pose import WorldPose
-from planner.domain.trajectory import RelativeTrajectory
+from planner.domain import Observation
+from planner.domain import WorldPose
+from planner.domain import RelativeTrajectory
 from planner.errors import ProtocolError
 from planner.algorithms.free_space import (
     FreeSpaceProfile,

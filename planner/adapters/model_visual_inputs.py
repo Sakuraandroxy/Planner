@@ -11,7 +11,7 @@ from numbers import Integral
 
 import numpy as np
 
-from planner.domain.observation import CameraIntrinsics, Observation
+from planner.domain import CameraIntrinsics, Observation
 from planner.errors import ObservationError
 
 

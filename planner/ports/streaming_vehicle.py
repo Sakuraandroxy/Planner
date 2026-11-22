@@ -1,7 +1,7 @@
 """Optional measured velocity-control port; called only by the flight owner."""
 from typing import Protocol
 
-from planner.domain.streaming import TimedVehicleState
+from planner.domain import TimedVehicleState
 
 
 class StreamingVehicle(Protocol):

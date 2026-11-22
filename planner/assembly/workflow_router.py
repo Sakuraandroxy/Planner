@@ -1,4 +1,4 @@
-from planner.domain.mission import MissionStage, TaskKind
+from planner.domain import MissionStage, TaskKind
 from planner.errors import ProtocolError
 from planner.workflows.base import Workflow
 

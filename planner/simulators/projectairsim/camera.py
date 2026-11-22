@@ -8,7 +8,7 @@ silently invalidate depth back-projection.
 
 from __future__ import annotations
 
-from ...domain.observation import CameraIntrinsics
+from planner.domain import CameraIntrinsics
 
 _SCENE_CAMERA = 0
 _DEPTH_CAMERA = 2

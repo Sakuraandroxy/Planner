@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from planner.domain.observation import CameraIntrinsics
+from planner.domain import CameraIntrinsics
 
 
 @dataclass(frozen=True)

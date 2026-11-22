@@ -5,8 +5,8 @@ from __future__ import annotations
 from concurrent.futures import Future
 from typing import Protocol
 
-from ..domain.execution import ExecutionBudget
-from ..domain.observation import Observation
+from planner.domain import ExecutionBudget
+from planner.domain import Observation
 
 
 class ObservationSource(Protocol):

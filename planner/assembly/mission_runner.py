@@ -1,6 +1,6 @@
 from planner.assembly.workflow_router import WorkflowRouter
-from planner.domain.mission import MissionPlan
-from planner.domain.result import MissionResult, StageResult, StageSummary
+from planner.domain import MissionPlan
+from planner.domain import MissionResult, StageResult, StageSummary
 
 
 # MissionRunner 负责按顺序运行一份任务计划中的各个阶段，并汇总结果。

@@ -17,11 +17,11 @@ from collections import deque
 from dataclasses import replace
 
 from ...config import CameraSettings, DepthSettings
-from ...domain.observation import Observation
-from ...domain.pose import WorldPose
-from ...domain.streaming import TimedVehicleState
+from planner.domain import Observation
+from planner.domain import WorldPose
+from planner.domain import TimedVehicleState
 from ...errors import ExecutionError
-from ...domain.motion import MotionLimits
+from planner.domain import MotionLimits
 from .collision import CollisionEvent, CollisionMonitor
 from .connection import ProjectAirSimConnection
 from .coordinates import (
@@ -92,7 +92,7 @@ class ProjectAirSimRover:
         frame_sink=None,
         tracking=None,
     ):
-        from ...domain.motion import ContinuousTrackingSettings
+        from planner.domain import ContinuousTrackingSettings
 
         self._connection = connection
         self._robot = robot

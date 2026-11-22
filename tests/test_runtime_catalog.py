@@ -12,7 +12,7 @@ from planner.config import (
     load_config,
     load_map_catalog,
 )
-from planner.domain.engine_family import parse_family_catalog
+from planner.domain import parse_family_catalog
 from planner.simulator import registry
 from planner.simulators.airsim import runtime as airsim_runtime
 from planner.simulators.projectairsim import runtime as pas_runtime

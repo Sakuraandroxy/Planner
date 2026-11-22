@@ -20,7 +20,7 @@ from planner.assembly.factories import (
     build_trace_factory,
 )
 from planner.config import load_config
-from planner.domain.mission import TaskKind
+from planner.domain import TaskKind
 from tests.support import write_config
 
 

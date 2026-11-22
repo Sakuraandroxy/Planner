@@ -4,7 +4,7 @@ from dataclasses import replace
 
 import numpy as np
 
-from planner.domain.depth_foreground import (
+from planner.domain import (
     DepthForegroundResult,
     DepthForegroundSettings,
     DepthPointLayer,

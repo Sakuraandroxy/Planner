@@ -4,9 +4,9 @@ import numpy as np
 import pytest
 
 from planner.algorithms.targeting.depth_geometry import DepthGeometry
-from planner.domain.observation import CameraIntrinsics, Observation
-from planner.domain.pose import WorldPose
-from planner.domain.visual_goal import GoalObservation, GoalVisibility
+from planner.domain import CameraIntrinsics, Observation
+from planner.domain import WorldPose
+from planner.domain import GoalObservation, GoalVisibility
 from tests.support import ue_camera_matrix
 
 BOX = (0.4, 0.4, 0.6, 0.6)

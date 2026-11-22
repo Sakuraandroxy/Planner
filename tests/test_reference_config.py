@@ -9,8 +9,8 @@ from planner.config import (
     load_completion_rules,
     load_config,
 )
-from planner.domain.motion import ContinuousTrackingSettings
-from planner.domain.sliding_window import SlidingWindowSettings
+from planner.domain import ContinuousTrackingSettings
+from planner.domain import SlidingWindowSettings
 from tests.support import write_config
 
 # One helper for every synthetic config directory in the suite.

@@ -1,9 +1,9 @@
 from typing import Protocol
 
-from planner.domain.execution import ExecutionBudget
-from planner.domain.observation import Observation
-from planner.domain.pose import WorldPose
-from planner.domain.visual_goal import GoalObservation, GoalReference
+from planner.domain import ExecutionBudget
+from planner.domain import Observation
+from planner.domain import WorldPose
+from planner.domain import GoalObservation, GoalReference
 
 
 class GoalObserver(Protocol):

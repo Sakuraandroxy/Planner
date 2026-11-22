@@ -1,5 +1,5 @@
 """Numeric-action wire rules and strict decoding for a ground or aerial vehicle."""
-from planner.domain.basic_motion import BasicMotionParameters
+from planner.domain import BasicMotionParameters
 from planner.errors import ProtocolError
 
 BASIC_MOTION_RULES = """basic_motion: execute relative ground translation or yaw rotation with an

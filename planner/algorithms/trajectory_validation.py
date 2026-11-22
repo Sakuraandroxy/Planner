@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import math
 
-from planner.domain.pose import WorldPose, resolve_yaw_delta_deg, wrap_yaw_deg
-from planner.domain.trajectory import RelativeTrajectory, WorldTrajectory
+from planner.domain import WorldPose, resolve_yaw_delta_deg, wrap_yaw_deg
+from planner.domain import RelativeTrajectory, WorldTrajectory
 from planner.errors import ExecutionError, ProtocolError
 
 

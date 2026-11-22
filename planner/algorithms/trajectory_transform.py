@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import math
 
-from planner.domain.pose import RelativePoseDelta, WorldPose, wrap_yaw_deg
-from planner.domain.trajectory import RelativeTrajectory, WorldTrajectory
+from planner.domain import RelativePoseDelta, WorldPose, wrap_yaw_deg
+from planner.domain import RelativeTrajectory, WorldTrajectory
 
 
 def world_pose_delta_in_reference_frame(

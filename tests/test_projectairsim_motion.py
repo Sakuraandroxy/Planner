@@ -2,10 +2,10 @@ import math
 
 import pytest
 
-from planner.domain.execution import ExecutionBudget
-from planner.domain.motion import MotionLimits
-from planner.domain.pose import WorldPose
-from planner.domain.trajectory import MotionSegment
+from planner.domain import ExecutionBudget
+from planner.domain import MotionLimits
+from planner.domain import WorldPose
+from planner.domain import MotionSegment
 from planner.errors import BudgetExceeded, ExecutionError, MotionPaused
 from planner.runtime.motion.synchronized import SMOOTH_PROFILE
 from planner.simulators.projectairsim.motion import SteppedMotionTracker, limit_vector

@@ -3,9 +3,9 @@ import math
 import re
 from dataclasses import dataclass, field
 
-from planner.domain.pose import wrap_yaw_deg
-from planner.domain.visual_goal import VisualGoalStatus
-from planner.domain.visual_goal_limits import VisualGoalLimits
+from planner.domain import wrap_yaw_deg
+from planner.domain import VisualGoalStatus
+from planner.domain import VisualGoalLimits
 
 
 class VisualGoalFailure(Exception):

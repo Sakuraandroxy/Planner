@@ -4,11 +4,11 @@ import logging
 import math
 import time
 
-from planner.domain.execution import ExecutionBudget, PoseCheckpoint
-from planner.domain.motion import MotionLimits
-from planner.domain.pose import WorldPose
-from planner.domain.streaming import TimedVehicleState
-from planner.domain.trajectory import MotionSegment
+from planner.domain import ExecutionBudget, PoseCheckpoint
+from planner.domain import MotionLimits
+from planner.domain import WorldPose
+from planner.domain import TimedVehicleState
+from planner.domain import MotionSegment
 from planner.errors import ExecutionError
 from planner.runtime.motion.synchronized import SMOOTH_PROFILE
 from planner.simulators.airsim.connection import AirSimConnection

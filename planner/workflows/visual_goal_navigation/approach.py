@@ -3,11 +3,7 @@ import math
 from dataclasses import replace
 from functools import partial
 
-from planner.domain.visual_goal import (
-    GoalVisibility,
-    VisualGoalPlanningContext,
-    VisualGoalState,
-)
+from planner.domain import GoalVisibility, VisualGoalPlanningContext, VisualGoalState
 from planner.errors import ExecutionError
 from planner.runtime.observation_snapshot import freeze_observation
 from planner.algorithms.trajectory_transform import relative_to_world, world_to_relative

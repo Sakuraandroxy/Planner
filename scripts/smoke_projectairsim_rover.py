@@ -31,9 +31,9 @@ from planner.assembly.factories import (
     build_free_navigation_planner,
 )
 from planner.config import default_config_path, load_config
-from planner.domain.basic_motion import BasicMotionParameters
-from planner.domain.free_navigation import FreeNavigationParameters
-from planner.domain.mission import MissionStage, TaskKind
+from planner.domain import BasicMotionParameters
+from planner.domain import FreeNavigationParameters
+from planner.domain import MissionStage, TaskKind
 from planner.runtime.execution import ExecutionService
 from planner.runtime.motion import SynchronizedMotionPlanner
 from planner.algorithms.trajectory_validation import TrajectoryValidator

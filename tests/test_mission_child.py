@@ -82,7 +82,7 @@ class _StubSession:
         self.seen = []
 
     def run(self, task, stop_event=None, log=None):
-        from planner.domain.result import MissionResult
+        from planner.domain import MissionResult
         self.seen.append((task.task_id, stop_event.is_set() if stop_event else None))
         return MissionResult(success=True, stages=(), error=None)
 
@@ -137,7 +137,7 @@ def test_a_stop_that_arrives_while_a_task_is_queued_cancels_that_task(monkeypatc
 
 def test_a_stop_that_lands_mid_task_cancels_that_task(monkeypatch):
     """The reader thread is the stop's path, so drive that thread for real."""
-    from planner.domain.result import MissionResult
+    from planner.domain import MissionResult
 
     child = _child(monkeypatch)
     child._session = _StubSession()

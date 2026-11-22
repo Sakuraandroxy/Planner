@@ -10,13 +10,9 @@ from planner.adapters.target_detection.prompts import (
     TARGET_DETECTION_SYSTEM_PROMPT,
     VisualGoalTargetDetectionPrompt,
 )
-from planner.domain.observation import CameraIntrinsics, Observation
-from planner.domain.pose import WorldPose
-from planner.domain.target_detection import (
-    NormalizedBoundingBox,
-    TargetDetection,
-    TargetDetectionInput,
-)
+from planner.domain import CameraIntrinsics, Observation
+from planner.domain import WorldPose
+from planner.domain import NormalizedBoundingBox, TargetDetection, TargetDetectionInput
 from planner.errors import ProtocolError
 
 

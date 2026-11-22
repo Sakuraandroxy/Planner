@@ -132,8 +132,8 @@ def test_airsim_slots_are_backed_by_real_code():
     """PORT_SLOTS may not claim a capability nothing implements."""
     from dataclasses import fields as dc_fields
 
-    from planner.ports.streaming_vehicle import StreamingVehicle
-    from planner.ports.vehicle import Vehicle
+    from planner.ports import StreamingVehicle
+    from planner.ports import Vehicle
     from planner.simulator.ports import SimulatorPorts
     from planner.simulators.airsim.vehicle import AirSimVehicle
 
