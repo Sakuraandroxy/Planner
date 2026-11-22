@@ -2,10 +2,10 @@
 
 名单来源章节：
 
-- `algorithms`、`runtime` ← 按实际导出面校准，见 `CALIBRATED`：跨层（其他 `planner` 包、
-  `tests/`、`scripts/`）在用的名字留在入口，只有本层在用的名字不出入口。与文档终值的差额
-  记在 `STILL_OPEN`。
-- `workflows` ← `docs/refactor/04-workflows.md` §8「表 A 对外名字逐条」。
+- `algorithms`、`runtime`、`workflows` ← 按实际导出面校准，见 `CALIBRATED`：跨层（其他
+  `planner` 包、`tests/`、`scripts/`）在用的名字留在入口，只有本层在用的名字不出入口。与文档终值
+  的差额：`algorithms`、`runtime` 记在 `STILL_OPEN`，`workflows` 写在 `CALIBRATED` 的注释里。
+- `workflows` 的文档来源是 `docs/refactor/04-workflows.md` §8「表 A 对外名字逐条」。
 - `assembly` ← `docs/refactor/05-assembly.md` §8.1「表 A 对外名字逐条」，处置列为「新增对外」的
   `build_resources` 一起算。
 - `ports` ← 同一张表，收口完成：18 个名字都有跨层调用点，期望集记在 `CALIBRATED`。
@@ -39,7 +39,7 @@ DOC_TABLES = {
 #: 解析结果应有的大小，取自各文档章节标题里的数字，用来发现表结构变化。
 PARSED_COUNTS = {"algorithms": 11, "runtime": 9, "workflows": 7, "assembly": 12}
 
-#: 已收口的三层：期望集按实际导出面校准，差额为零。
+#: 已按实际导出面校准的五层。差额逐条记在 `STILL_OPEN`。
 CALIBRATED = {
     "algorithms": frozenset(
         {
@@ -102,6 +102,36 @@ CALIBRATED = {
             "TrajectoryPlanner",
             "Vehicle",
             "WeatherControl",
+        }
+    ),
+    # 文档 §8 表 A 的 7 个里，`TASK_PACKAGES` 未落地（装配层 `requirements.py` 直读三个二级
+    # 入口）；三个 `StageAdmission` 由任务包二级入口提供，入口不重复导出。
+    "workflows": frozenset(
+        {
+            "BasicMotionWorkflow",
+            "FreeNavigationWorkflow",
+            "VisualGoalNavigationWorkflow",
+            "Workflow",
+            "require_confirmed",
+        }
+    ),
+    # 文档 §8.1 的 12 个里 `StageValidator`、`WorkerFactory`、`SimulatorSupervisor`、
+    # `SwitchRefused`、`build_resources` 尚未落地；`capabilities_for` 与四个 `build_*` 有层外
+    # 运行期调用点，文档判内联进 `build_resources`，内联未做，名字留在入口。
+    "assembly": frozenset(
+        {
+            "MissionInputs",
+            "MissionResources",
+            "ServerController",
+            "VehicleArm",
+            "assemble_missions",
+            "build_detector",
+            "build_free_navigation_planner",
+            "build_geometry",
+            "build_planner",
+            "capabilities_for",
+            "require_application",
+            "task_finish_events",
         }
     ),
 }
@@ -235,8 +265,6 @@ ENTRIES = ("domain", "ports", "algorithms", "runtime", "workflows", "assembly")
 STILL_OPEN = {
     "domain": "R21 削面未落地：A 类 115 个仍在入口；entry 另导 16 个文档判搬出但仍有调用点的类型"
     "（`server.py` 9、`approach.py` 4、`streaming.py` 3）",
-    "workflows": "阶段 5：任务包声明与 `common/` 未落地，入口仍未导出 `TASK_KIND` 一族",
-    "assembly": "阶段 6：装配层 12 个名字的收口未落地",
 }
 
 NAME_RE = re.compile(r"`([A-Za-z_][A-Za-z0-9_]*)`")

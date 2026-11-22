@@ -70,7 +70,7 @@ def test_a_configured_endpoint_without_a_credential_warns_at_build_time(caplog):
     import logging
     import os
 
-    from planner.assembly import build_task_parser
+    from planner.assembly.factories import build_task_parser
     from planner.config import default_config_path, load_config
 
     os.environ.pop("VLN_API_KEY", None)
