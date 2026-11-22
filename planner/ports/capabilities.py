@@ -5,10 +5,10 @@ A simulator either implements one of these or leaves it out of its
 "UE4 can switch weather, UE5 can swap appearance models" a data-free statement about
 which interfaces each simulator actually wrote.
 
-Do not add methods to ``planner.ports.vehicle`` or ``backend_worker`` to express
+Do not add methods to ``planner.ports.vehicle`` or the worker protocol to express
 a new capability. Add a port here, and have the simulators that can honour it
 implement it. Four capabilities (home, view switching, appearance models,
-weather) used to be crammed into ``BackendWorker`` as ten flat methods, so an
+weather) used to be crammed into the worker protocol as ten flat methods, so an
 implementer could only answer them by raising or returning nothing.
 """
 
