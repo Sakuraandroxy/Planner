@@ -172,7 +172,7 @@ class ContinuousReference:
 
 @dataclass(frozen=True)
 class HeadingHoldSettings:
-    """位置保持的航向环参数，只由 ``services/position_hold.py`` 读。"""
+    """位置保持的航向环参数，只由 ``runtime/position_hold.py`` 读。"""
 
     #: 位置保持的航向比例增益。与 ``yaw_gain`` 分开是因为两者面对的对象不同：
     #: 飞行路径跟踪一个有前馈的参考，保持环只对着一个固定角度，后者对执行链
