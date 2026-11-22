@@ -35,7 +35,6 @@ ENTRY_MODULES = frozenset({"planner.errors"})
 
 #: 各源层当前仍有的跨层深层 import 条数，数字口径同 `_deep_import_offenders`。
 #: 阶段 1g 已清零；标记留给文档表对齐后再删。
-DEEP_IMPORTS = {"assembly": 0, "simulators": 0, "workflows": 0}
 
 
 def _files_under(root: Path, *parts: str):
@@ -86,21 +85,7 @@ def _deep_import_offenders(root: Path, source: str) -> list[tuple[str, str]]:
 
 
 def _params():
-    params = []
-    for layer in LAYERS:
-        if layer in DEEP_IMPORTS:
-            params.append(
-                pytest.param(
-                    layer,
-                    marks=pytest.mark.xfail(
-                        strict=False,
-                        reason=f"阶段 1g 收口：{layer}/ 现有 {DEEP_IMPORTS[layer]} 条跨层深层 import",
-                    ),
-                )
-            )
-        else:
-            params.append(pytest.param(layer))
-    return params
+    return [pytest.param(layer) for layer in LAYERS]
 
 
 @pytest.mark.parametrize("layer", _params())
