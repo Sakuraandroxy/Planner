@@ -141,7 +141,7 @@ class CommandChannel:
             c.models.switch_models()
             return
         if kind == "profile":
-            c._switch_profile()
+            c.profile_switcher.switch_profile()
             return
         if kind == "stop_world":
             c.world.stop_world_command()

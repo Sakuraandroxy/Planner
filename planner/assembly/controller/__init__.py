@@ -38,6 +38,7 @@ from ...runtime.log_buffer import LogBuffer
 from .commands import CommandChannel
 from .state import LifecycleState
 from .models import ModelSwitcher
+from .profiles import ProfileSwitcher
 from .world import SessionSwitcher
 
 logger = logging.getLogger(__name__)
@@ -71,6 +72,7 @@ class ServerController:
         self.commands = CommandChannel(self)
         self.world = SessionSwitcher(self)
         self.models = ModelSwitcher(self)
+        self.profile_switcher = ProfileSwitcher(self)
         self._maps = maps
         self._simulator = simulator
         # Production starts disconnected: no worker is created and no socket
@@ -235,12 +237,23 @@ class ServerController:
         The assembly reads this when it rebuilds, which is how selecting a
         profile reaches both the in-process session and the UE4 child.
         """
-        with self._lock:
-            return self._profile
+        return self.profile_switcher.profile
 
     @property
     def profiles(self) -> tuple[ProfileInfo, ...]:
-        return self._profiles
+        return self.profile_switcher.profiles
+
+    def request_profile(self, profile: str) -> ServerState:
+        """Select a navigation profile.
+
+        With a session running, it is rebuilt from the new file: the profile's values
+        are constructor arguments of that session's vehicles and task pipelines, so
+        reloading the scene is the only way in. Reloading also puts every vehicle back
+        at its spawn, which is what makes two profiles comparable.
+
+        With no session, only the name is recorded; the next scene start reads it.
+        """
+        return self.profile_switcher.request_profile(profile)
 
     @property
     def weather_catalog(self):
@@ -285,74 +298,4 @@ class ServerController:
                 self._view_mode = validated
                 return validated, True
             raise BackendUnavailable(self._state)
-
-    def request_profile(self, profile: str) -> ServerState:
-        """Select a navigation profile.
-
-        With a session running, it is rebuilt from the new file: the profile's values
-        are constructor arguments of that session's vehicles and task pipelines, so
-        reloading the scene is the only way in. Reloading also puts every vehicle back
-        at its spawn, which is what makes two profiles comparable.
-
-        With no session, only the name is recorded; the next scene start reads it.
-        """
-        if not self._profiles:
-            raise ValueError("this deployment does not list any navigation profiles")
-        chosen = str(profile).strip()
-        if not any(info.id == chosen for info in self._profiles):
-            raise ValueError(
-                f"unknown profile '{chosen}'; expected one of "
-                f"{[info.id for info in self._profiles]}"
-            )
-        with self._lock:
-            if self._closing.is_set():
-                raise BackendUnavailable(self._state)
-            if chosen == self._profile:
-                return self._state
-            if self._state is ServerState.DISCONNECTED:
-                self._profile = chosen
-                self.lifecycle.log(
-                    f"Navigation profile '{chosen}' is selected; it is used when a "
-                    "scene starts."
-                )
-                return self._state
-            if (
-                self._state is not ServerState.IDLE
-                or self._worker is None
-                or not self._worker_ready
-            ):
-                raise BackendUnavailable(self._state)
-            self._profile = chosen
-            self._profile_switching = True
-            self._sim_error = None
-            self._active = None
-            self._instruction = ""
-            self._last_result = None
-            self._pending_activation = None
-            self._view_pending = False
-            self._state = ServerState.CONNECTING
-            self._commands.put(("profile", self._generation, chosen))
-        self.lifecycle.log(
-            f"Switching the navigation profile to '{chosen}'; rebuilding the session."
-        )
-        return ServerState.CONNECTING
-
-    # -- supervisor --------------------------------------------------------
-
-    def _switch_profile(self) -> None:
-        """Worker CLOSED -> rebuild the session from the profile now selected."""
-        if not self.commands.close_worker(skip_landing=True):
-            self.commands.failed(
-                "The worker did not confirm shutdown for the profile switch. "
-                "Retrying the session."
-            )
-            return
-        with self._lock:
-            profile = self._profile
-            self._profile_switching = False
-        self.lifecycle.log(
-            f"Navigation profile '{profile}' is active: its planner endpoint and "
-            "navigation settings are wired into the new session."
-        )
-        self.commands.connect()
 
