@@ -58,7 +58,6 @@ def test_reference_sections_are_parsed(tmp_path):
                 "visual_goal_navigation": {
                     "enabled": False,
                     "geometry_verified": True,
-                    "collision_check_enabled": True,
                     "output_root": "tmp/visual",
                     "limits": {"confirmation_count": 3},
                     "depth_foreground_filter": {"pixel_radius": 2},
@@ -79,7 +78,6 @@ def test_reference_sections_are_parsed(tmp_path):
     assert config.trajectory_planner.max_tokens == 512
     assert config.visual_goal_navigation.enabled is False
     assert config.visual_goal_navigation.geometry_verified is True
-    assert config.visual_goal_navigation.collision_check_enabled is True
     assert config.visual_goal_navigation.limits.confirmation_count == 3
     assert config.visual_goal_navigation.depth_foreground_filter.pixel_radius == 2
 

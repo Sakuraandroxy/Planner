@@ -225,6 +225,9 @@ def build_vehicle_arm(
         limits=vehicle.tracking_limits,
         tracking=config.continuous,
         timeout_s=config.drone.move_timeout_s,
+        collision=(
+            config.collision.recovery() if config.collision.enabled else None
+        ),
     )
     attach = getattr(vehicle, "attach_loop", None)
     if attach is not None:
@@ -309,11 +312,6 @@ def build_vehicle_arm(
             moving_observation_source=moving_source,
             stream_speed_mps=config.motion.max_speed_mps,
             stream_waypoint_timeout_s=60.0,
-            collision_backoff_m=config.free_navigation.collision_backoff_m,
-            maximum_collision_recoveries=(
-                config.free_navigation.maximum_collision_recoveries
-            ),
-            collision_recovery_reset_m=config.free_navigation.collision_recovery_reset_m,
             continuous_tracking=config.continuous,
             telemetry=telemetry,
             vertical_motion=is_drone,
