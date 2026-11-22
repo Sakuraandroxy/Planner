@@ -418,3 +418,6 @@
    - 选项 A（默认）：严格相等，`reverse is (forward_speed_mps < 0)`，否则构造期抛错。
    - 选项 B：只在两者矛盾时报错、允许 `reverse=False` 配负速度。代价：`reverse` 变成可被忽略的字段，适配层还得自己判符号。
 5. 已由 R23 第 4 条消除：四个目标接近类型只被 `capabilities/approach/target_approach.py` 与 `capabilities/completion/visual_goal_request.py` 引用，两个文件随类型一起迁进 `workflows/visual_goal_navigation/policy.py`，`adapters/` 不 import 它们，不存在依赖冲突。
+
+> 落地实测：契约层入口导出 116 个名字、端口层 18 个，与本节设计表 44 的差额来自跨层调用点占多数。
+> 削面按「无引用才删」执行，删掉的是死名字；`server.py`、`approach.py`、`streaming.py` 三类已按 R22 搬到装配层、任务层、执行层。
