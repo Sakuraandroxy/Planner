@@ -7,7 +7,7 @@ from planner.domain import WorldPose
 from planner.domain import RelativeTrajectory
 from planner.algorithms import world_pose_delta_in_reference_frame
 
-from .render import load, render
+from .render import load, load_fragment, render
 
 # In this prompt, "original instruction" means the instruction of the current
 # MissionStage, not the user's complete multi-stage mission. "Previous
@@ -72,33 +72,38 @@ def build_base_user_prompt(
     if current_guidance and current_guidance.strip():
         guidance = current_guidance.strip()
     else:
-        guidance = "Not supplied."
+        guidance = load_fragment("guidance_not_supplied")
     if current_guidance and guidance_start is not None:
-        guidance += "\nGuidance reference vehicle pose [world x,y,z,yaw_deg]: " + json.dumps(
-            [guidance_start.x, guidance_start.y, guidance_start.z, guidance_start.yaw_deg],
-            separators=(",", ":"))
-        guidance += (
-            "\nThis remaining-action guidance was issued at that reference pose, not renewed at the "
-            "current observation. Account for motion executed since that pose and for pending "
-            "before generating NEW continuation actions."
+        guidance += "\n" + render(
+            load_fragment("guidance_reference"),
+            vehicle="vehicle",
+            pose_json=json.dumps(
+                [guidance_start.x, guidance_start.y, guidance_start.z, guidance_start.yaw_deg],
+                separators=(",", ":")),
         )
-    history = (
-        ("No previous trajectory has been executed." if round_index == 1 else
-         "Execution history is not supplied; do not infer that no motion has occurred.")
-        if previous_trajectory is None
-        else "Recent confirmed executed actions, not a complete previous planning batch "
-        "(do not execute it again): " + json.dumps(
-            [[point.dx, point.dy, point.dz, point.dyaw_deg] for point in previous_trajectory.points],
-            separators=(",", ":"),
+    if previous_trajectory is None:
+        history = load_fragment(
+            "history_initial" if round_index == 1 else "history_unknown")
+    else:
+        history = render(
+            load_fragment("history_recent"),
+            points_json=json.dumps(
+                [[point.dx, point.dy, point.dz, point.dyaw_deg]
+                 for point in previous_trajectory.points],
+                separators=(",", ":"),
+            ),
         )
-    )
     if previous_trajectory is not None and previous_trajectory_start is not None:
-        history += "\n  Execution-history reference start pose: " + json.dumps(
-            [previous_trajectory_start.x, previous_trajectory_start.y,
-             previous_trajectory_start.z, previous_trajectory_start.yaw_deg], separators=(",", ":"))
+        history += "\n" + render(
+            load_fragment("history_start_pose"),
+            pose_json=json.dumps(
+                [previous_trajectory_start.x, previous_trajectory_start.y,
+                 previous_trajectory_start.z, previous_trajectory_start.yaw_deg],
+                separators=(",", ":")),
+        )
     pose = observation.pose
     return render(
-        load("base_user_prompt"),
+        load_fragment("base_user_prompt"),
         depth_protocol=depth_display_description(
             observation.depth_mapping, observation.depth_min_m, observation.depth_max_m),
         instruction=instruction.strip(),
@@ -116,7 +121,7 @@ def build_base_user_prompt(
         pose_yaw=f"{pose.yaw_deg:.3f}",
         camera_json=json.dumps(camera, separators=(",", ":")),
         pending_json=json.dumps(pending, separators=(",", ":")),
-    ).removesuffix("\n")
+    )
 
 
 def build_aerial_base_user_prompt(
@@ -162,33 +167,38 @@ def build_aerial_base_user_prompt(
     if current_guidance and current_guidance.strip():
         guidance = current_guidance.strip()
     else:
-        guidance = "Not supplied."
+        guidance = load_fragment("guidance_not_supplied")
     if current_guidance and guidance_start is not None:
-        guidance += "\nGuidance reference UAV pose [world x,y,z,yaw_deg]: " + json.dumps(
-            [guidance_start.x, guidance_start.y, guidance_start.z, guidance_start.yaw_deg],
-            separators=(",", ":"))
-        guidance += (
-            "\nThis remaining-action guidance was issued at that reference pose, not renewed at the "
-            "current observation. Account for motion executed since that pose and for pending "
-            "before generating NEW continuation actions."
+        guidance += "\n" + render(
+            load_fragment("guidance_reference"),
+            vehicle="UAV",
+            pose_json=json.dumps(
+                [guidance_start.x, guidance_start.y, guidance_start.z, guidance_start.yaw_deg],
+                separators=(",", ":")),
         )
-    history = (
-        ("No previous trajectory has been executed." if round_index == 1 else
-         "Execution history is not supplied; do not infer that no motion has occurred.")
-        if previous_trajectory is None
-        else "Recent confirmed executed actions, not a complete previous planning batch "
-        "(do not execute it again): " + json.dumps(
-            [[point.dx, point.dy, point.dz, point.dyaw_deg] for point in previous_trajectory.points],
-            separators=(",", ":"),
+    if previous_trajectory is None:
+        history = load_fragment(
+            "history_initial" if round_index == 1 else "history_unknown")
+    else:
+        history = render(
+            load_fragment("history_recent"),
+            points_json=json.dumps(
+                [[point.dx, point.dy, point.dz, point.dyaw_deg]
+                 for point in previous_trajectory.points],
+                separators=(",", ":"),
+            ),
         )
-    )
     if previous_trajectory is not None and previous_trajectory_start is not None:
-        history += "\n  Execution-history reference start pose: " + json.dumps(
-            [previous_trajectory_start.x, previous_trajectory_start.y,
-             previous_trajectory_start.z, previous_trajectory_start.yaw_deg], separators=(",", ":"))
+        history += "\n" + render(
+            load_fragment("history_start_pose"),
+            pose_json=json.dumps(
+                [previous_trajectory_start.x, previous_trajectory_start.y,
+                 previous_trajectory_start.z, previous_trajectory_start.yaw_deg],
+                separators=(",", ":")),
+        )
     pose = observation.pose
     return render(
-        load("aerial_base_user_prompt"),
+        load_fragment("aerial_base_user_prompt"),
         depth_protocol=depth_display_description(
             observation.depth_mapping, observation.depth_min_m, observation.depth_max_m),
         instruction=instruction.strip(),
@@ -206,7 +216,7 @@ def build_aerial_base_user_prompt(
         pose_yaw=f"{pose.yaw_deg:.3f}",
         camera_json=json.dumps(camera, separators=(",", ":")),
         pending_json=json.dumps(pending, separators=(",", ":")),
-    ).removesuffix("\n")
+    )
 
 
 ContextT = TypeVar("ContextT", contravariant=True)

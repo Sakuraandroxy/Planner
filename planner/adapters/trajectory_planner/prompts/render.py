@@ -1,17 +1,16 @@
-"""Render prompt templates from ``templates/`` with ``${name}`` placeholders.
+"""Load prompt templates from ``templates/`` and fill ``${name}`` placeholders.
 
-The prompt text only needs plain value interpolation, so a regular-expression
-replacement is enough and no template engine is required. A placeholder
-without a supplied value raises ``KeyError`` instead of reaching the model
-verbatim.
+Fragments that are embedded in a larger prompt are read with ``load_fragment``:
+it drops the single newline that ends the template file, so the composer in
+``base.py``/``free_navigation.py``/``visual_goal_navigation.py`` keeps control
+of every separator.
 """
 
-import re
 from pathlib import Path
 
-TEMPLATES_DIR = Path(__file__).with_name("templates")
+from planner.adapters.prompt_render import render
 
-_PLACEHOLDER = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+TEMPLATES_DIR = Path(__file__).with_name("templates")
 
 
 def load(name: str) -> str:
@@ -19,13 +18,6 @@ def load(name: str) -> str:
     return (TEMPLATES_DIR / f"{name}.md").read_text(encoding="utf-8")
 
 
-def render(template: str, **values: object) -> str:
-    """Replace every ``${name}`` in ``template`` with ``str(values[name])``."""
-
-    def substitute(match: re.Match[str]) -> str:
-        key = match.group(1)
-        if key not in values:
-            raise KeyError(f"prompt template has no value for ${{{key}}}")
-        return str(values[key])
-
-    return _PLACEHOLDER.sub(substitute, template)
+def load_fragment(name: str) -> str:
+    """Read a template that is composed into a larger prompt, minus its final newline."""
+    return load(name).removesuffix("\n")

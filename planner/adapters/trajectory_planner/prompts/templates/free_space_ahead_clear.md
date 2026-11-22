@@ -1,0 +1,1 @@
+- Nearest obstacle directly ahead (${label} deg): clear beyond ${max_range_m} m.
