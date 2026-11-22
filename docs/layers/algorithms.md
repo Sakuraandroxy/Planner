@@ -101,12 +101,13 @@ grep -rn "^from \.\|^from planner\." planner/algorithms/ | grep -v "planner.doma
 - `tests/test_free_space.py`（188 行）：`measure_free_space` 的剖面、`clear_window_deg`、`nearest_ahead_m`、参数校验。
 - `tests/test_geometric_planner.py`（160 行）：五段切分、到达缓冲、类型化上下文缺失。
 - `tests/test_basic_motion.py:132`：`BasicMotionConverter` 轴向到世界位姿的换算。
+- `tests/test_trajectory_transform.py`（新增，15 个用例、22 个测试项）：`world_pose_delta_in_reference_frame` 的航向系与回绕、`relative_to_world` 的累加与带符号偏航元数据、`world_to_relative` 的往返与元数据优先、`TrajectoryValidator` 两个校验入口的点数边界、恰好等容差、1e-6 容差带与构造期参数拒收。
 - `tests/test_public_surface.py`：断言 12 个名字仍在入口。
 
 未覆盖的空白
-- `planner/algorithms/trajectory_transform.py` 三个函数无直接单测，只经执行层间接跑到（tests/ 内无 import）。
-- `planner/algorithms/trajectory_validation.py` 的 `require_execution_anchor` 与 `TrajectoryValidator` 只被间接使用，无针对边界值（恰好等容差、1e-6 容差带）的用例。
+- `planner/algorithms/trajectory_validation.py` 的 `require_execution_anchor` 仍无直接单测；`TrajectoryValidator` 的执行层集成边界（锚点与队列抵叠）只在 `tests/test_batch3_services.py` 间接跑到。
 - `FreeSpaceProfileSettings` 的十个阈值只在 tests/test_free_space.py:189 处做参数校验测试，没有针对真实深度图的标定回归。
+- `DepthForegroundFilter` 的断点判定只在构造样例上验证，没有针对不同内参组合（`intrinsics` ≠ `depth_intrinsics`）的固定样例。
 
 ## 8 与其他层的联动
 
@@ -125,10 +126,42 @@ Qb2 层：algorithms 结论：`relative_to_world` / `world_to_relative` 在契�
 
 Qb3 层：algorithms 结论：`ACKERMANN_PASSED_LATERAL_TOLERANCE_M = 1.0` 没有标定出处，注释只说明是"量级依据"，而测试把这个值钉住了。依据：planner/algorithms/motion/corridor.py:7-9、tests/test_algorithms_motion.py:20 影响：否
 
-Qb4 层：algorithms 结论：轨迹变换与校验四个对外名字没有任何直接单元测试，覆盖只来自执行层的间接路径。依据：planner/algorithms/trajectory_transform.py:9,26,43、planner/algorithms/trajectory_validation.py:10,20 影响：否
+Qb4 层：algorithms 结论：轨迹变换与校验四个对外名字原本无直接单测，本轮新增 tests/test_trajectory_transform.py 后覆盖到 1e-6 容差带与构造期拒收；`require_execution_anchor` 仍只在层外间接跑到。依据：planner/algorithms/trajectory_transform.py:9,26,43、planner/algorithms/trajectory_validation.py:10,14,50,54 影响：否
 
 Qb5 层：algorithms 结论：`reached` 的 `passed_lateral_tolerance=None` 分支在真实路径不可达，队列构造时已把 `None` 换成位置容差。依据：planner/algorithms/motion/reached.py:27、planner/runtime/window/queue.py:30-33,142-144 影响：否
 
 Qb6 层：algorithms 结论：`DepthGeometry.estimate` 把标定错误和"没有有效像素"压成同一种返回值，调用方无法按原因分流。依据：planner/algorithms/targeting/depth_geometry.py:26-29,82-88 影响：否
 
 Qb7 层：algorithms 结论：`FreeSpaceProfileSettings` 十个阈值的合法性有校验，出处与标定过程没有记录。依据：planner/algorithms/free_space.py:25-34,36-74 影响：否
+
+## 10 已知缺口
+
+M5 同名变换两份
+- 生产名 `planner.algorithms.trajectory_transform.relative_to_world(RelativeTrajectory, WorldPose)` 把整条相对轨迹落到世界，逐点保留带符号偏航（planner/algorithms/trajectory_transform.py:26）。调用方：planner/runtime/window/inflight.py:98、planner/workflows/visual_goal_navigation/approach.py:25。
+- 契约层另有一份同名不同签名的 `planner.domain.pose.relative_to_world(yaw_deg, dx, dy, dz) -> tuple`（planner/domain/pose.py:54），只把单个车体系偏移转到世界。调用方：planner/runtime/segment_motion.py:58。
+- 风险：按名字检索会混两条路径，改一处漏另一处；两份都叫 `relative_to_world`，没有 `_trajectory` 式的区分后缀。
+
+M7 经验值未标定
+
+| 常量 | 取值 | 位置 | 影响 |
+| --- | --- | --- | --- |
+| `ACKERMANN_PASSED_LATERAL_TOLERANCE_M` | 1.0 m | planner/algorithms/motion/corridor.py:9 | 阿克曼越点走廊下限，配置只能抬高 |
+| `sector_width_deg` | 10.0 度 | planner/algorithms/free_space.py:26 | 扇面分辨率与剖面点数 |
+| `max_range_m` | 40.0 m | free_space.py:27 | 剖面报告距离上限 |
+| `distance_bin_m` | 1.0 m | free_space.py:28 | 地面线分箱粒度 |
+| `min_points_per_bin` | 8 | free_space.py:29 | 分箱有效所需点数 |
+| `ground_height_percentile` | 90.0 | free_space.py:30 | 地面高度取分位 |
+| `min_height_above_ground_m` | 0.15 m | free_space.py:31 | 障碍高度带下沿 |
+| `max_height_above_ground_m` | 2.5 m | free_space.py:32 | 障碍高度带上沿 |
+| `obstacle_distance_percentile` | 5.0 | free_space.py:33 | 障碍距离取分位 |
+| `min_obstacle_pixels` | 3 | free_space.py:34 | 判定为障碍所需像素数 |
+| `max_advance_m` / `max_vertical_m` / `max_yaw_step_deg` | 6.0 m / 2.0 m / 20.0 度 | planner/algorithms/planning/geometric_planner.py:27-29 | 几何规划器单批推进上限 |
+| `arrival_buffer_ratio` | 0.8 | geometric_planner.py:31 | 停在到达半径的 80% 处 |
+| `RefillScheduler.latency_s` | 5.5 s | planner/algorithms/sliding_window/scheduler.py:8 | 补点提前量，注释自述实验初值 |
+
+上表全部为经验值，未标定。改这些数只改本层计算结果，仓库里没有标定回归可对照。
+
+M13 剩余测试空白
+- `require_execution_anchor`（planner/algorithms/trajectory_validation.py:10）无直接单测。
+- 阈值改动没有回归基线，改 `free_space.py` 或 `corridor.py` 的常量不会让任何测试失败，除非同时改 tests 里的期望值。
+- `DepthForegroundFilter` 在 `intrinsics` 与 `depth_intrinsics` 不相同的场景没有固定样例，像素映射只靠一次手工修复的注释保证。
