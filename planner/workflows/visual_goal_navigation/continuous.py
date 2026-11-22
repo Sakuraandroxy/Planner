@@ -23,8 +23,8 @@ from planner.errors import ExecutionError, ObservationError, ProtocolError
 from planner.runtime.continuous_execution import ContinuousExecution
 from planner.runtime.moving_observations import MovingObservations
 from planner.runtime.observation_snapshot import freeze_observation, freeze_reference
-from planner.runtime.target_coordinates import point_in_horizontal_body
-from planner.runtime.trajectory_transform import relative_to_world
+from planner.algorithms.target_coordinates import point_in_horizontal_body
+from planner.algorithms.trajectory_transform import relative_to_world
 
 from .session import model_call
 from .termination import VisualGoalFailure

@@ -11,8 +11,8 @@ from planner.domain.sliding_window import (
 )
 from planner.errors import ExecutionError, ProtocolError
 from planner.ports.trajectory_planner import TrajectoryPlanner
-from planner.runtime.trajectory_transform import relative_to_world
-from planner.runtime.trajectory_validation import TrajectoryValidator
+from planner.algorithms.trajectory_transform import relative_to_world
+from planner.algorithms.trajectory_validation import TrajectoryValidator
 
 from .scheduler import RefillScheduler
 from .worker import SlowPlannerWorker

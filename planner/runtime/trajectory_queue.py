@@ -7,8 +7,8 @@ from planner.domain.streaming import QueuePauseSnapshot
 from planner.domain.trajectory import RelativeTrajectory, WorldTrajectory
 from planner.errors import ExecutionError, ProtocolError
 from planner.runtime.motion.continuous import reached
-from planner.runtime.trajectory_transform import world_to_relative
-from planner.runtime.trajectory_validation import require_execution_anchor
+from planner.algorithms.trajectory_transform import world_to_relative
+from planner.algorithms.trajectory_validation import require_execution_anchor
 
 
 class WorldWaypointQueue:

@@ -7,7 +7,7 @@ from planner.domain.target_state import TargetPositionState
 from planner.domain.visual_goal import GoalVisibility
 from planner.domain.visual_goal_completion import VisualGoalCompletionInput
 from planner.errors import ProtocolError
-from planner.runtime.target_coordinates import horizontal_distance
+from planner.algorithms.target_coordinates import horizontal_distance
 
 
 def require_visual_completion_evidence(request: VisualGoalCompletionInput) -> None:

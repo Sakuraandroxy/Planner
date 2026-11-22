@@ -56,7 +56,7 @@ from planner.domain.visual_goal import (
 )
 from planner.runtime.execution import ExecutionService
 from planner.runtime.motion import SynchronizedMotionPlanner
-from planner.runtime.trajectory_validation import (
+from planner.algorithms.trajectory_validation import (
     TrajectoryValidator,
 )
 from planner.simulators.projectairsim.connection import (
