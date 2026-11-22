@@ -20,6 +20,25 @@ class CameraIntrinsics:
     cy: float
     horizontal_fov_deg: float
 
+    def __post_init__(self) -> None:
+        """Reject intrinsics that cannot describe a pinhole camera."""
+        if type(self.width) is not int or type(self.height) is not int:
+            raise ValueError("intrinsics image dimensions must be integers")
+        if self.width <= 0 or self.height <= 0:
+            raise ValueError("intrinsics image dimensions must be positive")
+        for name in ("fx", "fy", "cx", "cy", "horizontal_fov_deg"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"intrinsics {name} must be a number")
+            if not math.isfinite(value):
+                raise ValueError(f"intrinsics {name} must be finite")
+        if self.fx <= 0.0 or self.fy <= 0.0:
+            raise ValueError("intrinsics focal lengths must be positive")
+        if not 0.0 <= self.cx < self.width or not 0.0 <= self.cy < self.height:
+            raise ValueError("intrinsics principal point must lie inside the image")
+        if not 0.0 <= self.horizontal_fov_deg < 180.0:
+            raise ValueError("intrinsics horizontal FOV must be in [0, 180) degrees")
+
     @classmethod
     def from_horizontal_fov(
         cls, width: int, height: int, hfov_deg: float
