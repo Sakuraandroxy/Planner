@@ -21,7 +21,7 @@
 
 | 文件 | 类与函数签名 | 估计行数 | 从哪来 |
 | --- | --- | --- | --- |
-| `runtime/__init__.py` | 本层唯一公开入口，只导出 `ControlLoop`、`GuidedVehicle`、`QueueFollower`、`ExecutionService`、`PlanningWindow`、`CollisionRecovery`、`PositionHold`、`FrameHub`、`TrajectoryHub`、`LogBuffer`、`ModelCallService`、`MovingObservations`、`StreamTimeline`、`close_resources`（裁决 R19a）；跨层 import 只能指向这个入口与 `runtime/window/__init__.py` | 18 | 新建 |
+| `runtime/__init__.py` | 本层唯一公开入口，只导出 10 个名字：`ControlLoop`、`GuidedVehicle`、`QueueFollower`、`ExecutionService`、`PlanningWindow`、`PositionHold`、`FrameHub`、`TrajectoryHub`、`LogBuffer`、`BackgroundCall`（裁决 R19a、R21）；跨层 import 只能指向这个入口 | 18 | 新建 |
 | `runtime/execution.py` | `class ExecutionService(vehicle: Vehicle, clock=time.monotonic)`；`acquire_flight(owner)`（裁决 R5：去掉 `collision_check` 参数）；`release_flight(owner, pending_cleanup=None)`；`stop_if_owner(owner)`；`set_deadline(deadline)`；`clear_deadline()`；`request_stop()`；`check_deadline()`；`checkpoint()`；`wait(seconds)`；`stop() -> StopResult`；`current_pose()` | 210 | `planner/services/execution.py` 262 行，`execute`/`execute_with_receipt` 移出到 `motion/loop.py` |
 | `runtime/collision_recovery.py` | `class CollisionRecovery(settings: CollisionRecoverySettings, capability: MotionCapability, limits: MotionLimits)`；`poll(state: CollisionState) -> CollisionContact \| None`；`begin(contact, pose) -> BackoffPlan`；`finish()`；`note_progress(metres)`；`reset()`；`attempts: int` | 130 | 新建，吸收 `planner/workflows/free_navigation/continuous.py:312` 与 `planner/workflows/visual_goal_navigation/continuous.py:259` 两份镜像 |
 | `runtime/motion/__init__.py` | 子包内部入口，只给同层使用（裁决 R19a：跨层不走这一层） | 18 | 新建 |
@@ -41,12 +41,11 @@
 | `runtime/frame_hub.py` | `class FrameHub(max_fps=10.0, clock)`；`publish(bgra, timestamp_s)`、`wait_next(after, timeout_s)`、`close()` | 70 | `planner/services/frame_hub.py` 同职责 |
 | `runtime/trajectory_hub.py` | `class TrajectoryHub(clock)`；`read()`、`publish(snapshot)`、`adopt(snapshot)`、`start`、`clear`、`publish_no_queue`、`publish_queue` | 120 | `planner/services/trajectory_hub.py` 同职责 |
 | `runtime/log_buffer.py` | `class LogBuffer(capacity=500)`；`append(message, level)`、`read(cursor)` | 45 | `planner/services/log_buffer.py` 同职责 |
-| `runtime/model_calls.py` | `class ModelCallService(clock)`；`require_available()`、`has_pending_call`、`call(operation, timeout_s, checkpoint)`、`close()` | 95 | `planner/services/model_calls.py` 同职责 |
-| `runtime/background_operation.py` | `class BackgroundOperation(clock)`；`busy`、`require_available()`、`start(operation, timeout_s)`、`poll()`、`discard()`、`close(close_idle=None)` | 96 | `planner/services/background_operation.py` 同职责 |
-| `runtime/moving_observations.py` | `class MovingObservations(source, clock, timeout_s, maximum_failures=3)`；`begin()`、`poll()`、`request(budget)`、`discard()`、`close()` | 50 | `planner/services/moving_observations.py` 同职责 |
-| `runtime/observation_snapshot.py` | `freeze_observation(observation)`；`freeze_reference(reference)` | 18 | `planner/services/observation_snapshot.py` 同职责 |
-| `runtime/stream_timeline.py` | `class StreamTimeline(maximum_entries=4096)`；`clear()`、`record(timestamp_ns, stage_token, queue, history)`、`at(timestamp_ns, stage_token, maximum_gap_ns)` | 35 | `planner/services/stream_timeline.py` 同职责 |
-| `runtime/resource_cleanup.py` | `close_resources(callbacks)` | 18 | `planner/services/resource_cleanup.py` 同职责 |
+| `runtime/background_call.py` | `class BackgroundCall(clock)`；阻塞式 `call(operation, timeout_s, checkpoint)` 与非阻塞 `start(operation, timeout_s)`、`poll()`、`discard()`、`close(close_idle=None)` | 130 | `planner/services/model_calls.py` 91 行与 `planner/services/background_operation.py` 95 行合并（裁决 R21） |
+| `runtime/moving_observations.py` | 内部化，不进包入口（裁决 R21）；取帧线程、传输、帧丢弃与重试退避全留本层，装配层按任务包声明的 `MovingCapture` Protocol 注入实例（裁决 R22）：`class MovingObservations(source, clock, timeout_s, maximum_failures=3)`；`begin()`、`poll()`、`request(budget)`、`discard()`、`close()` | 50 | `planner/services/moving_observations.py` 同职责 |
+| `runtime/observation_snapshot.py` | 移到 `algorithms/observations.py`（裁决 R21）：`freeze_observation(observation)`；`freeze_reference(reference)` | 18 | `planner/services/observation_snapshot.py` 同职责 |
+| `runtime/stream_timeline.py` | 内部化，不进包入口（裁决 R21）：`class StreamTimeline(maximum_entries=4096)`；`clear()`、`record(timestamp_ns, stage_token, queue, history)`、`at(timestamp_ns, stage_token, maximum_gap_ns)` | 35 | `planner/services/stream_timeline.py` 同职责 |
+| `runtime/resource_cleanup.py` | 内部化，不进包入口（裁决 R21）：`close_resources(callbacks)` | 18 | `planner/services/resource_cleanup.py` 同职责 |
 
 合计约 2960 行，与现 `planner/services/` 2710 行加 `capabilities/sliding_window/` 226 行基本持平。
 
@@ -360,7 +359,7 @@ StreamSink = CommandSink
 | `domain/` | `MotionModel`、`MotionCapability`、`HolonomicCommand`、`CarCommand`、`MotionCommand`、`CollisionContact`、`CollisionState`、`CollisionRecoverySettings`、`ExecutionBudget`、`ExecutionReceipt`、`ExecutionRecord`、`StopResult`、`MotionSegment`、`MotionTrajectory`、`WorldPose`、`resolve_yaw_delta_deg`、`wrap_yaw_deg`、`TimedVehicleState`、`QueuedWaypoint`、`PlanningSnapshot`、`PlanningWindowInput`、`SlidingWindowSettings`、`ContinuousTrackingSettings`、`MotionLimits`（只留一份） | `00-boundaries.md` 第四节与契约层方案 |
 | `ports/` | `Vehicle.current_pose/motion_capability/execute_segment/cancel/hover/collision_state -> CollisionState`（裁决 R1：槽最终由 runtime 的 `GuidedVehicle(streaming, loop)` 兑现，引擎侧只提供 `current_pose`/`motion_capability`/`collision_state`/`cancel`/`hover` 与 `stream_command`）；`StreamingVehicle.stream_state/stream_command`；`PositionHoldVehicle.stream_state/cancel/hold_velocity`（裁决 R7：`hold_velocity` 内部转调 `stream_command`）；`StreamGoalSource.next`（裁决 R16，文件 `ports/goal_source.py`）；`TrajectoryPlanner.plan`；`ObservationSource.capture`；`MovingObservationSource.capture_moving` | 端口文件 14 个；`collision_check.py` 删除（裁决 R5）后 13 个，新增 `goal_source.py`（裁决 R16）后回到 14 个 |
 | `algorithms/` | `corridor_for(model, limits)`（裁决 R6、R17：`ACKERMANN_PASSED_LATERAL_TOLERANCE_M = 1.0`，`HOLONOMIC` 取 `MotionLimits.position_tolerance_m`；配置只能抬高不能压低）、`heading_rate_deg_s`、`braking_speed`、`planned_speed`、`corner_speed`、`reached`、`duration_for`、`sample_segment`、`translation_handoff`、`ContinuousPathReference`、`world_to_relative`、`relative_to_world`、`require_execution_anchor`、`RefillScheduler` | 现 `services/motion/` 与 `capabilities/sliding_window/scheduler.py` 的纯函数部分，加 `algorithms/motion/corridor.py` |
-| `workflows/` | 实现或组装 `StreamGoalSource`（默认直接用 `QueueFollower`，只补暂停策略钩子，裁决 R4）；每阶段一个 `PlanningWindowInput`；调 `window` 六个方法；把 `delay`、`maximum_rounds` 交给 `window.begin` | 见任务层方案 |
+| `workflows/` | 实现或组装 `StreamGoalSource`（默认直接用 `QueueFollower`，只补暂停策略钩子，裁决 R4）；声明 `MovingCapture`（`request`/`poll`/`discard`/`busy`/`close`）由装配层注入运行时实现（裁决 R22）；每阶段一个 `PlanningWindowInput`；调 `window` 六个方法；把 `delay`、`maximum_rounds` 交给 `window.begin` | 见任务层方案 |
 | `assembly/` | 按载具造一套 `ControlLoop`：`capability = vehicle.motion_capability()`、`limits` 从 `config.motion` 一次构造、`tracking` 从 `config.continuous`、`recovery` 从 `config.motion.collision`（开关只有 `motion.collision.enabled`，默认 true；删 `visual_goal_navigation.collision_check_enabled`，裁决 R8）、注入 `clock`/`sleep`；用 `GuidedVehicle(streaming, loop)` 填 `Vehicle` 槽（裁决 R1） | 见装配层方案 |
 | `simulators/` | 只实现执行器：`stream_command(command, duration_s)` 按 `CarCommand` / `HolonomicCommand` 落地并推进一个周期；收到与 `MotionCapability` 不符的命令抛错，不许静默丢分量 | 现 `drive.py` 的投影必须改成校验 |
 | `simulator/ports.py` | 可跑任务只由 `REQUIRED_PORTS ⊆ 已填槽位` 推导；删 `SimulatorPorts.enabled_tasks` 与 `simulators/projectairsim/runtime.py` 的 `ENABLED_TASKS`（裁决 R18，原 R11 作废） | 能力矩阵无第二个人工开关；UE4 实现了 streaming 槽位，巡航因此自动开放 |
@@ -409,10 +408,10 @@ StreamSink = CommandSink
 | `QueueFollower` | 符合 `ports.StreamGoalSource` | 任务层构造后传给 `run_stream` | 稳定 |
 | `PositionHold` | 类（`start`/`wait`/`release`/`tick`） | 任务层与装配层 | 稳定 |
 | `FrameHub` / `TrajectoryHub` / `LogBuffer` | 汇类 | HTTP 入口层、UE4 子进程的 `telemetry_relay` | 稳定 |
-| `ModelCallService` / `MovingObservations` / `BackgroundOperation` / `StreamTimeline` / `close_resources` | 类与函数 | 任务层 | 稳定 |
+| `BackgroundCall` | 类（`ModelCallService` 与 `BackgroundOperation` 合并） | 任务层、装配层 | 稳定 |
 | `StreamRecorder` / `MotionSynthesizer` / `CommandLimiter` / `SlowPlannerWorker` / `BackgroundContinuationPlanner` | 内部类 | 仅本层 | 内部 |
 
-不暴露什么：`WorldWaypointQueue`（任务层只能经 `PlanningWindow` 的队列视图与六个方法访问，队列的 `revision`、`waypoint_id` 不进跨层签名）、`BackgroundContinuationPlanner`、`SlowPlannerWorker`、`RefillScheduler` 的类名与实例、`StreamRecorder`、`MotionSynthesizer`、`CommandLimiter`、`SEGMENT_PERIOD_S` 的导出、以及 `_guard` / `_tick` / `_recover_stream` 等私有方法。
+不暴露什么：`WorldWaypointQueue`（任务层只能经 `PlanningWindow` 的队列视图与六个方法访问，队列的 `revision`、`waypoint_id` 不进跨层签名）、`CollisionRecovery`、`MovingObservations`、`StreamTimeline`、`close_resources`（裁决 R21 内部化）、`BackgroundContinuationPlanner`、`SlowPlannerWorker`、`RefillScheduler` 的类名与实例、`StreamRecorder`、`MotionSynthesizer`、`CommandLimiter`、`SEGMENT_PERIOD_S` 的导出、以及 `_guard` / `_tick` / `_recover_stream` 等私有方法。
 
 ## 4 错误与失败路径
 
@@ -568,6 +567,82 @@ owner       release_flight；position_hold 继续持有直到下一任务
 | 8 | 收敛 `PlanningWindow` 到六个公开方法：`submit_stream`→`submit`，`stream_due`/`prefetch`/`next_world`/`executed` 只由 `ControlLoop` 调用；删 `continuous_execution.py` | 两类任务端到端；`/api/trajectory` 输出逐字段一致 |
 
 第 5 步是关键分界：在此之前行为等价，在此之后引擎不再决定节奏。
+
+## 削面复核（裁决 R21）
+
+口径：`现引用数` 按 `grep -rn <name> planner/ --include=*.py` 的文件计数（不含 tests）。`层外运行期调用点` 只列非测试、非同层、非 `__init__.py` 转发的实际执行路径。
+
+### A 对外名字逐条
+
+| 名字 | 现引用数 | 层外运行期调用点 | 处置 | 依据 |
+| --- | --- | --- | --- | --- |
+| `ControlLoop` | 0（新名） | `planner/workflows/basic_motion/workflow.py:98`（现 `execution.execute`）、`planner/workflows/free_navigation/continuous.py:199`（现 `stream.tick`） | 保留 | 任务层进入执行层的唯一运动入口 |
+| `GuidedVehicle` | 0（新名） | `planner/application/mission_assembly.py:220`（现直接构 `ExecutionService(vehicle)`） | 保留 | R1 规定由它兑现 `Vehicle` 槽 |
+| `QueueFollower` | 6（现名 `ContinuousExecution`） | `planner/workflows/free_navigation/continuous.py:100`、`planner/workflows/visual_goal_navigation/continuous.py:53` | 保留（改名） | R4 由任务层构后传 `run_stream` |
+| `ExecutionService` | 17 | `planner/workflows/basic_motion/workflow.py:67`、`planner/application/mission_assembly.py:220`、`planner/simulators/airsim/session.py` | 保留 | 控制权唯一硬约束 |
+| `PlanningWindow` | 7 | `planner/workflows/visual_goal_navigation/workflow.py:104`、`planner/workflows/free_navigation/workflow.py:142` | 保留 | 任务层只调它六个方法 |
+| `PositionHold` | 7 | `planner/simulators/projectairsim/drone.py:31`（import）、`:197`（`climb_by`）、`planner/simulators/airsim/observation_source.py:128`（`observable`） | 保留 | 引擎侧取帧前停稳判定 |
+| `FrameHub` | 6 | `planner/adapters/http/video.py:50`、`planner/server_bootstrap.py:54` | 保留 | MJPEG 读侧 |
+| `TrajectoryHub` | 7 | `planner/server_bootstrap.py:55`、`planner/simulator/telemetry_relay.py:52` | 保留 | 子进程快照回传 |
+| `LogBuffer` | 3 | `planner/application/server_controller.py:64` | 保留 | `/api/logs` 游标 |
+| `ModelCallService` | 12 | `planner/application/mission_assembly.py:325`、`planner/capabilities/completion/visual_goal_verification.py:15`、`planner/workflows/visual_goal_navigation/workflow.py:99` | 合并 | 与 `BackgroundOperation` 同构（Future+守护线程+deadline+隔离），并成 `BackgroundCall` |
+| `BackgroundOperation` | 7 | `planner/capabilities/targeting/visual_goal_refresh.py:39`、`planner/simulators/airsim/observation_source.py` | 合并 | 同上，`poll`/`start` 形态保留 |
+| `MovingObservations` | 5 | `planner/workflows/free_navigation/continuous.py:29`、`planner/workflows/visual_goal_navigation/continuous.py:24` | 内部化 | 类名不导出；取帧线程、传输、帧丢弃、重试退避留在本层，任务层只声明 `MovingCapture` Protocol，装配层注入（裁决 R22） |
+| `StreamTimeline` | 3 | 无 `import`；`planner/workflows/free_navigation/continuous.py:385` 经 `self.stream.timeline` 取锚点 | 内部化 | 锚点改由 `QueueFollower.anchor_at(timestamp_ns)` 提供，与 R4 的“队列消耗在 follower”一致 |
+| `close_resources` | 5 | `planner/workflows/free_navigation/workflow.py:200`、`planner/workflows/visual_goal_navigation/workflow.py:379` | 内部化 | 替换物 `contextlib.ExitStack`；风险：两个 workflow 各写一遍收尾 |
+| `freeze_observation` | 5（3 个文件） | `planner/workflows/visual_goal_navigation/workflow.py:299`、`planner/capabilities/targeting/visual_goal_refresh.py:98` | 移出本层（`algorithms/`） | 无状态拷贝，留在执行层逼任务层为纯函数 import 执行层 |
+| `freeze_reference` | 2 | `planner/workflows/visual_goal_navigation/continuous.py:98`、`planner/capabilities/targeting/visual_goal_refresh.py:99` | 移出本层（`algorithms/`） | 同上 |
+| `MotionPlanner` | 1 | `planner/workflows/visual_goal_navigation/workflow.py:61` | 移出本层（`ports/`） | 是 `Protocol`，不是实现 |
+| `CollisionRecovery` | 0（新名） | 无层外调用；仅 `ControlLoop._guard` 调 | 内部化 | 装配层只传 `CollisionRecoverySettings` |
+| `WorldWaypointQueue` | 4（全同层） | 0（`planner/domain/trajectory_telemetry.py:5` 只在 docstring 提到） | 内部化 | 已在“不暴露什么”里 |
+
+### B 历史残留删除清单
+
+| 名字 | 位置 | 处置与理由 |
+| --- | --- | --- |
+| `MotionLimits`（第二份） | `planner/services/segment_motion.py:21`，13 字段 | 合并进 `domain/motion.py:38` 的一份；字段读者见下表 |
+| `plan_segment` + `SegmentSetpoint` | `planner/services/segment_motion.py:131`、`:96` | 删：现引用 3，全在 `planner/services/__init__.py:7`、`:15` 的导出，运行期调用 0 |
+| `services/__init__.py` 的 5 个导出 | `planner/services/__init__.py:3` | 删：运行期无人 `import planner.services` 包入口，全部是深层 import |
+| `getattr(vehicle, "last_collision")` 探针 | `planner/workflows/free_navigation/continuous.py:300`、`:328`、`planner/workflows/visual_goal_navigation/continuous.py:245`、`:275` | 删：`CollisionState` 已带对方名称与时刻（R5） |
+| `ports/collision_check.py` | 9 行整文件 | 删（R5）；`acquire_flight` 同时去掉 `collision_check` 参数 |
+| `ROVER_PASSED_LATERAL_TOLERANCE_M`、`rover_tracking_limits()` | `planner/simulators/projectairsim/rover.py:48`、`:56` | 删（R6、R17）；走廊改由 `algorithms/motion/corridor.py` 的 1.0 m 给 |
+| `SimulatorPorts.enabled_tasks`、`ENABLED_TASKS` | `planner/simulator/ports.py:77`、`:90`、`:122`、`:133`、`:157` | 删（R18）；11 处引用、3 个文件，只剩槽位交集一个推导源 |
+| 三份跟踪律 | `planner/simulators/projectairsim/motion.py` 234 行、`planner/simulators/airsim/motion_tracker.py` 158 行、`planner/services/motion/continuous.py` 105 行 | 合并成 `runtime/motion/tracking.py` + `limits.py`；引擎只留 `stream_command` |
+| 两份碰撞退避镜像 | `planner/workflows/free_navigation/continuous.py:312-377`（66 行）、`planner/workflows/visual_goal_navigation/continuous.py:259-311`（53 行） | 删，进 `runtime/collision_recovery.py` |
+
+`MotionLimits` 字段读者与处置（`domain/motion.py` 17 个字段，`.字段` 引用按文件计）：
+
+| 字段 | 现读者 | 处置 |
+| --- | --- | --- |
+| `max_acceleration_mps2` | 11 | 保留（限幅唯一来源） |
+| `max_yaw_rate_deg_s` | 7 | 保留 |
+| `max_yaw_acceleration_deg_s2` | 8 | 保留 |
+| `control_hz` | 17 | 保留（R9 的周期来源） |
+| `position_gain` | 4 | 保留（位置保持与胡萝卜点阻尼） |
+| `yaw_gain` | 3 | 保留；三读者里两个是待删的 tracker，移完只剩 1 |
+| `position_tolerance_m` | 21 | 保留（与 `corridor_for` 的缺省值同源） |
+| `yaw_tolerance_deg` | 14 | 保留 |
+| `passed_lateral_tolerance_m` | 5 | 保留，语义改为“只抬高”（R17） |
+| `stopped_speed_mps` | 6 | 保留；与下一项合进 `StoppedThresholds(speed_mps, yaw_rate_dps)` |
+| `stopped_yaw_rate_deg_s` | 3 | 合并；三读者全在待下移/待删的 tracker 与 `airsim/observation_gate.py`，合并后由 `settle_time_s` 窗口兑现 |
+| `settle_time_s` | 11 | 保留，与 `position_tolerance_m` 不能合并：一个判时间窗，一个判距离球，`observable` 同时用两者 |
+| `min_duration_s` | 4 | 保留；3 个读者在待删的 `segment_motion.py`，实读 1 |
+| `heading_hold_gain` | 2 | 保留；四项建议收成 `HeadingServoSettings` 子结构（纯数据重构，不动值） |
+| `heading_rate_damping` | 2 | 同上 |
+| `heading_deadband_deg` | 2 | 同上 |
+| `heading_rate_deadband_dps` | 2 | 同上 |
+
+### 结论数字
+
+- 对外名字从 19 个降到 10 个：保留 `ControlLoop`、`GuidedVehicle`、`QueueFollower`、`ExecutionService`、`PlanningWindow`、`PositionHold`、`FrameHub`、`TrajectoryHub`、`LogBuffer`、`BackgroundCall`。
+- 内部化 5 个（`MovingObservations`、`StreamTimeline`、`close_resources`、`CollisionRecovery`、`WorldWaypointQueue`），合并 2 个（`ModelCallService` + `BackgroundOperation` → `BackgroundCall`，净减 1），移出本层 3 个（`freeze_observation`、`freeze_reference` → `algorithms/`，`MotionPlanner` → `ports/`）。核算：19 − 5 − 2 + 1 − 3 = 10。`MovingObservations` 只内部化类名，取帧线程与重试仍在执行层（裁决 R22）。
+- 删掉约 710 行：删 3 个文件 332 行（`segment_motion.py` 154、`continuous_execution.py` 169、`collision_check.py` 9）减去迁入 `algorithms/` 的约 80 行，引擎跟踪器与律段约 332 行（392 行文件减执行器约 60），两份碰撞退避镜像 119 行，走廊常量 6 行。
+- 无“只被测试使用”的名字：`StreamTimeline` 有 workflow 属性访问（运行期路径），内部化后改由 `QueueFollower.anchor_at` 提供；`WorldWaypointQueue` 的 4 处引用全在同层。
+
+### 需指挥层裁决
+
+1 `MovingObservations` 已内部化（裁决 R22）：取帧线程、传输、帧丢弃、重试退避留在执行层，任务层只声明 `MovingCapture`（`request`/`poll`/`discard`/`busy`/`close`），装配层按结构注入实现；不需要任务包自己再写重试计数。
+2 `freeze_observation`/`freeze_reference` 移到 `algorithms/` 需要计算层方案接收这两个名字，本层不自行落地。
 
 ## 8 未决问题
 

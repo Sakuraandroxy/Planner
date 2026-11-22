@@ -12,14 +12,14 @@
 
 | 文件 | 类与函数签名 | 行 | 从哪来 |
 | --- | --- | --- | --- |
-| `assembly/__init__.py` | 导出 `MissionResources`、`MissionInputs`、`assemble_missions`、`VehicleArm`、`PlannerApplication`、`ServerController`、`SwitchRefused`、`capabilities_for`、`task_finish_events` | 25 | 新写，转发现同级模块。跨层 import 只能指向这个文件（裁决 R19a） |
-| `assembly/mission_assembly.py` | `MissionResources`、`MissionInputs`、`MissionCommon`、`VehicleArm`、`assemble_missions(config, *, inputs, resources, log) -> dict[str, VehicleArm]`、`build_mission_common(config, *, planner, detector, log) -> MissionCommon`、`build_vehicle_arm(config, *, common, vehicle, vehicle_id, detector, geometry, telemetry, moving_source_factory, execution, observation_source, log) -> VehicleArm`、`require_application(arm) -> PlannerApplication` | 320 | `application/mission_assembly.py`（359 行）。删 `lane_reference_provider=None`（:306）；工作流集合计算（:281-290）移进 `requirements.py`，可跑任务只由槽位交集推导（裁决 R18）；新增 `Vehicle` 槽填充：`GuidedVehicle(streaming, loop)`（裁决 R1） |
-| `assembly/requirements.py` | `EXECUTABLE_PACKAGES`、`PortsView`、`declared_requirements() -> dict[TaskKind, tuple[str, ...]]`、`ports_view(*, slots, vehicles) -> PortsView`、`missing_slots(view, kind) -> tuple[str, ...]`、`available_kinds(view) -> frozenset[TaskKind]`、`capabilities_for(view, *, view_modes, weather_fields, weather_presets) -> Capabilities`、`assert_constructible(view, vehicle_id) -> None` | 120 | 新建。从一张显式元组 `EXECUTABLE_PACKAGES` 逐个 import 任务包 `__init__`，读 `TASK_KIND` 与 `REQUIRED_PORTS`（与 `docs/refactor/04-workflows.md` 同名）；吸收 `simulator/ports.py:44` 的 `TASK_REQUIREMENTS` 与 `:85` 的 `available_tasks()`；没有 `enabled_tasks` 参数（裁决 R18） |
+| `assembly/__init__.py` | 导出 12 个跨层名字：`assemble_missions`、`MissionInputs`、`MissionResources`、`VehicleArm`、`require_application`、`task_finish_events`、`ServerController`、`SwitchRefused`、`StageValidator`、`WorkerFactory`、`SimulatorSupervisor`、`build_resources` | 30 | 新写，转发现同级模块。跨层 import 只能指向这个文件（裁决 R19a）；名字集由 §8 削面复核定 |
+| `assembly/mission_assembly.py` | `MissionResources`、`MissionInputs`、`VehicleArm`、`assemble_missions(config, *, inputs, resources, log) -> dict[str, VehicleArm]`、`build_vehicle_arm(config, *, common, vehicle, vehicle_id, detector, geometry, telemetry, moving_source_factory, execution, observation_source, log) -> VehicleArm`、`require_application(arm) -> PlannerApplication` | 320 | `application/mission_assembly.py`（359 行）。删 `lane_reference_provider=None`（:306）；工作流集合计算（:281-290）移进 `requirements.py`，可跑任务只由槽位交集推导（裁决 R18）；新增 `Vehicle` 槽填充：`GuidedVehicle(streaming, loop)`（裁决 R1） |
+| `assembly/requirements.py` | `EXECUTABLE_PACKAGES`、`PortsView`、`declared_requirements() -> dict[TaskKind, tuple[str, ...]]`、`ports_view(*, slots, vehicles) -> PortsView`、`missing_slots(view, kind) -> tuple[str, ...]`、`available_kinds(view) -> frozenset[TaskKind]`、私有 `capabilities_for(view, *, view_modes, weather_fields, weather_presets) -> Capabilities`、`assert_constructible(view, vehicle_id) -> None` | 120 | 新建。从一张显式元组 `EXECUTABLE_PACKAGES` 逐个 import 任务包 `__init__`，读 `TASK_KIND` 与 `REQUIRED_PORTS`（与 `docs/refactor/04-workflows.md` 同名）；吸收 `simulator/ports.py:44` 的 `TASK_REQUIREMENTS` 与 `:85` 的 `available_tasks()`；没有 `enabled_tasks` 参数（裁决 R18） |
 | `assembly/application.py` | `PlannerApplication.__init__(task_parser, validator, runner, *, parse_call)`、`prepare(instruction)`、`execute_plan(plan)`、`execute(instruction)` | 41 | `application/application.py`，不拆 |
 | `assembly/mission_runner.py` | `MissionRunner.__init__(router)`、`prepare(plan)`、`run(plan) -> MissionResult` | 48 | `application/mission_runner.py`，不拆 |
 | `assembly/mission_validator.py` | `StageValidator`、`MissionValidator.__init__(validators, *, terminal_kinds)`、`supported_kinds`、`validate(plan)` | 68 | `application/mission_validator.py`，不拆 |
 | `assembly/workflow_router.py` | `WorkflowRouter.__init__(workflows)`、`supported_kinds`、`workflow_for(stage)` | 21 | `application/workflow_router.py`，不拆 |
-| `assembly/reporting.py` | `mission_report(result) -> tuple[tuple[str, ...], int]`、`task_finish_events(result, task_id) -> tuple[tuple[str, ...], WorkerEvent]` | 70 | `application/reporting.py`。`simulator/worker.py:14` 与 `simulator/mission_child.py:37` 继续 import 它，见 §8 第 4 条 |
+| `assembly/reporting.py` | `task_finish_events(result, task_id) -> tuple[tuple[str, ...], WorkerEvent]`、私有 `_report(result)` | 70 | `application/reporting.py`。`simulator/worker.py:14` 与 `simulator/mission_child.py:37` 继续 import `task_finish_events`，见 §9 第 4 条 |
 
 ### 1.2 控制器子包
 
@@ -27,37 +27,32 @@
 
 | 文件 | 类与函数签名 | 行 | 从哪来（现文件行号） |
 | --- | --- | --- | --- |
-| `assembly/controller/__init__.py` | `ServerController`：门面，持六个协作者；`state`、`status`、`logs`、`submit`、`stop`、`home`、`activate`、`request_weather`、`request_view`、`request_world`、`stop_world`、`request_models`、`request_profile`、`start`、`close`、`maps`、`vehicle_models`、`profiles`、`profile`、`weather_catalog`、`simulator_owned`、`capabilities()`；`SwitchRefused(Exception)` 带 `vehicle` 与 `reason`；`WorkerFactory` 与 `SimulatorSupervisor` 两个 Protocol 也声明在这里（裁决 R19b） | 175 | 新建门面；`__init__` 44-143 拆成字段分派 |
+| `assembly/controller/__init__.py` | `ServerController`：门面，持四个协作者；`state`、`status`、`logs`、`submit`、`stop`、`home`、`activate`、`request_weather`、`request_view`、`request_world`、`stop_world`、`request_models`、`request_profile`、`start`、`close`、`maps`、`vehicle_models`、`profiles`、`profile`、`weather_catalog`、`simulator_owned`、`capabilities()`；`SwitchRefused(Exception)` 带 `vehicle` 与 `reason`；`WorkerFactory` 与 `SimulatorSupervisor` 两个 Protocol 也声明在这里（裁决 R19b） | 175 | 新建门面；`__init__` 44-143 拆成字段分派 |
 | `assembly/controller/state.py` | `LifecycleState`：`state`、`status`、`admit_idle(operation)`、`admit_running_or_idle()`、`transition(state, reason)`、`on_event(event)`（事件泵）、`reset_session_state()` | 260 | `state` 145、`status` 150、`_log` 591、`_events` 892、`_reset_session_state` 830 |
 | `assembly/controller/commands.py` | `CommandChannel`：`put(kind, value)`、`deliver(command)`（`_command` 648 的分派）、`connect()` 607、`failed(reason)` 625、`close_worker(*, skip_landing)` 837、`wait_closed(worker)` 863、`drain(worker)` 875、`supervise()` 1015、`shutdown_worker()` 1054、`close()` 1073；`Handoff`：`request(target, *, blocking, timeout_s)`、`resolve(event)` | 310 | `_command` 648、`_connect` 607、`_failed_worker` 625、`_close_worker` 837、`_wait_closed` 863、`_drain` 875、`_run` 1015、`_shutdown_worker` 1054、`close` 1073；`Handoff` 从 `submit` 266 与 `_events` 的 ACTIVE 分支抽出 |
-| `assembly/controller/world.py` | `WorldSwitcher`：`maps`、`simulator_owned`、`start()`、`stop_leftover_simulator()`、`request_world(map_id)`、`stop_world()`、`selection_for(map_id)`、`apply_simulator(entry, restart)`、`switch_world(entry)`、`stop_world_command()`、`stop_simulator()` | 255 | `maps` 196、`simulator_owned` 200、`start` 215、`_stop_leftover_simulator` 229、`request_world` 386、`stop_world` 458、`_selection_for` 595、`_apply_simulator` 692、`_switch_world` 699、`_stop_world` 756、`_stop_simulator` 1091 |
-| `assembly/controller/models.py` | `ModelSwitcher`：`vehicle_models`、`request_models(updates)`、`switch_models()`、`reset()` | 90 | `vehicle_models` 177、`request_models` 482、`_switch_models` 793 |
-| `assembly/controller/weather.py` | `EnvironmentChannel`：`weather_catalog`、`request_weather(values)`、`request_view(mode)`、`on_event(event)`（WEATHER/VIEW 两支）、`reapply(worker)` | 115 | `weather_catalog` 211、`request_weather` 347、`request_view` 370，加 `_events` 里的 WEATHER（`drain` 875 与 `_events` 892）与 VIEW 分支。天气与机位同生命周期：跨会话保留、READY 后重放、RUNNING 中延迟，合并成一个协作者，见 §8 第 6 条 |
+| `assembly/controller/world.py` | `SessionSwitcher`：`maps`、`simulator_owned`、`start()`、`stop_leftover_simulator()`、`request_world(map_id)`、`stop_world()`、`selection_for(map_id)`、`apply_simulator(entry, restart)`、`switch_world(entry)`、`stop_world_command()`、`stop_simulator()`、`vehicle_models`、`request_models(updates)`、`switch_models()`、`profile`、`profiles`、`request_profile(name)`、`switch_profile()` | 380 | `maps` 196、`simulator_owned` 200、`start` 215、`_stop_leftover_simulator` 229、`request_world` 386、`stop_world` 458、`_selection_for` 595、`_apply_simulator` 692、`_switch_world` 699、`_stop_world` 756、`_stop_simulator` 1091；并入 `vehicle_models` 177、`request_models` 482、`_switch_models` 793、`profile` 182、`profiles` 192、`request_profile` 539、`_switch_profile` 813。地图、外观、配置三条命令共用 `close_worker → 必要时动栈 → connect` 骨架（§8） |
+| `assembly/controller/weather.py` | `EnvironmentChannel`：`weather_catalog`、`request_weather(values)`、`request_view(mode)`、`on_event(event)`（WEATHER/VIEW 两支）、`reapply(worker)` | 115 | `weather_catalog` 211、`request_weather` 347、`request_view` 370，加 `_events` 里的 WEATHER（`drain` 875 与 `_events` 892）与 VIEW 分支。天气与机位同生命周期：跨会话保留、READY 后重放、RUNNING 中延迟，合并成一个协作者（裁决 R12），见 §9 第 6 条 |
 | `assembly/controller/profiles.py` | `ProfileSwitcher`：`profile`、`profiles`、`request_profile(name)`、`switch_profile()`、`reset()` | 100 | `profile` 182、`profiles` 192、`request_profile` 539、`_switch_profile` 813 |
 
 ### 1.3 工厂子包
 
 | 文件 | 类与函数签名 | 行 | 从哪来 |
 | --- | --- | --- | --- |
-| `assembly/factories/__init__.py` | 导出六个构建函数 | 15 | 新写 |
-| `assembly/factories/planners.py` | `api_key(settings, label) -> str`、`build_planner(config, mode, *, aerial)`、`build_free_navigation_planner(config, *, aerial)`、`build_trajectory_planner(config, prompt_builder)` | 115 | `application/factories.py:38-56`、`:102-148`。`api_key` 落在这里，另外三个文件 `from .planners import api_key` |
-| `assembly/factories/detectors.py` | `build_detector(config, mode, *, bbox, surface_points)`、`build_geometry(config) -> DepthGeometry` | 95 | `application/factories.py:59-99`、`:203-210` |
-| `assembly/factories/parsers.py` | `build_task_parser(config, *, kinds, aerial) -> OpenAITaskParser \| None` | 45 | `application/factories.py:169-200` |
-| `assembly/factories/completion.py` | `build_completion_checker(config)`、`build_trace_factory(config, *, detector, planner)` | 75 | `application/factories.py:150-166`、`:213-251` |
+| `assembly/factories/__init__.py` | 只导出 `build_resources` | 12 | 新写 |
+| `assembly/factories/resources.py` | `build_resources(config, *, frame_sink, trajectory) -> MissionResources`；私有 `_detector(config)`、`_geometry(config)`、`_completion_checker(config)` | 130 | 合并 `application/factories.py:59-99`、`:150-166`、`:203-210`，加 `server_bootstrap.py:29-49` 与 `simulator/mission_child.py:232-252` 两份资源构造 |
+| `assembly/factories/planners.py` | `build_planner(config, mode, *, aerial=False, purpose="visual_goal")`；私有 `api_key(settings, label)`、`_trajectory_planner(config, prompt_builder)` | 125 | `application/factories.py:38-56`、`:102-148`；`build_free_navigation_planner` 合并进来 |
+| `assembly/factories/parsers.py` | `build_task_parser(config, *, kinds, aerial)`、`build_trace_factory(config, *, detector, planner)` | 110 | `application/factories.py:169-200`、`:213-251` |
 
 ### 1.4 配置包 `planner/config/`
 
-数据目录仍是仓库根 `config/`。`_project_root()` 现在是 `Path(__file__).resolve().parent.parent`（`config.py:844`，`__file__` 为 `planner/config.py`），文件搬进 `planner/config/paths.py` 后要改成 `parents[2]`。
+数据目录仍是仓库根 `config/`。`_project_root()` 现在是 `Path(__file__).resolve().parent.parent`（`config.py:844`，`__file__` 为 `planner/config.py`），文件搬进 `planner/config/profiles.py` 后要改成 `parents[2]`。
 
 | 文件 | 内容 | 行 | 从哪来 |
 | --- | --- | --- | --- |
 | `config/__init__.py` | 再导出全部公开名字，外部 import 路径不变；跨层只能 import `planner.config`（裁决 R19a） | 90 | 新写；保住 `tests/test_config.py`、`scripts/*.py`、`simulator/mission_child.py:38` 的现有 import |
-| `config/paths.py` | `project_root()`、`profiles_root()`、`default_profile()`、`default_config_path()`、`profile_of(path)`、`profile_config_path(profile)`、`available_profiles()`、`shared_or_profile(path, rel)` | 115 | `config.py:843-889`、`:979-1001` |
-| `config/profile.py` | `ProfileInfo`、`CLI_PROFILE_SECTIONS`→`PROFILE_SWITCHABLE_SECTIONS`、`profile_info(raw, path)`、`profile_raw(profile)`、`profile_drift(reference)`、`profile_catalog()` | 95 | `config.py:775-788`、`:891-977` |
-| `config/sections.py` | `ProjectAirSimSettings`、`DroneSettings`、`CameraSettings`、`TargetDetectionSettings`、`TrajectoryPlannerSettings`、`DepthSettings`、`TaskCompletionSettings`、`TaskParserSettings`、`VisualGoalNavigationSettings`、`FreeNavigationSettings`、`ServerSettings`、`SimulatorSettings` | 330 | `config.py:23-454`、`:738-774`。`ServerSettings` 新增 `handoff_timeout_s: float = 15.0` |
-| `config/maps.py` | `MapScene`、`MapEntry`、`MapCatalog`、`load_map_catalog(...)`、`parse_map_scene(...)`、`flatten_scene_defaults(...)`、`binary_root(...)`、`resolve_binary(...)` | 300 | `config.py:455-737`、`:1003-1218` |
-| `config/vehicles.py` | `VehicleModelOption`、`VehicleModelGroup`、`VehicleModelCatalog`、`default_vehicle_models()`、`load_vehicle_models(raw, *, maps, vehicles, families)`、`family_vehicle_models(families)` | 205 | `config.py:600-702`、`:1219-1311`、`:1364-1382`。删掉方法体内 `from .simulator import registry`（`:1280-1286`），见 §4.3 |
-| `config/camera.py` | `build_camera_settings(raw) -> CameraSettings`、`triple(values, *, where)` | 75 | `config.py:1312-1363` |
+| `config/profiles.py` | `profile_root()`、`default_profile()`、`default_config_path()`、`profile_of(path)`、`profile_config_path(profile)`、`available_profiles()`、`shared_or_profile(path, rel)`、`ProfileInfo`、`PROFILE_SWITCHABLE_SECTIONS`、`profile_info(raw, path)`、`profile_raw(profile)`、`profile_drift(reference)`、`profile_catalog()` | 200 | `config.py:775-788`、`:843-889`、`:891-977`、`:979-1001` |
+| `config/sections.py` | `ProjectAirSimSettings`、`DroneSettings`、`CameraSettings`、`TargetDetectionSettings`、`TrajectoryPlannerSettings`、`DepthSettings`、`TaskCompletionSettings`、`TaskParserSettings`、`VisualGoalNavigationSettings`、`FreeNavigationSettings`、`ServerSettings`、`SimulatorSettings`、`build_camera_settings(raw)`、`triple(values, *, where)` | 400 | `config.py:23-454`、`:738-774`、`:1312-1363`。`ServerSettings` 新增 `handoff_timeout_s: float = 15.0` |
+| `config/maps.py` | `MapScene`、`MapEntry`、`MapCatalog`、`VehicleModelOption`、`VehicleModelGroup`、`VehicleModelCatalog`、`default_vehicle_models()`、`load_map_catalog(...)`、`load_vehicle_models(raw, *, maps, vehicles, families)`、`family_vehicle_models(families)`、`parse_map_scene(...)`、`flatten_scene_defaults(...)`、`binary_root(...)`、`resolve_binary(...)` | 500 | `config.py:455-737`、`:600-702`、`:1003-1218`、`:1219-1311`、`:1364-1382`。外观模型与地图的场景变体是同一份数据，合并一文件；删掉 `load_vehicle_models` 里的 `from .simulator import registry`（`:1280-1286`），见 §4.3 |
 | `config/loader.py` | `AppConfig`、`PROFILE_SECTIONS`、`section(raw, key)`、`load_config(path) -> AppConfig`、`load_completion_rules(config_path, filename)` | 420 | `config.py:789-835`、`:836-842`、`:1383-1774` |
 
 ### 1.5 组合根
@@ -78,8 +73,8 @@ registry.build_session(simulator, config, map_entry, family, resources, log)   r
   ├─ import simulators/<name>.runtime，调其 build_session
   ├─ session.mission_inputs() → MissionInputs(vehicles, execution, observation_source, moving_source_factory)
   ├─ assemble_missions(config, inputs=..., resources=..., log=...)              mission_assembly.py:86
-  │    ├─ common = build_mission_common(...)            一次，与载具无关
   │    └─ 每台载具：build_vehicle_arm(...)                mission_assembly.py:182
+  │          ├─ 按 is_drone 选规划器与提示词（无共享容器，§8.2）
   │          ├─ Vehicle 槽 ← GuidedVehicle(streaming, loop)    （裁决 R1）
   │          ├─ view = requirements.ports_view(slots=该载具实际拿到的槽位)
   │          ├─ kinds = requirements.available_kinds(view)      ← 能力求交唯一计算点
@@ -168,15 +163,17 @@ POST /api/tasks                                          server_api.py:211
 
 | 名字 | 使用者 | 语义 |
 | --- | --- | --- |
-| `assemble_missions(config, *, inputs: MissionInputs, resources: MissionResources, log)` | `simulator/registry.py:72` | 端口集合 → `{vehicle_id: VehicleArm}`；缺线即 `ProtocolError` |
+| `assemble_missions(config, *, inputs: MissionInputs, resources: MissionResources, log)` | `simulator/registry.py:70`（import）、`:73`（调用） | 端口集合 → `{vehicle_id: VehicleArm}`；缺线即 `ProtocolError` |
 | `MissionInputs` / `MissionResources` / `VehicleArm` | 会话侧（`mission_inputs` / `attach_arms`） | 会话交出的引擎对象；装配交回的管线 |
-| `PlannerApplication.prepare(instruction)` / `execute_plan(plan)` | worker（`session.run`） | 解析 → 校验 → 路由 → 执行 |
-| `MissionValidator` / `WorkflowRouter` / `MissionRunner` | `PlannerApplication`、测试 | 准入、选路、顺序执行与首败即停 |
+| `require_application(arm)` | `simulators/projectairsim/session.py:297`、`simulators/airsim/session.py:204` | 拿不到解析器时的拒单理由，两个会话共用 |
+| `build_resources(config, *, frame_sink, trajectory)` | `server_bootstrap.py:57`、`simulator/mission_child.py`（改后） | 端点与几何的唯一构造入口，替掉两份实现 |
+| `StageValidator` | 任务包的 `policy.py` 按形状实现，不 import | 任务阶段准入的形状 |
+| `WorkerFactory` / `SimulatorSupervisor` | 组合根传闭包与 `FamilyRouter`，结构满足 | `ServerController` 的两类输入 |
+| `PlannerApplication` / `MissionValidator` / `WorkflowRouter` / `MissionRunner` | 层内互用；对外不导出 | 解析 → 校验 → 路由 → 执行，替换物是 `require_application` 与 `ServerController` |
 | `task_finish_events(result, task_id)` | `simulator/worker.py:272`、`simulator/mission_child.py:289` | `MissionResult` → 日志行 + 一条 FINISHED 事件 |
 | `ServerController` | `adapters/http/server_api.py`、`server_bootstrap.py` | 后端生命周期唯一所有者：`submit`、`stop`、`home`、`activate`、`request_weather`、`request_view`、`request_world`、`stop_world`、`request_models`、`request_profile`、`capabilities()`、`status`、`logs`、`start`、`close` |
 | `SwitchRefused(vehicle, reason)` | 入口层映射 409 | 提交期切载具失败，任务未投递 |
-| `capabilities_for(view, *, view_modes, weather_fields, weather_presets) -> Capabilities` | 入口层（经 controller） | 能力位的唯一推导入口 |
-| `build_detector` / `build_planner` / `build_free_navigation_planner` / `build_task_parser` / `build_completion_checker` / `build_geometry` / `build_trace_factory` | `server_bootstrap.py`、CLI 与冒烟脚本 | 按配置造端点，同一套解析规则 |
+| `build_planner` / `build_task_parser` / `build_trace_factory` | 层内调用；输出面只有 `build_resources` | 按配置造端点；巡航规划器并入 `build_planner`，detector/geometry/completion 内联进 `build_resources` |
 
 ### 3.2 我要求相邻层提供什么
 
@@ -217,14 +214,16 @@ POST /api/tasks                                          server_api.py:211
 | 名字 | 形状 | 由谁消费 | 稳定性 |
 | --- | --- | --- | --- |
 | `assemble_missions` | 函数，返回 `dict[str, VehicleArm]` | `simulator/registry.build_session` | 稳定 |
-| `MissionInputs`、`MissionResources`、`VehicleArm` | 数据类 | 会话侧、组合根 | 稳定；`VehicleArm.model_calls` 字段属内部 |
-| `PlannerApplication` | 类，`prepare`、`execute_plan`、`execute` | 会话 `run` | 稳定 |
+| `MissionInputs`、`MissionResources`、`VehicleArm` | 数据类 | 会话侧、组合根 | 稳定；`VehicleArm.model_calls` 字段被引擎会话 `close()` 读（`projectairsim/session.py:734`） |
+| `require_application` | 函数，返回一个只被调 `prepare` / `execute_plan` 的对象（`PlannerApplication` 是内部名） | 两个会话的 `run` | 稳定 |
+| `build_resources` | 函数，返回 `MissionResources` | `server_bootstrap`、`mission_child` | 稳定 |
 | `ServerController` | 类，公开方法见 §1.2 | `adapters/http`、组合根 | 稳定 |
 | `SwitchRefused` | 异常类型 | `adapters/http` 映射 409 | 稳定 |
-| `capabilities_for` | 函数，返回契约层的 `Capabilities` | `adapters/http`（经 controller） | 稳定 |
+| `StageValidator` | Protocol | 任务包结构实现 | 稳定 |
+| `WorkerFactory`、`SimulatorSupervisor` | Protocol | 组合根结构实现 | 稳定 |
 | `task_finish_events` | 函数，返回 `(lines, WorkerEvent)` | `simulator/worker`、`mission_child` | 稳定 |
 
-不暴露什么：六个控制器协作者（`LifecycleState`、`CommandChannel`、`WorldSwitcher`、`ModelSwitcher`、`EnvironmentChannel`、`ProfileSwitcher`）、`Handoff`、`PortsView`、`MissionCommon`、`EXECUTABLE_PACKAGES`、`build_vehicle_arm`、`build_mission_common` 都不出 `assembly/__init__.py`，同层内部随便 import。反例：runtime 的 `WorldWaypointQueue` 不在本层表里，装配也不认识 `PlanningWindow` 的内部队列。
+不暴露什么：四个控制器协作者（`LifecycleState`、`CommandChannel`、`SessionSwitcher`、`EnvironmentChannel`）、`Handoff`、`PortsView`、`EXECUTABLE_PACKAGES`、`build_vehicle_arm`、`PlannerApplication`、`MissionValidator`、`MissionRunner`、`WorkflowRouter`、`mission_report`、六个工厂私有函数都不出 `assembly/__init__.py`，同层内部随便 import。反例：runtime 的 `WorldWaypointQueue` 不在本层表里，装配也不认识 `PlanningWindow` 的内部队列。
 
 ## 4. 错误与失败路径
 
@@ -259,7 +258,7 @@ POST /api/tasks                                          server_api.py:211
 | 两个任务包声明同一个 `TASK_KIND` | `ProtocolError` | `requirements.declared_requirements`，新增 |
 | `MotionCapability.model` 与本臂注入的 `StreamingVehicle` 接受的命令类型不符 | `ProtocolError` | `command_type_for(capability)` 与 `require_supported(command, capability)`（`domain/motion.py`，见 `docs/refactor/01-contracts.md`）在 `build_vehicle_arm` 构造臂时比对；对应 `00-boundaries.md` 第五节"端口与命令类型不符" |
 | 准入表缺某个 `TaskKind` 的 `StageValidator`，或终结类任务没有准入器 | `ValueError` | `mission_validator.py:21-36`（保留） |
-| 检测器 / 规划器 mode 未知 | `ValueError` | `factories/detectors.py`、`factories/planners.py`（`factories.py:99`、`:134`） |
+| 检测器 / 规划器 mode 未知 | `ValueError` | `factories/resources.py`、`factories/planners.py`（`factories.py:99`、`:134`） |
 | 选了 `vlm` / 补全判定却没配 `url`/`model` | `ValueError` | `factories.py:80-84`、`:105-108`、`:152-155`（保留） |
 | 轨迹规划器 `timeout_s`/`max_tokens` 非正 | `ValueError` | `config/loader.py`（`config.py:1574-1576`） |
 | 配置分节不属该 profile | `ValueError` | `config/loader.py`（`config.py:1390-1396`） |
@@ -347,45 +346,113 @@ POST /api/tasks                                          server_api.py:211
 | 3 | 拆控制器：先 `commands.py`（队列 + worker 生命周期），再 `world.py`，再 `models.py`/`weather.py`/`profiles.py`，最后 `state.py` 与 `controller/__init__.py` 门面。每步 `ServerController` 公开签名不变 | 每步跑 `tests/test_server_controller.py` 68 个用例，只改 import 行，断言不动 |
 | 4 | 提交期切载具改阻塞交接 + `SwitchRefused`；`ServerSettings` 加 `handoff_timeout_s`；入口层加一条 `except SwitchRefused → 409` | `tests/test_assembly_handoff.py` 新绿；`test_server_api.py` 56 个用例不改通过 |
 | 5 | 能力位改由 `ServerController.capabilities()` 提供，`/api/world/options` 的 `simulator_labels` 一并改由 controller 提供（现读 `registry.labels()`，`server_api.py:322`）；删 `server_api.py:25` 的 `from ...simulator import registry` | 两个端点的 JSON 与重构前逐字段比对（golden 快照），只有 `task_kinds` 在切载具后收窄属预期差异；`tests/test_architecture.py` 全绿 |
-| 6 | 拆 `assembly/factories/` 四个文件，函数名与签名不变；`api_key` 落 `planners.py` | `tests/test_factories.py` 不改通过 |
+| 6 | 拆 `assembly/factories/` 为四个文件（`__init__`、`resources`、`planners`、`parsers`）；`build_detector`/`build_geometry`/`build_completion_checker` 内联成 `resources.py` 的私有函数，`build_free_navigation_planner` 并入 `build_planner`；`server_bootstrap` 与 `mission_child` 两边改调 `build_resources` | `tests/test_factories.py` 不改通过；两份资源构造的字段逐项一致 |
 | 7 | 拆 `planner/config/` 包；`_project_root()` 层级改为 `parents[2]`；`load_vehicle_models` 去掉 `registry` 依赖 | `tests/test_config.py`、`test_profiles.py`、`test_reference_config.py` 不改通过；`scripts/check_profiles.py` 输出为空 |
 | 8 | 加 `tests/test_layering.py` 的五条规则、§6.1 的构造期负例，以及 `tests/test_layer_entries.py` 的包入口与输入面规则（裁决 R19a、R19b） | 新测试绿；`pytest tests/ -q` 用例数只增不减 |
 
-## 8. 未决问题
+## 8. 削面复核
 
-### 8.1 提交期切载具是否阻塞 HTTP 请求
+复核口径：只认层外、运行路径上的调用点（文件:行号）。测试引用、同层内部引用、`__init__` 转发都不算。留一个名字要落进三类豁免之一：被外层运行路径调用；对外契约（HTTP 字段、配置字段、引擎或任务必须实现的 Protocol）；构造期不变量校验。引用数是 `grep -rn "\b<name>\b" --include=*.py planner scripts tests | wc -l`，含测试。
+
+### 8.1 表 A 对外名字逐条
+
+| 名字 | 现引用数 | 层外运行期调用点 | 处置 | 依据 |
+| --- | --- | --- | --- | --- |
+| `assemble_missions` | 8 | `simulator/registry.py:70`（import）、`:73`（调用） | 保留 | 会话工厂拿它接线 |
+| `MissionInputs` | 10 | `simulators/projectairsim/session.py:271`、`simulators/airsim/session.py:163` | 保留 | 会话构造它并交给装配 |
+| `MissionResources` | 9 | `server_bootstrap.py:38`、`simulator/mission_child.py:232` | 保留 | 组合根造它，两个进程各一份 |
+| `VehicleArm` | 7 | `simulators/projectairsim/session.py:84`（`_VehicleArm` 别名） | 保留 | `attach_arms` 的元素类型 |
+| `require_application` | 5 | `projectairsim/session.py:297`、`airsim/session.py:204` | 保留 | 两个会话共用的拒单路径 |
+| `task_finish_events` | 5 | `simulator/worker.py:272`、`simulator/mission_child.py:289` | 保留 | 两种 worker 共用同一份完成文本 |
+| `ServerController` | 16 | `server_bootstrap.py:117` | 保留 | 组合根唯一后端门面 |
+| `StageValidator` | 2 | 0（任务包按形状实现，不 import） | 保留（需裁决） | 对外契约：任务阶段准入的形状 |
+| `WorkerFactory` | 0 | 0（组合根传闭包，结构满足） | 保留（需裁决） | `ServerController` 的输入契约 |
+| `SimulatorSupervisor` | 0 | 0（组合根传 `FamilyRouter`） | 保留（需裁决） | 同上 |
+| `SwitchRefused` | 0 | 0（入口层尚未落地 `except`） | 保留（需裁决） | 409 的唯一语义载体 |
+| `build_resources`（新） | — | `server_bootstrap.py:57`、`mission_child.py:232`（改后） | 新增对外 | 替掉两份资源构造实现 |
+| `capabilities_for` | 3 | 0（入口读 `ServerController.capabilities()`） | 内部化 | 只在 `ServerController.capabilities()` 里调，不出层 |
+| `PlannerApplication` | 11 | 0 | 内部化 | 只在本层构造，外部只用 `require_application` |
+| `MissionValidator` | 13 | 0 | 内部化 | 只被 `PlannerApplication` 用 |
+| `MissionRunner` | 13 | 0 | 内部化 | 同上 |
+| `WorkflowRouter` | 9 | 0 | 内部化 | 同上 |
+| `MissionCommon` | 4 | 0 | 删 | 只是建臂中间数据，并入 `VehicleArm` 构造 |
+| `build_vehicle_arm` | 3 | 0（1 处只是 docstring） | 内部化 | 只有本层调 |
+| `build_mission_common` | 2 | 0 | 删 | 与 `MissionCommon` 同时消失 |
+| `build_detector` | 7 | `mission_child.py:233`、`server_bootstrap.py:39`、`scripts/smoke_projectairsim_drone.py:280` | 删（内联进 `build_resources`） | 三层调用都改为 `build_resources` |
+| `build_geometry` | 7 | `mission_child.py:240`、`server_bootstrap.py:46`、`smoke_projectairsim_drone.py:137` | 删（内联） | 同上 |
+| `build_planner` | 13 | `mission_child.py:239`、`server_bootstrap.py:45`、`smoke_projectairsim_drone.py:283` | 内部化 | 同上 |
+| `build_free_navigation_planner` | 10 | `scripts/smoke_projectairsim_rover.py:152` | 合并进 `build_planner` | 两函数只差 prompt 与“未配置返 None”语义 |
+| `build_task_parser` | 12 | 0（`mission_assembly.py:316` 在本层） | 内部化 | 建臂时才知道 kinds 与 aerial |
+| `build_completion_checker` | 6 | 0 | 删（内联） | 只有 `build_mission_common` 用 |
+| `build_trace_factory` | 5 | 0 | 内部化 | 同上 |
+| `mission_report` | 7 | 0（`reporting.py:56` 与 5 处测试） | 内部化 | 私有化为 `_report`；测试改读 `task_finish_events` |
+
+### 8.2 表 B 历史残留删除清单
+
+| 对象 | 位置 | 处理 | 理由 |
+| --- | --- | --- | --- |
+| 两份资源构造 | `server_bootstrap.py:29-49` 与 `simulator/mission_child.py:232-252` | 合并为 `assembly/factories/resources.py::build_resources` | 同一构造写两遍，只能靠注释维持一致；`frame_sink` 漏传曾让控制台掉面板（`mission_child.py:242-246`） |
+| `TASK_REQUIREMENTS` | `simulator/ports.py:44`，引用 3 | 删 | 唯一读者是同类 `:111`；交集改由 `assembly/requirements.py` 算（R18） |
+| `SimulatorPorts.available_tasks()` | `simulator/ports.py:85`，引用 2（均同类） | 删 | 同上 |
+| `SimulatorPorts.enabled_tasks` | `simulator/ports.py:77`、`:90`、`:122`、`:133`、`:157`，加 `mission_assembly.py:83`、`:118`、`:192`、`:215`，共 8 处 | 删 | 能力只由接口决定（R18） |
+| `lane_reference_provider` 与 `format_lane_reference` | `mission_assembly.py:306`；`workflows/free_navigation/workflow.py:76`、`:125`、`:164`、`:383`、`:386`；`continuous.py:54`、`:91`、`:437`、`:440`；`domain/lane_reference.py`；`prompts/free_navigation.py:404`、`:410`，共 13 处 | 删 | 纯视觉巡航（R1） |
+| `application/__init__.py` 只导出 `PlannerApplication` | `application/__init__.py:1-3`，层外调用 0 | 入口换成 §3.3 的 12 个名字 | 旧入口导出的是测试才用的名字 |
+| `mission_report` | `application/reporting.py:6`，引用 7（5 处在测试） | 私有化 `_report` | 运行期只有 `task_finish_events` 一个读者 |
+| `MissionCommon.aerial_planner` / `aerial_free_planner` | `mission_assembly.py:132-134`、`:159-176` | 随 `MissionCommon` 删 | 建臂时按 `is_drone` 选 prompt，少一个每臂共享的容器 |
+| `config.py` 里的引擎依赖 | `config.py:1280-1286` 的 `from .simulator import registry` | 删 | 判据改为“地图声明了 `scene.vehicle_scenes`”（§4.3） |
+
+### 8.3 合并结论
+
+- 控制器：6 文件/6 协作者 → 4 文件/4 协作者（§1.2 已按此更新）。`SessionSwitcher` 收地图、外观、配置三条命令，共用 `close_worker → 必要时动栈 → connect` 骨架；`EnvironmentChannel` 收天气与机位（R12）。
+- 工厂：7 个构建函数 → 4 个（§1.3 已按此更新）：`build_resources`（吸收 detector、geometry、completion checker）、`build_planner`（吸收巡航 prompt 与 aerial 变体）、`build_task_parser`、`build_trace_factory`。后三个不导出；代价是三个 `scripts/smoke_*.py` 改调 `build_resources`。
+- 配置包：7 模块 → 5 文件（§1.4 已按此更新）：`__init__.py`、`profiles.py`（路径 + 配置档元数据）、`sections.py`（含相机）、`maps.py`（含外观模型）、`loader.py`。
+
+### 8.4 结论数字
+
+对外名字 27 → 12：删 5 个（`MissionCommon`、`build_mission_common`、`build_detector`、`build_geometry`、`build_completion_checker`），内部化 10 个（`capabilities_for`、`PlannerApplication`、`MissionValidator`、`MissionRunner`、`WorkflowRouter`、`build_vehicle_arm`、`build_planner`、`build_task_parser`、`build_trace_factory`、`mission_report`），合并 1 个（`build_free_navigation_planner`），新增 1 个（`build_resources`）。5+10+1=16，27-16+1=12。删除代码约 120 行：`MissionCommon` 与 `build_mission_common` 45 行、`mission_child` 重复资源构造 22 行、detector/geometry/completion 三个公开包装 20 行、巡航规划器合并 12 行、`enabled_tasks` 过滤与泳道接线 6 行、入口旧导出 3 行、`capabilities_for` 层外导出 2 行。
+
+### 8.5 需指挥层裁决
+
+1. `SwitchRefused`：目前无运行期调用点，入口层 `except` 分支尚未落地。保留理由是它是“切载具失败 → 409”的唯一载体，复用 `BackendUnavailable` 会把 `detail.message` 写成 "planner is idle"。
+2. `StageValidator`、`WorkerFactory`、`SimulatorSupervisor`：三者都没有 import 调用点，靠结构类型被任务包与组合根满足。保留理由是对外契约（R19b 的输入面）。若要求“无调用点即删”，三个名字要降为文档约定，删掉后构造签名只剩 `object`。
+3. `build_resources`：新增名字，无历史引用可数；它的依据是 8.2 表第一行的两份实现必须收成一份。
+4. 三个 smoke 脚本直调 `build_detector`/`build_geometry`/`build_planner`：把它们算作工具路径（已内部化）还是运行路径（则三个工厂必须保留对外）需定口径。本表按“工具路径不算运行路径”处理。
+
+## 9. 未决问题
+
+### 9.1 提交期切载具是否阻塞 HTTP 请求
 
 选项：阻塞到 ACTIVE（默认），或立即 202 再在任务里切（现状）。
 
 取默认阻塞，上限 `server.handoff_timeout_s = 15.0`。理由：交接失败时目标载具可能已经传送或切过机位，若此时已经返 202，回滚只能表现为任务失败，操作员看到的是“任务失败”而不是“切载具失败”。阻塞把失败留在准入阶段，对应 409。代价是 `/api/tasks` 最坏多等 `handoff_timeout_s`；正常路径只走 park、传送、切机位三步，三步都在 worker 线程同步完成。
 
-### 8.2 `task_kinds` 的语义从"仿真器支持"变成"当前载具支持"
+### 9.2 `task_kinds` 的语义从"仿真器支持"变成"当前载具支持"
 
 选项：字段值改为当前载具的交集（默认），或保持仿真器级并新增 `task_kinds_by_vehicle` 字段。
 
 取默认，HTTP 字段不增不减。代价是同一个地图下切换载具时 `task_kinds` 会变，控制台必须按新值重渲染按钮（已有能力门控逻辑，数据源换掉即可）。选另一条路会让 `/api/status` 出现两份任务清单，控制台得决定读哪一份。
 
-### 8.3 实测白名单已删除（原 R11 作废）
+### 9.3 实测白名单已删除（原 R11 作废）
 
 裁决 R18：删 `SimulatorPorts.enabled_tasks` 字段，删 `simulators/projectairsim/runtime.py` 与 `simulators/airsim/runtime.py` 的 `ENABLED_TASKS`。可跑任务 = `REQUIRED_PORTS` ⊆ 已填槽位，没有第二个开关。原 R11 定的“白名单留在槽位包”不再成立；代码里唯一残留是提交时日志不再区分“引擎不支持”与“未实测”两种拒绝理由。
 
-### 8.4 `simulator/` 反向 import 装配层
+### 9.4 `simulator/` 反向 import 装配层
 
 `simulator/registry.py:70` 与 `simulator/worker.py:14`、`mission_child.py:37` 需要装配层的名字。选项：只从 `assembly/__init__.py` 取（默认），或把这些名字上移到组合根。
 
 取默认：`assembly/__init__.py` 导出 `assemble_missions` 与 `task_finish_events`，`simulator/` 不得 import `assembly.mission_assembly` 这类深层路径（裁决 R19a）。`registry.build_session` 仍是“会话建好就接线”的唯一缝，两个调用点（`server_bootstrap.py:98` 的闭包与 `mission_child.py:254`）共用它。`tests/test_layering.py` 写成“`planner.simulator` 的 import 只能指向 `planner.assembly` 包本身，出现子模块路径即失败”。
 
-### 8.5 切载具失败用新异常还是复用 `BackendUnavailable`
+### 9.5 切载具失败用新异常还是复用 `BackendUnavailable`
 
 选项：新 `SwitchRefused` + 入口层新增一条 409 映射（默认），或复用 `BackendUnavailable(ServerState.IDLE)`（现状会落到 409，无需改入口）。
 
 取新异常。复用会让 `detail.message` 写成 "planner is idle"，而真实原因是出车没停稳或目标载具传送失败；操作员看不出要修什么。代价是入口层多一个 `except`。
 
-### 8.6 天气与机位合并成一个协作者
+### 9.6 天气与机位合并成一个协作者
 
 已裁决：合并，一个文件（裁决 R12）。`controller/weather.py` 放 `EnvironmentChannel`，同时管天气与机位。两者生命周期一致：跨会话保留、READY 后重放、RUNNING 中延迟、失败回滚到 `_applied_view`/上一份天气。拆开会让"READY 之后重放哪些状态"这件事散在两个文件里。
 
-### 8.7 `api_key` 放哪个工厂文件
+### 9.7 `api_key` 放哪个工厂文件
 
 选项：放 `factories/planners.py`，另三个文件从它 import（默认），或新建 `factories/credentials.py`（第五个文件）。
 

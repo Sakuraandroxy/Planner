@@ -1,16 +1,16 @@
 # 01 契约层：`planner/domain/` 与 `planner/ports/`
 
-契约层最终 26 个文件（`domain/`）加 14 个（`ports/`）。载具运动类型与命令联合全部落在 `domain/motion.py`，碰撞类型落在 `domain/execution.py`，两份 `MotionLimits` 合成 `domain/motion.py` 一份 18 字段。端口改两个文件、删一个、加一个：`vehicle.py` 加 `motion_capability()` 与新的 `collision_state()` 返回类型，`streaming_vehicle.py` 用 `stream_command` 替掉 `stream_velocity`（裁决 R2），`collision_check.py` 删除（裁决 R5），新增 `goal_source.py` 声明 `StreamGoalSource`（裁决 R16）。`Vehicle` 槽由 runtime 的 `GuidedVehicle(streaming, loop)` 组合对象兑现，引擎只实现 `stream_command` 一个数据面动作（裁决 R1）。`Capabilities` 与 `MotionCapability` 靠文件、字段与测试三重隔离，不共享命名空间。
+契约层最终 21 个文件（`domain/`）加 13 个（`ports/`）。载具运动类型与命令联合全部落在 `domain/motion.py`，碰撞类型落在 `domain/execution.py`，两份 `MotionLimits` 合成 `domain/motion.py` 一份 15 字段（四个纬度字段收成 `HeadingHoldSettings`）。端口改两个文件、删一个、加一个：`vehicle.py` 加 `motion_capability()` 与新的 `collision_state()` 返回类型，`streaming_vehicle.py` 用 `stream_command` 替掉 `stream_velocity`（裁决 R2），`collision_check.py` 删除（裁决 R5），新增 `goal_source.py` 声明 `StreamGoalSource`（裁决 R16）。`Vehicle` 槽由 runtime 的 `GuidedVehicle(streaming, loop)` 组合对象兑现，引擎只实现 `stream_command` 一个数据面动作（裁决 R1）。`Capabilities` 与 `MotionCapability` 靠文件、字段与测试三重隔离，不共享命名空间。
 
 ## 一 职责与文件清单
 
 一句话：本层只定义类型、常量、不变量校验与协议声明，不含函数逻辑、不读时钟、不开线程、import 任何其他层。
 
-### 1.1 `planner/domain/`（26 个文件，估约 2550 行）
+### 1.1 `planner/domain/`（21 个文件，估约 2260 行）
 
 | 文件 | 类与函数签名 | 估行 | 从哪来 |
 | --- | --- | --- | --- |
-| `motion.py` | `MotionModel(str, Enum)`；`MotionCapability`；`HolonomicCommand`；`CarCommand`；`MotionCommand = HolonomicCommand \| CarCommand`；`command_type_for(capability) -> type`；`require_supported(command, capability) -> None`；`MotionLimits`（18 字段）；`ContinuousTrackingSettings`；`ContinuousReference`；`CollisionRecoverySettings` | 200 | 现 `domain/motion.py` 89 行 + `services/segment_motion.py:21-93` 的 `MotionLimits` 合入 + 新增 6 个类型与 2 个校验函数 |
+| `motion.py` | `MotionModel(str, Enum)`；`MotionCapability`；`HolonomicCommand`；`CarCommand`；`MotionCommand = HolonomicCommand \| CarCommand`；`require_supported(command, capability) -> None`；`HeadingHoldSettings`（四个纬向参数）；`MotionLimits`（15 字段）；`ContinuousTrackingSettings`；`ContinuousReference`（模块内私有，不导出）；`CollisionRecoverySettings` | 205 | 现 `domain/motion.py` 89 行 + `services/segment_motion.py:21-93` 的 `MotionLimits` 合入 + 新增 6 个类型与 1 个校验函数 + `HeadingHoldSettings`（裁决 R22） |
 | `execution.py` | `PoseCheckpoint`；`ExecutionBudget`；`ExecutionReceipt`；`StopResult`；`ExecutionRecord`；新增 `CollisionContact`；新增 `CollisionState` | 95 | 现 69 行 + 26 行 |
 | `engine_family.py` | `KNOWN_ACTIONS`；`KNOWN_DRIVERS`；`Capabilities`；`SimulatorFamily`；`FamilyCatalog`；`KNOWN_FAMILY_KEYS`；`NON_FAMILY_SECTIONS`；`parse_family_catalog(raw)` | 306 | 现 `domain/runtime.py` 原样改名，内容一字不改 |
 | `sliding_window.py` | `SlidingWindowSettings`；`QueuedWaypoint`；`PlanningSnapshot`；`ContinuationCandidate`；`PlanningOutput`；并入 `PlanningWindowInput` | 135 | 现 99 行 + `domain/planning_window.py:9-35` 的 `PlanningWindowInput` |
@@ -19,7 +19,7 @@
 | `trajectory.py` | `RelativeTrajectory`、`WorldTrajectory`、`MotionSegment`、`MotionTrajectory`、`SegmentResult` | 75 | 不动 |
 | `mission.py` | `TaskKind`、`MissionStage`、`MissionPlan`、`TaskParameters` | 36 | 不动 |
 | `result.py` | `CompletionBasis`、`ResultMeasurement`、`StageSummary`、`StageResult`、`MissionResult` | 66 | 不动 |
-| `streaming.py` | `TimedVehicleState`、`ControlTelemetry`、`QueuePauseSnapshot`、`QueueObservationAnchor` | 80 | 不动 |
+| `streaming.py` | `TimedVehicleState`（导出）；`ControlTelemetry`、`QueuePauseSnapshot`、`QueueObservationAnchor`（不导出，仅执行层消费） | 80 | 不动；`QueuePauseSnapshot` 内部化（裁决 R22） |
 | `trajectory_telemetry.py` | 剩余航点快照与序列化 | 213 | 不动 |
 | `server.py` | `ServerState`、`WorkerEvent`、`TaskSubmission`、`ServerStatus`、`LogBatch`、`BackendUnavailable` | 115 | 不动 |
 | `weather.py` | `WEATHER_CATALOG`、`WEATHER_FIELDS`、`merge_weather` | 185 | 不动 |
@@ -29,17 +29,17 @@
 | `visual_goal.py` | `GoalObservation`、`GoalGeometry`、`GoalReference`、`VisualGoalState` 等 | 134 | 不动 |
 | `visual_goal_limits.py` | 到达半径、`VisualGoalNavigationParameters` | 63 | 不动 |
 | `visual_goal_completion.py` | `VisualGoalTriggerRules`、`VisualGoalCompletionInput` | 79 | 不动 |
-| `approach.py` | `ApproachSettings`、`ApproachTarget`、`ApproachStatus`、`ApproachAssessment` | 49 | 不动 |
+| `approach.py` | 已删除：`ApproachSettings` 与 `TargetApproach.distance_within_radius` 随能力迁进 `workflows/visual_goal_navigation/policy.py`；`ApproachTarget`、`ApproachAssessment`、`ApproachStatus` 与 `assess` 删掉（裁决 R22、R23、R25） | 0 | 现 49 行删光，同 `capabilities/approach/target_approach.py` |
 | `target_detection.py` | `NormalizedBoundingBox`、`TargetDetection`、`TargetDetectionInput` | 100 | 不动 |
 | `target_state.py` | `TargetPositionState`、`TargetObservationEvidence` | 49 | 不动 |
-| `depth.py`、`depth_foreground.py`、`depth_visualization.py` | 深度协议、前景过滤设置、深度渲染 | 31 / 35 / 34 | 不动 |
+| `depth.py` | 深度协议、前景过滤设置、深度渲染三个小文件合并为一个 | 95 | 现 `depth.py` 31 + `depth_foreground.py` 35 + `depth_visualization.py` 34 合入（裁决 R22） |
 | `__init__.py` | 包入口：现有 7 个再导出，加 `MotionModel`、`MotionCapability`、`HolonomicCommand`、`CarCommand`、`MotionCommand`、`command_type_for`、`require_supported`、`CollisionContact`、`CollisionState`、`CollisionRecoverySettings`、`Capabilities`、`MotionLimits`、`ContinuousTrackingSettings`、`ExecutionBudget`、`ExecutionReceipt`、`StopResult`、`PoseCheckpoint`、`TimedVehicleState`、`PlanningWindowInput`、`SlidingWindowSettings` | 45 | 现有 14 行按裁决 R20 扩成完整导出；跨层只走这个入口 |
 
-删除：`lane_reference.py`（99 行，决定纯视觉）、`planning_window.py`（36 行，并入 `sliding_window.py`）。
+删除：`lane_reference.py`（99 行，决定纯视觉）、`planning_window.py`（36 行，并入 `sliding_window.py`）、`server.py`（115 行，7 个生命周期类型搬到 `assembly/`，裁决 R22）、`approach.py`（49 行：`ApproachSettings` 与 `distance_within_radius` 迁进 `workflows/visual_goal_navigation/policy.py`，其余三个类型与 `assess` 删掉，裁决 R25）。`depth_foreground.py` 与 `depth_visualization.py` 并入 `depth.py`（裁决 R22）。
 
-任务相关类型（`basic_motion.py`、`free_navigation.py`、`visual_goal*.py`、`approach.py`）留在 `domain/` 而不是迁进 `workflows/<task>/`：`adapters/task_parser/tasks/*` 与 `adapters/task_completion/prompts/visual_goal_completion.py` 必须引用这些类型，而 `adapters/` 只允许 import `domain/`、`ports/`、`algorithms/`。留在这里的只有数据结构，判定函数按 `docs/REFACTOR.md` 进各任务包 `policy.py`。
+任务相关类型（`basic_motion.py`、`free_navigation.py`、`visual_goal*.py`）留在 `domain/` 而不是迁进 `workflows/<task>/`：`adapters/task_parser/tasks/*` 与 `adapters/task_completion/prompts/visual_goal_completion.py` 必须引用这些类型，而 `adapters/` 只允许 import `domain/`、`ports/`、`algorithms/`。留在这里的只有数据结构，判定函数按 `docs/REFACTOR.md` 进各任务包 `policy.py`。`approach.py` 不在此列：`adapters/` 不引用它，所以整体迁出（裁决 R25）。
 
-### 1.2 `planner/ports/`（14 个文件）
+### 1.2 `planner/ports/`（13 个文件，裁决 R23）
 
 | 文件 | 协议与签名 | 估行 | 从哪来 |
 | --- | --- | --- | --- |
@@ -48,7 +48,7 @@
 | `goal_source.py` | `StreamGoalSource`：`next(state: TimedVehicleState, unwrapped_yaw_deg: float) -> MotionCommand \| None` | 10 | 新建。任务层实现（`runtime/motion/follower.py` 的 `QueueFollower`）、执行层消费（`ControlLoop.run_stream` 的 `goals`）的协议，按依赖规则必须落在 `ports/`（裁决 R16） |
 | `position_hold_vehicle.py` | `PositionHoldVehicle`：`stream_state()`、`cancel()`、`hold_velocity(velocity_world, yaw_rate_deg_s, duration_s)` | 10 | 不动，签名保持；实现内部转调 `stream_command`（裁决 R7） |
 | `observation_source.py` | `ObservationSource`、`ControlledObservationSource`、`MovingObservationSource` | 24 | 不动 |
-| `backend_worker.py` | 十个 worker 方法 | 28 | 不动 |
+| `backend_worker.py` | 已搬出：`simulator/worker_protocol.py` | 28 | 进程栈内部协议，连同 `WorkerEvent`、`TaskSubmission` 离开契约层（裁决 R23） |
 | `capabilities.py` | `ReturnHome`、`WeatherControl`、`StreamingViews`、`AppearanceModelControl`、`FramePublisher` | 70 | 不动 |
 | `goal_observer.py`、`target_detector.py`、`task_parser.py`、`task_completion.py`、`trajectory_planner.py`、`task_trace.py` | 各一个 `Protocol` | 12 / 12 / 10 / 7 / 37 / 12 | 不动 |
 | `__init__.py` | 包入口：全部 `Protocol` 与 `SegmentSink`/`StreamSink` 两个别名、`StreamGoalSource` | 25 | 现 6 行，按裁决 R20 扩成完整导出 |
@@ -70,7 +70,9 @@
 - 两者都从 `planner/domain` 入口导出，靠名字与字段区分（裁决 R20）：`Capabilities` 说引擎控件，`MotionCapability` 说载具运动学，同名不混用。
 - 新增测试守住：`MotionCapability` 只出现在 `domain/motion.py`，`Capabilities` 只出现在 `domain/engine_family.py`。
 
-### 1.4 两份 `MotionLimits` 合并：保留 18 个字段
+### 1.4 两份 `MotionLimits` 合并：保留 15 个字段
+
+四个纬向参数收成嵌套对象 `HeadingHoldSettings`，它们只被 `services/position_hold.py` 读，平铺在物理包络里只是历史（裁决 R22）。
 
 现 `domain/motion.py:38` 与 `services/segment_motion.py:21` 各一份。合并后落在 `domain/motion.py`，字段来源与默认值：
 
@@ -83,10 +85,7 @@
 | `control_hz` | 两侧同名 | 20.0 |
 | `min_duration_s` | 两侧同名 | 1.0 |
 | `passed_lateral_tolerance_m` | 两侧同名，改成配置覆盖项 | `None` 表示不覆盖；生效值取模型默认与配置值的较大者，配置只能抬高不能压低（裁决 R17） |
-| `heading_hold_gain` | 两侧同名 | 0.4 |
-| `heading_rate_damping` | 两侧同名 | 0.0 |
-| `heading_deadband_deg` | 两侧同名 | 0.5 |
-| `heading_rate_deadband_dps` | 两侧同名 | 1.5 |
+| `heading: HeadingHoldSettings` | 两侧同名，收成嵌套对象 | `HeadingHoldSettings()`；内含 `heading_hold_gain=0.4`、`heading_rate_damping=0.0`、`heading_deadband_deg=0.5`、`heading_rate_deadband_dps=1.5`（裁决 R22） |
 | `position_gain` | domain 独有 | 1.0 |
 | `yaw_gain` | domain 独有 | 2.0 |
 | `position_tolerance_m` | domain 独有 | 0.3 |
@@ -209,12 +208,13 @@
 | `MotionModel`、`MotionCapability` | 见上 | `assembly`、`algorithms`、`runtime`、`adapters/task_parser` | 稳定 |
 | `MotionCommand`（含两个成员） | 见上 | 引擎适配层 `stream_command`、`adapters/diagnostics` | 稳定 |
 | `MotionLimits` | 见上 | `algorithms`、`runtime` | 稳定 |
+| `HeadingHoldSettings` | frozen dataclass | `runtime`（位置保持） | 稳定（裁决 R22） |
 | `CollisionState`、`CollisionContact` | 见上 | `runtime` | 稳定 |
 | `CollisionRecoverySettings` | 见上 | `runtime` | 稳定 |
 | `Vehicle`、`StreamingVehicle` | `Protocol` | 引擎适配层实现，`runtime` 消费 | 稳定 |
 | `StreamGoalSource` | `Protocol` | 任务层实现，`runtime/motion/loop.py` 消费（裁决 R16） | 稳定 |
 | `PositionHoldVehicle` | `Protocol` | 引擎适配层实现，`runtime` 消费（裁决 R7） | 内部，阶段 5 再定 |
-| `command_type_for`、`require_supported` | 纯函数 | 引擎适配层、`assembly` 构造期、`runtime` | 稳定 |
+| `require_supported` | 纯函数 | 引擎适配层、`assembly` 构造期、`runtime` | 稳定 |
 
 不暴露什么：`GuidedVehicle`、`ControlLoop`、`QueueFollower`、`PlanningWindow`、`WorldWaypointQueue` 属执行层内部，不进任何跨层表；`SegmentSink`、`StreamSink` 只是 `stream_command` 的别名，不单独建文件也不导出（裁决 R2）；`SimulatorPorts`、`TASK_REQUIREMENTS`、`_Slot` 等占位类属装配与引擎侧，不进契约；任何引擎实现类（`ProjectAirSimRover`、`AirSimVehicle`）不跨层可见。
 
@@ -289,7 +289,121 @@
 7. 删文件。`domain/lane_reference.py` 与其两处接线删除；`domain/planning_window.py` 的 `PlanningWindowInput` 并入 `domain/sliding_window.py` 后删文件，改 4 个引用（`services/planning_window.py:18`、`workflows/visual_goal_navigation/session.py:8`、`workflows/free_navigation/continuous.py:17`、`tests/test_batch3_services.py:12`）。验收：`pytest tests/ -q` 全绿，用例数不减少。
 8. 跨层 import 改走包入口（裁决 R20）。`from planner.domain.pose import WorldPose` → `from planner.domain import WorldPose`，`planner.ports` 同理。现状估算：指向 `planner.domain.<模块>` 的深层 import 约 444 条（绝对路径 368，相对两三级点 76），指向 `planner.ports.<模块>` 约 25 条，合计约 470 条、涉 162 个文件。按包分批：`runtime`（现 `services/`）116 处、`adapters` 52 处，其余为 `workflows`、`tests`、`scripts` 各一批，每批 `pytest tests/ -q`。验收：`grep -rn "from planner\.domain\.\|from \.\.domain\.\|from \.\.\.domain\.\|from planner\.ports\.\|from \.\.ports\." planner tests scripts` 只剩 `planner/domain/` 与 `planner/ports/` 包内部及两个包入口。
 
-## 八 未决问题
+## 八 削面复核（裁决 R21）
+
+口径：引用数 = `grep -rn "\bName\b" planner --include=*.py` 去掉 `planner/domain/__init__.py` 的转发行后的计数。测试、`scripts/`、包入口转发不计；同层内部引用不计入"层外调用点"。
+
+### A 对外名字逐条
+
+| 名字 | 现引用数 | 层外运行期调用点 | 处置 | 依据 |
+| --- | --- | --- | --- | --- |
+| `WorldPose` | 165 | `services/trajectory-validation.py`、所有载具适配层 | 保留 | 调用（全栈输入） |
+| `RelativePoseDelta` | 29 | `services/trajectory_transform.py:5` | 保留 | 调用 |
+| `Observation` | 68 | `services/free_space.py:21` | 保留 | 调用与构造期校验 |
+| `CameraIntrinsics` | 15 | `capabilities/targeting/depth_surface_sampling.py:21` | 保留 | 调用；两份实现按 R14 不合并 |
+| `CameraMountPose` | 1 | 无 | 删 | 全仓仅定义一处，无人使用 |
+| `relative_to_world` | 21 | `services/segment_motion.py:11` | 保留 | 调用 |
+| `wrap_deg` | 8 | `services/segment_motion.py:151` | 保留 | 调用 |
+| `SegmentResult` | 1 | 无 | 删 | 仅定义加包入口导出，无生产调用方 |
+| `MotionModel` | 0 | 目标：`simulators/projectairsim/rover.py` 的 `motion_capability()`（R1 落地后） | 保留 | 对外契约：引擎必须声明的运动学类型 |
+| `MotionCapability` | 0 | 同上 | 保留 | 对外契约：引擎必须实现的 `motion_capability()` 返回类型 |
+| `HolonomicCommand` | 0 | 目标：`runtime/motion/loop.py` 产出，引擎 `stream_command` 消费 | 保留 | 对外契约：`stream_command` 的命令类型 |
+| `CarCommand` | 0 | 同上 | 保留 | 同上 |
+| `MotionCommand` | 0 | 同上 | 保留 | 同上 |
+| `command_type_for` | 0 | 无 | 内部化 | 仅 `require_supported` 内部需要，外部直接调 `require_supported` |
+| `require_supported` | 0 | 目标：引擎 `stream_command` 第一句（R1） | 保留 | 构造期不变量校验 |
+| `CollisionContact` | 0 | 目标：三个载具适配层的 `collision_state()` | 保留 | 对外契约：`CollisionState` 字段类型，适配层构造 |
+| `CollisionState` | 0 | 目标：`runtime/collision_recovery.py` 的 `poll`（R5） | 保留 | 对外契约：`Vehicle.collision_state()` 返回类型 |
+| `CollisionRecoverySettings` | 0 | 目标：`runtime/collision_recovery.py` 构造参数 | 保留 | 配置字段 |
+| `Capabilities` | 4 | `simulator/ports.py:93` → `/api/status` | 保留 | HTTP 字段 |
+| `MotionLimits` | 42 | `services/motion/synchronized.py:5` 等 | 保留 | 配置字段；字段审计见 A.2 |
+| `HeadingHoldSettings` | 0 | 目标：`services/position_hold.py`（现四处纬向字段的唯一读者） | 保留 | 配置字段；从 `MotionLimits` 收成嵌套对象（裁决 R22） |
+| `ContinuousTrackingSettings` | 32 | `services/motion/continuous.py:32` | 保留 | 配置字段 |
+| `ExecutionBudget` | 37 | `services/execution.py:127` | 保留 | 调用 |
+| `COMMAND_FOR_MODEL` | 0 | 不采纳 | 不新增常量 | 06 提的“按模型取命令类型”用 `require_supported(command, capability)` 覆盖：适配层收到命令后校验，类型不符就抛 `ValueError`，不需要映射表（裁决 R25） |
+| `ExecutionReceipt` | 9 | 仅 `runtime` 内部产生与消费 | 内部化 | 只有执行层用，不进契约面（裁决 R22） |
+| `StopResult` | 18 | 仅 `services/execution.py:79` 自身与任务层取错误字符串 | 内部化 | 同上（裁决 R22） |
+| `PoseCheckpoint` | 9 | `simulators/projectairsim/motion.py:72` | 保留 | 对外契约：`execute_segment` 参数类型 |
+| `TimedVehicleState` | 18 | `services/position_hold.py:31` | 保留 | 调用与 `stream_state()` 返回类型 |
+| `PlanningWindowInput` | 10 | 仅 `services/planning_window.py:121` | 内部化，随滑窗进 `runtime/window/` | 无第二消费者（裁决 R22） |
+| `SlidingWindowSettings` | 12 | `services/planning_window.py:66` | 保留 | 配置字段 |
+| `Vehicle` | 17 | `simulator/ports.py:40` 槽位类型 | 保留 | 对外契约：引擎必须实现的 Protocol |
+| `StreamingVehicle` | 4 | `simulator/ports.py:39` | 保留 | 同上 |
+| `StreamGoalSource` | 0 | 目标：`runtime/motion/follower.py` 的 `QueueFollower` 实现（R4/R16） | 保留 | 对外契经：任务层实现、执行层消费 |
+| `SegmentSink`、`StreamSink` | 0 | 目标：`runtime/motion/loop.py` 的 `sink`（R2） | 内部化 | 是 `stream_command` 的签名别名，留在 runtime（裁决 R22） |
+| `PositionHoldVehicle` | 2 | `services/position_hold.py:12` | 保留 | 对外契约：引擎必须实现的 Protocol（R7） |
+| `ObservationSource` | 7 | `simulator/ports.py:37` | 保留 | 对外契约 |
+| `ControlledObservationSource` | 2 | `simulator/ports.py:35` | 保留 | 对外契约 |
+| `MovingObservationSource` | 6 | `simulator/ports.py:36` | 保留 | 对外契约 |
+| `ReturnHome` | 2 | `simulator/ports.py:30` | 保留 | 对外契约与 `home` 动作门 |
+| `WeatherControl` | 3 | `simulator/ports.py:32` | 保留 | 对外契约与天气 HTTP 字段 |
+| `StreamingViews` | 2 | `simulator/ports.py:31` | 保留 | 对外契约与 `view_modes` 字段 |
+| `AppearanceModelControl` | 2 | `simulator/ports.py:28` | 保留 | 对外契约与 `/api/models` |
+| `FramePublisher` | 2 | `simulator/ports.py:29` | 保留 | 对外契约与 `/api/video` 门 |
+| `BackendWorker` | 4 | 搬到 `simulator/worker_protocol.py`，由 `simulator/worker.py:38` 与两个引擎的 `session.py` 从 `simulator` 取（裁决 R23） | 搬走 | 进程栈协议，不是载具能力 |
+| `GoalObserver` | 2 | `workflows/visual_goal_navigation/workflow.py:54` | 保留 | 对外契约：检测器实现必须满足 |
+| `TargetDetector` | 2 | `capabilities/targeting/bbox_goal_observation.py:9` | 保留 | 对外契约 |
+| `TaskCompletion` | 0 | 无任何 import 行；唯一引用是 `application/factories.py:19` 导入实现类 | 删（不导出） | 无层外 import，按 R21 规则 4 处理（裁决 R23） |
+| `TaskParser` | 4 | `application/application.py:7` | 保留 | 对外契约 |
+| `TrajectoryPlanner` | 10 | `services/planning_window.py:32` | 保留 | 对外契约 |
+| `TaskTrace` | 3 | `workflows/visual_goal_navigation/workflow.py:57` | 保留 | 对外契约 |
+
+### A.2 `MotionLimits` 15 个字段逐个读者
+
+| 字段 | 引用数 | 层外运行期首处读者 | 处置 |
+| --- | --- | --- | --- |
+| `max_speed_mps` | 5 | `services/segment_motion.py`（段时长）、`application/factories.py` | 保留 |
+| `max_acceleration_mps2` | 11 | `services/motion/continuous.py` | 保留 |
+| `max_yaw_rate_deg_s` | 7 | `services/motion/continuous.py` | 保留 |
+| `max_yaw_acceleration_deg_s2` | 8 | `services/motion/continuous.py` | 保留 |
+| `control_hz` | 15 | `services/position_hold.py` | 保留（亦定流量节拍） |
+| `min_duration_s` | 4 | `services/motion/synchronized.py` | 保留 |
+| `passed_lateral_tolerance_m` | 5 | `services/trajectory_queue.py`（越点判据） | 保留（R6/R17 覆盖项） |
+| `heading: HeadingHoldSettings` | 0（现为四个平铺字段，各 2） | `services/position_hold.py` | 收成嵌套对象；四子字段仍是不同轴，不再合（裁决 R22） |
+| `position_gain` | 4 | `services/motion/continuous.py` | 保留 |
+| `yaw_gain` | 3 | `services/motion/continuous.py` | 保留 |
+| `position_tolerance_m` | 21 | `services/motion/continuous.py` | 保留 |
+| `yaw_tolerance_deg` | 14 | `services/motion/continuous_reference.py` | 保留 |
+| `stopped_speed_mps` | 6 | `services/continuous_execution.py` | 保留；与 `stopped_yaw_rate_deg_s` 是两个轴 |
+| `stopped_yaw_rate_deg_s` | 3 | `simulators/projectairsim/motion.py` | 保留；合并到速度阈值会把"原地旋转可接受"误判成已停 |
+| `settle_time_s` | 11 | `services/position_hold.py` | 保留；它是时间窗，与 `position_tolerance_m`（几何半径）不同量纲 |
+
+不合并的三对：`settle_time_s` 与 `position_tolerance_m`（时间与距离）；`stopped_speed_mps` 与 `stopped_yaw_rate_deg_s`（平移与旋转两个轴）；`heading_deadband_deg` 与 `heading_rate_deadband_dps`（误差与速度两个判据）。
+
+### B 历史残留删除清单
+
+| 名字 | 位置 | 现引用 | 处置与理由 | 风险 |
+| --- | --- | --- | --- | --- |
+| `SegmentResult` | `domain/trajectory.py:71-76` | 3（定义、包入口导入与 `__all__`） | 删。无生产调用方，与 `ExecutionReceipt` 职责重叠 | 无；若有外部脚本反序列化该名字会报 `ImportError` |
+| `CameraMountPose` | `domain/pose.py:143` 起 | 1（仅定义） | 删。docstring 声称 AirSim 读回，全仓无一处读取或构造 | 无 |
+| `ApproachTarget`、`ApproachAssessment`、`ApproachStatus` 与 `TargetApproach.assess` | `domain/approach.py`、`capabilities/approach/target_approach.py:23` | 5、5、4；`assess` 0 个运行期调用方 | 删。`ApproachSettings` 与 `distance_within_radius` 随能力迁进 `workflows/visual_goal_navigation/policy.py`（裁决 R25），`distance_within_radius` 的现调用点是 `capabilities/completion/visual_goal_request.py:42` | 目前只有 `tests/test_capability_completion.py` 与 `tests/test_reference_contracts.py` 在用，两个测试随之删 |
+| 第二份 `MotionLimits` | `services/segment_motion.py:21-93` | 73 行 | 已按合并裁决移入 `domain/motion.py` | 无 |
+| `CollisionCheck` | `ports/collision_check.py` | 已删 | R5 删除 | 无 |
+| 车道先验 | `domain/lane_reference.py` | 99 行 | 已定删除 | 无 |
+| `PlanningWindowInput` 的第二个宿主 | `domain/planning_window.py` | 36 行 | 并入 `domain/sliding_window.py` | 无 |
+| `CameraIntrinsics` 两份实现 | `domain/observation.py` 与 `ports/` 相机视图侧 | 15 | 保留两份，加主点差 ≤ 0.5 px 的断言（R14） | 两份漂移只能靠断言发现 |
+| `ports/position_hold_vehicle.py` 的 `hold_velocity` | 同文件 | 2 | 保留，实现内部转调 `stream_command`（R7）；全向签名对阿克曼无效，但该端口不由车实现 | 车没有速度保持，只能 `hover()` |
+
+### C 结论数字（裁决 R23 终值）
+
+- 基线 48 → 终值 44。明细：R21 −2（`SegmentResult`、`command_type_for`）；R22 −1（`PlanningWindowInput`）、−2（`SegmentSink`、`StreamSink`）、+1（`HeadingHoldSettings`）；R23 −1（`TaskCompletion`）；补齐 R20 清单漏列 +2（`MotionSegment`、`MotionTrajectory`）。
+- `ExecutionReceipt`、`StopResult` 留成契约类型（裁决 R23 第 5 条）：`workflows/visual_goal_navigation/workflow.py:20` 导入 `StopResult`，同文件 189 行读 `exc.receipt.remaining`，`flight.py:7` 导入 `ExecutionReceipt`。
+- 搬出契约层、不占总名额：`ServerState`、`ServerStatus`、`BackendUnavailable` 等 7 个生命周期类型进 `assembly/controller/state.py`；`WorkerEvent`、`TaskSubmission` 随 `ports/backend_worker.py` 进 `simulator/worker_protocol.py`；`LogBatch` 进 `runtime/log_buffer.py`（唯一使用点 `services/log_buffer.py:9`）；四个目标接近类型进 `workflows/visual_goal_navigation/policy.py`（其中三个类型与 `assess` 删掉）。`domain/` 26 → 21 个文件（裁决 R25）。
+- 终值 44 仍高于 34，差值 10，逐条给 import 行反证（拆掉就不能在构造期报错或推导能力位）：
+  - `GoalObserver`：`planner/workflows/visual_goal_navigation/workflow.py:54`
+  - `TargetDetector`：`planner/capabilities/targeting/bbox_goal_observation.py:9`
+  - `TaskParser`：`planner/application/application.py:7`
+  - `TrajectoryPlanner`：`planner/services/planning_window.py:32`
+  - `TaskTrace`：`planner/workflows/visual_goal_navigation/workflow.py:57`
+  - `FramePublisher`：`planner/simulator/ports.py:29`
+  - `ReturnHome`：`planner/simulator/ports.py:30`
+  - `StreamingViews`：`planner/simulator/ports.py:31`
+  - `WeatherControl`：`planner/simulator/ports.py:32`
+  - `AppearanceModelControl`：`planner/simulator/ports.py:28`
+  后五条的 import 行都在 `planner/simulator/ports.py` 的 `SimulatorPorts` 字段声明上，拆掉后槽位只能写 `object`，`tests/test_architecture.py` 的“声明槽位有真实实现”检查失效；前五条拆掉后，`adapters/` 与 `application/` 的参数只剩鸭子类型，少接一根线不再在构造期报错。
+- 删代码行：本次实删 164 行（`server.py` 115、`approach.py` 49），另有 `ports/backend_worker.py` 28 行搬去 `simulator/`；累计（含前几次裁决）约 420 行。
+
+## 九 未决问题
 
 1. `MotionCapability` 是否进 `SimulatorPorts` 槽位。
    - 选项 A（默认）：只走 `Vehicle.motion_capability()`，`SimulatorPorts` 不加槽位。代价：`SimulatorPorts.from_slots` 的 `_Slot` 占位（`planner/simulator/ports.py`）没有这个方法，控制台不能据能力渲染"横移"控件。
@@ -303,3 +417,4 @@
 4. `CarCommand.reverse` 与速度符号的校验强度。
    - 选项 A（默认）：严格相等，`reverse is (forward_speed_mps < 0)`，否则构造期抛错。
    - 选项 B：只在两者矛盾时报错、允许 `reverse=False` 配负速度。代价：`reverse` 变成可被忽略的字段，适配层还得自己判符号。
+5. 已由 R23 第 4 条消除：四个目标接近类型只被 `capabilities/approach/target_approach.py` 与 `capabilities/completion/visual_goal_request.py` 引用，两个文件随类型一起迁进 `workflows/visual_goal_navigation/policy.py`，`adapters/` 不 import 它们，不存在依赖冲突。

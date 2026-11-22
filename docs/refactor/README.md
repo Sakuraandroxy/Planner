@@ -160,7 +160,7 @@ controller  position_hold.start() -> IDLE
 
 层间解耦靠三条机制，全部可测：
 
-- **入口唯一（D10）。** 每层只从 `planner/<层>/__init__.py` 导出公开名字，跨层 import 只能写 `from planner.<层> import <名字>`。任务包这类二级包也可以直接 import 其 `__init__`（`planner.workflows.basic_motion`），但不能再往下一层。深层路径如 `planner.runtime.motion.loop` 只允许同层内部使用。契约层因此扩两个包入口，把新类型与全部 Protocol 导出去。
+- **入口唯一（D10）。** 每层只从 `planner/<层>/__init__.py` 导出公开名字；**二级包入口**（`planner.algorithms.motion`、`planner.workflows.basic_motion`）也算合法入口。跨层 import 只能指向某个 `__init__.py`，不能指向普通模块文件。深层路径如 `planner.runtime.motion.loop` 只允许同层内部使用。契约层因此扩两个包入口，把新类型与全部 Protocol 导出去。
 - **输入只有两类（D11）。** 要么是契约层类型，要么是本层自己声明的 `Protocol`。执行层不接收任务层的具体类，任务层不接收引擎对象。
 - **只见名字不见实现（D12）。** 跨层传的是契约类型或本层 Protocol 的实例，构造参数与返回值都不写对方的具体类。
 
@@ -220,6 +220,22 @@ controller  position_hold.start() -> IDLE
 - 不暴露：客户端库对象不离开引擎包；端口实现类只经由 `SimulatorPorts` 槽位对外。
 - 细节：`06-adapters-engines.md` §三。
 
+### 削面结果（R21–R24）
+
+六层各自按"每个对外名字给出层外运行期调用点"重审了一遍。合计对外名字从 226 降到 132，删除或移出约 3800 行。
+
+| 层 | 对外名字 | 删除与移出 | 主要处置 |
+| --- | --- | --- | --- |
+| 契约 | 48 → 44 | 约 470 行 | 生命周期 7 类搬进 `assembly/controller/state.py`；`WorkerEvent`、`TaskSubmission` 随 `backend_worker` 进 `simulator/worker_protocol.py`；`LogBatch` 进 `runtime/log_buffer.py`；目标接近的 `approach.py` 整体迁出（三个类型与 `assess` 删）；`SegmentResult` 删；`depth_foreground`、`depth_visualization` 并入 `depth.py`；`MotionLimits` 的四个 heading 字段收成 `HeadingHoldSettings`；`domain/` 26 → 21 个文件 |
+| 计算 | 72 → 36 | 约 170 行 | 27 个名字私有化；`plan_segment`、`SegmentSetpoint` 删除；停稳三判合成 `settle_check`；两个偏航函数合一；对外入口拆成层入口 11 个加 `motion/`、`depth/`、`targeting/` 三个二级入口 |
+| 执行 | 19 → 10 | 约 710 行 | 删 `segment_motion.py`、`continuous_execution.py`、`collision_check.py`；两个引擎的跟踪器律段删除；两份碰撞退避镜像删除；`StreamTimeline`、`MovingObservations`、`CollisionRecovery`、`close_resources` 内部化 |
+| 任务 | 10 → 7 | 约 303 行 | `TaskDeclaration`、`Workflow` 内部化；`require_confirmed` 撤；`TaskLoop`、`StageEvidence`、六个 `Channel` 全部不进对外面 |
+| 装配 | 27 → 12 | 约 120 行 | 控制器协作者 6 → 4（`SessionSwitcher` 收地图、外观、配置；`EnvironmentChannel` 收天气与机位）；六个工厂收成四个；`capabilities_for`、`PlannerApplication`、`MissionValidator`、`MissionRunner`、`WorkflowRouter` 内部化 |
+| 引擎与适配 | 50 → 23 | 约 2233 行 | 删 `recording.py`、两个 tracker 文件、观测门、走廊常量、车道提示词；`streaming_views.py` 移出到 `scripts/`；提示词正文外置为模板（1411 → 约 490 行 Python 加约 900 行模板）；`TASK_REQUIREMENTS` 迁出 |
+
+三条判据落在测试里：`tests/test_public_surface.py` 把每层的包入口 `__all__` 与该层文档的 A 表逐名比对，多一个少一个都失败；`tests/test_layer_entries.py` 保证跨层 import 只落在 `__init__.py`；`tests/test_architecture.py` 继续守客户端库与能力推导。
+
+
 ## 六、被动能力的落点
 
 | 能力 | 位置 | 触发 | 任务层看到什么 |
@@ -253,6 +269,7 @@ controller  position_hold.start() -> IDLE
 | --- | --- |
 | `tests/test_layering.py` | D1–D9 依赖规则，含 `simulator/` 白名单与"只有 assembly 同时 import 任务与引擎" |
 | `tests/test_layer_entries.py` | D10–D12：跨层 import 只落在包入口；输入参数类型是契约类型或本层 `Protocol`；跨层签名里不出现对方具体类 |
+| `tests/test_public_surface.py` | 每层包入口的 `__all__` 与该层文档 A 表逐名一致；二级入口只导出本组名字 |
 | `tests/test_capability_matrix.py` | R18：可跑任务 = `REQUIRED_PORTS` ⊆ 已填槽位；`SimulatorPorts` 无 `enabled_tasks`；UE4 填了 `streaming` 因此巡航在结果里 |
 | `tests/test_motion_contract.py` | 五个新类型的 `__post_init__` 负例、命令分型、`require_supported` |
 | `tests/test_vehicle_port.py` | 三个适配层的 `motion_capability()` 取值；给车喂横向命令必须抛错且引擎调用计数为 0 |
@@ -276,7 +293,7 @@ UE4 侧一次：启动场景后确认巡航出现在能力位里（R18 取消了
 | 阶段 | 内容 | 验收 |
 | --- | --- | --- |
 | 0 | 删除俯视任务 | 已完成（`8273ef7`） |
-| 1 | 改名与搬家：三个包改名、`domain/runtime.py` 改 `engine_family.py`、纯函数进 `algorithms/`、`MotionLimits` 合一份、滑窗线程进 `runtime/window/`、任务判定进任务包、删 `lane_reference`；跨层 import 改走包入口（约 470 条、162 个文件） | `pytest tests/ -q` 全绿；`test_layering.py` 与 `test_layer_entries.py` 通过；用例数不减 |
+| 1 | 改名与搬家：三个包改名、`domain/runtime.py` 改 `engine_family.py`、纯函数进 `algorithms/`、`MotionLimits` 合一份、滑窗线程进 `runtime/window/`、任务判定进任务包、删 `lane_reference`；跨层 import 改走包入口（约 470 条、162 个文件）；按各层 B 表删除历史残留（合计约 3800 行） | `pytest tests/ -q` 全绿；`test_layering.py` 与 `test_layer_entries.py` 通过；用例数不减 |
 | 2 | 契约扩展：加 `MotionModel`/`MotionCapability`/两个命令/`CollisionState`/`CollisionRecoverySettings`；三个适配层实现 `motion_capability()` 与 `stream_command`（旧名保留一版别名）；`motion.collision` 配置段；删 `enabled_tasks` 与各引擎 `ENABLED_TASKS`，能力矩阵改为纯槽位推导（R18） | 契约、端口与能力矩阵测试全绿；UE4 巡航出现在能力位里 |
 | 3 | 循环上移：`ControlLoop` 外壳先委派旧实现，再把律搬进 `runtime/motion/`，删两个 tracker 的律，`GuidedVehicle` 填槽 | UE5 数值动作精度不劣化；连续遥测差 ≤1 拍 |
 | 4 | 被动安全：`CollisionRecovery` 接 `_guard`，删巡航与目标接近里的两处镜像退避与碰撞预检分支 | 假载具接触三任务都触发；次数超限报错 |
@@ -304,12 +321,17 @@ UE4 侧一次：启动场景后确认巡航出现在能力位里（R18 取消了
 | R12 | 天气与机位 | 合成 `EnvironmentChannel` | 与 `REFACTOR.md` 原表一字不符，需同步改 |
 | R13 | 提示词外置范围 | 只三个大文件 | 四份小提示词仍在 Python |
 | R14 | 相机内参半像素差 | 两份都留，加断言 | 长期存在两套主点 |
-| R15 | `streaming_views.py` | 留引擎包，运行时不 import | 引擎包继续携带 xvfb/xpra 相关代码 |
+| R15 | `streaming_views.py` | **作废**，见 R22（移出到 `scripts/`） | — |
 | R16 | `StreamGoalSource` 放哪 | 新增 `ports/goal_source.py`；Sink 名不建文件 | `ports/` 回到 14 个文件 |
 | R17 | 越点走廊取值 | 阿克曼 1.0 m（原 0.6 m 实测失败率偏高），配置只能抬高 | 车更早起下一个航点，越点后轨迹更宽松 |
 | R18 | 可跑任务由什么决定 | 只由 `REQUIRED_PORTS` ⊆ 已填槽位；删 `enabled_tasks` 与 `ENABLED_TASKS` | 未实跑过的组合也会被承诺，出问题要从引擎查 |
 | R19 | 层间怎么解耦 | 层一个公开入口；输入只收契约类型或本层 `Protocol`；跨层不见实现类 | 包入口要导出全部公开名，约 470 条深层 import 要改 |
 | R20 | 契约层包入口导出范围 | `domain/`、`ports/` 两个 `__init__` 导出全部公开名字，`errors.py` 作第三个入口 | 导出面变宽，新增类型必须同步入口 |
+| R21 | 对外名字是否都必要 | 逐个给出层外运行期调用点；没有就内部化或删除；找不到就删，只要测试在用的不保留 | 约 144 个名字被内部化或删除 |
+| R22 | HTTP 生命周期与目标接近类型留在契约层吗 | 搬出：生命周期进装配层，worker 协议进进程栈，目标接近类型进任务包 | 契约层少 12 个名字、`domain/` 26 → 22 个文件 |
+| R23 | 契约层还能不能压到 34 | 压到 34 需要拆掉构造期校验，保留 44 并逐条给 import 行反证 | 契约层仍是六层里对外名字最多的 |
+| R25 | 收尾一致性：`approach.py` 与 `COMMAND_FOR_MODEL` | `domain/approach.py` 整体迁出任务包；不新增 `COMMAND_FOR_MODEL`，适配层用 `require_supported` 校验 | 契约层少一个文件 |
+| R24 | 一个大入口还是几个二级入口 | 允许二级包入口：层入口只放通用名字，`algorithms.motion`、`algorithms.depth`、`algorithms.targeting` 各自成入口 | 规则稍宽，测试按"只能指向 `__init__.py`"守 |
 
 ## 十一、仍然开放的问题
 
@@ -343,9 +365,9 @@ UE4 侧一次：启动场景后确认巡航出现在能力位里（R18 取消了
 | 文件 | 层 | 行数 |
 | --- | --- | --- |
 | `00-boundaries.md` | 共同约束与初始契约 | 192 |
-| `01-contracts.md` | 契约层 `domain/`、`ports/` | 305 |
-| `02-algorithms.md` | 计算层 `algorithms/` | 842 |
-| `03-runtime.md` | 执行层 `runtime/` | 610 |
-| `04-workflows.md` | 任务层 `workflows/` | 352 |
-| `05-assembly.md` | 装配层 `assembly/` 与 `config/` | 392 |
-| `06-adapters-engines.md` | 端口实现、引擎实现、进程栈 | 378 |
+| `01-contracts.md` | 契约层 `domain/`、`ports/` | 420 |
+| `02-algorithms.md` | 计算层 `algorithms/` | 955 |
+| `03-runtime.md` | 执行层 `runtime/` | 685 |
+| `04-workflows.md` | 任务层 `workflows/` | 391 |
+| `05-assembly.md` | 装配层 `assembly/` 与 `config/` | 459 |
+| `06-adapters-engines.md` | 端口实现、引擎实现、进程栈 | 452 |

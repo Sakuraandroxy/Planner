@@ -8,11 +8,11 @@
 
 | 文件 | 类与函数签名 | 估计行数 | 从哪来 |
 | --- | --- | --- | --- |
-| `workflows/__init__.py` | 层入口，唯一跨层可见面：`Workflow`、`TaskDeclaration`、`TASK_PACKAGES`、三个工作流类、三个 `StageAdmission`、`require_confirmed` | 24 | 现 `workflows/__init__.py:10`；改为显式重导出，装配层只从这个入口 import（裁决 R19a） |
+| `workflows/__init__.py` | 层入口，跨层可见面只留 7 个名字：`TASK_PACKAGES`、三个工作流类、三个 `StageAdmission` | 20 | 现 `workflows/__init__.py:10`；显式重导出（裁决 R19a）；`Workflow`、`TaskDeclaration` 不导出，`require_confirmed` 撤掉（裁决 R21） |
 | `workflows/base.py` | `Workflow(Protocol)`：`prepare() / run(stage) / close()`；`TaskDeclaration`；`declaration_of(package) -> TaskDeclaration` | 30 | 现 `workflows/base.py:8-10` 加两个新符号 |
 | `workflows/common/__init__.py` | 包说明 | 3 | 新建 |
 | `workflows/common/budget.py` | `StageBudget`：`start(stage, limits)`、`remaining_s(clock)`、`require_time(clock)`、`count_model_call(clock)`、`unreliable_observation(ambiguous=False)`、`record(receipt)`、`stop`、`remaining_motion` | 120 | 现 `visual_goal_navigation/session.py:68` 的 `require_time`、同文件 `:84` 的 `model_call`、`visual_goal_navigation/termination.py` 的调用计数、`free_navigation/workflow.py` 的各参数校验 |
-| `workflows/common/evidence.py` | `StageEvidence`（frozen dataclass）、`summary_for(evidence)`、`result_for(evidence)`、`require_confirmed(result, stage)`、`MEASUREMENT_NAMES` | 110 | 现 `application/mission_runner.py:20-45` 的结果检查，加 `domain/result.py:28,49` 的构造样板 |
+| `workflows/common/evidence.py` | `StageEvidence`（frozen dataclass）、`summary_for(evidence)`、`result_for(evidence)`、`MEASUREMENT_NAMES` | 90 | 现三个 `workflow.py` 的 `StageSummary`/`StageResult` 样板，加 `domain/result.py:28,49` 的构造要求；`require_confirmed` 不进这里（裁决 R21） |
 | `workflows/common/loop.py` | `TaskCycle(Protocol)`：`begin(ctx) / round(ctx) / finish(ctx)`；`CycleContext`；`RoundOutcome`；`TaskLoop(cycle, budget, clock, sleep, checkpoint, event)`、`TaskLoop.drive(context) -> RoundOutcome` | 140 | 三个 `workflow.py` 里重复的 while 骨架（`visual_goal_navigation/workflow.py:285`、`free_navigation/workflow.py:237`、`basic_motion/workflow.py:58`） |
 | `workflows/common/streaming.py` | `ObservationFeed(Protocol)`、`StoppedFeed`、`MovingFeed`；`MotionChannel(Protocol)`、`SegmentChannel`、`StreamChannel`；`ChannelReport` | 300 | `visual_goal_navigation/{continuous.py,approach.py,flight.py}` 与 `free_navigation/continuous.py` 的 tick 与下发骨架，去掉两处镜像 |
 | `workflows/basic_motion/__init__.py` | `TASK_KIND`、`REQUIRED_PORTS`、`BasicMotionWorkflow`、`StageAdmission` | 10 | 现 `basic_motion/__init__.py:2` |
@@ -77,8 +77,8 @@ class MotionChannel(Protocol):
 | `prepare()` | 幂等；不发指令、不取帧、不调模型；只检查端口与资源可用（模型调用服务空闲、滑窗 worker 可用、`moving_capture` 在连续模式下存在）。失败抛 `ProtocolError` 或 `ExecutionError`，这是构造期之外的第二次准入 |
 | `run(stage)` | 首行自己调一次 `prepare()`，不依赖 runner 已经调过；只处理一个 stage；任何退出路径都返回 `StageResult`，用户停止与失败都是 `success=False` |
 | `close()` | 幂等；置 `_closed`；之后 `run`/`prepare` 抛 `ExecutionError`。worker 线程与规则见第 5 节 |
-| `MissionRunner` | 按 `plan.stages` 顺序调用 `workflow_for(stage).run(stage)`，首败即停；不认识 `stage.parameters` 的具体类型（那是 `StageAdmission` 的事）；用 `evidence.require_confirmed(result, stage)` 校验返回形状 |
-| `require_confirmed` | `stage_id` 必须等于 `stage.stage_id`；`success=True` 必须带 `summary.completion_confirmed=True` 且 `completion_basis is not NOT_VERIFIED`；任一不满足则改写为失败，reason 写 `"workflow returned no confirmed stage completion evidence or mismatched stage ID"`。这三条现在是 `application/mission_runner.py:26-42`，搬进 `common/evidence.py` |
+| `MissionRunner` | 按 `plan.stages` 顺序调用 `workflow_for(stage).run(stage)`，首败即停；不认识 `stage.parameters` 的具体类型（那是 `StageAdmission` 的事）；自己校验返回形状，不使用本层导出的校验函数（裁决 R21） |
+| 返回形状判据 | `stage_id` 必须等于 `stage.stage_id`；`success=True` 必须带 `summary.completion_confirmed=True` 且 `completion_basis is not NOT_VERIFIED`；任一不满足则改写为失败，reason 写 `"workflow returned no confirmed stage completion evidence or mismatched stage ID"`。这三条留在 `application/mission_runner.py:26-42`，位置不动 |
 
 段执行路径：数值动作，以及没有 streaming 端口时的目标接近。
 
@@ -159,22 +159,17 @@ class CruiseCycle:
 TASK_KIND: TaskKind = TaskKind.FREE_NAVIGATION
 REQUIRED_PORTS: tuple[str, ...] = ("vehicle", "observation", "streaming")
 
-# planner/workflows/base.py
-@dataclass(frozen=True)
-class TaskDeclaration:
-    kind: TaskKind
-    required_ports: tuple[str, ...]
-    package: str
-
-def declaration_of(package: ModuleType) -> TaskDeclaration: ...
-class Workflow(Protocol):
-    def prepare(self) -> None: ...
-    def run(self, stage: MissionStage) -> StageResult[object]: ...
-    def close(self) -> None: ...
-
-# planner/workflows/common/evidence.py
-def require_confirmed(result: StageResult[object], stage: MissionStage) -> StageResult[object]: ...
+# planner/workflows/__init__.py —— 层入口，只重导出这 7 个名字
+TASK_PACKAGES: tuple[TaskDeclaration, ...]          # 3 条，元素类型不外泄
+BasicMotionWorkflow
+VisualGoalNavigationWorkflow
+FreeNavigationWorkflow
+BasicMotionStageAdmission                         # 三个准入各一个
+VisualGoalNavigationStageAdmission
+FreeNavigationStageAdmission
 ```
+
+`TaskDeclaration` 与 `Workflow` 留在 `base.py` 供本层与 `TASK_PACKAGES` 使用，不导出（裁决 R21）。
 
 用法三条，写进测试：
 
@@ -241,13 +236,12 @@ def require_confirmed(result: StageResult[object], stage: MissionStage) -> Stage
 | 名字 | 形状 | 由谁消费 | 稳定性 |
 | --- | --- | --- | --- |
 | `TASK_PACKAGES` | `tuple[TaskDeclaration, ...]`，长度 3 | `assembly/requirements.py` | 稳定 |
-| `TaskDeclaration` | frozen dataclass：`kind`、`required_ports`、`package` | `assembly/requirements.py` | 稳定 |
-| `Workflow` | Protocol：`prepare()`、`run(stage)`、`close()` | 装配层、`assembly/mission_runner` | 稳定 |
 | `BasicMotionWorkflow`、`VisualGoalNavigationWorkflow`、`FreeNavigationWorkflow` | 构造器 + `prepare/run/close` | 装配层 | 稳定 |
-| `StageAdmission`（三个任务包各一个） | `validate(stage) -> None` | `assembly/mission_validator` | 稳定 |
-| `require_confirmed` | `(StageResult[object], MissionStage) -> StageResult[object]` | `assembly/mission_runner` | 稳定 |
+| 三个 `StageAdmission` | `validate(stage) -> None` | `assembly/mission_validator` | 稳定 |
 
-不暴露什么：`StageEvidence`、`CycleContext`、`RoundOutcome`、`TaskLoop`、`MotionChannel`、`SegmentChannel`、`StreamChannel`、`ObservationFeed`、`ChannelReport`、`TargetTracker`、`CompletionGate`、`StallWatch`、`VisualGoalExitPolicy`、`SearchPolicy`、`MEASUREMENT_NAMES`，以及 runtime 的 `WorldWaypointQueue`、`PlanningWindow` 内部队列状态、`SegmentSink`/`StreamSink` 的实现体。任务包之间也不通过任何名字互引（裁决 R19b、R19c）。
+只有这 7 个名字跨层可见（裁决 R21）；`TaskDeclaration`、`Workflow`、`require_confirmed` 已从输出面撤下。
+
+不暴露什么：`TaskDeclaration`、`Workflow`、`require_confirmed`、`StageEvidence`、`CycleContext`、`RoundOutcome`、`TaskLoop`、`MotionControl`、`ExecutionControl`、`PlanningQueue`、`MovingCapture`、`MotionChannel`、`SegmentChannel`、`StreamChannel`、`ObservationFeed`、`ChannelReport`、`TargetTracker`、`CompletionGate`、`StallWatch`、`VisualGoalExitPolicy`、`SearchPolicy`、`MEASUREMENT_NAMES`，以及 runtime 的 `WorldWaypointQueue`、`PlanningWindow` 内部队列状态、`SegmentSink`/`StreamSink` 的实现体。任务包之间也不通过任何名字互引（裁决 R19b、R19c）。
 
 ## 4 错误与失败路径
 
@@ -327,13 +321,13 @@ def require_confirmed(result: StageResult[object], stage: MissionStage) -> Stage
 
 15. `test_no_lane_prior.py`：`planner/workflows/**` 全文不含 `lane`；`FreeNavigationWorkflow` 的构造参数里没有 `lane_reference_provider`；对规划器的调用 kwargs 里 `task_context is None`（用 fake 规划器记录 kwargs 断言）。
 
-16. `test_public_surface.py`：`planner.workflows` 的公开名字集合等于输出表，多一个或少一个都失败；输出表里的内部名（`StageEvidence`、`ChannelReport`、`PlanningWindow` 等）不得出现在包入口（裁决 R19c）。`test_task_annotations.py`：三个工作流 `__init__` 的参数与 `run` 的返回注解只出现契约层类型或本层 Protocol，出现其他层的具体类名即失败（裁决 R19b）。
+16. `test_public_surface.py`：`planner.workflows` 的公开名字集合等于输出表的 7 个，多一个或少一个都失败；输出表里的内部名（`StageEvidence`、`ChannelReport`、`PlanningWindow` 等）不得出现在包入口（裁决 R19c）。`test_task_annotations.py`：三个工作流 `__init__` 的参数与 `run` 的返回注解只出现契约层类型或本层 Protocol，出现其他层的具体类名即失败（裁决 R19b）。
 
 ## 7 迁移步骤
 
 每步独立可验证，前一步不绿不进下一步。
 
-1. **建 `common/budget.py` 与 `common/evidence.py`。** 把 `session.py:68,84` 的 `require_time`/`model_call` 与 `mission_runner.py:26-42` 的检查搬进去，三个任务包改调新符号，`mission_runner.py` 改为调 `evidence.require_confirmed`。验收：`pytest tests/test_workflow.py tests/test_visual_goal_parameters.py -q` 全绿，`application/mission_runner.py` 降到 20 行以内。
+1. **建 `common/budget.py` 与 `common/evidence.py`。** 把 `session.py:68,84` 的 `require_time`/`model_call` 与 `mission_runner.py:26-42` 的检查搬进去，三个任务包改调新符号；`mission_runner.py:26-42` 的校验留在原位，只改它构造 `StageSummary` 的方式。验收：`pytest tests/test_workflow.py tests/test_visual_goal_parameters.py -q` 全绿，`application/mission_runner.py` 降到 20 行以内。
 2. **加任务包声明。** 三个 `__init__.py` 写 `TASK_KIND`/`REQUIRED_PORTS`，加 `base.declaration_of`；`assembly/requirements.py` 读声明生成表，与 `simulator/ports.py:44-48` 的旧表并行比对一次（临时断言两表相等），比对通过后删旧表。验收：`pytest tests/test_capability_gating.py tests/test_runtime_catalog.py -q` 全绿。
 3. **抽 `common/loop.py`，先接 `basic_motion`。** 数值动作改走 `TaskLoop`，`run_segment` 由任务包调 `ControlLoop`。验收：`pytest tests/test_basic_motion.py -q`；UE5 跑一次数值动作，`/api/trajectory` 输出与重构前一致。
 4. **抽 `common/streaming.py` 的 `SegmentChannel`，接目标接近停稳模式。** 删 `approach.py`、`flight.py` 的段执行簿记，`session.py` 剩下的字段并入 `CycleContext`。验收：`pytest tests/test_visual_goal_anchor.py tests/test_visual_goal_collision_recovery.py -q`；UE4 与 UE5 各跑一次目标接近（停稳模式）。
@@ -341,7 +335,52 @@ def require_confirmed(result: StageResult[object], stage: MissionStage) -> Stage
 6. **重写 `free_navigation`。** 删停稳批次回退（`workflow.py:237` 的那层 while）、`_lane_context`(`:376`)、`lane_reference_provider`(`:76`)、`continuous.py` 的 `_recover_from_collision`(`:312`) 与 `_lane_context`(`:435`)；`cruise.py` 只保留速度流一条路径；`mission_assembly.py:306` 的 `lane_reference_provider=None` 一并删。验收：`pytest tests/test_free_navigation.py -q` 全绿；UE5 巡航实跑，中途制造一次接触，确认后退—清队列—继续由执行层完成。
 7. **收口。** 删 `capabilities/{approach,completion,task_validation}/` 与 `workflows/{visual_goal_navigation/{approach,flight,session,continuous}.py,free_navigation/continuous.py}`；加第 6 节全部测试；`workflows/__init__.py` 去掉 eager import。验收：`pytest tests/ -q` 全绿，用例数不减。
 
-## 8 未决问题
+## 8 削面复核
+
+对外名字从 10 个降到 7 个，内部化 2 个，撤 1 个，删镜像与死代码约 303 行（裁决 R21）。
+
+表 A 对外名字逐条。引用数是 `grep -rn --include=*.py` 的非 docs 命中数，含测试；"层外运行期调用点"排除测试、同层与 `__init__` 转发。
+
+| 名字 | 现引用数 | 层外运行期调用点 | 处置 | 依据 |
+| --- | --- | --- | --- | --- |
+| `BasicMotionWorkflow` | 16 | `application/mission_assembly.py:262`；`scripts/smoke_projectairsim_drone.py:254`、`scripts/smoke_projectairsim_rover.py:125` | 保留 | 装配与实机冒烟都在构造它，属规则 2 第一类 |
+| `VisualGoalNavigationWorkflow` | 12 | `application/mission_assembly.py:237`；`scripts/smoke_projectairsim_drone.py:130` | 保留 | 同上 |
+| `FreeNavigationWorkflow` | 13 | `application/mission_assembly.py:288`；`scripts/smoke_projectairsim_rover.py:162` | 保留 | 同上 |
+| `TASK_PACKAGES` | 0（新增） | 等价位是 `planner/simulator/ports.py:44`，被 `ports.py:88` 的 `available_tasks()` 在运行期读，`/api/status` 与 `/api/world/options` 每轮都走 | 保留 | 能力门必须由任务包声明推导；见本节末的裁决请求 |
+| `TaskDeclaration` | 0（新增） | 无；只作为 `TASK_PACKAGES` 的元素与注解出现 | 内部化 | 元素照常用，导出名字没有运行期用途；违反规则 1 |
+| `Workflow` | 7 | 无；只有 `application/workflow_router.py:3,8,15` 的类型注解 | 内部化 | 运行期只调 `.prepare()`/`.run()`/`.close()`，结构化匹配足够 |
+| `BasicMotionStageAdmission`（现 `BasicMotionStageValidator`） | 9 | 构造 `application/mission_assembly.py:274`；运行期 `application/mission_validator.py:68` | 保留 | 构造期不变量校验，属规则 2 第三类 |
+| `VisualGoalNavigationStageAdmission`（现 `VisualGoalStageValidator`） | 6 | 构造 `application/mission_assembly.py:275`；运行期 `application/mission_validator.py:68` | 保留 | 同上 |
+| `FreeNavigationStageAdmission`（现 `FreeNavigationStageValidator`） | 10 | 构造 `application/mission_assembly.py:311`；运行期 `application/mission_validator.py:68` | 保留 | 同上 |
+| `require_confirmed` | 0（新增） | 无；等价判据已在 `application/mission_runner.py:26-42` 每单执行 | 删（不导出，逻辑留在装配层） | 搬出去再搬回来，只换来一个跨层名字 |
+
+四个自声明 Protocol（`MotionControl`、`ExecutionControl`、`PlanningQueue`、`MovingCapture`）本来就不在对外面，本轮明确内部化：它们只在构造参数与返回注解里出现。砍掉它们就要在注解里写 runtime 的具体类，违反裁决 R19b，因此保留且不进 `planner/workflows/__init__.py`。
+
+`TASK_PACKAGES` 与三个包的 `TASK_KIND`/`REQUIRED_PORTS` 不重复：三个包常量是定义点（裁决 R10），`TASK_PACKAGES` 是层入口的派生视图（裁决 R19a），装配层只读后者。省掉 `TASK_PACKAGES` 的唯一办法是放行装配层直读三个任务包，那要改 R19a。
+
+表 B 历史残留删除清单。
+
+| 名字 | 位置 | 处置 | 行数 | 理由 |
+| --- | --- | --- | --- | --- |
+| `TargetApproach.assess` | `planner/capabilities/approach/target_approach.py:23-28` | 删 | 8 | 引用 3 处全在 `tests/test_capability_completion.py:80,84,87`；生产只调 `distance_within_radius`（`capabilities/completion/visual_goal.py:25`、`capabilities/completion/visual_goal_request.py:42`）。风险低，测试改断 `distance_within_radius` |
+| `_recover_from_collision` 两份 | `workflows/visual_goal_navigation/continuous.py:259-311`、`workflows/free_navigation/continuous.py:312-382` | 删 | 124 | 两份镜像，visual 侧注释自认 "Mirrors"（`:262`）；退避改由执行层 `CollisionRecovery` 承担（裁决 R5、R8）。风险中：失败语义从任务层移到执行层 |
+| `_discard_pretask_contact` 两份 | `visual_goal_navigation/continuous.py:241-248`、`free_navigation/continuous.py:288-311` | 删 | 32 | 同源镜像；任务开始前接触的丢弃属于 `CollisionState` 的生命周期，归执行层 |
+| `_reset_recovery_budget_after_progress` 两份 | `visual_goal_navigation/continuous.py:249-258`、`free_navigation/continuous.py:264-287` | 删 | 34 | 同源镜像；预算重置随 `CollisionRecoverySettings` 进执行层 |
+| `_lane_context` 两份 | `free_navigation/workflow.py:376-388`、`free_navigation/continuous.py:435-441` | 删 | 20 | 车道先验整块退役，删后无调用方（与 `lane_reference_provider` 同时删） |
+| `_publish` 两份 | `visual_goal_navigation/continuous.py:123-151`、`free_navigation/continuous.py:229-263` | 合并 | 64 → 34 | 两处都只是把队列字段搬进 `publish_queue`，差异只有目标上下文；合并到 `common/streaming.py` |
+| `_submit` 两份 | `visual_goal_navigation/continuous.py:193-240`、`free_navigation/continuous.py:383-434` | 合并 | 100 → 50 | 同上，锚点与目标上下文改由参数传入 |
+| `_execute_window` 与直连执行两套簿记 | `visual_goal_navigation/flight.py:95-125`、`visual_goal_navigation/approach.py:19-38` | 合并 | 70 → 40 | 同一件事两个入口；合并为 `SegmentChannel` |
+| `TASK_REQUIREMENTS` | `planner/simulator/ports.py:44-48` | 删（迁到任务包声明） | 5 | 只有 2 处引用，都在 `ports.py`；替换物是 `TASK_PACKAGES`（裁决 R10） |
+
+结论数字：
+
+- 对外名字 10 → 7。内部化 2（`TaskDeclaration`、`Workflow`），撤 1（`require_confirmed`），另 4 个本层 Protocol 不进对外面。
+- 直接删除 218 行（表 B 前 5 项）加合并省 80 行、旧表 5 行，合计约 303 行；本层估计行数从 2110 降到约 1810。
+- 表 B 的 9 项里 6 项是"同一件事两份实现"，2 项是"删后无人调用"，1 项是历史表迁走。
+
+需要指挥层裁决的一项：`TASK_PACKAGES` 目前引用数为 0，只有装配层的目标代码会读它，保留理由是能力门必须由任务包声明推导、而装配层不许直读任务包（裁决 R19a）。若放行直读，这个名字可以不要。
+
+## 9 未决问题
 
 1. **批次模式怎样拿到已授权的航点。** 默认：批次模式完全不用 `PlanningWindow`，任务包直连 `planner.plan` 并发 `ControlLoop.run_segment`，因为"一批确定航点、期间不重规划"没有补点需求。备选：给 `PlanningWindow` 加 `take_batch() -> MotionTrajectory`，让批次模式也走滑窗。取舍：默认方案少一个跨层方法、失败面更小，代价是批次模式没有后台预取，批次之间必然停稳；备选方案能预取，但要往契约里加第七个方法，且批次模式的"停稳取帧"语义与窗口的流式队列混在一起。
 2. **`QueueFollower` 由谁构造、暂停判据放哪。** 裁决 R3/R4 已定：`run_stream` 的 deadline 到期抛 `BudgetExceeded`；`QueueFollower` 实现 `StreamGoalSource`，`PlanningWindow` 不承担伺服；任务层把 `pause_when` 交给 `QueueFollower`。剩下的选择是构造点：默认在任务包的 `StreamChannel` 里按 `window.queue_view()` 造，暂停判据与任务策略同处；备选在装配层造好注入，执行层可见全部 hook。取舍：默认方案让 `QueueFollower` 不认识任务，代价是构造参数随任务策略增长；备选方案把任务策略搬进装配层，与"任务判定在任务包"冲突。
