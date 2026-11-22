@@ -7,6 +7,7 @@ from .frame_hub import FrameHub
 from .log_buffer import LogBuffer
 from .model_calls import ModelCallService
 from .motion import SynchronizedMotionPlanner
+from .motion.loop import ControlLoop
 from .motion.base import MotionPlanner
 from .motion.continuous import reached
 from .motion.continuous_speed import braking_speed
@@ -23,6 +24,7 @@ from .window import PlanningWindow
 __all__ = [
     "BackgroundOperation",
     "ContinuousExecution",
+    "ControlLoop",
     "ExecutionService",
     "FrameHub",
     "LogBuffer",

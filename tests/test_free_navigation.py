@@ -176,7 +176,7 @@ def _workflow(
         record=ExecutionRecord(START, START.offset(1.0, 0.0), _trajectory())
     )
     workflow = FreeNavigationWorkflow(
-        source, planner, validator, motion, execution, **kwargs
+        source, planner, validator, motion, execution, loop=execution, **kwargs
     )
     return workflow, source, planner, validator, motion, execution
 
@@ -632,6 +632,7 @@ def _continuous_controller(
     execution = FakeStreamingExecution(vehicle=vehicle)
     controller = FreeNavigationContinuous(
         execution,
+        execution,
         source or object(),
         MotionLimits(),
         2.0,
@@ -1039,12 +1040,14 @@ def _continuous_workflow(continuous_stack, **kwargs):
 
 def test_continuous_mode_requires_an_enabled_window_and_motion_limits():
     def build(**kwargs):
+        execution = FakeExecution()
         return FreeNavigationWorkflow(
             FakeSource(_observation()),
             FakePlanner(_trajectory()),
             FakeValidator(),
             FakeMotion(),
-            FakeExecution(),
+            execution,
+            loop=execution,
             **kwargs,
         )
 

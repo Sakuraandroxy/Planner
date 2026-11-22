@@ -184,7 +184,7 @@ def _workflow(parameters, *, reach=True, interrupt=False):
     execution = FakeExecution(
         vehicle, reach=reach, interrupt=interrupt
     )
-    workflow = BasicMotionWorkflow(vehicle, FakeMotion(), execution)
+    workflow = BasicMotionWorkflow(vehicle, FakeMotion(), execution, loop=execution)
     stage = MissionStage("stage_1", TaskKind.BASIC_MOTION, parameters)
     return workflow, execution, vehicle, stage
 

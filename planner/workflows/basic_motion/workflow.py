@@ -19,6 +19,7 @@ from planner.domain import wrap_yaw_deg
 from planner.domain import CompletionBasis, ResultMeasurement, StageResult, StageSummary
 from planner.domain import MotionSegment, MotionTrajectory
 from planner.errors import ExecutionError
+from planner.runtime import ControlLoop
 from planner.runtime import ExecutionService
 from planner.runtime import SMOOTH_PROFILE
 from planner.runtime.motion.synchronized import duration_for
@@ -34,12 +35,14 @@ class BasicMotionWorkflow:
         execution: ExecutionService,
         clock=time.monotonic,
         *,
+        loop: ControlLoop,
         limits=MotionLimits(),
         telemetry=None,
     ):
         self.vehicle = vehicle
         self.motion = motion
         self.execution = execution
+        self.loop = loop
         self.clock = clock
         self.converter = BasicMotionConverter()
         self.limits = limits
@@ -91,7 +94,7 @@ class BasicMotionWorkflow:
                 target_speed_mps=self.motion.speed_mps,
                 yaw_delta_deg=yaw_delta,
             )
-            self.execution.execute(MotionTrajectory((segment,)))
+            self.loop.execute(MotionTrajectory((segment,)))
             actual = self.vehicle.current_pose()
             if (
                 math.dist(

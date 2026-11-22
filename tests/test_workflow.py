@@ -23,6 +23,7 @@ from planner.domain import (
 from planner.domain import VisualGoalTriggerRules
 from planner.domain import VisualGoalLimits
 from planner.errors import MotionPaused
+from planner.runtime import ControlLoop
 from planner.runtime import ExecutionService
 from planner.runtime import SynchronizedMotionPlanner
 from planner.algorithms import TrajectoryValidator
@@ -47,6 +48,9 @@ class FakeVehicle:
             self.pose, self.pose.yaw_deg
         ):
             raise MotionPaused(self.pose, self.pose.yaw_deg)
+
+    def stream_command(self, command, duration_s):
+        pass
 
     def hover(self):
         pass
@@ -199,16 +203,18 @@ def _workflow(
         radius_m=7.0, pause_radius_m=6.5
     )
     motion_limits = MotionLimits()
+    execution = ExecutionService(vehicle)
     return VisualGoalNavigationWorkflow(
         source,
         observer or FixedObserver(),
         planner or GeometricTargetPlanner(),
         TrajectoryValidator(5, 2.0, 45.0),
         SynchronizedMotionPlanner(2.0, motion_limits),
-        ExecutionService(vehicle),
+        execution,
         DepthGeometry(0.5, True),
         VisualGoalCompletion(limits, TargetApproach()),
         limits,
+        loop=ControlLoop(execution, vehicle),
         trace_factory=trace_factory,
         completion_checker=checker or ScriptedChecker(True),
         trigger_rules=rules,

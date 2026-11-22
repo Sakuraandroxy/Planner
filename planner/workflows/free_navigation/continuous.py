@@ -26,6 +26,7 @@ from planner.errors import (
     ProtocolError,
 )
 from planner.runtime import ContinuousExecution
+from planner.runtime import ControlLoop
 from planner.runtime import MovingObservations
 from planner.algorithms import relative_to_world
 
@@ -36,6 +37,7 @@ class FreeNavigationContinuous:
     def __init__(
         self,
         execution,
+        loop: ControlLoop,
         moving_source,
         motion_limits,
         speed_mps,
@@ -83,6 +85,7 @@ class FreeNavigationContinuous:
                 "continuous collision recovery budget must be a positive integer"
             )
         self.execution = execution
+        self.loop = loop
         self.clock, self.sleep = clock, sleep
         self.telemetry = telemetry
         self.vertical_motion = bool(vertical_motion)
@@ -343,7 +346,7 @@ class FreeNavigationContinuous:
         backoff = RelativeTrajectory(
             (RelativePoseDelta(dx=-backoff_m),)
         )
-        self.execution.execute(
+        self.loop.execute(
             self.motion.create_motion(relative_to_world(backoff, pose))
         )
         window.queue.clear()

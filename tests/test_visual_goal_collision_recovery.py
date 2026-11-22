@@ -109,6 +109,7 @@ class _Motion:
 def _follower_with(**overrides):
     follower = object.__new__(VisualGoalContinuous)
     follower.execution = _Execution()
+    follower.loop = follower.execution
     follower.stream = _Stream()
     follower.frames = _Frames()
     follower.targets = _Targets()
