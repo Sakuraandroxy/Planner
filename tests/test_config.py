@@ -504,7 +504,7 @@ def test_heading_settings_are_read_from_the_config_file(tmp_path):
     config = load_config(path)
     assert config.motion.heading_hold_gain == pytest.approx(0.8)
     assert config.motion.heading_deadband_deg == pytest.approx(0.7)
-    tracking = config.motion.to_tracking_limits()
+    tracking = config.motion
     assert tracking.heading_hold_gain == pytest.approx(0.8)
 
 

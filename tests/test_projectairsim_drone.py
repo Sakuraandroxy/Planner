@@ -9,7 +9,7 @@ from projectairsim.types import LandedState
 from planner.config import CameraSettings, DepthSettings
 from planner.domain.pose import WorldPose
 from planner.errors import ExecutionError
-from planner.runtime.segment_motion import MotionLimits as ConfiguredMotionLimits
+from planner.domain.motion import MotionLimits as ConfiguredMotionLimits
 from planner.simulators.projectairsim.drone import ProjectAirSimDrone
 from planner.simulators.projectairsim.moving_source import BorrowedMovingSource
 
@@ -627,9 +627,9 @@ def test_collision_state_latches_one_non_ground_contact():
 def test_tracking_limits_are_derived_from_the_configured_envelope():
     configured = ConfiguredMotionLimits(
         max_speed_mps=5.0,
-        max_accel_mps2=1.2,
-        max_yaw_rate_dps=45.0,
-        max_yaw_accel_dps2=60.0,
+        max_acceleration_mps2=1.2,
+        max_yaw_rate_deg_s=45.0,
+        max_yaw_acceleration_deg_s2=60.0,
         control_hz=20.0,
         min_duration_s=0.5,
     )

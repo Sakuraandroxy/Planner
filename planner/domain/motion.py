@@ -36,11 +36,17 @@ class ContinuousReference:
 
 @dataclass(frozen=True)
 class MotionLimits:
-    """通用的物理运动限制与跟踪容差，单位为米 / 度 / 秒"""
+    """物理运动包络与跟踪容差，单位为米 / 度 / 秒。
 
+    配置侧与跟踪侧的字段合在这一份里：``planner/config.py`` 从
+    ``config/core/<profile>/base.yaml`` 的 ``motion`` 段构造它，规划器、跟踪器与
+    位置保持直接读它，不再有转换对象。
+    """
+
+    max_speed_mps: float = 3.0
     max_acceleration_mps2: float = 1.5
     max_yaw_rate_deg_s: float = 30.0
-    max_yaw_acceleration_deg_s2: float = 30.0
+    max_yaw_acceleration_deg_s2: float = 60.0
     control_hz: float = 20.0
     position_gain: float = 1.0
     yaw_gain: float = 2.0
