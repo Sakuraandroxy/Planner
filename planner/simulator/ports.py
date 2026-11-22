@@ -53,9 +53,6 @@ class SimulatorPorts:
     frames: FramePublisher | None = None
     home: ReturnHome | None = None
     vehicles: tuple[str, ...] = ("drone",)
-    #: Task kinds the shared layer may offer even when every port is present.
-    #: A simulator that has not been flown with a task lists it out of here.
-    enabled_tasks: tuple[str, ...] = ()
 
     def slot(self, name: str) -> object | None:
         return getattr(self, name, None)
@@ -65,8 +62,7 @@ class SimulatorPorts:
         return tuple(
             item.name
             for item in fields(self)
-            if self.slot(item.name) is not None
-            and item.name not in {"vehicles", "enabled_tasks"}
+            if self.slot(item.name) is not None and item.name != "vehicles"
         )
     @classmethod
     def from_slots(
@@ -77,7 +73,6 @@ class SimulatorPorts:
         view_modes: tuple[str, ...] = (),
         weather_fields: dict[str, str] | None = None,
         weather_presets: tuple[str, ...] = (),
-        enabled_tasks: tuple[str, ...] = (),
     ) -> SimulatorPorts:
         """A stand-in bundle built from the slot names a simulator declares.
 
@@ -101,7 +96,6 @@ class SimulatorPorts:
             frames=_Slot("frames") if "frames" in present else None,
             home=_Slot("home") if "home" in present else None,
             vehicles=vehicles,
-            enabled_tasks=enabled_tasks,
         )
 
 

@@ -22,16 +22,6 @@ PORT_SLOTS: tuple[str, ...] = (
     "weather",
 )
 
-#: AirSim was only ever flown on these tasks. This list is a **verification
-#: status**, not an engine limit: ``free_navigation`` is technically reachable
-#: (the vehicle streams velocity and AirSim has the depth), but the planner
-#: behind it is new in main and has never been flown against AirSim depth, so it
-#: stays off the offer list until that run happens.
-ENABLED_TASKS: tuple[str, ...] = (
-    "basic_motion",
-    "visual_goal_navigation",
-)
-
 VEHICLES: tuple[str, ...] = ("drone",)
 
 
@@ -59,7 +49,6 @@ def build_ports(
         moving_capture=moving_capture if moving_capture is not None else observation,
         weather=weather,
         vehicles=VEHICLES,
-        enabled_tasks=ENABLED_TASKS,
     )
 
 
@@ -89,7 +78,6 @@ def describe() -> SimulatorPorts:
         view_modes=(),
         weather_fields=WEATHER_FIELDS,
         weather_presets=WEATHER_PRESETS,
-        enabled_tasks=ENABLED_TASKS,
     )
 
 

@@ -62,18 +62,14 @@ def test_a_kind_is_offered_when_its_slots_are_part_of_the_bundle():
     assert requirements.available_kinds(()) == ()
 
 
-def test_enabled_tasks_narrows_the_offer_without_adding_one():
-    assert requirements.available_kinds(EVERY_SLOT, ("basic_motion",)) == (
-        "basic_motion",
-    )
-    # A simulator that lists nothing is unrestricted, not disabled.
-    assert requirements.available_kinds(EVERY_SLOT, ()) == requirements.available_kinds(
-        EVERY_SLOT
-    )
-    # Naming a task the slots cannot run does not make it available.
-    assert "free_navigation" not in requirements.available_kinds(
-        ("vehicle",), ("free_navigation",)
-    )
+def test_a_simulator_cannot_narrow_the_offer_with_a_task_list():
+    """Only slots decide; a bundle has no field for naming task kinds (R18)."""
+    from dataclasses import fields
+
+    from planner.simulator.ports import SimulatorPorts
+
+    names = {item.name for item in fields(SimulatorPorts)}
+    assert "enabled_tasks" not in names
 
 
 def test_missing_slots_lists_what_the_bundle_lacks():

@@ -22,10 +22,6 @@ PORT_SLOTS: tuple[str, ...] = (
     "home",
 )
 
-#: Empty means every task whose ports are present may be offered. UE5 has been
-#: flown with all three of its task kinds, so nothing is withheld here.
-ENABLED_TASKS: tuple[str, ...] = ()
-
 VEHICLES: tuple[str, ...] = ("rover", "drone")
 
 
@@ -82,5 +78,4 @@ def describe(vehicles: tuple[str, ...] = VEHICLES) -> SimulatorPorts:
         view_modes=VIEW_MODES,
         weather_fields=weather_fields(),
         weather_presets=tuple(preset.id for preset in WEATHER_CATALOG.presets),
-        enabled_tasks=ENABLED_TASKS,
     )

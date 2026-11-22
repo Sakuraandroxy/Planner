@@ -80,7 +80,6 @@ class MissionInputs:
     execution: object | None = None
     observation_source: object | None = None
     moving_source_factory: Callable | None = None
-    enabled_tasks: tuple[str, ...] | None = None
 
 
 def assemble_missions(
@@ -115,7 +114,6 @@ def assemble_missions(
             geometry=resources.geometry,
             telemetry=resources.trajectory,
             moving_source_factory=inputs.moving_source_factory,
-            enabled_tasks=inputs.enabled_tasks,
             execution=inputs.execution,
             observation_source=inputs.observation_source,
             log=log,
@@ -190,7 +188,6 @@ def build_vehicle_arm(
     geometry,
     telemetry=None,
     moving_source_factory: Callable | None = None,
-    enabled_tasks: tuple[str, ...] | None = None,
     execution: ExecutionService | None = None,
     observation_source=None,
     log: Callable[[str, str], None],
@@ -204,16 +201,13 @@ def build_vehicle_arm(
     "'AirSimVehicle' object has no attribute 'capture'" the moment it looked at an
     image. Say which object plays which role instead of hoping one plays both.
 
-    ``enabled_tasks`` is the simulator package's own list (``ENABLED_TASKS``). A
-    family that has never flown a task must not be offered it because a model
-    endpoint happens to be configured: UE4 has no free-navigation history with
-    main's planner, and the task parser prompt is built from the kinds the router
-    actually supports, so filtering here also filters the prompt.
+    Which tasks this arm offers is not stated here: the task parser prompt is built
+    from the kinds the router actually supports, and the router holds every kind
+    whose required ports this vehicle fills and whose planner is configured.
     """
     settings = config.visual_goal_navigation
     limits = settings.limits
     is_drone = vehicle_id == "drone"
-    allowed = None if enabled_tasks is None else set(enabled_tasks)
     planner = common.aerial_planner if is_drone else common.planner
     free_planner = common.aerial_free_planner if is_drone else common.free_planner
     # AirSim passes an execution service it has already bound to the position hold and
@@ -292,13 +286,7 @@ def build_vehicle_arm(
     }
     terminal_kinds: set[TaskKind] = set()
     closed = [basic, visual]
-    if allowed is not None:
-        workflows = {kind: workflow for kind, workflow in workflows.items()
-                     if kind.value in allowed}
-        stage_validators = {kind: validator for kind, validator in stage_validators.items()
-                            if kind.value in allowed}
-        closed = list(workflows.values())
-    if free_planner is not None and (allowed is None or "free_navigation" in allowed):
+    if free_planner is not None:
         free = FreeNavigationWorkflow(
             vehicle,
             free_planner,

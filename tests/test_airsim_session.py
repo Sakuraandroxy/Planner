@@ -102,12 +102,15 @@ def test_the_live_bundle_agrees_with_the_advertised_capabilities():
     )
 
 
-def test_free_navigation_is_not_built_for_ue4():
-    """``ENABLED_TASKS`` decides what the family may be offered, not the config."""
+def test_free_navigation_is_built_for_ue4():
+    """The streaming slot is filled, so cruising is offered without a whitelist (R18)."""
     session = _session()
     kinds = {type(workflow).__name__ for workflow in session._arm.workflows}
-    assert "FreeNavigationWorkflow" not in kinds, kinds
-    assert {"BasicMotionWorkflow", "VisualGoalNavigationWorkflow"} <= kinds, kinds
+    assert {
+        "BasicMotionWorkflow",
+        "VisualGoalNavigationWorkflow",
+        "FreeNavigationWorkflow",
+    } <= kinds, kinds
 
 
 def test_ue4_refuses_a_vehicle_it_does_not_drive():
