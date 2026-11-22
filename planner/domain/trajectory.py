@@ -65,12 +65,3 @@ class MotionTrajectory:
     """Complete executable motion made of ordered segments."""
 
     segments: tuple[MotionSegment, ...]
-
-
-@dataclass(frozen=True)
-class SegmentResult:
-    start: WorldPose
-    end: WorldPose
-    frames: int
-    duration_s: float
-    cancelled: bool = False

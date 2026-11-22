@@ -106,7 +106,6 @@ from .trajectory import (
     MotionSegment,
     MotionTrajectory,
     RelativeTrajectory,
-    SegmentResult,
     WorldTrajectory,
 )
 from .trajectory_telemetry import (
@@ -233,7 +232,6 @@ __all__ = [
     "RelativeTrajectory",
     "ResultMeasurement",
     "SHARED_DEPTH_MAPPING",
-    "SegmentResult",
     "ServerLog",
     "ServerState",
     "ServerStatus",
