@@ -11,17 +11,12 @@ state.
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 from dataclasses import asdict
-from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
-from starlette.concurrency import run_in_threadpool
+from fastapi import FastAPI, Query
+from fastapi.responses import JSONResponse, StreamingResponse
 
-from planner.assembly import BackendUnavailable, ServerState
+from planner.assembly import ServerState
 from planner.domain import TrajectorySnapshot
 from planner.domain import default_view_for
 from .schemas import (
@@ -34,19 +29,14 @@ from .schemas import (
     WorldRequest,
 )
 from .video import BOUNDARY, mjpeg_chunks
-
-CONSOLE_DIR = Path(__file__).resolve().parents[3] / "console"
-
-
-def _unavailable(exc: BackendUnavailable) -> HTTPException:
-    code = (
-        503
-        if exc.state in (ServerState.CONNECTING, ServerState.DISCONNECTED)
-        else 409
-    )
-    return HTTPException(
-        code, detail={"state": exc.state.value, "message": str(exc)}
-    )
+from .wiring import (
+    build_app,
+    capabilities,
+    capability_gate,
+    invoke,
+    missing_catalog,
+    mount_console,
+)
 
 
 def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAPI:
@@ -59,73 +49,12 @@ def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAP
     port it lacks and this layer names no simulator of its own.
     """
 
-    def capabilities():
-        """Flags for the active map's simulator, as the controller reports them."""
-        return controller.capabilities(), controller.active_simulator
-
-    def require(action):
-        caps, simulator = capabilities()
-        if caps is not None and not caps.supports(action):
-            raise HTTPException(
-                501,
-                detail={
-                    "unsupported": action,
-                    "simulator": simulator,
-                    "message": (
-                        f"simulator '{simulator}' does not implement the port "
-                        f"behind {action}"
-                    ),
-                },
-            )
-
-    @asynccontextmanager
-    async def lifespan(app):
-        controller.start()
-        try:
-            yield
-        finally:
-            await run_in_threadpool(controller.close)
-
-    app = FastAPI(title="ProjectAirSim VLN Planner API", lifespan=lifespan)
-    app.state.frames = frames
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=list(settings.allowed_origins),
-        allow_methods=["GET", "POST"],
-        allow_headers=["Content-Type"],
-        allow_credentials=False,
-    )
-
-    @app.middleware("http")
-    async def cache_headers(request, call_next):
-        response = await call_next(request)
-        path = request.url.path
-        if path.startswith("/api/"):
-            response.headers["Cache-Control"] = "no-store"
-        elif path == "/" or path.startswith("/console/"):
-            # Revalidate so an updated console never runs from a stale cache.
-            response.headers["Cache-Control"] = "no-cache"
-        return response
+    app = build_app(controller, settings, frames)
+    require = capability_gate(controller)
 
     @app.post("/api/tasks", status_code=202)
     def submit(request: TaskRequest):
-        try:
-            task = controller.submit(request.instruction, request.vehicle)
-        except BackendUnavailable as exc:
-            code = (
-                503
-                if exc.state
-                in (ServerState.CONNECTING, ServerState.DISCONNECTED)
-                else 409
-            )
-            raise HTTPException(
-                code,
-                detail={"state": exc.state.value, "message": str(exc)},
-            ) from exc
-        except ValueError as exc:
-            raise HTTPException(
-                400, detail={"message": str(exc)}
-            ) from exc
+        task = invoke(controller.submit, request.instruction, request.vehicle)
         return {
             "task_id": task.task_id,
             "state": ServerState.RUNNING.value,
@@ -135,7 +64,7 @@ def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAP
     @app.get("/api/status")
     def status():
         payload = asdict(controller.status)
-        caps, simulator = capabilities()
+        caps, simulator = capabilities(controller)
         if caps is not None:
             payload["simulator"] = simulator
             payload["capabilities"] = caps.as_dict()
@@ -166,28 +95,14 @@ def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAP
     def home(request: HomeRequest | None = None):
         require("home")
         vehicle = request.vehicle if request is not None else None
-        try:
-            chosen = controller.home(vehicle)
-        except BackendUnavailable as exc:
-            raise _unavailable(exc) from exc
-        except ValueError as exc:
-            raise HTTPException(
-                400, detail={"message": str(exc)}
-            ) from exc
+        chosen = invoke(controller.home, vehicle)
         return {"state": ServerState.IDLE.value, "vehicle": chosen}
 
     @app.post("/api/vehicle", status_code=202)
     def activate_vehicle(request: VehicleRequest):
         # No vehicle whitelist here: ServerController rejects ids outside its
         # own roster, and the console filters the buttons with ``capabilities``.
-        try:
-            chosen = controller.activate(request.vehicle)
-        except BackendUnavailable as exc:
-            raise _unavailable(exc) from exc
-        except ValueError as exc:
-            raise HTTPException(
-                400, detail={"message": str(exc)}
-            ) from exc
+        chosen = invoke(controller.activate, request.vehicle)
         return {
             "state": ServerState.IDLE.value,
             "vehicle": chosen,
@@ -198,11 +113,9 @@ def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAP
     def world_options():
         maps = getattr(controller, "maps", None)
         if maps is None:
-            raise HTTPException(
-                503, detail={"message": "map catalog is unavailable"}
-            )
+            raise missing_catalog("map")
         current = controller.status
-        caps, simulator = capabilities()
+        caps, simulator = capabilities(controller)
         payload = {
             "maps": list(maps.ids),
             "map_labels": maps.labels,
@@ -227,14 +140,7 @@ def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAP
     def switch_world(request: WorldRequest):
         # The router picks the driver from the map's family, so a UE4 map can no
         # longer reach the ProjectAirSim launch script.
-        try:
-            state = controller.request_world(request.map)
-        except BackendUnavailable as exc:
-            raise _unavailable(exc) from exc
-        except ValueError as exc:
-            raise HTTPException(
-                400, detail={"message": str(exc)}
-            ) from exc
+        state = invoke(controller.request_world, request.map)
         code = 202 if state is ServerState.CONNECTING else 200
         return JSONResponse(
             {"state": state.value, "map": request.map}, status_code=code
@@ -245,14 +151,7 @@ def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAP
         # Service-level action: no capability gate. A simulator family states what
         # it can do inside the scene, not whether this service may take the whole
         # scene down; the controller refuses when it does not own the simulator.
-        try:
-            state = controller.stop_world()
-        except BackendUnavailable as exc:
-            raise _unavailable(exc) from exc
-        except ValueError as exc:
-            raise HTTPException(
-                400, detail={"message": str(exc)}
-            ) from exc
+        state = invoke(controller.stop_world)
         return JSONResponse({"state": state.value}, status_code=202)
 
     @app.get("/api/models")
@@ -260,9 +159,7 @@ def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAP
         require("models")
         catalog = getattr(controller, "vehicle_models", None)
         if catalog is None:
-            raise HTTPException(
-                503, detail={"message": "vehicle model catalog is unavailable"}
-            )
+            raise missing_catalog("vehicle model")
         current = controller.status
         return {
             "models": dict(current.models or {}),
@@ -279,14 +176,7 @@ def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAP
     @app.post("/api/models")
     def switch_models(request: ModelsRequest):
         require("models")
-        try:
-            state = controller.request_models(request.models)
-        except BackendUnavailable as exc:
-            raise _unavailable(exc) from exc
-        except ValueError as exc:
-            raise HTTPException(
-                400, detail={"message": str(exc)}
-            ) from exc
+        state = invoke(controller.request_models, request.models)
         code = 202 if state is ServerState.CONNECTING else 200
         return JSONResponse(
             {
@@ -318,14 +208,7 @@ def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAP
 
     @app.post("/api/profile")
     def switch_profile(request: ProfileRequest):
-        try:
-            state = controller.request_profile(request.profile)
-        except BackendUnavailable as exc:
-            raise _unavailable(exc) from exc
-        except ValueError as exc:
-            raise HTTPException(
-                400, detail={"message": str(exc)}
-            ) from exc
+        state = invoke(controller.request_profile, request.profile)
         code = 202 if state is ServerState.CONNECTING else 200
         return JSONResponse(
             {"state": state.value, "profile": request.profile}, status_code=code
@@ -336,9 +219,7 @@ def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAP
         require("weather")
         catalog = getattr(controller, "weather_catalog", None)
         if catalog is None:
-            raise HTTPException(
-                503, detail={"message": "weather catalog is unavailable"}
-            )
+            raise missing_catalog("weather")
         return {
             "fields": [
                 {"id": field.id, "label": field.label}
@@ -357,14 +238,7 @@ def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAP
     @app.post("/api/weather", status_code=202)
     def set_weather(payload: dict[str, object]):
         require("weather")
-        try:
-            merged = controller.request_weather(payload)
-        except BackendUnavailable as exc:
-            raise _unavailable(exc) from exc
-        except ValueError as exc:
-            raise HTTPException(
-                400, detail={"message": str(exc)}
-            ) from exc
+        merged = invoke(controller.request_weather, payload)
         return {
             "state": ServerState.IDLE.value,
             "weather": merged,
@@ -372,14 +246,7 @@ def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAP
 
     @app.post("/api/view")
     def set_view(request: ViewRequest):
-        try:
-            mode, deferred = controller.request_view(request.mode)
-        except BackendUnavailable as exc:
-            raise _unavailable(exc) from exc
-        except ValueError as exc:
-            raise HTTPException(
-                422, detail={"message": str(exc)}
-            ) from exc
+        mode, deferred = invoke(controller.request_view, request.mode, code=422)
         return {"view_mode": mode, "deferred": deferred}
 
 
@@ -397,15 +264,6 @@ def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAP
                 ),
             )
 
-    if CONSOLE_DIR.is_dir():
-        app.mount(
-            "/console",
-            StaticFiles(directory=str(CONSOLE_DIR)),
-            name="console",
-        )
-
-        @app.get("/", include_in_schema=False)
-        def index():
-            return FileResponse(CONSOLE_DIR / "index.html")
+    mount_console(app)
 
     return app
