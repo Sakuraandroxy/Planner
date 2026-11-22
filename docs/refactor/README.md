@@ -88,12 +88,16 @@ class ControlLoop:
 # runtime/window/window.py
 class PlanningWindow:  begin / submit / poll_stream / pause_for_completion / complete / end
 
+# ports/goal_source.py
+class StreamGoalSource(Protocol):
+    next(state: TimedVehicleState, unwrapped_yaw_deg: float) -> MotionCommand | None
+
 # workflows/<pkg>/__init__.py
 TASK_KIND: TaskKind
 REQUIRED_PORTS: tuple[str, ...]
 ```
 
-十三条形状约定：
+十四条形状约定：
 
 1. 命令下发只有一个签名 `stream_command(command, duration_s)`。`SegmentSink` 与 `StreamSink` 都是它的别名，不再有 `apply` 这个第二名字。
 2. `execute_segment` 由 `runtime` 的 `GuidedVehicle(streaming, loop)` 兑现，引擎类不实现它（R1）。过渡期允许引擎留三行委派。
@@ -108,6 +112,7 @@ REQUIRED_PORTS: tuple[str, ...]
 11. `enabled_tasks` 留在 `SimulatorPorts`，表示实测状态（R11）。
 12. 控制器里的天气与机位合成一个 `EnvironmentChannel`，生命周期一致（R12）。
 13. 提示词只外置 `adapters/trajectory_planner/prompts` 三个文件；其余四个小文件留在 Python（R13）。
+14. `StreamGoalSource` 声明在新增的 `ports/goal_source.py`：任务层实现、执行层消费的协议必须落在 `ports/`；两个 Sink 名字不单独建文件（R16）。
 
 ## 四、三条关键路径
 
@@ -238,6 +243,7 @@ controller  position_hold.start() -> IDLE
 | R13 | 提示词外置范围 | 只三个大文件 | 四份小提示词仍在 Python |
 | R14 | 相机内参半像素差 | 两份都留，加断言 | 长期存在两套主点 |
 | R15 | `streaming_views.py` | 留引擎包，运行时不 import | 引擎包继续携带 xvfb/xpra 相关代码 |
+| R16 | `StreamGoalSource` 放哪 | 新增 `ports/goal_source.py`；Sink 名不建文件 | `ports/` 回到 14 个文件 |
 
 ## 十一、仍然开放的问题
 
@@ -272,9 +278,9 @@ controller  position_hold.start() -> IDLE
 | 文件 | 层 | 行数 |
 | --- | --- | --- |
 | `00-boundaries.md` | 共同约束与初始契约 | 192 |
-| `01-contracts.md` | 契约层 `domain/`、`ports/` | 267 |
+| `01-contracts.md` | 契约层 `domain/`、`ports/` | 268 |
 | `02-algorithms.md` | 计算层 `algorithms/` | 785 |
-| `03-runtime.md` | 执行层 `runtime/` | 562 |
+| `03-runtime.md` | 执行层 `runtime/` | 564 |
 | `04-workflows.md` | 任务层 `workflows/` | 313 |
 | `05-assembly.md` | 装配层 `assembly/` 与 `config/` | 358 |
 | `06-adapters-engines.md` | 端口实现、引擎实现、进程栈 | 338 |

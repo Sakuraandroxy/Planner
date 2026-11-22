@@ -1,6 +1,6 @@
 # 01 契约层：`planner/domain/` 与 `planner/ports/`
 
-契约层最终 26 个文件（`domain/`）加 13 个（`ports/`）。载具运动类型与命令联合全部落在 `domain/motion.py`，碰撞类型落在 `domain/execution.py`，两份 `MotionLimits` 合成 `domain/motion.py` 一份 18 字段。端口改两个文件、删一个：`vehicle.py` 加 `motion_capability()` 与新的 `collision_state()` 返回类型，`streaming_vehicle.py` 用 `stream_command` 替掉 `stream_velocity`（裁决 R2），`collision_check.py` 删除（裁决 R5）。`Vehicle` 槽由 runtime 的 `GuidedVehicle(streaming, loop)` 组合对象兑现，引擎只实现 `stream_command` 一个数据面动作（裁决 R1）。`Capabilities` 与 `MotionCapability` 靠文件、字段与测试三重隔离，不共享命名空间。
+契约层最终 26 个文件（`domain/`）加 14 个（`ports/`）。载具运动类型与命令联合全部落在 `domain/motion.py`，碰撞类型落在 `domain/execution.py`，两份 `MotionLimits` 合成 `domain/motion.py` 一份 18 字段。端口改两个文件、删一个、加一个：`vehicle.py` 加 `motion_capability()` 与新的 `collision_state()` 返回类型，`streaming_vehicle.py` 用 `stream_command` 替掉 `stream_velocity`（裁决 R2），`collision_check.py` 删除（裁决 R5），新增 `goal_source.py` 声明 `StreamGoalSource`（裁决 R16）。`Vehicle` 槽由 runtime 的 `GuidedVehicle(streaming, loop)` 组合对象兑现，引擎只实现 `stream_command` 一个数据面动作（裁决 R1）。`Capabilities` 与 `MotionCapability` 靠文件、字段与测试三重隔离，不共享命名空间。
 
 ## 一 职责与文件清单
 
@@ -39,12 +39,13 @@
 
 任务相关类型（`basic_motion.py`、`free_navigation.py`、`visual_goal*.py`、`approach.py`）留在 `domain/` 而不是迁进 `workflows/<task>/`：`adapters/task_parser/tasks/*` 与 `adapters/task_completion/prompts/visual_goal_completion.py` 必须引用这些类型，而 `adapters/` 只允许 import `domain/`、`ports/`、`algorithms/`。留在这里的只有数据结构，判定函数按 `docs/REFACTOR.md` 进各任务包 `policy.py`。
 
-### 1.2 `planner/ports/`（13 个文件）
+### 1.2 `planner/ports/`（14 个文件）
 
 | 文件 | 协议与签名 | 估行 | 从哪来 |
 | --- | --- | --- | --- |
 | `vehicle.py` | `Vehicle`：`current_pose() -> WorldPose`；`motion_capability() -> MotionCapability`；`execute_segment(segment: MotionSegment, *, budget: ExecutionBudget \| None = None, pose_checkpoint: PoseCheckpoint \| None = None) -> None`；`cancel() -> None`；`hover() -> None`；`collision_state() -> CollisionState` | 31 | 现 26 行，加 `motion_capability`，改 `collision_state` 返回类型。`execute_segment` 由 `runtime/motion/loop.py` 的 `GuidedVehicle(streaming, loop)` 兑现，引擎类不实现它（裁决 R1） |
 | `streaming_vehicle.py` | `StreamingVehicle`：`stream_state() -> TimedVehicleState`；`stream_command(command: MotionCommand, duration_s: float) -> None` | 14 | 现 9 行，`stream_velocity` 删。这是唯一的命令下发签名，`SegmentSink`/`StreamSink` 都是它的别名（裁决 R2） |
+| `goal_source.py` | `StreamGoalSource`：`next(state: TimedVehicleState, unwrapped_yaw_deg: float) -> MotionCommand \| None` | 10 | 新建。任务层实现（`runtime/motion/follower.py` 的 `QueueFollower`）、执行层消费（`ControlLoop.run_stream` 的 `goals`）的协议，按依赖规则必须落在 `ports/`（裁决 R16） |
 | `position_hold_vehicle.py` | `PositionHoldVehicle`：`stream_state()`、`cancel()`、`hold_velocity(velocity_world, yaw_rate_deg_s, duration_s)` | 10 | 不动，签名保持；实现内部转调 `stream_command`（裁决 R7） |
 | `observation_source.py` | `ObservationSource`、`ControlledObservationSource`、`MovingObservationSource` | 24 | 不动 |
 | `backend_worker.py` | 十个 worker 方法 | 28 | 不动 |
@@ -139,10 +140,10 @@
 
 ### 3.1 我提供什么
 
-- 全部数据类型与 `Protocol`：`MotionModel`、`MotionCapability`、`HolonomicCommand`、`CarCommand`、`MotionCommand`、`CollisionContact`、`CollisionState`、`CollisionRecoverySettings`、`MotionLimits`、`MotionSegment`、`ExecutionBudget`、`PoseCheckpoint`、`Capabilities`。
+- 全部数据类型与 `Protocol`：`MotionModel`、`MotionCapability`、`HolonomicCommand`、`CarCommand`、`MotionCommand`、`CollisionContact`、`CollisionState`、`CollisionRecoverySettings`、`MotionLimits`、`MotionSegment`、`ExecutionBudget`、`PoseCheckpoint`、`Capabilities`，以及 `StreamGoalSource`（裁决 R16）。
 - 三个校验入口：各 frozen 类型的 `__post_init__`；`command_type_for(capability)`；`require_supported(command, capability)`。
 - 零逻辑承诺：`domain/` 与 `ports/` 不 import `algorithms/`、`runtime/`、`workflows/`、`assembly/`、`adapters/`、`simulator/`、`simulators/`。
-- 不提供第二个下发名字：`SegmentSink`、`StreamSink` 都是 `stream_command(command, duration_s)` 的别名，`apply` 这个名字不出现（裁决 R2）。
+- 不提供第二个下发名字：`SegmentSink`、`StreamSink` 都是 `stream_command(command, duration_s)` 的别名，`apply` 这个名字不出现（裁决 R2）。两个 Sink 名字不单独建文件，`ports/` 下新增的只有 `goal_source.py`（裁决 R16）。
 
 ### 3.2 我要求相邻层提供什么
 

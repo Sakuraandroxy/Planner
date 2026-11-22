@@ -36,6 +36,7 @@
 | `runtime/window/queue.py` | `class WorldWaypointQueue(position_tolerance_m, yaw_tolerance_deg, passed_lateral_tolerance_m)`；`load_prefix`、`load_batch`、`pending`、`consume`、`consume_stream`、`append_continuation`、`pause_stream`、`restore_stream`、`clear`、`matches`、`require_anchor`、`check_owner` | 150 | `planner/services/trajectory_queue.py` 148 行 |
 | `runtime/window/worker.py` | `class SlowPlannerWorker`；`require_available()`、`has_pending_call`、`submit(operation) -> Future`、`close()` | 80 | `planner/capabilities/sliding_window/worker.py` 76 行 |
 | `runtime/window/inflight.py` | `class BackgroundContinuationPlanner(planner, validator, worker, scheduler, clock)`；`begin(request_limit)`、`submit(snapshot)`、`poll()`、`wait(checkpoint)`、`discard()`、`end()` | 140 | `planner/capabilities/sliding_window/planning.py` 135 行 |
+| `ports/goal_source.py`（契约层新增，本层只消费） | `class StreamGoalSource(Protocol)`：`next(state: TimedVehicleState, unwrapped_yaw_deg: float) -> MotionCommand \| None` | 15 | 新建（裁决 R16）；`runtime/motion/follower.py` 实现，`ControlLoop.run_stream` 消费 |
 | `runtime/position_hold.py` | `class PositionHold(vehicle: PositionHoldVehicle, limits, tracking, speed_mps, timeout_s, *, clock, sleep)`；`start(target=None)`、`release()`、`tick()`、`wait(*, budget, checkpoint)`、`climb_by(metres)`、`observable`、`contains_pose(pose)` | 170 | `planner/services/position_hold.py` 同职责 |
 | `runtime/frame_hub.py` | `class FrameHub(max_fps=10.0, clock)`；`publish(bgra, timestamp_s)`、`wait_next(after, timeout_s)`、`close()` | 70 | `planner/services/frame_hub.py` 同职责 |
 | `runtime/trajectory_hub.py` | `class TrajectoryHub(clock)`；`read()`、`publish(snapshot)`、`adopt(snapshot)`、`start`、`clear`、`publish_no_queue`、`publish_queue` | 120 | `planner/services/trajectory_hub.py` 同职责 |
@@ -331,18 +332,19 @@ class CollisionRecovery:
 三个协议由契约层声明，本层实现或消费：
 
 ```python
-# ports/control_loop.py（请求 01 契约层收；裁决 R2：只有一个下发名字）
+# ports/goal_source.py（裁决 R16）
+class StreamGoalSource(Protocol):
+    def next(self, state: TimedVehicleState, unwrapped_yaw_deg: float) -> MotionCommand | None: ...
+
+# SegmentSink / StreamSink 不建文件：它们是 stream_command 的别名（裁决 R2）
 class CommandSink(Protocol):
     def stream_command(self, command: MotionCommand, duration_s: float) -> None: ...
 
-SegmentSink = CommandSink      # runtime 内部别名，不出现 apply
+SegmentSink = CommandSink
 StreamSink = CommandSink
-
-class StreamGoalSource(Protocol):
-    def next(self, state: TimedVehicleState, unwrapped_yaw_deg: float) -> MotionCommand | None: ...
 ```
 
-`StreamGoalSource.next` 的第二个参数是在契约签名上多出来的：契约层给的是 `next(state)`，而偏航必须用不折返的连续角，`WorldPose.yaw_deg` 会跨 ±180 跳变。请求 01 契约层把 `next` 定为 `next(state, unwrapped_yaw_deg)`，或把连续偏航放进 `TimedVehicleState`。
+`StreamGoalSource` 由 `ports/goal_source.py` 声明（裁决 R16），`runtime/motion/follower.py` 的 `QueueFollower` 实现它，`ControlLoop.run_stream` 的 `goals` 参数标注就是这个类型。`next` 的 `unwrapped_yaw_deg` 参数是在 `00-boundaries.md` 的 `next(state)` 上多出来的：偏航必须用不折返的连续角，`WorldPose.yaw_deg` 会跨 ±180 跳变。
 
 `SegmentSink` 与 `StreamSink` 是同一签名的两个名字，区别只在下发周期与是否允许 `None` 目标，没有方法差异；保持空闲用零速度命令表达，停稳用 `ExecutionService.stop()`（裁决 R2）。
 
@@ -351,7 +353,7 @@ class StreamGoalSource(Protocol):
 | 相邻层 | 我要求的东西 | 形状 |
 | --- | --- | --- |
 | `domain/` | `MotionModel`、`MotionCapability`、`HolonomicCommand`、`CarCommand`、`MotionCommand`、`CollisionContact`、`CollisionState`、`CollisionRecoverySettings`、`ExecutionBudget`、`ExecutionReceipt`、`ExecutionRecord`、`StopResult`、`MotionSegment`、`MotionTrajectory`、`WorldPose`、`resolve_yaw_delta_deg`、`wrap_yaw_deg`、`TimedVehicleState`、`QueuedWaypoint`、`PlanningSnapshot`、`PlanningWindowInput`、`SlidingWindowSettings`、`ContinuousTrackingSettings`、`MotionLimits`（只留一份） | `00-boundaries.md` 第四节与契约层方案 |
-| `ports/` | `Vehicle.current_pose/motion_capability/execute_segment/cancel/hover/collision_state -> CollisionState`（裁决 R1：槽最终由 runtime 的 `GuidedVehicle(streaming, loop)` 兑现，引擎侧只提供 `current_pose`/`motion_capability`/`collision_state`/`cancel`/`hover` 与 `stream_command`）；`StreamingVehicle.stream_state/stream_command`；`PositionHoldVehicle.stream_state/cancel/hold_velocity`（裁决 R7：`hold_velocity` 内部转调 `stream_command`）；`TrajectoryPlanner.plan`；`ObservationSource.capture`；`MovingObservationSource.capture_moving` | 现有 14 个端口，`collision_check.py` 删除（裁决 R5） |
+| `ports/` | `Vehicle.current_pose/motion_capability/execute_segment/cancel/hover/collision_state -> CollisionState`（裁决 R1：槽最终由 runtime 的 `GuidedVehicle(streaming, loop)` 兑现，引擎侧只提供 `current_pose`/`motion_capability`/`collision_state`/`cancel`/`hover` 与 `stream_command`）；`StreamingVehicle.stream_state/stream_command`；`PositionHoldVehicle.stream_state/cancel/hold_velocity`（裁决 R7：`hold_velocity` 内部转调 `stream_command`）；`StreamGoalSource.next`（裁决 R16，文件 `ports/goal_source.py`）；`TrajectoryPlanner.plan`；`ObservationSource.capture`；`MovingObservationSource.capture_moving` | 端口文件 14 个；`collision_check.py` 删除（裁决 R5）后 13 个，新增 `goal_source.py`（裁决 R16）后回到 14 个 |
 | `algorithms/` | `corridor_for(model, limits)`（裁决 R6：`ACKERMANN` 0.6 m，`HOLONOMIC` 取 `MotionLimits.position_tolerance_m`）、`heading_rate_deg_s`、`braking_speed`、`planned_speed`、`corner_speed`、`reached`、`duration_for`、`sample_segment`、`translation_handoff`、`ContinuousPathReference`、`world_to_relative`、`relative_to_world`、`require_execution_anchor`、`RefillScheduler` | 现 `services/motion/` 与 `capabilities/sliding_window/scheduler.py` 的纯函数部分，加 `algorithms/motion/corridor.py` |
 | `workflows/` | 实现或组装 `StreamGoalSource`（默认直接用 `QueueFollower`，只补暂停策略钩子，裁决 R4）；每阶段一个 `PlanningWindowInput`；调 `window` 六个方法；把 `delay`、`maximum_rounds` 交给 `window.begin` | 见任务层方案 |
 | `assembly/` | 按载具造一套 `ControlLoop`：`capability = vehicle.motion_capability()`、`limits` 从 `config.motion` 一次构造、`tracking` 从 `config.continuous`、`recovery` 从 `config.motion.collision`（开关只有 `motion.collision.enabled`，默认 true；删 `visual_goal_navigation.collision_check_enabled`，裁决 R8）、注入 `clock`/`sleep`；用 `GuidedVehicle(streaming, loop)` 填 `Vehicle` 槽（裁决 R1） | 见装配层方案 |
