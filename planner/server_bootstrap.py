@@ -7,7 +7,7 @@ from pathlib import Path
 from .adapters.http.server_api import create_api
 from .assembly.factories import build_detector, build_geometry, build_planner
 from .assembly.mission_assembly import MissionResources
-from .assembly.server_controller import ServerController
+from .assembly.controller import ServerController
 from .config import (
     AppConfig,
     load_config,
