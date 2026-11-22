@@ -16,8 +16,8 @@ from ...domain.pose import RelativePoseDelta
 from ...domain.trajectory import RelativeTrajectory
 from ...domain.visual_goal import VisualGoalPlanningContext
 from ...errors import ProtocolError
-from ...runtime.target_coordinates import point_in_horizontal_body
-from ...runtime.trajectory_transform import relative_to_world
+from ...algorithms.target_coordinates import point_in_horizontal_body
+from ...algorithms.trajectory_transform import relative_to_world
 
 WAYPOINT_COUNT = 5
 

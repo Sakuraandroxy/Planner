@@ -62,8 +62,8 @@ from planner.runtime.motion.base import MotionPlanner
 from planner.runtime.observation_snapshot import freeze_observation
 from planner.runtime.planning_window import PlanningWindow
 from planner.runtime.resource_cleanup import close_resources
-from planner.runtime.trajectory_transform import relative_to_world
-from planner.runtime.trajectory_validation import TrajectoryValidator
+from planner.algorithms.trajectory_transform import relative_to_world
+from planner.algorithms.trajectory_validation import TrajectoryValidator
 
 from .approach import VisualGoalApproachPhase
 from .flight import VisualGoalFlightPhase

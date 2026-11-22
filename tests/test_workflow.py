@@ -25,7 +25,7 @@ from planner.domain.visual_goal_limits import VisualGoalLimits
 from planner.errors import MotionPaused
 from planner.runtime.execution import ExecutionService
 from planner.runtime.motion import SynchronizedMotionPlanner
-from planner.runtime.trajectory_validation import TrajectoryValidator
+from planner.algorithms.trajectory_validation import TrajectoryValidator
 from planner.workflows.visual_goal_navigation import VisualGoalNavigationWorkflow
 from tests.support import ue_camera_matrix
 
