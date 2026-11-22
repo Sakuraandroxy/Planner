@@ -87,6 +87,8 @@ class StreamingVehicle(Protocol):
 # runtime/motion/loop.py
 SEGMENT_PERIOD_S = 0.030
 class ControlLoop:
+    segment_sink() -> Callable[[MotionCommand, float], None]   # vehicle.stream_command 的绑定
+    stream_sink()  -> Callable[[MotionCommand, float], None]
     run_segment(segment, sink, *, budget) -> ExecutionReceipt
     run_stream(goals, sink, *, deadline_monotonic) -> None
 
@@ -104,7 +106,7 @@ REQUIRED_PORTS: tuple[str, ...]
 
 十四条形状约定：
 
-1. 命令下发只有一个签名 `stream_command(command, duration_s)`。`SegmentSink` 与 `StreamSink` 都是它的别名，不再有 `apply` 这个第二名字。
+1. 命令下发只有一个签名 `stream_command(command, duration_s)`。任务层不自己造 sink：它调 `ControlLoop.segment_sink()` 或 `stream_sink()` 拿到可调用对象再传回循环。`SegmentSink`、`StreamSink` 只是执行层内部类型别名，不导出、不是跨层名字（R26）。
 2. `execute_segment` 由 `runtime` 的 `GuidedVehicle(streaming, loop)` 兑现，引擎类不实现它（R1）。过渡期允许引擎留三行委派。
 3. `run_stream` 的正常返回只有一种：`goals.next` 返回 `None`。deadline 到期抛 `BudgetExceeded`（R3）。
 4. 目标源由 `runtime/motion/follower.py` 的 `QueueFollower` 实现，含队列消耗与航点超时；`PlanningWindow` 只提供队列视图、`consume` 与六个方法（R4）。
@@ -184,7 +186,7 @@ controller  position_hold.start() -> IDLE
 
 - 职责：持有状态与时间，不认识任何具体任务。
 - 输入：契约层类型；`ports` 的 `Vehicle`、`StreamingVehicle`、`PositionHoldVehicle`、`ObservationSource`、`MovingObservationSource`、`TrajectoryPlanner`、`StreamGoalSource`；`algorithms` 的纯函数；`clock` 与 `sleep` 两个可替换调用。
-- 输出：`ControlLoop`（两条通道）、`ExecutionService`（控制权与预算）、`PlanningWindow`（六个方法）、`CollisionRecovery`、`QueueFollower`、`GuidedVehicle`、`PositionHold`、`FrameHub`、`TrajectoryHub`、`LogBuffer`、`ModelCallService`、`MovingObservations`、`BackgroundOperation`、`StreamTimeline`、`close_resources`。
+- 输出：`ControlLoop`（两条通道，加 `segment_sink()`、`stream_sink()` 两个取 sink 的方法）、`ExecutionService`（控制权与预算）、`PlanningWindow`（六个方法）、`CollisionRecovery`、`QueueFollower`、`GuidedVehicle`、`PositionHold`、`FrameHub`、`TrajectoryHub`、`LogBuffer`、`ModelCallService`、`MovingObservations`、`BackgroundOperation`、`StreamTimeline`、`close_resources`。
 - 不暴露：`WorldWaypointQueue`、`SlowPlannerWorker`、`BackgroundContinuationPlanner`、`StreamRecorder`、`MotionSynthesizer`、`CommandLimiter`、两个周期常量、`_guard`。
 - 细节：`03-runtime.md` §3.4。
 
@@ -331,6 +333,7 @@ UE4 侧一次：启动场景后确认巡航出现在能力位里（R18 取消了
 | R22 | HTTP 生命周期与目标接近类型留在契约层吗 | 搬出：生命周期进装配层，worker 协议进进程栈，目标接近类型进任务包 | 契约层少 12 个名字、`domain/` 26 → 22 个文件 |
 | R23 | 契约层还能不能压到 34 | 压到 34 需要拆掉构造期校验，保留 44 并逐条给 import 行反证 | 契约层仍是六层里对外名字最多的 |
 | R25 | 收尾一致性：`approach.py` 与 `COMMAND_FOR_MODEL` | `domain/approach.py` 整体迁出任务包；不新增 `COMMAND_FOR_MODEL`，适配层用 `require_supported` 校验 | 契约层少一个文件 |
+| R26 | sink 是不是跨层名字 | 不是。`ControlLoop.segment_sink()`/`stream_sink()` 提供 `stream_command` 的绑定，两个 Sink 类型别名留在执行层内部 | 任务层多两次方法调用 |
 | R24 | 一个大入口还是几个二级入口 | 允许二级包入口：层入口只放通用名字，`algorithms.motion`、`algorithms.depth`、`algorithms.targeting` 各自成入口 | 规则稍宽，测试按"只能指向 `__init__.py`"守 |
 
 ## 十一、仍然开放的问题
@@ -367,7 +370,7 @@ UE4 侧一次：启动场景后确认巡航出现在能力位里（R18 取消了
 | `00-boundaries.md` | 共同约束与初始契约 | 192 |
 | `01-contracts.md` | 契约层 `domain/`、`ports/` | 420 |
 | `02-algorithms.md` | 计算层 `algorithms/` | 955 |
-| `03-runtime.md` | 执行层 `runtime/` | 685 |
+| `03-runtime.md` | 执行层 `runtime/` | 687 |
 | `04-workflows.md` | 任务层 `workflows/` | 391 |
 | `05-assembly.md` | 装配层 `assembly/` 与 `config/` | 459 |
 | `06-adapters-engines.md` | 端口实现、引擎实现、进程栈 | 452 |

@@ -138,7 +138,7 @@ UE4：`capture()` → `ObservationGate.capture()`（自称 owner、`begin_observ
 | --- | --- | --- |
 | `Vehicle` | 最终由 `runtime.motion.loop.GuidedVehicle(streaming, loop)` 兑现，装配层填槽；过渡期投影到引擎载具 | `current_pose`、`motion_capability`、`execute_segment`、`cancel`、`hover`、`collision_state`（裁决 R1） |
 | `StreamingVehicle` | `ProjectAirSimRover`、`ProjectAirSimDrone`、`AirSimVehicle` | `stream_state`、`stream_command` |
-| `stream_command(command: MotionCommand, duration_s: float) -> None` | 同上三处 | 引擎侧唯一数据面动作；runtime 的 `SegmentSink`、`StreamSink` 都是这个签名的别名，不出现第二个名字（裁决 R2） |
+| `stream_command(command: MotionCommand, duration_s: float) -> None` | 同上三处 | 引擎侧唯一数据面动作；sink 由 `ControlLoop.segment_sink()`/`stream_sink()` 提供，就是 `vehicle.stream_command` 的绑定，适配层不认识任何 sink 名字（裁决 R2、R26） |
 | `ObservationSource` / `ControlledObservationSource` / `MovingObservationSource` | `ProjectAirSimObservationSource`、`AirSimObservationSource`、`BorrowedMovingSource` | |
 | `WeatherControl` | 新增 `ProjectAirSimWeather`、现有 `AirSimWeather` | |
 | `StreamingViews` | 新增 `StreamingViewCycle` | 只有 UE5 有 |
