@@ -48,7 +48,6 @@
 | --- | --- | --- | --- |
 | `ServerController` | 类 | 后端生命周期唯一门面 | `planner/server_bootstrap.py:112`；`planner/adapters/http/wiring.py`（`build_app` 入参） |
 | `ServerState` | `str` Enum | 五个对外状态 | `planner/adapters/http/wiring.py:19,28`；`planner/adapters/http/server_api.py:19,60,91,99` |
-| `ServerStatus` | frozen dataclass | `/api/status` 的字段快照 | 仅装配层与 `tests/test_server_api.py:16,259` |
 | `BackendUnavailable` | `RuntimeError` 子类 | 状态拒绝的载体 | `planner/adapters/http/wiring.py:19,24,45` |
 | `MapSelection` | frozen dataclass | 会话工厂的场景身份 | `planner/server_bootstrap.py:17,59` |
 | `MissionInputs` | frozen dataclass | 会话交出的引擎对象 | `planner/simulators/projectairsim/session.py:30,238`；`planner/simulators/airsim/session.py:30,157` |
@@ -63,7 +62,7 @@
 | `build_planner` | 函数 | 轨迹规划器构造 | `planner/server_bootstrap.py:45`；`planner/simulator/mission_child.py:235`；`scripts/smoke_projectairsim_drone.py:271` |
 | `build_free_navigation_planner` | 函数 | 巡航规划器构造 | `scripts/smoke_projectairsim_rover.py:150`；生产路径在 `planner/assembly/mission_assembly.py:158-159` |
 
-`planner/assembly/__init__.py:31-48` 是完整清单。`MissionCommon`、`build_mission_common`、`build_vehicle_arm`、`capabilities_for` 之外的工厂函数（`build_task_parser`、`build_trace_factory`、`build_completion_checker`、`api_key`）、六个控制器协作者（`LifecycleState`、`CommandChannel`、`SessionSwitcher`、`ModelSwitcher`、`ProfileSwitcher`、`EnvironmentChannel`）、`PlannerApplication`/`MissionValidator`/`MissionRunner`/`WorkflowRouter` 都不在层入口，同层内部按模块路径取。
+`planner/assembly/__init__.py:30-46` 是完整清单。`ServerStatus` 已从层入口移除，测试改从 `planner/assembly/controller/state.py` 取。`MissionCommon`、`build_mission_common`、`build_vehicle_arm`、`capabilities_for` 之外的工厂函数（`build_task_parser`、`build_trace_factory`、`build_completion_checker`、`api_key`）、六个控制器协作者（`LifecycleState`、`CommandChannel`、`SessionSwitcher`、`ModelSwitcher`、`ProfileSwitcher`、`EnvironmentChannel`）、`PlannerApplication`/`MissionValidator`/`MissionRunner`/`WorkflowRouter` 都不在层入口，同层内部按模块路径取。
 
 ## 5 关键流程
 
@@ -159,7 +158,7 @@
 - `build_vehicle_arm` 的连续分支（`moving_source_factory` + `sliding_window.enabled`）无断言；`assemble_missions` 只在 AirSim 会话测试里被驱动，`ProjectAirSim` 路径无对应用例。
 - `capabilities()` 返回 `None` 时的行为（目录无条目）没有测试；`tests/test_server_api.py` 的 `FakeController` 直接给现成能力位。
 - `CommandChannel.deliver` 的代数丢弃、`shutdown_worker` 的未确认 CLOSED 分支、`wait_closed` 超时分支各缺负例。
-- `ServerStatus` 的类型契约只被 `tests/test_server_api.py:259` 构造过一次，字段集合变化不会被测试发现。
+- `ServerStatus` 不再是层入口名字，只有 `tests/test_server_api.py:259` 构造过它，字段集合变化不会被测试发现。
 - `mission_report` 的 `success=True` 但无阶段分支（`planner/assembly/reporting.py:29-43`）未覆盖。
 
 ## 8 与其他层的联动
@@ -188,5 +187,18 @@
 - Qdocc21 层：assembly 结论：`MissionInputs.execution` 由所有 arm 共用，而 `ExecutionService` 绑定单个 `vehicle`；目前只有 AirSim 传该字段且只报一台载具，多载具家族一旦照传就会串车 依据：`planner/assembly/mission_assembly.py:215`、`planner/simulators/airsim/session.py:157-164`、`planner/simulators/projectairsim/session.py:238-241` 影响：是（simulator 文档的 `mission_inputs` 契约）
 - Qdocc22 层：assembly 结论：`TASK_REQUIREMENTS` 在 import 时构造并 `import_module` 三个任务包，任何导入 `planner.assembly` 的进程都会加载全部工作流与其依赖 依据：`planner/assembly/requirements.py:76`、`planner/workflows/__init__.py:3-7` 影响：否
 - Qdocc23 层：assembly 结论：`PlannerApplication.execute` 会对同一份计划跑两次 `validate` 与两次 `runner.prepare`（`prepare()` 里一次，`execute_plan()` 里再一次） 依据：`planner/assembly/application.py:25-41` 影响：否
-- Qdocc24 层：assembly 结论：`ServerStatus` 从层入口导出，层外只有测试引用，运行期没有读者；`ServerState` 才是 HTTP 适配层真正需要的类型 依据：`planner/assembly/__init__.py:13,38`、`planner/assembly/controller/state.py:39-69`、`tests/test_server_api.py:16` 影响：否
+- Qdocc24 层：assembly 结论：`ServerStatus` 曾从层入口导出，层外只有测试引用；已按 M2 移除导出，`ServerState` 才是 HTTP 适配层真正需要的类型 依据：`planner/assembly/__init__.py:30-46`、`planner/assembly/controller/state.py:39-69`、`tests/test_server_api.py:16` 影响：否
 - Qdocc25 层：assembly 结论：`mission_report` 在 `success=True` 但阶段为空时返回退出码 0 且文案写"未验证"，退出码与文案矛盾 依据：`planner/assembly/reporting.py:29-43` 影响：否
+
+## 10 已知缺口
+
+1. 与 `planner.simulator` 双向依赖，现存两条边。装配取引擎槽位：`planner/assembly/requirements.py:20`；引擎栈取装配的名字：`planner/simulator/registry.py:40` 惰性 import `capabilities_for`，`planner/simulator/worker.py:14` 与 `planner/simulator/mission_child.py:33` 取 `task_finish_events`。风险：把 `SimulatorPorts` 移出 `planner/simulator`，或让 registry 在模块顶层 import 装配层，都会变成导入环。`tests/test_layering.py:155` 只断言"装配是唯一同时 import 任务与仿真器的层"，不覆盖 adapters，因此 `planner/adapters/task_completion/prompts/visual_goal_completion.py:6` 从任务层二级入口取 `require_visual_completion_evidence` 这条边没有测试盯着。
+2. `capabilities_for` 有两份位置。派生实现在 `planner/assembly/requirements.py:97`，转发包装在 `planner/simulator/registry.py:38`。层入口导出的只有派生版（`planner/assembly/__init__.py:43`）；控制器与配置加载走转发版（`planner/assembly/controller/__init__.py:219`、`planner/config/vehicles.py:181`）。风险：换入口时容易只改一处。
+3. `submit` 在锁内把 `_vehicle` 改成请求值并置 RUNNING，切载具的 park、hide、homing 要到会话 `run` 才发生，失败没有回滚路径（`planner/assembly/controller/commands.py:52-66`、`planner/simulators/projectairsim/session.py:256-280`）。触发条件：提交的目标载具不是当前活动载具，且该载具切换失败。
+4. 代数不符的命令在 `deliver` 里静默 return，而调用方已经改过 `_state` 与 `_pending_activation`，没有日志也没有回执（`planner/assembly/controller/commands.py:127-133`）。触发条件：换代发生在同一轮投递与消费之间。
+5. `mission_report` 在 `success=True` 且阶段为空时返回退出码 0，文案写"task completion not verified"，退出码与文案矛盾（`planner/assembly/reporting.py:29-43`）。
+6. `require_confirmed` 定义在任务层，唯一调用点是装配层（`planner/assembly/mission_runner.py:24`）。放错层的代价是本层新增一个跨层名字，行为没有差异。
+7. `PlannerApplication.execute` 对同一份计划跑两次 `validate` 与两次 `runner.prepare`（`planner/assembly/application.py:25-41`）。影响：`prepare` 必须保持幂等，否则第二次会抛。
+8. 状态码决定权在适配层，装配层只给异常类型与状态枚举。503 与 409 由 `planner/adapters/http/wiring.py:24-33` 按 `BackendUnavailable.state` 二分，400 由同文件 `:31-40` 映射 `ValueError`，501 由同文件 `:63-81` 的能力门给出。`ServerController.capabilities()` 返回 `None` 时能力门整段跳过（`planner/adapters/http/wiring.py:66-68`），四个动作位全部放行。
+9. 能力位与可跑任务不一致。`task_kinds` 只按端口槽位求交（`planner/assembly/requirements.py:79-84`），管线成员还受三个配置约束：巡航规划器是否配置（`planner/assembly/mission_assembly.py:289`）、任务解析器是否配置（`planner/assembly/mission_assembly.py:316`）、完成校验器在构造期直接抛 `ValueError`（`planner/assembly/factories/completion.py:14-17`）。触发条件：巡航规划器未配置而载具槽位满足 `REQUIRED_PORTS`，控制台显示可点，提交后 `MissionValidator` 抛 `unsupported task kind`（`planner/assembly/mission_validator.py:61-63`）。
+10. 常量未走配置：巡航航点超时在两处写死 `60.0`（`planner/assembly/mission_assembly.py:264`、`planner/assembly/mission_assembly.py:302`），任务包同名参数的默认值也是 `60.0`（`planner/workflows/free_navigation/workflow.py:68`），三处没有单一出处。

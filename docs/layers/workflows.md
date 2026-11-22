@@ -172,3 +172,25 @@
 - Qdocc10 层：workflows 结论：视觉连续实现没有 `_closed` 标志，`prepare()` 也不查关闭态，与巡航连续实现不对称 依据：`planner/workflows/visual_goal_navigation/continuous.py:48-61`、对比 `planner/workflows/free_navigation/continuous.py:103-127` 影响：否
 - Qdocc11 层：workflows 结论：两个连续实现都穿过 `ExecutionService` 直取 `execution.vehicle` 端口并调 `stream_state`/`hover`，本层声明的 Protocol 面没有这几个方法 依据：`planner/workflows/free_navigation/continuous.py:109-114`、`planner/workflows/free_navigation/continuous.py:220-224`；`planner/workflows/visual_goal_navigation/continuous.py:49-51` 影响：是（ports.md 的 `StreamingVehicle` 说明）
 - Qdocc12 层：workflows 结论：`approach.checkpoint` 与 `flight.verify` 里的"碰撞中"分支不可达，因为 `ExecutionService.collision_state()` 恒返回 `False` 依据：`planner/workflows/visual_goal_navigation/approach.py:69-73`、`planner/workflows/visual_goal_navigation/flight.py:34-38`、`planner/runtime/execution.py:104-111` 影响：是（runtime.md 的碰撞职责条目）
+
+## 10 已知缺口
+
+三类任务的能力差异，逐格给依据。
+
+| 项 | 数值动作 | 视觉目标接近 | 无终点巡航 |
+| --- | --- | --- | --- |
+| 阶段预算 | 无。不调 `set_deadline`，超时只由 `ControlLoop` 的 `timeout_s` 兜（`planner/workflows/basic_motion/workflow.py:66-97`） | 有。`maximum_task_duration_s` 写成 `ExecutionBudget` 并 `set_deadline`（`planner/workflows/visual_goal_navigation/workflow.py:128`、`planner/workflows/visual_goal_navigation/workflow.py:138`） | 无。`set_deadline(None)`，连续与停稳回退两条路都不设期限（`planner/workflows/free_navigation/workflow.py:211`） |
+| 关闭态 | 无。`close()` 空实现，`run` 不查关闭标志（`planner/workflows/basic_motion/workflow.py:51-55`） | 有。`prepare` 抛 `ExecutionError`（`planner/workflows/visual_goal_navigation/workflow.py:112-114`）；连续实现缺这一个标志（`planner/workflows/visual_goal_navigation/continuous.py:48-61`） | 有（`planner/workflows/free_navigation/workflow.py:158-160`）；连续实现另有自己的标志（`planner/workflows/free_navigation/continuous.py:105-127`） |
+| 异常映射 | 一律 `EXECUTION_ERROR`，`BudgetExceeded` 与 `ExecutionError` 不可分（`planner/workflows/basic_motion/workflow.py:121-132`） | 六类分支按类型映射（`planner/workflows/visual_goal_navigation/workflow.py:159-172`） | 六类分支按类型映射（`planner/workflows/free_navigation/workflow.py:290-301`） |
+| 连续路径 | 无 | `ContinuousExecution`，每拍 `stream.tick`（`planner/workflows/visual_goal_navigation/continuous.py:233-283`） | `StreamRunner` 加 `QueueFollower`（`planner/workflows/free_navigation/continuous.py:83-172`） |
+| 停滞判据 | 无 | 位移 `< 0.2 m` 且转角 `< 2.0°` 连续两次（`planner/workflows/visual_goal_navigation/termination.py:25-30`） | 停稳批次 `< 1e-6 m` 且 `< 1e-6°` 计 `max_consecutive_stalls` 次，连续走 `stall_timeout_s` 时间窗（`planner/workflows/free_navigation/workflow.py:268-278`、`planner/workflows/free_navigation/continuous.py:206-218`） |
+
+缺口清单：
+
+1. 阶段预算与关闭态在三个任务间不对称。风险：数值动作没有阶段时限，关闭后仍会驱动载具。触发条件：计划里出现 `basic_motion`，或同一会话内 `close()` 之后再次 `run`。
+2. 视觉与巡航的连续实现各有一份 `_submit` 与 `_publish`，`timeline.at` 失败后的补锚点分支逐行相同（`planner/workflows/visual_goal_navigation/continuous.py:175-221`、`planner/workflows/free_navigation/continuous.py:235-277`）。生产路径两份都活，暂无死路。
+3. `segment_motion` 的三个名字是死路，`planner/runtime/__init__.py:21` 仍导出 `plan_segment`、`quintic`、`duration_for`；生产用的是 `synchronized.duration_for`（`planner/runtime/motion/__init__.py:2`，调用点 `planner/workflows/basic_motion/workflow.py:25`）。任务侧不存在第二份 `duration_for`。
+4. 停滞阈值 `0.2 m`、`2.0°`、`1e-6 m`、`1e-6°` 都是经验值，未标定，也没有配置出处。影响：低速或高噪声工况下 `STUCK` 会误报或漏报。
+5. 巡航停稳回退分支没有重试与计划数上限，给规划器传 `budget=None`（`planner/workflows/free_navigation/workflow.py:238-258`）。触发条件：窗口未启用且使用该回退路径。
+6. 巡航连续路径用 `AssertionError` 表达"不该返回"，随后被 `except Exception` 收成 `BLOCKED`（`planner/workflows/free_navigation/workflow.py:218-224`、`planner/workflows/free_navigation/workflow.py:285-301`）。
+7. 测试空白：`VisualGoalContinuous` 无任何测试引用，`_check_pause`、`_submit`、`_sync_remaining` 未覆盖；视觉工作流的连续分支（`planner/workflows/visual_goal_navigation/workflow.py:143`、`planner/workflows/visual_goal_navigation/workflow.py:206-207`、`planner/workflows/visual_goal_navigation/workflow.py:270-271`）无测试；`basic_motion` 的 `prepare`/`close` 无断言；巡航 `_publish` 的日志分支未断言。
