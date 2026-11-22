@@ -13,7 +13,8 @@ from planner.config import (
     VehicleModelOption,
 )
 from planner.domain import WorldPose
-from planner.domain import BackendUnavailable, ServerState, ServerStatus, TaskSubmission
+from planner.assembly import BackendUnavailable, ServerState, ServerStatus
+from planner.simulator import TaskSubmission
 from planner.domain import QueuedWaypoint
 from planner.domain import MODE_CONTINUOUS
 from planner.domain import WEATHER_CATALOG, WEATHER_FIELDS, merge_weather

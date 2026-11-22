@@ -8,15 +8,71 @@ events, so the supervisor thread keeps being the sole writer.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
+from enum import Enum
 
-from ...domain import (
-    ServerState,
-    ServerStatus,
-    WorkerEventKind,
-    default_view_for,
-)
+from ...domain import default_view_for
+from ...simulator import WorkerEventKind
 
 logger = logging.getLogger(__name__)
+
+
+class ServerState(str, Enum):
+    # No scene is loaded and no simulator connection is attempted until the
+    # console asks for a map (the planner's startup state).
+    DISCONNECTED = "disconnected"
+    CONNECTING = "connecting"
+    IDLE = "idle"
+    RUNNING = "running"
+    STOPPING = "stopping"
+
+
+@dataclass(frozen=True)
+class MapSelection:
+    """Scene identity handed to the worker factory for a map."""
+
+    map_id: str
+    scene_file: str
+    sim_config_path: str
+
+
+@dataclass(frozen=True)
+class ServerStatus:
+    state: ServerState
+    instruction: str = ""
+    last_result: str | None = None
+    vehicle: str = ""
+    vehicles: tuple[str, ...] = ()
+    # Selected/active map id and every id the console may switch to.
+    map: str = ""
+    maps: tuple[str, ...] = ()
+    # Active streaming view id ("" until the session reports one).
+    view_mode: str = ""
+    # True while the simulator is stepping through streaming views to apply a
+    # requested camera; clients show a blank screen instead of the switching.
+    view_pending: bool = False
+    # Complete eight-field weather state, or None before the session is ready.
+    weather: dict[str, float] | None = None
+    # True while the simulator stack is being stopped/relaunched for a map.
+    map_switching: bool = False
+    # Selected appearance model per vehicle, or None without a model catalog.
+    models: dict[str, str] | None = None
+    # True while the worker is restarting to load a model's scene variant.
+    models_switching: bool = False
+    #: Selected navigation profile ("" when the deployment lists none).
+    profile: str = ""
+    #: Profile ids the console may switch to.
+    profiles: tuple[str, ...] = ()
+    # True while the worker is being rebuilt from another profile's config.
+    profile_switching: bool = False
+    # Last simulator restart failure, surfaced by /api/status and /api/logs.
+    sim_error: str | None = None
+
+
+class BackendUnavailable(RuntimeError):
+    def __init__(self, state: ServerState):
+        self.state = state
+        super().__init__(f"planner is {state.value}")
 
 
 class LifecycleState:

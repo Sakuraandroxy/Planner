@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from planner.adapters.http.server_api import create_api
 from planner.config import ServerSettings, load_map_catalog
-from planner.domain import ServerState
+from planner.assembly import ServerState
 from planner.runtime import FrameHub
 from planner.runtime import TrajectoryHub
 from tests.test_server_api import FakeController

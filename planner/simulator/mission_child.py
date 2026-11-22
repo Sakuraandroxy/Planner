@@ -32,7 +32,7 @@ from planner.assembly import build_detector, build_geometry, build_planner
 from planner.assembly import MissionResources
 from planner.assembly import task_finish_events
 from ..config import load_config
-from planner.domain import TaskSubmission, WorkerEventKind
+from .worker_protocol import TaskSubmission, WorkerEventKind
 from planner.domain import snapshot_to_payload
 from . import registry
 from .subprocess_worker import EVENT_FD_ENV

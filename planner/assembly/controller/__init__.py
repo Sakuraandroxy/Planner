@@ -22,18 +22,19 @@ from ...config import MapCatalog, MapEntry, ProfileInfo, VehicleModelCatalog
 from ...domain import (
     WEATHER_CATALOG,
     Capabilities,
-    MapSelection,
-    ServerState,
-    ServerStatus,
-    TaskSubmission,
     default_view_for,
 )
 from ...runtime import LogBuffer
-from ...simulator import BackendWorker, registry
+from ...simulator import BackendWorker, TaskSubmission, registry
 from .commands import CommandChannel
 from .models import ModelSwitcher
 from .profiles import ProfileSwitcher
-from .state import LifecycleState
+from .state import (
+    LifecycleState,
+    MapSelection,
+    ServerState,
+    ServerStatus,
+)
 from .weather import EnvironmentChannel
 from .world import SessionSwitcher
 

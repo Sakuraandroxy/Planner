@@ -12,7 +12,7 @@ import threading
 from collections.abc import Callable
 
 from planner.assembly import task_finish_events
-from planner.domain import TaskSubmission, WorkerEvent, WorkerEventKind
+from .worker_protocol import TaskSubmission, WorkerEvent, WorkerEventKind
 
 
 class ThreadedMissionWorker:

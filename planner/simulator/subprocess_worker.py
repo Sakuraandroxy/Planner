@@ -34,7 +34,7 @@ import threading
 import time
 from collections.abc import Callable
 
-from planner.domain import TaskSubmission, WorkerEvent, WorkerEventKind
+from .worker_protocol import TaskSubmission, WorkerEvent, WorkerEventKind
 from planner.domain import snapshot_from_payload
 from planner.domain import weather_catalog_from_payload
 

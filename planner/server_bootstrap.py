@@ -14,7 +14,7 @@ from .config import (
     profile_catalog,
     profile_config_path,
 )
-from planner.domain import MapSelection
+from planner.assembly import MapSelection
 from planner.runtime import FrameHub
 from planner.runtime import TrajectoryHub
 from .simulator import registry

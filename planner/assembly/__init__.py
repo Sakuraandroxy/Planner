@@ -6,6 +6,12 @@ uses on its own stay in their modules and are imported from there.
 """
 
 from .controller import ServerController
+from .controller.state import (
+    BackendUnavailable,
+    MapSelection,
+    ServerState,
+    ServerStatus,
+)
 from .factories import (
     build_detector,
     build_free_navigation_planner,
@@ -23,9 +29,13 @@ from .reporting import task_finish_events
 from .requirements import capabilities_for
 
 __all__ = [
+    "BackendUnavailable",
+    "MapSelection",
     "MissionInputs",
     "MissionResources",
     "ServerController",
+    "ServerState",
+    "ServerStatus",
     "VehicleArm",
     "assemble_missions",
     "build_detector",

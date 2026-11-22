@@ -7,7 +7,7 @@ keeps the current selection.
 from __future__ import annotations
 
 from ...config import VehicleModelCatalog
-from ...domain import BackendUnavailable, ServerState
+from .state import BackendUnavailable, ServerState
 
 
 class ModelSwitcher:

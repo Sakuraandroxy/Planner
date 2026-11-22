@@ -1,6 +1,6 @@
 """The same result text is displayed by the CLI and the HTTP log window."""
 from planner.domain import MissionResult
-from planner.domain import WorkerEvent, WorkerEventKind
+from planner.simulator import WorkerEvent, WorkerEventKind
 
 
 def mission_report(result: MissionResult) -> tuple[tuple[str, ...], int]:

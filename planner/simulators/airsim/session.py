@@ -29,7 +29,7 @@ from collections.abc import Callable
 
 from planner.assembly import MissionInputs, require_application
 from planner.domain import MissionResult
-from planner.domain import TaskSubmission
+from planner.simulator import TaskSubmission
 from planner.domain import WEATHER_CATALOG, validate_weather_values
 from planner.errors import ProtocolError
 from planner.runtime import ExecutionService

@@ -120,9 +120,13 @@ CALIBRATED = {
     # 运行期调用点，文档判内联进 `build_resources`，内联未做，名字留在入口。
     "assembly": frozenset(
         {
+            "BackendUnavailable",
+            "MapSelection",
             "MissionInputs",
             "MissionResources",
             "ServerController",
+            "ServerState",
+            "ServerStatus",
             "VehicleArm",
             "assemble_missions",
             "build_detector",
@@ -263,8 +267,8 @@ ENTRIES = ("domain", "ports", "algorithms", "runtime", "workflows", "assembly")
 
 #: 现状与文档的差距，各条标 xfail；落地阶段见注释。
 STILL_OPEN = {
-    "domain": "R21 削面未落地：A 类 115 个仍在入口；entry 另导 16 个文档判搬出但仍有调用点的类型"
-    "（`server.py` 9、`approach.py` 4、`streaming.py` 3）",
+    "domain": "R21 削面未落地：A 类 115 个仍在入口；entry 另导 7 个文档判搬出但仍有调用点的类型"
+    "（`approach.py` 4、`streaming.py` 3）",
 }
 
 NAME_RE = re.compile(r"`([A-Za-z_][A-Za-z0-9_]*)`")

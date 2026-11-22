@@ -15,7 +15,7 @@ import time
 
 import pytest
 
-from planner.domain import TaskSubmission, WorkerEvent, WorkerEventKind
+from planner.simulator import TaskSubmission, WorkerEvent, WorkerEventKind
 from planner.simulator.subprocess_worker import (
     ChildProcessError,
     SubprocessMissionWorker,

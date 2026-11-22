@@ -10,7 +10,7 @@ from projectairsim.types import WeatherParameter
 from planner.domain import MissionPlan, MissionStage, TaskKind
 from planner.domain import WorldPose
 from planner.domain import MissionResult
-from planner.domain import TaskSubmission
+from planner.simulator import TaskSubmission
 from planner.domain import VIEW_MODES
 from planner.domain import WEATHER_FIELDS, default_weather
 from planner.errors import ExecutionError, ProtocolError

@@ -15,13 +15,12 @@ from planner.config import (
     VehicleModelOption,
 )
 from planner.domain import WorldPose
-from planner.domain import (
+from planner.assembly import (
     BackendUnavailable,
     MapSelection,
     ServerState,
-    WorkerEvent,
-    WorkerEventKind,
 )
+from planner.simulator import WorkerEvent, WorkerEventKind
 from planner.domain import QueuedWaypoint
 from planner.domain import MODE_CONTINUOUS
 from planner.domain import WEATHER_FIELDS
