@@ -160,6 +160,12 @@ python scripts/probe_ue4_env.py
   改代码不改文档等于把结论丢掉。
 - 发现历史结论被推翻，更新 `docs/archive/` 里对应的条目，并写清新结论的依据。
 
+### 5.1 提交信息检查
+
+- `python scripts/check_commit_msg.py [文件]` 检查一条提交信息，不传参数时读 `.git/COMMIT_EDITMSG`。
+- 退出 0 表示四条规范全部通过；退出 1 时把失败项逐条打到 stderr，标题与正文分开报。
+- 接进钩子即可拦住不合规提交：`.git/hooks/commit-msg` 里写 `exec python scripts/check_commit_msg.py "$1"`。
+
 ## 6 排错顺序
 
 从便宜到贵，不要跳步：
