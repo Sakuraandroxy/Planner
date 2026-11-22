@@ -9,15 +9,15 @@ from typing import Any
 
 import yaml
 
-from .domain.depth import validate_depth_protocol
-from .domain.depth_foreground import DepthForegroundSettings
-from .domain.motion import ContinuousTrackingSettings
-from .domain.engine_family import FamilyCatalog, parse_family_catalog
-from .domain.sliding_window import SlidingWindowSettings
-from .domain.view import VIEW_MODES
-from .domain.visual_goal_completion import VisualGoalTriggerRules
-from .domain.visual_goal_limits import VisualGoalLimits
-from .domain.motion import MotionLimits
+from ..domain.depth import validate_depth_protocol
+from ..domain.depth_foreground import DepthForegroundSettings
+from ..domain.motion import ContinuousTrackingSettings
+from ..domain.engine_family import FamilyCatalog, parse_family_catalog
+from ..domain.sliding_window import SlidingWindowSettings
+from ..domain.view import VIEW_MODES
+from ..domain.visual_goal_completion import VisualGoalTriggerRules
+from ..domain.visual_goal_limits import VisualGoalLimits
+from ..domain.motion import MotionLimits
 
 
 @dataclass(frozen=True)
@@ -841,7 +841,7 @@ def _section(raw: dict[str, Any], key: str) -> dict[str, Any]:
 
 
 def _project_root() -> Path:
-    return Path(__file__).resolve().parent.parent
+    return Path(__file__).resolve().parents[2]
 
 
 #: Every directory under ``config/core`` is one complete runtime configuration:
@@ -1277,7 +1277,7 @@ def load_vehicle_models(
             )
         )
     catalog = VehicleModelCatalog(groups=tuple(groups))
-    from .simulator import registry
+    from ..simulator import registry
 
     modelable = {
         entry.id
