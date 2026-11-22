@@ -11,12 +11,8 @@ other command is rejected.
 from __future__ import annotations
 
 from ...config import MapCatalog, MapEntry
-from ...domain import (
-    BackendUnavailable,
-    MapSelection,
-    ServerState,
-)
 from ...errors import SimulatorNotOwned, SimulatorRestartError
+from .state import BackendUnavailable, MapSelection, ServerState
 
 
 class SessionSwitcher:

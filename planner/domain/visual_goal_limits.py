@@ -2,8 +2,6 @@
 import math
 from dataclasses import dataclass, fields
 
-from .approach import ApproachSettings
-
 
 @dataclass(frozen=True)
 class VisualGoalLimits:
@@ -55,10 +53,3 @@ class VisualGoalLimits:
             raise ValueError("search range must be within +/-90 degrees")
         if self.search_half_span_deg / self.search_step_deg > 12:
             raise ValueError("search scan has too many steps")
-
-    def validate_arrival_radius(self, radius_m: float):
-        self.approach_settings(radius_m)
-        return radius_m
-
-    def approach_settings(self, radius_m: float) -> ApproachSettings:
-        return ApproachSettings(radius_m, self.distance_uncertainty_margin_m)

@@ -114,7 +114,7 @@ def test_free_navigation_is_built_for_ue4():
 
 
 def test_ue4_refuses_a_vehicle_it_does_not_drive():
-    from planner.domain import TaskSubmission
+    from planner.simulator import TaskSubmission
 
     session = _session()
     with pytest.raises(ProtocolError, match="drone only"):

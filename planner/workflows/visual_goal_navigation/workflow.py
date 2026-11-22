@@ -9,6 +9,7 @@ from functools import partial
 from .completion import VisualGoalCompletion
 from .completion import VisualGoalRadiusTrigger
 from .completion import VisualGoalVerification
+from .policy import approach_settings
 from planner.algorithms.targeting import bound_target_geometry, bound_target_goal
 from planner.algorithms.depth import DepthGeometry
 from .targeting import VisualGoalRefresh
@@ -145,7 +146,7 @@ class VisualGoalNavigationWorkflow:
             parameters = stage.parameters
             if not isinstance(parameters, VisualGoalNavigationParameters):
                 raise VisualGoalFailure(VisualGoalStatus.BLOCKED, "invalid visual goal parameters")
-            self.limits.validate_arrival_radius(self.trigger_rules.radius_m)
+            approach_settings(self.limits, self.trigger_rules.radius_m)
             if self.trace_factory:
                 trace = self.trace_factory()
                 trace.event("task_start", stage_id=stage.stage_id, parameters=parameters, limits=self.limits,

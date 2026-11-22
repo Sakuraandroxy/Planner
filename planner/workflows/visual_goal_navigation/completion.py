@@ -6,9 +6,12 @@
 import math
 from dataclasses import replace
 
-from planner.workflows.visual_goal_navigation.policy import TargetApproach
+from planner.workflows.visual_goal_navigation.policy import (
+    ApproachSettings,
+    TargetApproach,
+    approach_settings,
+)
 from planner.algorithms import horizontal_distance
-from planner.domain import ApproachSettings
 from planner.domain import resolve_yaw_delta_deg, wrap_yaw_deg
 from planner.domain import TargetPositionState
 from planner.domain import WorldTrajectory
@@ -86,7 +89,7 @@ class VisualGoalCompletion:
         if (limits.maximum_vertical_offset_m is not None and
                 abs(observation.pose.z-initial_pose.z) > limits.maximum_vertical_offset_m):
             return False
-        return self.approach.distance_within_radius(horizontal_distance(geometry.world_point,observation.pose), limits.approach_settings(radius_m))
+        return self.approach.distance_within_radius(horizontal_distance(geometry.world_point,observation.pose), approach_settings(limits, radius_m))
 
 
 # Task-local radius pause policy; no device calls, network calls or queue access.

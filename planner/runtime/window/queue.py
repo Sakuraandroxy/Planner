@@ -1,14 +1,25 @@
 """Owner-thread world queue; consuming a prefix does not change its revision."""
 import threading
+from dataclasses import dataclass
 
 from planner.domain import WorldPose, resolve_yaw_delta_deg
-from planner.domain import PlanningSnapshot, QueuedWaypoint
-from planner.domain import QueuePauseSnapshot
+from planner.domain import PlanningSnapshot, QueuedWaypoint, TimedVehicleState
 from planner.domain import RelativeTrajectory, WorldTrajectory
 from planner.errors import ExecutionError, ProtocolError
 from planner.runtime.motion.continuous import reached
 from planner.algorithms import world_to_relative
 from planner.algorithms import require_execution_anchor
+
+
+@dataclass(frozen=True)
+class QueuePauseSnapshot:
+    stage_token: int
+    queue_revision: int
+    state: TimedVehicleState
+    unwrapped_yaw_deg: float
+    remaining: tuple[QueuedWaypoint, ...]
+    first_goal_yaw_deg: float | None
+    reason: str
 
 
 class WorldWaypointQueue:

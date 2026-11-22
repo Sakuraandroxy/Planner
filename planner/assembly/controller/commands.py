@@ -12,12 +12,10 @@ import threading
 import time
 
 from ...domain import (
-    BackendUnavailable,
-    ServerState,
-    TaskSubmission,
-    WorkerEventKind,
     default_view_for,
 )
+from ...simulator import TaskSubmission, WorkerEventKind
+from .state import BackendUnavailable, ServerState
 
 
 class CommandChannel:

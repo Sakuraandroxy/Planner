@@ -8,13 +8,13 @@ from planner.adapters.diagnostics import VisualGoalTrace
 from planner.domain import DepthForegroundResult
 from planner.domain import CameraIntrinsics, Observation
 from planner.domain import WorldPose
-from planner.domain import ControlTelemetry
 from planner.domain import (
     GoalGeometry,
     GoalObservation,
     GoalVisibility,
     SurfacePointEstimate,
 )
+from planner.runtime.telemetry import ControlTelemetry
 
 
 def _observation() -> Observation:

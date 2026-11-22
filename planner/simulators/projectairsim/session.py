@@ -30,7 +30,7 @@ from projectairsim import Drone, Rover
 from planner.assembly import MissionInputs, VehicleArm, require_application
 from ...config import AppConfig
 from planner.domain import MissionResult
-from planner.domain import TaskSubmission
+from planner.simulator import TaskSubmission
 from planner.domain import VIEW_MODES, cycle_delta, default_view_for, validate_view_mode
 from planner.domain import (
     WEATHER_CATALOG,

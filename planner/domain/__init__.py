@@ -1,11 +1,5 @@
 """Pure domain types: no simulator or network dependency."""
 
-from .approach import (
-    ApproachAssessment,
-    ApproachSettings,
-    ApproachStatus,
-    ApproachTarget,
-)
 from .basic_motion import BasicMotionParameters, BasicMotionResult, BasicMotionStatus
 from .depth import (
     FAR_VALID_PIXEL_VALUE,
@@ -72,17 +66,6 @@ from .result import (
     StageResult,
     StageSummary,
 )
-from .server import (
-    BackendUnavailable,
-    LogBatch,
-    MapSelection,
-    ServerLog,
-    ServerState,
-    ServerStatus,
-    TaskSubmission,
-    WorkerEvent,
-    WorkerEventKind,
-)
 from .sliding_window import (
     ContinuationCandidate,
     PlanningOutput,
@@ -91,9 +74,7 @@ from .sliding_window import (
     SlidingWindowSettings,
 )
 from .streaming import (
-    ControlTelemetry,
     QueueObservationAnchor,
-    QueuePauseSnapshot,
     TimedVehicleState,
 )
 from .target_detection import (
@@ -165,12 +146,7 @@ from .weather import (
 )
 
 __all__ = [
-    "ApproachAssessment",
-    "ApproachSettings",
-    "ApproachStatus",
-    "ApproachTarget",
     "ArrivalRelation",
-    "BackendUnavailable",
     "BasicMotionParameters",
     "BasicMotionResult",
     "BasicMotionStatus",
@@ -184,7 +160,6 @@ __all__ = [
     "ContinuationCandidate",
     "ContinuousReference",
     "ContinuousTrackingSettings",
-    "ControlTelemetry",
     "DepthForegroundResult",
     "DepthForegroundSettings",
     "DepthPointLayer",
@@ -203,13 +178,11 @@ __all__ = [
     "HeadingHoldSettings",
     "HolonomicCommand",
     "INVALID_DEPTH_SENTINEL_M",
-    "LogBatch",
     "MODE_CONTINUOUS",
     "MODE_IDLE",
     "MODE_NO_QUEUE",
     "MODE_PENDING",
     "MODE_STOPPED_BATCH",
-    "MapSelection",
     "MissionPlan",
     "MissionResult",
     "MissionStage",
@@ -225,16 +198,12 @@ __all__ = [
     "PlanningWindowInput",
     "PoseCheckpoint",
     "QueueObservationAnchor",
-    "QueuePauseSnapshot",
     "QueueSnapshot",
     "QueuedWaypoint",
     "RelativePoseDelta",
     "RelativeTrajectory",
     "ResultMeasurement",
     "SHARED_DEPTH_MAPPING",
-    "ServerLog",
-    "ServerState",
-    "ServerStatus",
     "SimulatorFamily",
     "SlidingWindowSettings",
     "StageResult",
@@ -247,7 +216,6 @@ __all__ = [
     "TargetPositionState",
     "TaskKind",
     "TaskParameters",
-    "TaskSubmission",
     "TimedVehicleState",
     "TrajectoryPointSnapshot",
     "TrajectorySnapshot",
@@ -269,8 +237,6 @@ __all__ = [
     "WEATHER_FIELDS",
     "WEATHER_LABELS",
     "WeatherCatalog",
-    "WorkerEvent",
-    "WorkerEventKind",
     "WorldPose",
     "WorldTrajectory",
     "build_queue_snapshot",

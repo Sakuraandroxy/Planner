@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, field_validator
 from starlette.concurrency import run_in_threadpool
 
-from planner.domain import BackendUnavailable, ServerState
+from planner.assembly import BackendUnavailable, ServerState
 from planner.domain import TrajectorySnapshot
 from planner.domain import default_view_for
 from .video import BOUNDARY, mjpeg_chunks

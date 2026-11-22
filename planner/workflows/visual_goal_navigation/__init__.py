@@ -10,7 +10,14 @@ from .completion import (
     retained_world_trajectory,
 )
 from .continuous import VisualGoalContinuous
-from .policy import TargetApproach, VisualGoalStageValidator
+from .policy import (
+    ApproachSettings,
+    ApproachStatus,
+    ApproachTarget,
+    TargetApproach,
+    VisualGoalStageValidator,
+    approach_settings,
+)
 from .targeting import BBoxGoalObserver, VisualGoalRefresh
 from .termination import VisualGoalExitPolicy, VisualGoalFailure
 from .workflow import VisualGoalNavigationWorkflow
@@ -23,6 +30,9 @@ REQUIRED_PORTS: tuple[str, ...] = ("vehicle", "observation")
 __all__ = [
     "REQUIRED_PORTS",
     "TASK_KIND",
+    "ApproachSettings",
+    "ApproachStatus",
+    "ApproachTarget",
     "BBoxGoalObserver",
     "TargetApproach",
     "VisualGoalCompletion",
@@ -34,6 +44,7 @@ __all__ = [
     "VisualGoalRefresh",
     "VisualGoalStageValidator",
     "VisualGoalVerification",
+    "approach_settings",
     "require_visual_completion_evidence",
     "retained_world_trajectory",
 ]

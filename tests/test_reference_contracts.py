@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from planner.domain import ApproachSettings, ApproachStatus
+from planner.workflows.visual_goal_navigation import ApproachSettings, ApproachStatus, approach_settings
 from planner.domain import BasicMotionParameters
 from planner.domain import DepthForegroundResult, DepthForegroundSettings
 from planner.domain import FreeNavigationParameters
@@ -123,7 +123,7 @@ def test_trigger_rules_default_pause_to_the_single_radius():
 
 def test_limits_derive_approach_settings_and_validate_search():
     limits = VisualGoalLimits(distance_uncertainty_margin_m=0.2)
-    approach = limits.approach_settings(7.0)
+    approach = approach_settings(limits, 7.0)
     assert approach.arrival_radius_m == 7.0
     assert approach.uncertainty_margin_m == 0.2
     assert math.isclose(limits.target_position_update_radius_m, 0.5)

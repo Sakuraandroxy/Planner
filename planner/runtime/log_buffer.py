@@ -4,9 +4,23 @@ from __future__ import annotations
 
 import threading
 from collections import deque
+from dataclasses import dataclass
 from datetime import datetime
 
-from planner.domain import LogBatch, ServerLog
+
+@dataclass(frozen=True)
+class ServerLog:
+    id: int
+    time: str
+    level: str
+    message: str
+
+
+@dataclass(frozen=True)
+class LogBatch:
+    items: tuple[ServerLog, ...]
+    next_cursor: int
+    truncated: bool = False
 
 
 class LogBuffer:
