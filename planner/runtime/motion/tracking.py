@@ -15,11 +15,24 @@ from planner.domain import (
     ContinuousTrackingSettings,
     HolonomicCommand,
     MotionModel,
+    RelativePoseDelta,
     wrap_yaw_deg,
 )
 
 from .heading_servo import tracked_heading_rate_deg_s
 from .synchronized import sample_segment
+
+
+def measured_action(start, end, yaw):
+    """实测位移换算到起点航向系，附上带符号的偏航增量。"""
+    angle = math.radians(start.yaw_deg)
+    x, y = end.x - start.x, end.y - start.y
+    return RelativePoseDelta(
+        math.cos(angle) * x + math.sin(angle) * y,
+        -math.sin(angle) * x + math.cos(angle) * y,
+        end.z - start.z,
+        yaw,
+    )
 
 
 def limit_vector(values, maximum):

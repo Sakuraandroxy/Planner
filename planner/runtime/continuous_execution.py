@@ -12,7 +12,7 @@ from planner.domain import RelativeTrajectory
 from planner.errors import ExecutionError
 from planner.ports import StreamingVehicle
 from planner.runtime.execution import ExecutionService
-from planner.runtime.motion.loop import measured_action
+from planner.runtime.motion.tracking import measured_action
 from planner.runtime.motion.continuous import ContinuousFollower
 from planner.runtime.motion.continuous_reference import is_rotation
 from planner.runtime.stream_timeline import StreamTimeline

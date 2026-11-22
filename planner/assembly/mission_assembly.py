@@ -27,6 +27,7 @@ from planner.domain import TaskKind
 from ..errors import ProtocolError
 from planner.runtime import ControlLoop
 from planner.runtime import ExecutionService
+from planner.runtime import GuidedVehicle
 from planner.runtime import ModelCallService
 from planner.runtime import SynchronizedMotionPlanner
 from planner.algorithms import TrajectoryValidator
@@ -228,6 +229,7 @@ def build_vehicle_arm(
     attach = getattr(vehicle, "attach_loop", None)
     if attach is not None:
         attach(loop)
+    guided = GuidedVehicle(vehicle, loop)
     source = vehicle if observation_source is None else observation_source
     motion = SynchronizedMotionPlanner(config.motion.max_speed_mps, vehicle.tracking_limits)
     goal_observer = BBoxGoalObserver(
@@ -268,7 +270,7 @@ def build_vehicle_arm(
         vertical_motion=is_drone,
     )
     basic = BasicMotionWorkflow(
-        vehicle,
+        guided,
         motion,
         execution,
         loop=loop,

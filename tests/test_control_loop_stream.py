@@ -69,10 +69,19 @@ class PassiveExecution:
         return StopResult(False)
 
 
+class FakeQueue:
+    """时间线只读这两个字段。"""
+
+    items = ()
+    revision = 0
+
+
 def loop_for(plant, execution=None):
-    return ControlLoop(
+    loop = ControlLoop(
         execution or PassiveExecution(), plant, limits=LIMITS, timeout_s=10.0
     )
+    loop.recorder.begin(FakeQueue(), "stage")
+    return loop
 
 
 def test_stream_sends_one_command_per_call_and_stops_when_goals_run_out():

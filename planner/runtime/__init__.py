@@ -4,9 +4,11 @@ from .background_operation import BackgroundOperation
 from .continuous_execution import ContinuousExecution
 from .execution import ExecutionService
 from .frame_hub import FrameHub
+from .guided_vehicle import GuidedVehicle
 from .log_buffer import LogBuffer
 from .model_calls import ModelCallService
 from .motion import SynchronizedMotionPlanner
+from .motion.follower import QueueFollower
 from .motion.loop import ControlLoop
 from .motion.base import MotionPlanner
 from .motion.continuous import reached
@@ -27,12 +29,14 @@ __all__ = [
     "ControlLoop",
     "ExecutionService",
     "FrameHub",
+    "GuidedVehicle",
     "LogBuffer",
     "ModelCallService",
     "MotionPlanner",
     "MovingObservations",
     "PlanningWindow",
     "PositionHold",
+    "QueueFollower",
     "SMOOTH_PROFILE",
     "SegmentSetpoint",
     "SynchronizedMotionPlanner",

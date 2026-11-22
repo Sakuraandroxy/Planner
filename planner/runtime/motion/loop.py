@@ -21,33 +21,22 @@ from planner.domain import (
     ExecutionRecord,
     MotionLimits,
     MotionTrajectory,
-    RelativePoseDelta,
     RelativeTrajectory,
     resolve_yaw_delta_deg,
     wrap_yaw_deg,
 )
 from planner.errors import BudgetExceeded, ExecutionError, MotionPaused
+from planner.ports import StreamGoalSource
 
 from .synchronized import duration_for
-from .tracking import SegmentSynthesizer, command_for
+from .record import StreamRecorder
+from .tracking import SegmentSynthesizer, command_for, measured_action
 
 #: 段执行一拍。固定值，不进配置（裁决 R9）。
 SEGMENT_PERIOD_S = 0.030
 
 #: 段执行在停稳前允许花掉的最长时间，装配层按载具配置覆盖。
 DEFAULT_MOTION_TIMEOUT_S = 60.0
-
-
-def measured_action(start, end, yaw):
-    """实测位移换算到起点航向系，附上带符号的偏航增量。"""
-    angle = math.radians(start.yaw_deg)
-    x, y = end.x - start.x, end.y - start.y
-    return RelativePoseDelta(
-        math.cos(angle) * x + math.sin(angle) * y,
-        -math.sin(angle) * x + math.cos(angle) * y,
-        end.z - start.z,
-        yaw,
-    )
 
 
 def _remaining(current, actual_yaw, segment, tail):
@@ -92,12 +81,10 @@ class ControlLoop:
         self.clock, self.sleep = clock, sleep
         #: UE4 的取帧门：段执行每拍服务一次在途取帧请求，恢复后从实测位姿重锚。
         self.observation_gate = None
+        self.recorder = StreamRecorder(clock)
         self.state = None
         self.holding = True
         self._running = False
-        self._last_ns = None
-        self._yaw = None
-        self._pose_yaw = None
 
     @property
     def period(self) -> float:
@@ -422,7 +409,17 @@ class ControlLoop:
                 previous_pose = actual
                 steps += 1
 
-    def run_stream(self, goals, sink, *, deadline_monotonic=None) -> None:
+    def sample(self):
+        """读一次实测状态并记进时间线；任务层的取帧与窗口都读这一次。"""
+        self.execution.checkpoint()
+        state = self.streaming.stream_state()
+        self.recorder.sample(state)
+        self.state = state
+        return state
+
+    def run_stream(
+        self, goals: StreamGoalSource, sink, *, deadline_monotonic=None
+    ) -> None:
         """连续路径的一拍。
 
         目标源返回 ``None`` 或队列为空时正常返回，并在返回前调 ``execution.stop()``；
@@ -434,17 +431,8 @@ class ControlLoop:
             None if deadline_monotonic is None else ExecutionBudget(deadline_monotonic)
         )
         self._guard(budget)
-        state = self.streaming.stream_state()
-        if self._last_ns is not None and state.timestamp_ns < self._last_ns:
-            raise ExecutionError("simulator clock moved backwards during stream")
-        self._last_ns = state.timestamp_ns
-        if self._yaw is None:
-            self._yaw = state.pose.yaw_deg
-        else:
-            self._yaw += resolve_yaw_delta_deg(self._pose_yaw, state.pose.yaw_deg)
-        self._pose_yaw = state.pose.yaw_deg
-        self.state = state
-        command = goals.next(state, self._yaw)
+        state = self.sample()
+        command = goals.next(state, self.recorder.yaw)
         if command is None:
             if not self.holding:
                 self.execution.stop()
