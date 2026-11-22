@@ -20,6 +20,7 @@ import math
 import numpy as np
 
 from planner.domain import WorldPose, wrap_deg
+from planner.domain import TimedVehicleState
 
 
 def _finite(value: object) -> bool:
@@ -131,6 +132,24 @@ def body_pose_from_camera(
     )
 
 
+def pose_to_transform(pose: WorldPose) -> dict:
+    """``SetPose``/``SetObjectPose`` payload pose for a world pose (NED)."""
+    quaternion = (
+        math.cos(math.radians(pose.yaw_deg) / 2),
+        math.sin(math.radians(pose.yaw_deg) / 2),
+    )
+    return {
+        "frame_id": "DEFAULT_FRAME",
+        "translation": {"x": pose.x, "y": pose.y, "z": pose.z},
+        "rotation": {
+            "w": quaternion[0],
+            "x": 0.0,
+            "y": 0.0,
+            "z": quaternion[1],
+        },
+    }
+
+
 def camera_matrix(
     camera_position: tuple[float, float, float], camera_rotation: np.ndarray
 ) -> np.ndarray:
@@ -204,3 +223,26 @@ def velocity_from_kinematics(kinematics: dict) -> tuple[float, float, float]:
         return (float(linear["x"]), float(linear["y"]), float(linear["z"]))
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError("kinematics response has no usable linear velocity") from exc
+
+
+def state_from_kinematics(
+    kinematics: dict, monotonic_s: float
+) -> TimedVehicleState:
+    """Streaming vehicle state from ``GetGroundTruthKinematics``.
+
+    ``timestamp_ns`` is simulator time, ``monotonic_s`` the owner-thread clock
+    reading taken with the sample.
+    """
+    pose = pose_from_kinematics(kinematics)
+    timestamp_ns = int(kinematics["time_stamp"])
+    velocity = velocity_from_kinematics(kinematics)
+    roll, pitch, _ = attitude_deg_from_kinematics(kinematics)
+    return TimedVehicleState(
+        pose,
+        timestamp_ns,
+        monotonic_s,
+        velocity,
+        pitch_deg=pitch,
+        roll_deg=roll,
+        yaw_rate_deg_s=yaw_rate_deg_from_kinematics(kinematics),
+    )
