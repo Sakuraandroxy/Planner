@@ -9,8 +9,8 @@ from planner.domain.visual_goal import (
     VisualGoalState,
 )
 from planner.errors import ExecutionError
-from planner.services.observation_snapshot import freeze_observation
-from planner.services.trajectory_transform import relative_to_world, world_to_relative
+from planner.runtime.observation_snapshot import freeze_observation
+from planner.runtime.trajectory_transform import relative_to_world, world_to_relative
 
 from .session import model_call
 

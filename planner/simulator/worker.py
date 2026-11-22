@@ -11,7 +11,7 @@ import queue
 import threading
 from collections.abc import Callable
 
-from ..application.reporting import task_finish_events
+from ..assembly.reporting import task_finish_events
 from ..domain.server import TaskSubmission, WorkerEvent, WorkerEventKind
 
 

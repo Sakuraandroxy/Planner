@@ -11,7 +11,7 @@ import logging
 import math
 import time
 
-from planner.capabilities.basic_motion_conversion import BasicMotionConverter
+from planner.algorithms.basic_motion_conversion import BasicMotionConverter
 from planner.domain.basic_motion import BasicMotionResult, BasicMotionStatus
 from planner.domain.execution import StopResult
 from planner.domain.motion import MotionLimits
@@ -24,8 +24,8 @@ from planner.domain.result import (
 )
 from planner.domain.trajectory import MotionSegment, MotionTrajectory
 from planner.errors import ExecutionError
-from planner.services.execution import ExecutionService
-from planner.services.motion.synchronized import SMOOTH_PROFILE, duration_for
+from planner.runtime.execution import ExecutionService
+from planner.runtime.motion.synchronized import SMOOTH_PROFILE, duration_for
 
 logger = logging.getLogger(__name__)
 

@@ -11,9 +11,9 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Generic, TypeVar
 
-from planner.capabilities.sliding_window.planning import BackgroundContinuationPlanner
-from planner.capabilities.sliding_window.scheduler import RefillScheduler
-from planner.capabilities.sliding_window.worker import SlowPlannerWorker
+from planner.algorithms.sliding_window.planning import BackgroundContinuationPlanner
+from planner.algorithms.sliding_window.scheduler import RefillScheduler
+from planner.algorithms.sliding_window.worker import SlowPlannerWorker
 from planner.domain.execution import ExecutionRecord
 from planner.domain.planning_window import PlanningWindowInput
 from planner.domain.pose import resolve_yaw_delta_deg
@@ -30,9 +30,9 @@ from planner.errors import (
     ProtocolError,
 )
 from planner.ports.trajectory_planner import TrajectoryPlanner
-from planner.services.trajectory_queue import WorldWaypointQueue
-from planner.services.trajectory_transform import world_to_relative
-from planner.services.trajectory_validation import TrajectoryValidator
+from planner.runtime.trajectory_queue import WorldWaypointQueue
+from planner.runtime.trajectory_transform import world_to_relative
+from planner.runtime.trajectory_validation import TrajectoryValidator
 
 ContextT = TypeVar("ContextT")
 logger = logging.getLogger(__name__)

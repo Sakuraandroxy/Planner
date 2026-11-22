@@ -35,16 +35,16 @@ sys.path.insert(0, str(ROOT))
 
 from projectairsim import Drone
 
-from planner.application.factories import (
+from planner.assembly.factories import (
     build_detector,
     build_geometry,
     build_planner,
 )
-from planner.capabilities.approach import TargetApproach
-from planner.capabilities.completion.visual_goal import (
+from planner.algorithms.approach import TargetApproach
+from planner.algorithms.completion.visual_goal import (
     VisualGoalCompletion,
 )
-from planner.capabilities.targeting.bbox_goal_observation import (
+from planner.algorithms.targeting.bbox_goal_observation import (
     BBoxGoalObserver,
 )
 from planner.config import default_config_path, load_config
@@ -54,9 +54,9 @@ from planner.domain.mission import MissionStage, TaskKind
 from planner.domain.visual_goal import (
     VisualGoalNavigationParameters,
 )
-from planner.services.execution import ExecutionService
-from planner.services.motion import SynchronizedMotionPlanner
-from planner.services.trajectory_validation import (
+from planner.runtime.execution import ExecutionService
+from planner.runtime.motion import SynchronizedMotionPlanner
+from planner.runtime.trajectory_validation import (
     TrajectoryValidator,
 )
 from planner.simulators.projectairsim.connection import (

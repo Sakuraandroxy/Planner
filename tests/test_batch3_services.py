@@ -5,7 +5,7 @@ import time
 import numpy as np
 import pytest
 
-from planner.capabilities.sliding_window.scheduler import RefillScheduler
+from planner.algorithms.sliding_window.scheduler import RefillScheduler
 from planner.domain.execution import ExecutionBudget, ExecutionReceipt
 from planner.domain.motion import MotionLimits
 from planner.domain.observation import CameraIntrinsics, Observation
@@ -24,10 +24,10 @@ from planner.errors import (
     ProtocolError,
     ResourceCleanupError,
 )
-from planner.services.moving_observations import MovingObservations
-from planner.services.planning_window import PlanningWindow
-from planner.services.resource_cleanup import close_resources
-from planner.services.trajectory_validation import TrajectoryValidator
+from planner.runtime.moving_observations import MovingObservations
+from planner.runtime.planning_window import PlanningWindow
+from planner.runtime.resource_cleanup import close_resources
+from planner.runtime.trajectory_validation import TrajectoryValidator
 from tests.support import ue_camera_matrix
 
 

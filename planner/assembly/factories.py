@@ -25,9 +25,9 @@ from ..adapters.trajectory_planner.prompts import (
     FreeNavigationTrajectoryPrompt,
     VisualGoalTrajectoryPrompt,
 )
-from ..capabilities.planning import GeometricTargetPlanner
-from ..capabilities.targeting import DepthGeometry
-from ..capabilities.targeting.depth_foreground import DepthForegroundFilter
+from ..algorithms.planning import GeometricTargetPlanner
+from ..algorithms.targeting import DepthGeometry
+from ..algorithms.targeting.depth_foreground import DepthForegroundFilter
 from ..config import AppConfig
 from ..domain.mission import TaskKind
 from ..domain.target_detection import NormalizedBoundingBox

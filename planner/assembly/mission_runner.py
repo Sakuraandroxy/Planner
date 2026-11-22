@@ -1,4 +1,4 @@
-from planner.application.workflow_router import WorkflowRouter
+from planner.assembly.workflow_router import WorkflowRouter
 from planner.domain.mission import MissionPlan
 from planner.domain.result import MissionResult, StageResult, StageSummary
 

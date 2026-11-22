@@ -35,7 +35,7 @@ from ..domain.view import (
 from ..domain.weather import WEATHER_CATALOG, merge_weather
 from ..errors import SimulatorNotOwned, SimulatorRestartError
 from ..ports.backend_worker import BackendWorker
-from ..services.log_buffer import LogBuffer
+from ..runtime.log_buffer import LogBuffer
 
 logger = logging.getLogger(__name__)
 

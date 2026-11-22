@@ -1,13 +1,13 @@
 """Explicit fresh-depth or stage-bound admission; neither proves semantic completion."""
 import math
 
-from planner.capabilities.approach import TargetApproach
+from planner.algorithms.approach import TargetApproach
 from planner.domain.approach import ApproachSettings
 from planner.domain.target_state import TargetPositionState
 from planner.domain.visual_goal import GoalVisibility
 from planner.domain.visual_goal_completion import VisualGoalCompletionInput
 from planner.errors import ProtocolError
-from planner.services.target_coordinates import horizontal_distance
+from planner.runtime.target_coordinates import horizontal_distance
 
 
 def require_visual_completion_evidence(request: VisualGoalCompletionInput) -> None:

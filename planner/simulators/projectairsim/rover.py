@@ -21,7 +21,7 @@ from ...domain.observation import Observation
 from ...domain.pose import WorldPose
 from ...domain.streaming import TimedVehicleState
 from ...errors import ExecutionError
-from ...services.segment_motion import MotionLimits
+from ...runtime.segment_motion import MotionLimits
 from .collision import CollisionEvent, CollisionMonitor
 from .connection import ProjectAirSimConnection
 from .coordinates import (

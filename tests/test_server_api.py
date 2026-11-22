@@ -22,9 +22,9 @@ from planner.domain.server import (
 from planner.domain.sliding_window import QueuedWaypoint
 from planner.domain.trajectory_telemetry import MODE_CONTINUOUS
 from planner.domain.weather import WEATHER_CATALOG, WEATHER_FIELDS, merge_weather
-from planner.services.frame_hub import FrameHub
-from planner.services.log_buffer import LogBuffer
-from planner.services.trajectory_hub import TrajectoryHub
+from planner.runtime.frame_hub import FrameHub
+from planner.runtime.log_buffer import LogBuffer
+from planner.runtime.trajectory_hub import TrajectoryHub
 
 
 class FakeController:

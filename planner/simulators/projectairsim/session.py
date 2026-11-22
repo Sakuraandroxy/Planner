@@ -35,7 +35,7 @@ import numpy as np
 from projectairsim import Drone, Rover
 from projectairsim.types import WeatherParameter
 
-from ...application.mission_assembly import (
+from ...assembly.mission_assembly import (
     MissionInputs,
     VehicleArm,
     require_application,
@@ -263,7 +263,7 @@ class ProjectAirSimMissionSession:
         """Hand the assembly the engine-side objects it wires pipelines around.
 
         The task pipeline does not know which simulator owns the vehicle, so it
-        lives in ``planner/application/mission_assembly.py``. This session says
+        lives in ``planner/assembly/mission_assembly.py``. This session says
         which vehicles ProjectAirSim has and which moving observation source
         belongs to them; it does not build planners, detectors or telemetry
         sinks -- a peer middleware may not construct its peer.

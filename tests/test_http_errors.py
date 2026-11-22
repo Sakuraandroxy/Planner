@@ -70,12 +70,12 @@ def test_a_configured_endpoint_without_a_credential_warns_at_build_time(caplog):
     import logging
     import os
 
-    from planner.application.factories import build_task_parser
+    from planner.assembly.factories import build_task_parser
     from planner.config import default_config_path, load_config
 
     os.environ.pop("VLN_API_KEY", None)
     config = load_config(default_config_path())
-    with caplog.at_level(logging.WARNING, logger="planner.application.factories"):
+    with caplog.at_level(logging.WARNING, logger="planner.assembly.factories"):
         build_task_parser(config, kinds=None, aerial=True)
     text = caplog.text
     assert "task_parser" in text and "no credential was found" in text

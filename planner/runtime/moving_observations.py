@@ -3,7 +3,7 @@ from functools import partial
 
 from planner.errors import ObservationError
 from planner.ports.observation_source import MovingObservationSource
-from planner.services.background_operation import BackgroundOperation
+from planner.runtime.background_operation import BackgroundOperation
 
 
 class MovingObservations:

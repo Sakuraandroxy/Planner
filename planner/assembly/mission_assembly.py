@@ -17,20 +17,20 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from ..capabilities.approach import TargetApproach
-from ..capabilities.completion.visual_goal import VisualGoalCompletion
-from ..capabilities.targeting.bbox_goal_observation import BBoxGoalObserver
-from ..capabilities.task_validation.basic_motion import BasicMotionStageValidator
-from ..capabilities.task_validation.free_navigation import FreeNavigationStageValidator
-from ..capabilities.task_validation.visual_goal_navigation import (
+from ..algorithms.approach import TargetApproach
+from ..algorithms.completion.visual_goal import VisualGoalCompletion
+from ..algorithms.targeting.bbox_goal_observation import BBoxGoalObserver
+from ..algorithms.task_validation.basic_motion import BasicMotionStageValidator
+from ..algorithms.task_validation.free_navigation import FreeNavigationStageValidator
+from ..algorithms.task_validation.visual_goal_navigation import (
     VisualGoalStageValidator,
 )
 from ..domain.mission import TaskKind
 from ..errors import ProtocolError
-from ..services.execution import ExecutionService
-from ..services.model_calls import ModelCallService
-from ..services.motion import SynchronizedMotionPlanner
-from ..services.trajectory_validation import TrajectoryValidator
+from ..runtime.execution import ExecutionService
+from ..runtime.model_calls import ModelCallService
+from ..runtime.motion import SynchronizedMotionPlanner
+from ..runtime.trajectory_validation import TrajectoryValidator
 from ..workflows.basic_motion import BasicMotionWorkflow
 from ..workflows.free_navigation import FreeNavigationWorkflow
 from ..workflows.visual_goal_navigation import VisualGoalNavigationWorkflow

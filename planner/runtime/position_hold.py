@@ -10,9 +10,9 @@ from planner.domain.pose import WorldPose, wrap_yaw_deg
 from planner.domain.streaming import TimedVehicleState
 from planner.errors import BudgetExceeded, ExecutionError
 from planner.ports.position_hold_vehicle import PositionHoldVehicle
-from planner.services.motion.command_smoothing import CommandSmoother, bounded
-from planner.services.motion.heading_servo import heading_rate_deg_s
-from planner.services.motion.hold_handoff import translation_handoff
+from planner.runtime.motion.command_smoothing import CommandSmoother, bounded
+from planner.runtime.motion.heading_servo import heading_rate_deg_s
+from planner.runtime.motion.hold_handoff import translation_handoff
 
 logger = logging.getLogger(__name__)
 

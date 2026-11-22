@@ -27,9 +27,9 @@ from ...domain.observation import Observation
 from ...domain.pose import WorldPose
 from ...domain.streaming import TimedVehicleState
 from ...errors import ExecutionError
-from ...services.motion.synchronized import SMOOTH_PROFILE
-from ...services.position_hold import PositionHold
-from ...services.segment_motion import MotionLimits
+from ...runtime.motion.synchronized import SMOOTH_PROFILE
+from ...runtime.position_hold import PositionHold
+from ...runtime.segment_motion import MotionLimits
 from .async_bridge import AsyncBridge
 from .collision import CollisionEvent, CollisionMonitor
 from .connection import ProjectAirSimConnection

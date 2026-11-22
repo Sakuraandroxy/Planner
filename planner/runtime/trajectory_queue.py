@@ -6,9 +6,9 @@ from planner.domain.sliding_window import PlanningSnapshot, QueuedWaypoint
 from planner.domain.streaming import QueuePauseSnapshot
 from planner.domain.trajectory import RelativeTrajectory, WorldTrajectory
 from planner.errors import ExecutionError, ProtocolError
-from planner.services.motion.continuous import reached
-from planner.services.trajectory_transform import world_to_relative
-from planner.services.trajectory_validation import require_execution_anchor
+from planner.runtime.motion.continuous import reached
+from planner.runtime.trajectory_transform import world_to_relative
+from planner.runtime.trajectory_validation import require_execution_anchor
 
 
 class WorldWaypointQueue:
