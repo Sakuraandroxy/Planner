@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from planner.adapters.http.video import encode_jpeg, mjpeg_chunks
-from planner.services.frame_hub import FrameHub
+from planner.runtime.frame_hub import FrameHub
 
 
 def _bgra(width=8, height=6) -> np.ndarray:

@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-from planner.application.server_controller import ServerController
+from planner.assembly.server_controller import ServerController
 from planner.config import (
     MapCatalog,
     MapEntry,
@@ -26,7 +26,7 @@ from planner.domain.sliding_window import QueuedWaypoint
 from planner.domain.trajectory_telemetry import MODE_CONTINUOUS
 from planner.domain.weather import WEATHER_FIELDS
 from planner.errors import SimulatorNotOwned
-from planner.services.trajectory_hub import TrajectoryHub
+from planner.runtime.trajectory_hub import TrajectoryHub
 
 
 def _settings(**overrides):

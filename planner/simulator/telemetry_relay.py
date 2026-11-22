@@ -6,7 +6,7 @@ loop in a child process, so the child cannot hold the hub -- but the workflows s
 need *a* sink with the hub's interface. Passing ``None`` and letting them publish
 nothing is how UE4 lost the panel while UE5 kept it.
 
-Snapshots are built by the real :class:`~planner.services.trajectory_hub.TrajectoryHub`
+Snapshots are built by the real :class:`~planner.runtime.trajectory_hub.TrajectoryHub`
 so the fields cannot drift from what the in-process family produces, and publishing is
 coalesced: the sliding-window planner can publish several times per control period, and
 one pipe line per call would bury the events that matter.
@@ -18,7 +18,7 @@ import time
 from collections.abc import Callable
 
 from ..domain.trajectory_telemetry import TrajectorySnapshot
-from ..services.trajectory_hub import TrajectoryHub
+from ..runtime.trajectory_hub import TrajectoryHub
 
 #: How often a snapshot may cross the pipe while a task is running.
 DEFAULT_MIN_INTERVAL_S = 0.4

@@ -3,7 +3,7 @@
 import pytest
 
 from planner.config import MapEntry, MapScene
-from planner.domain.runtime import SimulatorFamily
+from planner.domain.engine_family import SimulatorFamily
 from planner.simulator.argv import argv_values, render, render_argv
 
 

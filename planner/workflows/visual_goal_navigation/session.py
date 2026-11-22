@@ -3,7 +3,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from planner.capabilities.completion.visual_goal_trigger import VisualGoalRadiusTrigger
+from planner.algorithms.completion.visual_goal_trigger import VisualGoalRadiusTrigger
 from planner.domain.execution import ExecutionBudget
 from planner.domain.planning_window import PlanningWindowInput
 from planner.domain.pose import WorldPose
@@ -16,8 +16,8 @@ from planner.domain.visual_goal import (
     VisualGoalStatus,
 )
 from planner.errors import BudgetExceeded, ModelCallTimeout
-from planner.services.model_calls import ModelCallService
-from planner.services.planning_window import PlanningWindow
+from planner.runtime.model_calls import ModelCallService
+from planner.runtime.planning_window import PlanningWindow
 
 from .termination import SearchPolicy, VisualGoalExitPolicy, VisualGoalFailure
 

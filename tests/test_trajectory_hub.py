@@ -17,7 +17,7 @@ from planner.domain.trajectory_telemetry import (
     snapshot_from_payload,
     snapshot_to_payload,
 )
-from planner.services.trajectory_hub import TrajectoryHub
+from planner.runtime.trajectory_hub import TrajectoryHub
 
 
 def _items():

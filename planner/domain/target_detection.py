@@ -2,7 +2,7 @@
 
 Nothing in this module knows about world coordinates. The detector only binds
 image evidence; depth back-projection happens later in
-``capabilities.targeting.depth_geometry``.
+``algorithms.targeting.depth_geometry``.
 """
 
 from __future__ import annotations

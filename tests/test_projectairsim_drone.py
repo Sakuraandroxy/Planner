@@ -9,7 +9,7 @@ from projectairsim.types import LandedState
 from planner.config import CameraSettings, DepthSettings
 from planner.domain.pose import WorldPose
 from planner.errors import ExecutionError
-from planner.services.segment_motion import MotionLimits as ConfiguredMotionLimits
+from planner.runtime.segment_motion import MotionLimits as ConfiguredMotionLimits
 from planner.simulators.projectairsim.drone import ProjectAirSimDrone
 from planner.simulators.projectairsim.moving_source import BorrowedMovingSource
 

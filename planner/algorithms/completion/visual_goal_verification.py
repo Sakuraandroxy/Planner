@@ -4,7 +4,7 @@ from dataclasses import replace
 from planner.domain.visual_goal_completion import VisualGoalCompletionInput
 from planner.errors import ProtocolError
 from planner.ports.task_completion import TaskCompletionChecker
-from planner.services.model_calls import ModelCallService
+from planner.runtime.model_calls import ModelCallService
 
 from .visual_goal_request import require_visual_completion_evidence
 

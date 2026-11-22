@@ -11,8 +11,8 @@ from planner.domain.motion import ContinuousTrackingSettings, MotionLimits
 from planner.domain.pose import WorldPose, resolve_yaw_delta_deg, wrap_yaw_deg
 from planner.domain.trajectory import MotionSegment
 from planner.errors import BudgetExceeded, ExecutionError, MotionPaused
-from planner.services.motion.heading_servo import tracked_heading_rate_deg_s
-from planner.services.motion.synchronized import duration_for, sample_segment
+from planner.runtime.motion.heading_servo import tracked_heading_rate_deg_s
+from planner.runtime.motion.synchronized import duration_for, sample_segment
 
 logger = logging.getLogger(__name__)
 

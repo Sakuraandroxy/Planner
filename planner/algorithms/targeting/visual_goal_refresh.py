@@ -12,8 +12,8 @@ from planner.errors import (
     ObservationError,
     ProtocolError,
 )
-from planner.services.background_operation import BackgroundOperation
-from planner.services.observation_snapshot import freeze_observation, freeze_reference
+from planner.runtime.background_operation import BackgroundOperation
+from planner.runtime.observation_snapshot import freeze_observation, freeze_reference
 
 from .association import accept_position, bound_target_geometry, make_reference
 

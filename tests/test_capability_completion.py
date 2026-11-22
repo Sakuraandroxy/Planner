@@ -3,16 +3,16 @@ import time
 import numpy as np
 import pytest
 
-from planner.capabilities.approach import TargetApproach
-from planner.capabilities.completion.visual_goal import VisualGoalCompletion
-from planner.capabilities.completion.visual_goal_request import (
+from planner.algorithms.approach import TargetApproach
+from planner.algorithms.completion.visual_goal import VisualGoalCompletion
+from planner.algorithms.completion.visual_goal_request import (
     require_visual_completion_evidence,
 )
-from planner.capabilities.completion.visual_goal_retained_motion import (
+from planner.algorithms.completion.visual_goal_retained_motion import (
     retained_world_trajectory,
 )
-from planner.capabilities.completion.visual_goal_trigger import VisualGoalRadiusTrigger
-from planner.capabilities.completion.visual_goal_verification import (
+from planner.algorithms.completion.visual_goal_trigger import VisualGoalRadiusTrigger
+from planner.algorithms.completion.visual_goal_verification import (
     VisualGoalVerification,
 )
 from planner.domain.approach import ApproachSettings, ApproachStatus, ApproachTarget

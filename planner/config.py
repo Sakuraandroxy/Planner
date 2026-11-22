@@ -12,12 +12,12 @@ import yaml
 from .domain.depth import validate_depth_protocol
 from .domain.depth_foreground import DepthForegroundSettings
 from .domain.motion import ContinuousTrackingSettings
-from .domain.runtime import FamilyCatalog, parse_family_catalog
+from .domain.engine_family import FamilyCatalog, parse_family_catalog
 from .domain.sliding_window import SlidingWindowSettings
 from .domain.view import VIEW_MODES
 from .domain.visual_goal_completion import VisualGoalTriggerRules
 from .domain.visual_goal_limits import VisualGoalLimits
-from .services.segment_motion import MotionLimits
+from .runtime.segment_motion import MotionLimits
 
 
 @dataclass(frozen=True)

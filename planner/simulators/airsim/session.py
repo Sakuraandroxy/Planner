@@ -2,7 +2,7 @@
 
 The UE5 counterpart is ``planner/simulators/projectairsim/session.py``. Both build
 their own vehicles and then hand them to the same wiring in
-``planner/application/mission_assembly.py``, so a task means the same thing on either
+``planner/assembly/mission_assembly.py``, so a task means the same thing on either
 engine and neither simulator package imports the other.
 
 Three pieces here are AirSim's own, and come from the old branch's ``build_runtime``
@@ -27,7 +27,7 @@ import threading
 import time
 from collections.abc import Callable
 
-from planner.application.mission_assembly import (
+from planner.assembly.mission_assembly import (
     MissionInputs,
     require_application,
 )
@@ -35,7 +35,7 @@ from planner.domain.result import MissionResult
 from planner.domain.server import TaskSubmission
 from planner.domain.weather import WEATHER_CATALOG, validate_weather_values
 from planner.errors import ProtocolError
-from planner.services.execution import ExecutionService
+from planner.runtime.execution import ExecutionService
 
 from .connection import AirSimConnection
 from .observation_gate import ObservationGate

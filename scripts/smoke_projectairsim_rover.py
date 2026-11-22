@@ -27,16 +27,16 @@ sys.path.insert(0, str(ROOT))
 
 from projectairsim import Rover
 
-from planner.application.factories import (
+from planner.assembly.factories import (
     build_free_navigation_planner,
 )
 from planner.config import default_config_path, load_config
 from planner.domain.basic_motion import BasicMotionParameters
 from planner.domain.free_navigation import FreeNavigationParameters
 from planner.domain.mission import MissionStage, TaskKind
-from planner.services.execution import ExecutionService
-from planner.services.motion import SynchronizedMotionPlanner
-from planner.services.trajectory_validation import TrajectoryValidator
+from planner.runtime.execution import ExecutionService
+from planner.runtime.motion import SynchronizedMotionPlanner
+from planner.runtime.trajectory_validation import TrajectoryValidator
 from planner.simulators.projectairsim.connection import (
     ProjectAirSimConnection,
     ProjectAirSimConnectionConfig,
