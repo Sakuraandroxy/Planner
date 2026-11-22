@@ -74,9 +74,7 @@ from .sliding_window import (
     SlidingWindowSettings,
 )
 from .streaming import (
-    ControlTelemetry,
     QueueObservationAnchor,
-    QueuePauseSnapshot,
     TimedVehicleState,
 )
 from .target_detection import (
@@ -162,7 +160,6 @@ __all__ = [
     "ContinuationCandidate",
     "ContinuousReference",
     "ContinuousTrackingSettings",
-    "ControlTelemetry",
     "DepthForegroundResult",
     "DepthForegroundSettings",
     "DepthPointLayer",
@@ -201,7 +198,6 @@ __all__ = [
     "PlanningWindowInput",
     "PoseCheckpoint",
     "QueueObservationAnchor",
-    "QueuePauseSnapshot",
     "QueueSnapshot",
     "QueuedWaypoint",
     "RelativePoseDelta",

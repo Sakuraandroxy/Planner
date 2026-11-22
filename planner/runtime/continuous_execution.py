@@ -7,7 +7,6 @@ from planner.domain import ExecutionRecord
 from planner.domain import CarCommand, HolonomicCommand, MotionModel
 from planner.domain import ContinuousTrackingSettings
 from planner.domain import resolve_yaw_delta_deg
-from planner.domain import ControlTelemetry
 from planner.domain import RelativeTrajectory
 from planner.errors import ExecutionError
 from planner.ports import StreamingVehicle
@@ -16,6 +15,7 @@ from planner.runtime.motion.tracking import measured_action
 from planner.runtime.motion.continuous import ContinuousFollower
 from planner.runtime.motion.continuous_reference import is_rotation
 from planner.runtime.stream_timeline import StreamTimeline
+from planner.runtime.telemetry import ControlTelemetry
 
 
 class ContinuousExecution:

@@ -267,8 +267,8 @@ ENTRIES = ("domain", "ports", "algorithms", "runtime", "workflows", "assembly")
 
 #: 现状与文档的差距，各条标 xfail；落地阶段见注释。
 STILL_OPEN = {
-    "domain": "R21 削面未落地：A 类 115 个仍在入口；entry 另导 3 个文档判内部化但仍有层外调用点的类型"
-    "（`streaming.py` 3）",
+    "domain": "R21 削面未落地：A 类 115 个仍在入口；entry 另导 1 个文档判内部化但任务层仍在构造的类型"
+    "（`streaming.py` 的 `QueueObservationAnchor`，它作为滑窗的 frame_anchor 入参跨层传递）",
 }
 
 NAME_RE = re.compile(r"`([A-Za-z_][A-Za-z0-9_]*)`")
