@@ -8,10 +8,11 @@
 - `workflows` ← `docs/refactor/04-workflows.md` §8「表 A 对外名字逐条」。
 - `assembly` ← `docs/refactor/05-assembly.md` §8.1「表 A 对外名字逐条」，处置列为「新增对外」的
   `build_resources` 一起算。
-- `domain`、`ports` ← `docs/refactor/01-contracts.md` §八「A 对外名字逐条」。该表把契约层两个包
-  混排在一张表里，按包拆不开，所以两个包的期望集合是逐名实测的 A 类名单，硬编码在
-  `HARDCODED`：A 类 = 有跨层调用点（`planner/` 除本身两包外的层，或 `tests/`）且确属契约
-  类型。文档判“搬出契约层”而代码仍在用的名字不计入 A 类，它们就是两条 xfail 的差距。
+- `ports` ← 同一张表，收口完成：18 个名字都有跨层调用点，期望集记在 `CALIBRATED`。
+- `domain` ← 同一张表。该表把契约层两个包混排在一张表里，按包拆不开，所以期望集合是逐名实测
+  的 A 类名单，硬编码在 `HARDCODED`：A 类 = 有跨层调用点（`planner/` 除本身两包外的层，或
+  `tests/`）且确属契约类型。文档判“搬出契约层”而代码仍在用的名字不计入 A 类，这就是它那条
+  xfail 的差距。
 
 文档表解析不出来时（`_kept_names` 为空）`test_documented_tables_parse` 直接失败，不静默跳过。
 """
@@ -38,7 +39,7 @@ DOC_TABLES = {
 #: 解析结果应有的大小，取自各文档章节标题里的数字，用来发现表结构变化。
 PARSED_COUNTS = {"algorithms": 11, "runtime": 9, "workflows": 7, "assembly": 12}
 
-#: 已按实际导出面校准的两层。差额逐条记在 `STILL_OPEN`。
+#: 已收口的三层：期望集按实际导出面校准，差额为零。
 CALIBRATED = {
     "algorithms": frozenset(
         {
@@ -81,9 +82,31 @@ CALIBRATED = {
             "reached",
         }
     ),
+    "ports": frozenset(
+        {
+            "AppearanceModelControl",
+            "ControlledObservationSource",
+            "FramePublisher",
+            "GoalObserver",
+            "MovingObservationSource",
+            "ObservationSource",
+            "PositionHoldVehicle",
+            "ReturnHome",
+            "StreamGoalSource",
+            "StreamingVehicle",
+            "StreamingViews",
+            "TargetDetector",
+            "TaskCompletionChecker",
+            "TaskParser",
+            "TaskTrace",
+            "TrajectoryPlanner",
+            "Vehicle",
+            "WeatherControl",
+        }
+    ),
 }
 
-#: 契约层两个包的期望集合，出处见文件头。
+#: `domain` 的期望集合，出处见文件头。
 HARDCODED = {
     "domain": frozenset(
         {
@@ -204,28 +227,6 @@ HARDCODED = {
             "wrap_yaw_deg",
         }
     ),
-    "ports": frozenset(
-        {
-            "AppearanceModelControl",
-            "ControlledObservationSource",
-            "FramePublisher",
-            "GoalObserver",
-            "MovingObservationSource",
-            "ObservationSource",
-            "PositionHoldVehicle",
-            "ReturnHome",
-            "StreamGoalSource",
-            "StreamingVehicle",
-            "StreamingViews",
-            "TargetDetector",
-            "TaskCompletionChecker",
-            "TaskParser",
-            "TaskTrace",
-            "TrajectoryPlanner",
-            "Vehicle",
-            "WeatherControl",
-        }
-    ),
 }
 
 ENTRIES = ("domain", "ports", "algorithms", "runtime", "workflows", "assembly")
@@ -303,10 +304,9 @@ def test_documented_tables_parse(entry):
     assert len(names) == PARSED_COUNTS[entry], f"解析到 {len(names)} 个名字：{sorted(names)}"
 
 
-@pytest.mark.parametrize("entry", sorted(HARDCODED))
-def test_hardcoded_sets_are_filled(entry):
-    assert len(HARDCODED[entry]) == len(set(HARDCODED[entry]))
-    assert HARDCODED[entry], f"{entry} 的期望集合是空的"
+@pytest.mark.parametrize("entry", sorted(HARDCODED | CALIBRATED))
+def test_expected_sets_are_filled(entry):
+    assert _expected(entry), f"{entry} 的期望集合是空的"
 
 
 @pytest.mark.parametrize(

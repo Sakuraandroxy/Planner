@@ -1,4 +1,7 @@
-"""Ports are structural interfaces: simulator adapters need only match them."""
+"""Ports are structural interfaces: simulator adapters need only match them.
+
+入口只导出有跨层调用点的名字：跨层 import 一律指向这里，只有本层在用的名字留深层路径。
+"""
 
 from .capabilities import (
     AppearanceModelControl,
