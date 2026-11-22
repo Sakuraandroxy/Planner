@@ -20,9 +20,9 @@ from dataclasses import dataclass
 from ..algorithms.approach import TargetApproach
 from ..algorithms.completion.visual_goal import VisualGoalCompletion
 from ..algorithms.targeting.bbox_goal_observation import BBoxGoalObserver
-from ..algorithms.task_validation.basic_motion import BasicMotionStageValidator
-from ..algorithms.task_validation.free_navigation import FreeNavigationStageValidator
-from ..algorithms.task_validation.visual_goal_navigation import (
+from ..workflows.basic_motion.policy import BasicMotionStageValidator
+from ..workflows.free_navigation.policy import FreeNavigationStageValidator
+from ..workflows.visual_goal_navigation.policy import (
     VisualGoalStageValidator,
 )
 from ..domain.mission import TaskKind

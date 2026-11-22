@@ -17,7 +17,7 @@ from planner.adapters.trajectory_planner.prompts import (
     FREE_NAVIGATION_SYSTEM_PROMPT,
     FreeNavigationTrajectoryPrompt,
 )
-from planner.algorithms.task_validation.free_navigation import (
+from planner.workflows.free_navigation.policy import (
     FreeNavigationStageValidator,
 )
 from planner.domain.basic_motion import BasicMotionParameters

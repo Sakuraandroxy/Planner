@@ -5,13 +5,13 @@ from planner.assembly.mission_runner import MissionRunner
 from planner.assembly.mission_validator import MissionValidator
 from planner.assembly.reporting import mission_report
 from planner.assembly.workflow_router import WorkflowRouter
-from planner.algorithms.task_validation.basic_motion import (
+from planner.workflows.basic_motion.policy import (
     BasicMotionStageValidator,
 )
-from planner.algorithms.task_validation.free_navigation import (
+from planner.workflows.free_navigation.policy import (
     FreeNavigationStageValidator,
 )
-from planner.algorithms.task_validation.visual_goal_navigation import (
+from planner.workflows.visual_goal_navigation.policy import (
     VisualGoalStageValidator,
 )
 from planner.domain.basic_motion import BasicMotionParameters
