@@ -31,6 +31,7 @@ from .profile import (
 )
 from .sections import (
     CameraSettings,
+    CollisionSettings,
     DepthSettings,
     DroneSettings,
     FreeNavigationSettings,
@@ -54,6 +55,7 @@ from .vehicles import (
 __all__ = [
     "AppConfig",
     "CameraSettings",
+    "CollisionSettings",
     "DepthSettings",
     "DroneSettings",
     "FreeNavigationSettings",

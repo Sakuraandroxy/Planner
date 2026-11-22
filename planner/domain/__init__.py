@@ -43,6 +43,7 @@ from .free_navigation import (
 from .mission import MissionPlan, MissionStage, TaskKind, TaskParameters
 from .motion import (
     CarCommand,
+    CollisionRecoverySettings,
     ContinuousReference,
     ContinuousTrackingSettings,
     HeadingHoldSettings,
@@ -178,6 +179,7 @@ __all__ = [
     "Capabilities",
     "CarCommand",
     "CollisionContact",
+    "CollisionRecoverySettings",
     "CollisionState",
     "CompletionBasis",
     "ContinuationCandidate",

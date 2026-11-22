@@ -106,7 +106,7 @@ class VisualGoalNavigationWorkflow:
                 motion_limits, stream_speed_mps, goal_observer, geometry, completion, self.flight,
                 self._capture, self._search, clock, sleep, self._event, stream_waypoint_timeout_s,
                 target_updates=self.target_updates, tracking_settings=continuous_tracking,
-                telemetry=telemetry, vertical_motion=self.vertical_motion, motion=self.motion)
+                telemetry=telemetry, vertical_motion=self.vertical_motion)
 
     def prepare(self) -> None:
         if self._closed:
@@ -381,8 +381,6 @@ class VisualGoalNavigationWorkflow:
         heading = session.search.next_heading(observation.pose, session.reference,
                                                parameters.target_description)
         relative = RelativeTrajectory((RelativePoseDelta(0, 0, 0, wrap_yaw_deg(heading-observation.pose.yaw_deg)),))
-        if self.execution.collision_state():
-            raise ExecutionError("collision during enabled search check")
         if not session.policy.anchor_valid(observation, self.execution.current_pose(), self.clock()):
             return
         self.validator.validate_relative(relative)

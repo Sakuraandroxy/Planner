@@ -55,5 +55,16 @@ class MotionPaused(Exception):
         self.unwrapped_yaw_deg = unwrapped_yaw_deg
 
 
+class CollisionInterrupt(Exception):
+    """执行层内部的碰撞信号：``ControlLoop._guard`` 抛出，循环自己接住后退避。
+
+    任务层看不到它。预算耗尽时抛的是 ``ExecutionError``，那才需要任务层处理。
+    """
+
+    def __init__(self, contact):
+        super().__init__("collision contact detected")
+        self.contact = contact
+
+
 class FreeNavigationStalled(Exception):
     """Free navigation made no measurable progress; mapped to the STUCK status."""

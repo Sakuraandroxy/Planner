@@ -315,6 +315,13 @@ class PlanningWindow(Generic[ContextT]):
         self.background.end()
         self.queue.clear()
 
+    def interrupt(self) -> None:
+        """碰撞退避后作废授权队列与在途规划，下一拍重新取帧补点。"""
+        self.queue.check_owner()
+        self.background.discard()
+        self.queue.clear()
+        self.record = None
+
     def end(self) -> None:
         if self.active:
             self.background.end()

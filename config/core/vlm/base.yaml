@@ -55,6 +55,16 @@ motion:
     max_jerk_mps3: 3.0
     # 偏航角加速度的最大变化率，度/秒³。
     max_yaw_jerk_deg_s3: 60.0
+  # 碰撞退避：接触后沿航向倒车、作废队列再继续。
+  collision:
+    # 接触检测开关；false 时控制循环不读碰撞端口。
+    enabled: true
+    # 第 n 次连续恢复沿当前航向倒车 n 倍此距离（默认 3/6/9 米）。
+    backoff_m: 3.0
+    # 单次允许的连续恢复次数；超过后按执行错误结束。
+    maximum_recoveries: 3
+    # 恢复后累计前进达到此距离时清零连续次数，单位米。
+    reset_after_progress_m: 20.0
 
 # 目标定位用的视觉模型端点。url 或 model 留空时改用手动检测器，
 # 由 config/app.yml 的 server.detector 决定。
@@ -137,24 +147,11 @@ sliding_window:
   # 滑窗规划观测的最大有效年龄，单位秒。
   max_observation_age_s: 120.0
 
-# 无目标道路跟随（free_navigation）的接触恢复。
-free_navigation:
-  # ProjectAirSim 原生碰撞事件触发后沿当前航向倒车的距离，单位米。
-  # 第 n 次连续恢复按 n 倍递增（默认 3/6/9 米），让重规划获得更宽的视野。
-  collision_backoff_m: 3.0
-  # 单次任务允许的碰撞恢复次数；超过后按执行错误结束。
-  maximum_collision_recoveries: 3
-  # 恢复后累计前进达到此距离时清零连续恢复计数，单位米。
-  # 自由导航是无界任务：只有连续原地反复碰撞才应耗尽预算。
-  collision_recovery_reset_m: 20.0
-
 # 视觉目标导航工作流专用配置。
 visual_goal_navigation:
   enabled: true
   # 确认 RGB/深度配准、内参与深度语义已核实；false 阻止视觉任务准备。
   geometry_verified: true
-  # 本工作流是否读取仿真器碰撞事件并中断。
-  collision_check_enabled: false
   # 视觉任务诊断日志和观测图像的输出根目录。
   output_root: output/visual_goal/vlm
   # 完成判定规则文件；相对路径以主配置所在目录为基准。

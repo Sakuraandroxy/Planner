@@ -37,10 +37,10 @@ ACTION_PORTS: dict[str, str] = {
 }
 
 #: Names a task may require: every port slot the bundle declares. ``vehicles``
-#: and ``enabled_tasks`` carry data, not a port.
+#: carries data, not a port.
 SLOT_NAMES: frozenset[str] = frozenset(
     item.name for item in fields(SimulatorPorts)
-) - {"vehicles", "enabled_tasks"}
+) - {"vehicles"}
 
 
 def build_table(
@@ -76,20 +76,11 @@ def build_table(
 TASK_REQUIREMENTS: dict[str, tuple[str, ...]] = build_table()
 
 
-def available_kinds(
-    slots: Iterable[str], enabled_tasks: Iterable[str] = ()
-) -> tuple[str, ...]:
-    """Task kinds whose required slots are all present.
-
-    ``enabled_tasks`` is a simulator's verification status, not an engine limit:
-    an empty tuple offers every task the slots allow.
-    """
+def available_kinds(slots: Iterable[str]) -> tuple[str, ...]:
+    """Task kinds whose required slots are all present."""
     present = set(slots)
-    allowed = set(enabled_tasks)
     return tuple(
-        kind
-        for kind in TASK_REQUIREMENTS
-        if not missing_slots(kind, present) and (not allowed or kind in allowed)
+        kind for kind in TASK_REQUIREMENTS if not missing_slots(kind, present)
     )
 
 
@@ -121,7 +112,7 @@ def capabilities_for(ports: SimulatorPorts) -> Capabilities:
         actions=tuple(
             action for action, slot in ACTION_PORTS.items() if slot in present
         ),
-        task_kinds=available_kinds(slots, ports.enabled_tasks),
+        task_kinds=available_kinds(slots),
         weather_fields=weather_fields,
         weather_presets=weather_presets,
     )

@@ -29,6 +29,7 @@ from .paths import default_config_path, shared_or_profile
 from .profile import PROFILE_SWITCHABLE_SECTIONS, ProfileInfo, _profile_info
 from .sections import (
     CameraSettings,
+    CollisionSettings,
     DepthSettings,
     DroneSettings,
     FreeNavigationSettings,
@@ -94,6 +95,7 @@ class AppConfig:
     free_navigation: FreeNavigationSettings = field(
         default_factory=FreeNavigationSettings
     )
+    collision: CollisionSettings = field(default_factory=CollisionSettings)
     #: How this profile introduces itself on the console.
     profile: ProfileInfo = field(default_factory=ProfileInfo)
 
@@ -262,6 +264,22 @@ def load_config(path: str | Path) -> AppConfig:
         }
     )
 
+    collision_raw = motion_raw.get("collision", {})
+    if not isinstance(collision_raw, dict):
+        raise ValueError("motion.collision must be a mapping")
+    collision_names = {item.name for item in fields(CollisionSettings)}
+    unknown = set(collision_raw) - collision_names
+    if unknown:
+        raise ValueError(f"unknown motion.collision settings: {sorted(unknown)}")
+    collision = CollisionSettings(
+        enabled=collision_raw.get("enabled", True),
+        backoff_m=float(collision_raw.get("backoff_m", 3.0)),
+        maximum_recoveries=int(collision_raw.get("maximum_recoveries", 3)),
+        reset_after_progress_m=float(
+            collision_raw.get("reset_after_progress_m", 20.0)
+        ),
+    )
+
     detection_raw = _section(raw, "target_detection")
     target_detection = TargetDetectionSettings(
         url=str(detection_raw.get("url", "")),
@@ -388,7 +406,6 @@ def load_config(path: str | Path) -> AppConfig:
     visual_names = {
         "enabled",
         "geometry_verified",
-        "collision_check_enabled",
         "output_root",
         "limits",
         "completion_rules_file",
@@ -419,7 +436,6 @@ def load_config(path: str | Path) -> AppConfig:
     for name, default in (
         ("enabled", True),
         ("geometry_verified", False),
-        ("collision_check_enabled", False),
     ):
         value = visual_raw.get(name, default)
         if type(value) is not bool:
@@ -448,6 +464,7 @@ def load_config(path: str | Path) -> AppConfig:
         projectairsim=projectairsim,
         camera=camera,
         motion=motion,
+        collision=collision,
         maps=maps,
         families=families,
         vehicle_models=vehicle_models,

@@ -111,6 +111,36 @@ def require_supported(command: MotionCommand, capability: MotionCapability) -> N
 
 
 @dataclass(frozen=True)
+class CollisionRecoverySettings:
+    """接触后退避的距离与预算；第 n 次连续恢复后退 ``backoff_m * n``。
+
+    ``reset_after_progress_m`` 不参与单次退避距离，只在累计前进超过它之后把连续
+    次数归零：无界任务里要防的是卡在同一个障碍物前，不是限制任务总时长。
+    """
+
+    backoff_m: float = 3.0
+    maximum_recoveries: int = 3
+    reset_after_progress_m: float = 20.0
+
+    def __post_init__(self) -> None:
+        for name in ("backoff_m", "reset_after_progress_m"):
+            value = getattr(self, name)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value <= 0
+            ):
+                raise ValueError(f"collision {name} must be finite and positive")
+        if type(self.maximum_recoveries) is not int or self.maximum_recoveries < 1:
+            raise ValueError("collision maximum_recoveries must be a positive integer")
+        if self.reset_after_progress_m <= self.backoff_m:
+            raise ValueError(
+                "collision reset_after_progress_m must exceed backoff_m"
+            )
+
+
+@dataclass(frozen=True)
 class ContinuousTrackingSettings:
     """Streaming lookahead and smoothing; jerk limits also serve position hold."""
 

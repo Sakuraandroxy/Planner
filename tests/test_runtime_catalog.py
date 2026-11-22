@@ -62,7 +62,12 @@ def test_derived_airsim_capabilities():
     assert caps.view_modes == ()
     assert caps.actions == ("weather",)
     assert not caps.supports("home") and not caps.supports("models")
-    assert "free_navigation" not in caps.task_kinds
+    # UE4 fills the streaming slot, so cruising follows from the ports alone (R18).
+    assert caps.task_kinds == (
+        "basic_motion",
+        "visual_goal_navigation",
+        "free_navigation",
+    )
     # The single AirSim spelling difference is carried by the adapter module.
     assert caps.weather_fields["road_wetness"] == "roadwetness"
 

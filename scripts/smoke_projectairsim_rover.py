@@ -169,13 +169,6 @@ def main() -> int:
                 moving_observation_source=rover,
                 stream_speed_mps=config.motion.max_speed_mps,
                 stream_waypoint_timeout_s=60.0,
-                collision_backoff_m=config.free_navigation.collision_backoff_m,
-                maximum_collision_recoveries=(
-                    config.free_navigation.maximum_collision_recoveries
-                ),
-                collision_recovery_reset_m=(
-                    config.free_navigation.collision_recovery_reset_m
-                ),
                 continuous_tracking=config.continuous,
                 lane_reference_provider=None,
             )
@@ -223,9 +216,10 @@ def main() -> int:
                 f"path_length={free_workflow.continuous.path_length_m:.1f} m "
                 f"final_pose={free_workflow.continuous.final_pose}"
             )
+            recoveries = free_workflow.loop.recovery
             print(
                 f"  collision_recoveries="
-                f"{free_workflow.continuous.collision_recoveries} "
+                f"{getattr(recoveries, 'attempts', 0)} "
                 f"last_collision={rover.last_collision}"
             )
         final_pose = rover.current_pose()

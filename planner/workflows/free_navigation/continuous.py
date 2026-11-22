@@ -2,9 +2,10 @@
 
 This is the free-navigation counterpart of ``VisualGoalContinuous``: the same
 20 Hz queue follower and background sliding-window planning, with the target,
-pause-radius, search and completion branches removed. A native collision event
-triggers a bounded reverse, clears the remaining queue and resumes replanning;
-the stage itself is unbounded, ending only on a user stop or local failure.
+pause-radius, search and completion branches removed. Collision backoff happens
+in the control loop, which stops, reverses and clears the queue before the next
+tick replans; the stage itself is unbounded, ending only on a user stop or local
+failure.
 """
 from __future__ import annotations
 
@@ -15,9 +16,7 @@ from planner.domain import ExecutionBudget
 from planner.domain import FreeNavigationParameters
 from planner.domain import ContinuousTrackingSettings
 from planner.domain import PlanningWindowInput
-from planner.domain import RelativePoseDelta
 from planner.domain import QueueObservationAnchor
-from planner.domain import RelativeTrajectory
 from planner.domain import MODE_CONTINUOUS
 from planner.errors import (
     ExecutionError,
@@ -28,7 +27,6 @@ from planner.errors import (
 from planner.runtime import ControlLoop
 from planner.runtime import QueueFollower
 from planner.runtime import MovingObservations
-from planner.algorithms import relative_to_world
 
 logger = logging.getLogger(__name__)
 
@@ -44,10 +42,6 @@ class FreeNavigationContinuous:
         clock,
         sleep,
         *,
-        motion=None,
-        collision_backoff_m: float = 3.0,
-        maximum_collision_recoveries: int = 3,
-        collision_recovery_reset_m: float = 20.0,
         model_request_timeout_s: float,
         stall_timeout_s: float,
         waypoint_timeout_s: float = 60.0,
@@ -60,8 +54,6 @@ class FreeNavigationContinuous:
             ("model request timeout", model_request_timeout_s),
             ("stall timeout", stall_timeout_s),
             ("waypoint timeout", waypoint_timeout_s),
-            ("collision backoff", collision_backoff_m),
-            ("collision recovery reset distance", collision_recovery_reset_m),
         ):
             if (
                 isinstance(value, bool)
@@ -77,24 +69,11 @@ class FreeNavigationContinuous:
             raise ValueError(
                 "continuous capture failure budget must be a positive integer"
             )
-        if (
-            type(maximum_collision_recoveries) is not int
-            or maximum_collision_recoveries < 1
-        ):
-            raise ValueError(
-                "continuous collision recovery budget must be a positive integer"
-            )
         self.execution = execution
         self.loop = loop
         self.clock, self.sleep = clock, sleep
         self.telemetry = telemetry
         self.vertical_motion = bool(vertical_motion)
-        self.motion = motion
-        self.collision_backoff_m = float(collision_backoff_m)
-        self.maximum_collision_recoveries = maximum_collision_recoveries
-        self.collision_recovery_reset_m = float(collision_recovery_reset_m)
-        self.collision_recoveries = 0
-        self.collision_reset_baseline_m = None
         self.source = moving_source
         self.model_request_timeout_s = float(model_request_timeout_s)
         self.stall_timeout_s = float(stall_timeout_s)
@@ -156,10 +135,7 @@ class FreeNavigationContinuous:
         self.initial_pose = initial_observation.pose
         self.planning_calls = 0
         self.path_length_m = 0.0
-        self.collision_recoveries = 0
-        self.collision_reset_baseline_m = None
         self.final_pose = initial_observation.pose
-        self._discard_pretask_contact()
         observation = initial_observation
         self.frames.begin()
         self.loop.recorder.begin(
@@ -172,14 +148,8 @@ class FreeNavigationContinuous:
         try:
             while True:
                 tick_started = self.clock()
-                if self.execution.vehicle.collision_state().in_contact:
-                    observation = self._recover_from_collision(window)
-                    used_capture = None
-                    progress_m = self.loop.recorder.path_length_m
-                    progress_at = self.clock()
                 self.loop.run_stream(self.follower, self.loop.stream_sink())
                 state = self.loop.state
-                self._reset_recovery_budget_after_progress()
                 window.record = self.loop.recorder.record
                 frame = self.frames.poll()
                 if frame is not None:
@@ -259,116 +229,10 @@ class FreeNavigationContinuous:
             )
         return progress_m, progress_at
 
-    def _reset_recovery_budget_after_progress(self) -> None:
-        """Clear the consecutive contact count after sustained forward progress.
-
-        Free navigation is unbounded, so the recovery budget must protect
-        against being stuck at one obstacle rather than cap the lifetime of the
-        task. Once the car has driven ``collision_recovery_reset_m`` past the
-        last recovery, a later contact starts a fresh budget.
-        """
-        if not self.collision_recoveries:
-            return
-        baseline = self.collision_reset_baseline_m
-        if baseline is None:
-            return
-        progress_m = self.loop.recorder.path_length_m - baseline
-        if progress_m < self.collision_recovery_reset_m:
-            return
-        logger.info(
-            "[FreeNavigation] %.1f m of progress since the last contact; "
-            "collision recovery budget reset",
-            progress_m,
-        )
-        self.collision_recoveries = 0
-        self.collision_reset_baseline_m = None
-
-    def _discard_pretask_contact(self) -> None:
-        """Drop a contact that was latched before this stage started.
-
-        The reference adapter consumes contacts in ``reset``/``return_home``,
-        so a contact cannot leak from one task into the next. ProjectAirSim
-        publishes contacts asynchronously, so a teleport or settle contact can
-        arrive after that read and still be pending when the stage begins; it
-        would otherwise trigger a spurious reverse on the very first tick.
-        """
-        consume = getattr(self.execution.vehicle, "collision_state", None)
-        if not callable(consume) or not consume().in_contact:
-            return
-        last = getattr(self.execution.vehicle, "last_collision", None)
-        logger.info(
-            "[FreeNavigation] discarding a contact latched before the stage "
-            "started (object=%s)",
-            getattr(last, "object_name", "unknown"),
-        )
-
     def _update_measurements(self) -> None:
         self.path_length_m = self.loop.recorder.path_length_m
         if self.loop.recorder.record is not None:
             self.final_pose = self.loop.recorder.record.end
-
-    def _recover_from_collision(self, window):
-        """Back off, drop the authorized queue and let the loop replan.
-
-        Free navigation has no completion condition, so a contact always means
-        "still unfinished": reverse along the current heading, clear every
-        remaining waypoint and discard speculative planning/captures before the
-        next tick requests a fresh observation. Repeated contacts back off
-        farther, because a 3 m retreat leaves the camera too close to a static
-        obstacle for the model to see an alternative.
-        """
-        self.collision_recoveries += 1
-        if self.collision_recoveries > self.maximum_collision_recoveries:
-            raise ExecutionError("collision recovery budget exhausted")
-        if self.motion is None:
-            raise ExecutionError("collision recovery requires a motion planner")
-        backoff_m = self.collision_backoff_m * self.collision_recoveries
-        last = getattr(self.execution.vehicle, "last_collision", None)
-        logger.warning(
-            "[FreeNavigation] collision detected against %s; backing off "
-            "%.1f m and clearing the queue (recovery %d/%d)",
-            getattr(last, "object_name", "unknown"),
-            backoff_m,
-            self.collision_recoveries,
-            self.maximum_collision_recoveries,
-        )
-        self.execution.stop()
-        window.background.discard()
-        self.frames.discard()
-        # A capture epoch ends with the collision; stale retry accounting must
-        # not make the next planning observation fail immediately.
-        self.frames.failures = 0
-        self.frames.retry_at = 0.0
-        pose = self.loop.state.pose
-        backoff = RelativeTrajectory(
-            (RelativePoseDelta(dx=-backoff_m),)
-        )
-        self.loop.execute(
-            self.motion.create_motion(relative_to_world(backoff, pose))
-        )
-        window.queue.clear()
-        # Contacts made while still overlapping or reversing out are already
-        # handled by this recovery; do not start another one immediately.
-        self.execution.vehicle.collision_state()
-        self.follower.reset()
-        self.loop.holding = True
-        state = self.loop.sample()
-        # Start a fresh execution-history window at the recovered pose. Passing
-        # the collided segment back as the model's previous trajectory anchors
-        # replanning to the failed path. Cumulative path length is untouched so
-        # telemetry and the stall watchdog keep their meaning.
-        self.loop.recorder.initial = state.pose
-        self.loop.recorder.actions = []
-        self.loop.recorder.record = None
-        self.collision_reset_baseline_m = self.loop.recorder.path_length_m
-        deadline = self.clock() + self.model_request_timeout_s
-        while self.frames.job.busy:
-            if self.clock() >= deadline:
-                raise ObservationError(
-                    "previous capture did not finish during collision recovery"
-                )
-            self.sleep(0.01)
-        return self.source.capture()
 
     def _capture_budget(self):
         return ExecutionBudget(

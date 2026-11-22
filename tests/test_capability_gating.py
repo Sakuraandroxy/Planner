@@ -61,6 +61,8 @@ def test_status_publishes_the_active_simulator(client):
     assert payload["capabilities"]["vehicles"] == ["drone"]
     assert payload["capabilities"]["view_modes"] == []
     assert payload["capabilities"]["actions"] == ["weather"]
+    # UE4 fills vehicle, observation and streaming, so cruising is derivable.
+    assert "free_navigation" in payload["capabilities"]["task_kinds"]
 
 
 def test_world_options_map_every_scene_to_a_simulator(client):

@@ -8,6 +8,7 @@ from typing import Any
 
 from ..domain.depth import validate_depth_protocol
 from ..domain.depth_foreground import DepthForegroundSettings
+from ..domain.motion import CollisionRecoverySettings
 from ..domain.view import VIEW_MODES
 from ..domain.visual_goal_completion import VisualGoalTriggerRules
 from ..domain.visual_goal_limits import VisualGoalLimits
@@ -339,10 +340,33 @@ class TaskParserSettings:
 
 
 @dataclass(frozen=True)
+class CollisionSettings:
+    """``motion.collision`` 子段：接触后退避的开关与预算。"""
+
+    enabled: bool = True
+    backoff_m: float = 3.0
+    maximum_recoveries: int = 3
+    reset_after_progress_m: float = 20.0
+
+    def __post_init__(self) -> None:
+        if type(self.enabled) is not bool:
+            raise ValueError("motion.collision.enabled must be boolean")
+        # 三个数值的判据只写在契约层那份设置里，这里不复制一套。
+        self.recovery()
+
+    def recovery(self) -> CollisionRecoverySettings:
+        """执行层持有的那份设置；字段非法时在这里抛 ``ValueError``。"""
+        return CollisionRecoverySettings(
+            backoff_m=self.backoff_m,
+            maximum_recoveries=self.maximum_recoveries,
+            reset_after_progress_m=self.reset_after_progress_m,
+        )
+
+
+@dataclass(frozen=True)
 class VisualGoalNavigationSettings:
     enabled: bool = True
     geometry_verified: bool = False
-    collision_check_enabled: bool = False
     output_root: str = "output/visual_goal"
     limits: VisualGoalLimits = field(default_factory=VisualGoalLimits)
     completion_rules_file: str | None = None
@@ -354,7 +378,7 @@ class VisualGoalNavigationSettings:
     )
 
     def __post_init__(self) -> None:
-        for name in ("enabled", "geometry_verified", "collision_check_enabled"):
+        for name in ("enabled", "geometry_verified"):
             if type(getattr(self, name)) is not bool:
                 raise ValueError(f"{name} must be boolean")
         if not isinstance(self.output_root, str) or not self.output_root.strip():
@@ -368,30 +392,7 @@ class VisualGoalNavigationSettings:
 
 @dataclass(frozen=True)
 class FreeNavigationSettings:
-    """``free_navigation`` section: native-contact recovery knobs."""
-
-    collision_backoff_m: float = 3.0
-    maximum_collision_recoveries: int = 3
-    # Sustained forward progress that clears the consecutive recovery count.
-    collision_recovery_reset_m: float = 20.0
-
-    def __post_init__(self) -> None:
-        for name in ("collision_backoff_m", "collision_recovery_reset_m"):
-            value = getattr(self, name)
-            if (
-                isinstance(value, bool)
-                or not isinstance(value, (int, float))
-                or not math.isfinite(value)
-                or value <= 0
-            ):
-                raise ValueError(f"{name} must be finite and positive")
-        if (
-            type(self.maximum_collision_recoveries) is not int
-            or self.maximum_collision_recoveries < 1
-        ):
-            raise ValueError(
-                "maximum_collision_recoveries must be a positive integer"
-            )
+    """``free_navigation`` 段。"""
 
 
 @dataclass(frozen=True)

@@ -37,7 +37,7 @@ from planner.runtime import ExecutionService
 from .connection import AirSimConnection
 from .observation_gate import ObservationGate
 from .observation_source import AirSimObservationSource
-from .runtime import ENABLED_TASKS, WEATHER_FIELDS, WEATHER_PRESETS, build_ports
+from .runtime import WEATHER_FIELDS, WEATHER_PRESETS, build_ports
 from .server_vehicle import ServerVehicle
 from .weather import AirSimWeather
 
@@ -171,7 +171,6 @@ class AirSimMissionSession:
             # does not, which is why only UE4 shook. A read-only transport per
             # capture worker keeps pixels off the control lock.
             moving_source_factory=lambda vehicle: self.build_capture_source(),
-            enabled_tasks=ENABLED_TASKS,
         )
 
     def attach_arms(self, arms: dict) -> None:
