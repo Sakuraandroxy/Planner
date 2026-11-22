@@ -2,10 +2,10 @@
 
 名单来源章节：
 
-- `algorithms`、`runtime` ← 按实际导出面校准，见 `CALIBRATED`：跨层（其他 `planner` 包、
-  `tests/`、`scripts/`）在用的名字留在入口，只有本层在用的名字不出入口。与文档终值的差额
-  记在 `STILL_OPEN`。
-- `workflows` ← `docs/refactor/04-workflows.md` §8「表 A 对外名字逐条」。
+- `algorithms`、`runtime`、`workflows` ← 按实际导出面校准，见 `CALIBRATED`：跨层（其他
+  `planner` 包、`tests/`、`scripts/`）在用的名字留在入口，只有本层在用的名字不出入口。与文档终值
+  的差额：`algorithms`、`runtime` 记在 `STILL_OPEN`，`workflows` 写在 `CALIBRATED` 的注释里。
+- `workflows` 的文档来源是 `docs/refactor/04-workflows.md` §8「表 A 对外名字逐条」。
 - `assembly` ← `docs/refactor/05-assembly.md` §8.1「表 A 对外名字逐条」，处置列为「新增对外」的
   `build_resources` 一起算。
 - `domain`、`ports` ← `docs/refactor/01-contracts.md` §八「A 对外名字逐条」。该表把契约层两个包
@@ -38,7 +38,7 @@ DOC_TABLES = {
 #: 解析结果应有的大小，取自各文档章节标题里的数字，用来发现表结构变化。
 PARSED_COUNTS = {"algorithms": 11, "runtime": 9, "workflows": 7, "assembly": 12}
 
-#: 已按实际导出面校准的两层。差额逐条记在 `STILL_OPEN`。
+#: 已按实际导出面校准的四层。差额逐条记在 `STILL_OPEN`。
 CALIBRATED = {
     "algorithms": frozenset(
         {
@@ -79,6 +79,17 @@ CALIBRATED = {
             "plan_segment",
             "quintic",
             "reached",
+        }
+    ),
+    # 文档 §8 表 A 的 7 个里，`TASK_PACKAGES` 未落地（装配层 `requirements.py` 直读三个二级
+    # 入口）；三个 `StageAdmission` 由任务包二级入口提供，入口不重复导出。
+    "workflows": frozenset(
+        {
+            "BasicMotionWorkflow",
+            "FreeNavigationWorkflow",
+            "VisualGoalNavigationWorkflow",
+            "Workflow",
+            "require_confirmed",
         }
     ),
 }
@@ -236,7 +247,6 @@ STILL_OPEN = {
     "（`server.py` 9、`approach.py` 4、`streaming.py` 3）",
     "ports": "R23 收口差 1 文件：`planner/ports/backend_worker.py` 仍在，"
     "`assembly/controller/__init__.py` 两处注解在用；文件搬到 `simulator/worker_protocol.py` 才能到 13 个",
-    "workflows": "阶段 5：任务包声明与 `common/` 未落地，入口仍未导出 `TASK_KIND` 一族",
     "assembly": "阶段 6：装配层 12 个名字的收口未落地",
 }
 
