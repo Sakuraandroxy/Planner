@@ -29,7 +29,7 @@ class CommandChannel:
         if c._thread is not None:
             return
         if not c._session_started:
-            c._stop_leftover_simulator()
+            c.world.stop_leftover_simulator()
             c.lifecycle.log(
                 "No scene is loaded. Choose a map in the console to start "
                 "the simulator."
@@ -135,7 +135,7 @@ class CommandChannel:
             state, active = c._state, c._active
             worker = c._worker
         if kind == "world":
-            c._switch_world(value)
+            c.world.switch_world(value)
             return
         if kind == "models":
             c._switch_models()
@@ -144,7 +144,7 @@ class CommandChannel:
             c._switch_profile()
             return
         if kind == "stop_world":
-            c._stop_world()
+            c.world.stop_world_command()
             return
         if worker is None:
             return
@@ -295,7 +295,7 @@ class CommandChannel:
                         c._pending_world is not None
                         and c.clock() >= c._world_retry_at
                     ):
-                        c._switch_world(c._pending_world)
+                        c.world.switch_world(c._pending_world)
                     if (
                         c._session_started
                         and c._worker is None
@@ -361,4 +361,4 @@ class CommandChannel:
         finally:
             # Even when the monitor thread is wedged: at this point nothing is left to
             # interrupt, and leaving a UE process holding the GPU is the worse failure.
-            c._stop_simulator()
+            c.world.stop_simulator()

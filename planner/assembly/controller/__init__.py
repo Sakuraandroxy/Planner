@@ -37,6 +37,7 @@ from ...ports.backend_worker import BackendWorker
 from ...runtime.log_buffer import LogBuffer
 from .commands import CommandChannel
 from .state import LifecycleState
+from .world import SessionSwitcher
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,11 @@ class ServerController:
         self.settings = settings
         self.clock = clock
         self.logs = LogBuffer(settings.log_buffer_size)
+        # Collaborators share the fields below; only the supervisor thread
+        # mutates them, HTTP threads read through the properties.
+        self.lifecycle = LifecycleState(self)
+        self.commands = CommandChannel(self)
+        self.world = SessionSwitcher(self)
         self._maps = maps
         self._simulator = simulator
         # Production starts disconnected: no worker is created and no socket
@@ -117,7 +123,7 @@ class ServerController:
             self._maps.default_map
         )
         self._map_id = map_id
-        self._selection = self._selection_for(map_id)
+        self._selection = self.world.selection_for(map_id)
         self._map_switching = False
         self._sim_error: str | None = None
         self._pending_world: MapEntry | None = None
@@ -141,10 +147,6 @@ class ServerController:
         # Previous selection while a console vehicle activation is in flight;
         # used to roll back the optimistic status when it fails.
         self._pending_activation: dict[str, str] | None = None
-        # Collaborators share the fields above; only the supervisor thread
-        # mutates them, HTTP threads read through the properties below.
-        self.lifecycle = LifecycleState(self)
-        self.commands = CommandChannel(self)
 
     def start(self) -> None:
         self.commands.start()
@@ -171,6 +173,37 @@ class ServerController:
 
     def close(self) -> None:
         self.commands.close()
+
+    def request_world(self, map_id: str) -> ServerState:
+        """Start a scene or switch the running simulator to another map.
+
+        From ``disconnected`` this is the console's "start scene": an absent
+        stack is launched, and a stack already running the selected map is
+        simply attached to. From ``idle`` it restarts the stack for the new
+        map. Preflight runs before any state change so a simulator that was
+        not started by the launch script is rejected with an actionable error
+        instead of being killed.
+        """
+        return self.world.request_world(map_id)
+
+    def stop_world(self) -> ServerState:
+        """Console "stop scene": close the session, then take our stack down.
+
+        Only from ``idle``: a running task owns the session, and the operator can
+        stop the task first. The stack is stopped through the same ownership check
+        a map switch uses, so a simulator this service did not launch keeps running
+        and the console says why.
+        """
+        return self.world.stop_world()
+
+    @property
+    def maps(self) -> MapCatalog:
+        return self.world.maps
+
+    @property
+    def simulator_owned(self) -> bool:
+        """True when the running stack passes the launch-script ownership check."""
+        return self.world.simulator_owned
 
     @property
     def state(self) -> ServerState:
@@ -199,63 +232,9 @@ class ServerController:
         return self._profiles
 
     @property
-    def maps(self) -> MapCatalog:
-        return self._maps
-
-    @property
-    def simulator_owned(self) -> bool:
-        """True when the running stack passes the launch-script ownership check."""
-        if self._simulator is None:
-            return False
-        try:
-            self._simulator.preflight()
-        except (SimulatorNotOwned, SimulatorRestartError):
-            return False
-        return True
-
-    @property
     def weather_catalog(self):
         with self._lock:
             return self._weather_catalog
-
-    def _stop_leftover_simulator(self) -> None:
-        """Stop a script-managed stack so a disconnected start shows no scene.
-
-        Only processes whose pidfiles and command lines match this project are
-        touched. A simulator started outside the launch script is left running
-        (the console can attach to it after a map is chosen).
-        """
-        simulator = self._simulator
-        if simulator is None or not simulator.running():
-            return
-        try:
-            simulator.preflight()
-        except SimulatorNotOwned as error:
-            self.lifecycle.log(
-                "A simulator is running but was not started by the launch "
-                "script; leaving it alone. The console may still show its "
-                f"screen. {error}",
-                "WARNING",
-            )
-            return
-        except SimulatorRestartError as error:
-            self.lifecycle.log(
-                f"Cannot clean up the running simulator: {error}", "WARNING"
-            )
-            return
-        self.lifecycle.log(
-            "Stopping the simulator left over from a previous run."
-        )
-        try:
-            simulator.stop()
-        except Exception as error:
-            self.lifecycle.log(
-                f"Stopping the leftover simulator failed: "
-                f"{type(error).__name__}: {error}",
-                "ERROR",
-            )
-            return
-        self.lifecycle.log("Leftover simulator stopped; the console starts blank.")
 
     def request_weather(self, values) -> dict[str, float]:
         """Merge a partial update over the current weather and queue it."""
@@ -295,102 +274,6 @@ class ServerController:
                 self._view_mode = validated
                 return validated, True
             raise BackendUnavailable(self._state)
-
-    def request_world(self, map_id: str) -> ServerState:
-        """Start a scene or switch the running simulator to another map.
-
-        From ``disconnected`` this is the console's "start scene": an absent
-        stack is launched, and a stack already running the selected map is
-        simply attached to. From ``idle`` it restarts the stack for the new
-        map. Preflight runs before any state change so a simulator that was
-        not started by the launch script is rejected with an actionable error
-        instead of being killed.
-        """
-        entry = self._maps.entry(str(map_id))
-        if entry is None:
-            raise ValueError(
-                f"unknown map '{map_id}'; expected one of {list(self._maps.ids)}"
-            )
-        if self._simulator is None:
-            raise ValueError("this deployment does not manage the simulator")
-        attach = False
-        with self._lock:
-            if self._closing.is_set() or self._state not in (
-                ServerState.DISCONNECTED,
-                ServerState.IDLE,
-            ):
-                raise BackendUnavailable(self._state)
-            # From idle a session is connected, so the stack is by definition
-            # running and must go through stop+launch. From disconnected the
-            # ports say whether some stack is already up (for another map).
-            restart = (
-                self._state is ServerState.IDLE or self._simulator.running()
-            )
-            if self._state is ServerState.IDLE:
-                if self._worker is None or not self._worker_ready:
-                    raise BackendUnavailable(self._state)
-                if entry.id == self._map_id:
-                    return self._state
-            elif entry.id == self._map_id and self._simulator.running():
-                # The planner restarted while the same map kept running:
-                # connect instead of paying for another simulator restart.
-                self._state = ServerState.CONNECTING
-                self._session_started = True
-                self._sim_error = None
-                attach = True
-        if attach:
-            self.lifecycle.log(
-                f"Attaching to the running simulator for '{entry.id}'."
-            )
-            return ServerState.CONNECTING
-        if restart:
-            try:
-                self._simulator.preflight()
-            except Exception as error:
-                raise ValueError(f"cannot switch maps: {error}") from error
-        with self._lock:
-            if self._state not in (
-                ServerState.DISCONNECTED,
-                ServerState.IDLE,
-            ):
-                raise BackendUnavailable(self._state)
-            self._map_switching = True
-            self._sim_error = None
-            self._active = None
-            self._instruction = ""
-            self._last_result = None
-            self._pending_activation = None
-            self._view_pending = False
-            self._world_restart = restart
-            self._state = ServerState.CONNECTING
-            self._session_started = True
-            self._commands.put(("world", self._generation, entry))
-        self.lifecycle.log(f"Preparing map '{entry.id}'; the simulator stack starts.")
-        return ServerState.CONNECTING
-
-    def stop_world(self) -> ServerState:
-        """Console "stop scene": close the session, then take our stack down.
-
-        Only from ``idle``: a running task owns the session, and the operator can
-        stop the task first. The stack is stopped through the same ownership check
-        a map switch uses, so a simulator this service did not launch keeps running
-        and the console says why.
-        """
-        if self._simulator is None:
-            raise ValueError("this deployment does not manage the simulator")
-        with self._lock:
-            if self._closing.is_set() or self._state is not ServerState.IDLE:
-                raise BackendUnavailable(self._state)
-            self._active = None
-            self._instruction = ""
-            self._last_result = None
-            self._pending_activation = None
-            self._view_pending = False
-            self._weather_applied = False
-            self._state = ServerState.CONNECTING
-            self._commands.put(("stop_world", self._generation, None))
-        self.lifecycle.log("Stopping the scene at the operator's request.")
-        return ServerState.CONNECTING
 
     def request_models(self, updates: dict[str, str]) -> ServerState:
         """Select appearance models and reload the scene (idle only).
@@ -502,119 +385,6 @@ class ServerController:
 
     # -- supervisor --------------------------------------------------------
 
-    def _selection_for(self, map_id: str) -> MapSelection:
-        entry = self._maps.entry(map_id) or self._maps.maps[0]
-        scene_file = entry.scene_file
-        if self._model_catalog is not None:
-            # Same-map scene variants live on the map entry: a model that has no
-            # variant there keeps the map's default scene.
-            for group in self._model_catalog.groups:
-                model_id = self._models.get(group.vehicle)
-                if model_id is not None:
-                    scene_file = entry.scene.scene_for(model_id)
-        return MapSelection(entry.id, scene_file, entry.sim_config_path)
-
-    def _apply_simulator(self, entry: MapEntry, restart: bool) -> None:
-        """Launch an absent stack, or restart the running one for a new map."""
-        if restart:
-            self._simulator.restart(entry)
-        else:
-            self._simulator.start(entry)
-
-    def _switch_world(self, entry: MapEntry) -> None:
-        """Worker CLOSED -> stack start/restart -> reconnect, owner thread."""
-        with self._lock:
-            self._pending_world = entry
-            self._map_switching = True
-        if not self.commands.close_worker(skip_landing=True):
-            with self._lock:
-                self._world_retry_at = (
-                    self.clock() + self.settings.reconnect_interval_s
-                )
-            self.lifecycle.log(
-                "The worker did not confirm shutdown; the map switch will "
-                "retry without touching the simulator.",
-                "WARNING",
-            )
-            return
-        last_error: Exception | None = None
-        for attempt in range(1, self._restart_attempts + 1):
-            try:
-                self._apply_simulator(entry, self._world_restart)
-            except Exception as error:
-                last_error = error
-                self.lifecycle.log(
-                    f"Simulator attempt {attempt}/{self._restart_attempts} "
-                    f"failed: {type(error).__name__}: {error}",
-                    "ERROR",
-                )
-                continue
-            last_error = None
-            break
-        if last_error is not None:
-            with self._lock:
-                self._sim_error = (
-                    f"simulator start for '{entry.id}' failed: {last_error}"
-                )
-                self._map_switching = False
-                self._pending_world = None
-                # Back to the unconnected state so the console can retry the
-                # same scene after the operator fixes the stack.
-                self._state = ServerState.DISCONNECTED
-                self._session_started = False
-                self._next_start = 0.0
-            self.lifecycle.log(
-                "Map start failed; fix the simulator and choose the scene "
-                "again to retry (see /api/status sim_error).",
-                "ERROR",
-            )
-            return
-        with self._lock:
-            self._map_id = entry.id
-            self._selection = self._selection_for(entry.id)
-            self._map_switching = False
-            self._sim_error = None
-            self._pending_world = None
-        self.lifecycle.log(f"Map switched to '{entry.id}'.")
-        self.commands.connect()
-
-    def _stop_world(self) -> None:
-        """Worker CLOSED -> stack stop -> disconnected, owner thread."""
-        if not self.commands.close_worker(skip_landing=True):
-            self.commands.failed(
-                "The worker did not confirm shutdown for the scene stop."
-            )
-            return
-        warning = None
-        simulator = self._simulator
-        if simulator is not None:
-            try:
-                if simulator.running():
-                    simulator.preflight()
-                    simulator.stop()
-            except SimulatorNotOwned as error:
-                warning = (
-                    "The scene was not started by this service; it keeps "
-                    f"running. {error}"
-                )
-            except Exception as error:
-                warning = (
-                    "Stopping the simulator failed: "
-                    f"{type(error).__name__}: {error}"
-                )
-        with self._lock:
-            self._state = ServerState.DISCONNECTED
-            self._session_started = False
-            self._next_start = 0.0
-            self._map_switching = False
-            self._pending_world = None
-            self._worker_ready = False
-            self._sim_error = warning
-        if warning is not None:
-            self.lifecycle.log(warning, "WARNING")
-        else:
-            self.lifecycle.log("Scene stopped; the console starts blank.")
-
     def _switch_models(self) -> None:
         """Worker CLOSED -> reconnect with the variant scene, same simulator."""
         if not self.commands.close_worker(skip_landing=True):
@@ -625,7 +395,7 @@ class ServerController:
             return
         with self._lock:
             self._models_switching = False
-            self._selection = self._selection_for(self._map_id)
+            self._selection = self.world.selection_for(self._map_id)
         self.lifecycle.log(
             "Vehicle models switched: "
             + ", ".join(
@@ -652,47 +422,3 @@ class ServerController:
         )
         self.commands.connect()
 
-    def _stop_simulator(self) -> None:
-        """Take the simulator stack down when the service goes.
-
-        The stack used to outlive the service, cleaned up only by the next startup. From
-        the operator's side that is a leak: Ctrl-C ends the console while UE keeps
-        rendering on the xpra port and holding a GPU. The flight console treats this
-        differently -- ``cli.py`` turns a signal into ``SystemExit`` and its ``finally``
-        shuts the scene manager down -- because the service owns the processes it
-        launched. Stopping here goes through the same ladder a map switch uses: xpra
-        stop, a verified tree kill if the ports survive, then the display lock.
-
-        A stack this project cannot prove it started is left alone with a warning; the
-        ownership rules are the ones that already refuse a map switch.
-        """
-        simulator = self._simulator
-        if simulator is None:
-            return
-        try:
-            if not simulator.running():
-                return
-        except Exception as error:
-            self.lifecycle.log(
-                f"Cannot tell whether a simulator is running; leaving it alone "
-                f"({type(error).__name__}: {error})",
-                "WARNING",
-            )
-            return
-        self.lifecycle.log(
-            "Shutting down: stopping the simulator this service started."
-        )
-        try:
-            simulator.stop()
-        except SimulatorNotOwned as error:
-            self.lifecycle.log(
-                "Leaving a simulator this service did not start running. "
-                f"{error}",
-                "WARNING",
-            )
-        except Exception as error:
-            self.lifecycle.log(
-                f"Stopping the simulator on shutdown failed: "
-                f"{type(error).__name__}: {error}",
-                "ERROR",
-            )
