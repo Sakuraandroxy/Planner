@@ -6,13 +6,15 @@ pause-radius, search and completion branches removed. Collision backoff happens
 in the control loop, which stops, reverses and clears the queue before the next
 tick replans; the stage itself is unbounded, ending only on a user stop or local
 failure.
+
+取帧、poll_stream、补点门控与节拍由 ``workflows.common.streaming.StreamRunner``
+编排，本模块只提供判定回调。
 """
 from __future__ import annotations
 
 import logging
 import math
 
-from planner.domain import ExecutionBudget
 from planner.domain import FreeNavigationParameters
 from planner.domain import ContinuousTrackingSettings
 from planner.domain import PlanningWindowInput
@@ -27,6 +29,7 @@ from planner.errors import (
 from planner.runtime import ControlLoop
 from planner.runtime import QueueFollower
 from planner.runtime import MovingObservations
+from planner.workflows.common.streaming import StreamPolicy, StreamRunner
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +98,8 @@ class FreeNavigationContinuous:
         self.planning_calls = 0
         self.path_length_m = 0.0
         self.final_pose = None
+        self.progress_m = 0.0
+        self.progress_at = 0.0
         self._closed = False
 
     def prepare(self) -> None:
@@ -136,62 +141,35 @@ class FreeNavigationContinuous:
         self.planning_calls = 0
         self.path_length_m = 0.0
         self.final_pose = initial_observation.pose
-        observation = initial_observation
         self.frames.begin()
         self.loop.recorder.begin(
             window.queue, window.background.stage_token
         )
         self.follower.begin(window.queue)
-        used_capture = None
-        progress_m = self.loop.recorder.path_length_m
-        progress_at = self.clock()
+        self.progress_m = self.loop.recorder.path_length_m
+        self.progress_at = self.clock()
+        runner = StreamRunner(
+            self.loop,
+            self.follower,
+            self.frames,
+            self.execution,
+            clock=self.clock,
+            sleep=self.sleep,
+            capture_timeout_s=self.model_request_timeout_s,
+            policy=StreamPolicy(
+                authorized=self._log_authorized,
+                progress=self._progress,
+                idle=self._idle,
+                measure=lambda window: self._measure(
+                    window, parameters.instruction, stage_id
+                ),
+                submit=lambda observation, window: self._submit(
+                    observation, parameters, window
+                ),
+            ),
+        )
         try:
-            while True:
-                tick_started = self.clock()
-                self.loop.run_stream(self.follower, self.loop.stream_sink())
-                state = self.loop.state
-                window.record = self.loop.recorder.record
-                frame = self.frames.poll()
-                if frame is not None:
-                    observation = frame
-                result = window.poll_stream(
-                    state.pose, self.execution.checkpoint
-                )
-                if result is not None:
-                    logger.info(
-                        "[FreeNavigation] %s request=%s detail=%s queue=%d",
-                        result[0],
-                        result[1],
-                        result[2],
-                        len(window.queue.items),
-                    )
-                progress_m, progress_at = self._check_progress(
-                    window, progress_m, progress_at
-                )
-                if not window.queue.items:
-                    # CARLA is synchronous: with no command the world would not
-                    # advance, so a moving capture could never complete while
-                    # the queue waits for planning. Hovering keeps the car at
-                    # its pose and advances exactly one fixed step.
-                    self.execution.vehicle.hover()
-                self._update_measurements()
-                self._publish(window, parameters.instruction, stage_id)
-                due = window.stream_due()
-                if due and used_capture != observation.capture_id:
-                    self._submit(observation, parameters, window)
-                    used_capture = observation.capture_id
-                if (
-                    due
-                    and self.frames.job.future is None
-                    and not self.frames.job.busy
-                ):
-                    self.frames.request(self._capture_budget())
-                self.sleep(
-                    max(
-                        0.001,
-                        self.loop.period - (self.clock() - tick_started),
-                    )
-                )
+            runner.run(window, initial_observation)
         finally:
             self.frames.discard()
             self._update_measurements()
@@ -216,28 +194,43 @@ class FreeNavigationContinuous:
             vertical_motion=self.vertical_motion,
         )
 
-    def _check_progress(self, window, progress_m, progress_at):
+    def _log_authorized(self, result, window) -> None:
+        logger.info(
+            "[FreeNavigation] %s request=%s detail=%s queue=%d",
+            result[0],
+            result[1],
+            result[2],
+            len(window.queue.items),
+        )
+
+    def _progress(self, window) -> None:
         current = self.loop.recorder.path_length_m
         now = self.clock()
         if not window.queue.items:
-            return current, now
-        if current > progress_m + 1e-6:
-            return current, now
-        if now - progress_at >= self.stall_timeout_s:
+            self.progress_m, self.progress_at = current, now
+            return
+        if current > self.progress_m + 1e-6:
+            self.progress_m, self.progress_at = current, now
+            return
+        if now - self.progress_at >= self.stall_timeout_s:
             raise FreeNavigationStalled(
                 "free navigation made no measurable progress"
             )
-        return progress_m, progress_at
+
+    def _idle(self, window) -> None:
+        # CARLA is synchronous: with no command the world would not advance, so
+        # a moving capture could never complete while the queue waits for
+        # planning. Hovering keeps the car at its pose and advances one step.
+        self.execution.vehicle.hover()
+
+    def _measure(self, window, instruction, stage_id) -> None:
+        self._update_measurements()
+        self._publish(window, instruction, stage_id)
 
     def _update_measurements(self) -> None:
         self.path_length_m = self.loop.recorder.path_length_m
         if self.loop.recorder.record is not None:
             self.final_pose = self.loop.recorder.record.end
-
-    def _capture_budget(self):
-        return ExecutionBudget(
-            self.clock() + self.model_request_timeout_s
-        )
 
     def _submit(self, observation, parameters, window) -> bool:
         try:
