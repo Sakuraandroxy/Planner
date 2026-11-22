@@ -15,8 +15,8 @@ The four streaming cameras are:
 ``VIEW_MODES`` is the cycle order the console assumes. The server reports
 nothing about where in the ring it is, so the runtime tracks the position from
 the start declared in ``projectairsim.view_cycle_start`` and counts switches
-from there. ``planner/simulators/projectairsim/streaming_views.py`` can measure
-the real cycle, but only as a manual tool (``scripts/calibrate_streaming_views.py``):
+from there. ``scripts/streaming_views.py`` can measure the real cycle, but only
+as a manual tool (``scripts/calibrate_streaming_views.py``):
 measuring at every startup costs more than the simulator itself.
 """
 

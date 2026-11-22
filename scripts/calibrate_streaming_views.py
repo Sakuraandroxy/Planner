@@ -4,12 +4,12 @@
 ProjectAirSim has no free-spectator camera: ``World.switch_streaming_view()``
 cycles through the robots' sensors marked ``streaming-enabled`` in their robot
 JSONC. The cycle order is not stable across builds or scene loads, so the
-session measures it at startup (``planner/simulators/projectairsim/
-streaming_views.py``) by matching xpra screenshots against ``GetImages``
-frames. This script is the manual evidence tool for that mapping: it walks the
-catalog through ``POST /api/view``, captures after each step and reports frame
-differences. Open the PNGs in ``--out`` to confirm that, for example,
-``rover_front`` really shows the rover nose camera. No source edit is needed
+session measures it at startup (``scripts/streaming_views.py``) by matching
+xpra screenshots against ``GetImages`` frames. This script is the manual
+evidence tool for that mapping: it walks the catalog through ``POST /api/view``,
+captures after each step and reports frame differences. Open the PNGs in
+``--out`` to confirm that, for example, ``rover_front`` really shows the rover
+nose camera. No source edit is needed
 when the order differs; the runtime calibration follows the live server.
 
 The script requires an idle planner and a running xpra display.

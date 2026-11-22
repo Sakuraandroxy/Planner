@@ -35,7 +35,7 @@ from itertools import permutations
 import cv2
 import numpy as np
 
-from ...domain.view import VIEW_MODES
+from planner.domain.view import VIEW_MODES
 
 SIGNATURE_SIZE = (160, 90)
 # Matching thresholds measured against the live simulator: the right camera

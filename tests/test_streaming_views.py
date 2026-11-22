@@ -1,10 +1,13 @@
 """Runtime streaming-view calibration without a live simulator."""
 
+import ast
+from pathlib import Path
+
 import numpy as np
 import pytest
 
 from planner.domain.view import VIEW_MODES
-from planner.simulators.projectairsim.streaming_views import (
+from scripts.streaming_views import (
     MAX_UNMATCHED_SCORE,
     MIN_MATCH_SCORE,
     _solve_assignment,
@@ -415,3 +418,41 @@ def test_assignment_rejects_two_equally_good_permutations():
 
     assert positions is None
     assert reason is not None and "ambiguous" in reason
+
+
+SIMULATORS = Path(__file__).resolve().parents[1] / "planner" / "simulators"
+
+#: Names that only the calibration tool may define or call.
+CALIBRATION_NAMES = frozenset({"xpra_screenshot", "signature_bgr", "verify_streaming_views"})
+
+
+def _names_in(path):
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            names.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            names.add(node.attr)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                names.add(alias.name.rsplit(".", 1)[-1])
+                names.add(alias.asname or alias.name.rsplit(".", 1)[-1])
+    return names
+
+
+def test_the_engine_package_does_not_carry_calibration_names():
+    """Calibration lives in ``scripts/``; the engine package must not grow it back."""
+    offenders = {}
+    for path in sorted(SIMULATORS.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        hit = sorted(_names_in(path) & CALIBRATION_NAMES)
+        if hit:
+            offenders[str(path.relative_to(SIMULATORS))] = hit
+    assert not offenders, (
+        "the calibration tool belongs in scripts/streaming_views.py; the engine "
+        f"package only reads the recorded cycle: {offenders}"
+    )
