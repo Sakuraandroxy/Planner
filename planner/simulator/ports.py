@@ -1,13 +1,8 @@
-"""The bundle a simulator hands the shared layer, and what it implies.
+"""The bundle a simulator hands the shared layer.
 
 ``SimulatorPorts`` is the only seam between the task logic and a simulator. The
 shared layer asks for a port and either gets an object or gets ``None``; it
 never asks which simulator is running.
-
-``capabilities()`` derives the console's feature flags from those slots. That is
-deliberate: a config file that lists capabilities can drift from what the code
-implements, and the drift only shows up as a broken button on a machine with a
-simulator attached.
 
 The bundle answers exactly one question: *can this engine perform this action?*
 Anything the service or the shared planner provides on its own -- trajectory
@@ -17,13 +12,16 @@ simulator that never implemented the flag silently loses functionality it was
 never missing. ``trajectory`` used to be gated this way: the port held the
 service's own hub, the endpoint read that hub directly, and nothing consulted
 the port except the gate.
+
+The dataclass is data only. Which task a slot set can run, and which optional
+controls it unlocks, is derived in ``planner.assembly.requirements`` from the
+task packages' own declarations.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, fields
 
-from planner.domain import Capabilities
 from planner.ports import (
     AppearanceModelControl,
     FramePublisher,
@@ -38,23 +36,6 @@ from planner.ports import (
 )
 from planner.ports import StreamingVehicle
 from planner.ports import Vehicle
-
-#: Task kind -> port slots it cannot run without. Keys are ``SimulatorPorts``
-#: field names, so adding a task means adding one row, not one branch.
-TASK_REQUIREMENTS: dict[str, tuple[str, ...]] = {
-    "basic_motion": ("vehicle",),
-    "visual_goal_navigation": ("vehicle", "observation"),
-    "free_navigation": ("vehicle", "observation", "streaming"),
-}
-
-#: Port slot -> the ``actions`` flag it unlocks. Only engine-dependent controls
-#: belong here; see the module docstring for why generic features stay out.
-ACTION_PORTS: dict[str, str] = {
-    "home": "home",
-    "models": "models",
-    "video": "frames",
-    "weather": "weather",
-}
 
 
 @dataclass(frozen=True)
@@ -78,40 +59,6 @@ class SimulatorPorts:
 
     def slot(self, name: str) -> object | None:
         return getattr(self, name, None)
-
-    def missing(self, required: tuple[str, ...]) -> tuple[str, ...]:
-        return tuple(name for name in required if self.slot(name) is None)
-
-    def available_tasks(self) -> tuple[str, ...]:
-        return tuple(
-            kind
-            for kind, required in TASK_REQUIREMENTS.items()
-            if not self.missing(required)
-            and (not self.enabled_tasks or kind in self.enabled_tasks)
-        )
-
-    def capabilities(self) -> Capabilities:
-        actions = tuple(
-            action
-            for action, slot in ACTION_PORTS.items()
-            if self.slot(slot) is not None
-        )
-        view_modes: tuple[str, ...] = ()
-        if self.views is not None:
-            view_modes = tuple(self.views.view_modes())
-        weather_fields: dict[str, str] = {}
-        weather_presets: tuple[str, ...] = ()
-        if self.weather is not None:
-            weather_fields = dict(self.weather.fields())
-            weather_presets = tuple(self.weather.presets())
-        return Capabilities(
-            vehicles=tuple(self.vehicles),
-            view_modes=view_modes,
-            actions=actions,
-            task_kinds=self.available_tasks(),
-            weather_fields=weather_fields,
-            weather_presets=weather_presets,
-        )
 
     def implemented(self) -> tuple[str, ...]:
         """Port slot names holding an object, for logs and architecture tests."""

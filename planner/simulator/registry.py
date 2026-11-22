@@ -1,9 +1,10 @@
-"""Resolve a simulator id to the capabilities it advertises.
+"""Resolve a simulator id to the ports it advertises.
 
-The registry asks each simulator package for its declared port slots and derives
-the flags. There is deliberately no capability data in ``config``: a simulator
-package that gains or loses a port changes what the console offers, and a config
-file cannot disagree with the code about it.
+The registry asks each simulator package for its declared port slots. The flags
+that follow from those slots are derived in ``planner.assembly.requirements``,
+which is also where the task packages' requirements are read; there is
+deliberately no capability data in ``config``, because a config file cannot
+disagree with the code about what a simulator implements.
 """
 
 from __future__ import annotations
@@ -35,7 +36,10 @@ def ports_for(simulator: str) -> SimulatorPorts:
 
 
 def capabilities_for(simulator: str):
-    return ports_for(simulator).capabilities()
+    """Flags for a simulator id. The requirement table lives in the assembly."""
+    from ..assembly.requirements import capabilities_for as derive
+
+    return derive(ports_for(simulator))
 
 
 def build_session(simulator: str, *, config, map_entry, family, resources, log):

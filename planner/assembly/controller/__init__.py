@@ -19,6 +19,7 @@ import time
 from collections.abc import Callable
 
 from ...config import MapCatalog, MapEntry, ProfileInfo, VehicleModelCatalog
+from ...domain import Capabilities
 from ...domain.server import (
     MapSelection,
     ServerState,
@@ -29,6 +30,7 @@ from ...domain.view import default_view_for
 from ...domain.weather import WEATHER_CATALOG
 from ...ports.backend_worker import BackendWorker
 from ...runtime.log_buffer import LogBuffer
+from ...simulator import registry
 from .commands import CommandChannel
 from .models import ModelSwitcher
 from .profiles import ProfileSwitcher
@@ -202,6 +204,29 @@ class ServerController:
     def simulator_owned(self) -> bool:
         """True when the running stack passes the launch-script ownership check."""
         return self.world.simulator_owned
+
+    def capabilities(self) -> Capabilities | None:
+        """Console flags for the active map's simulator.
+
+        The requirement table these flags derive from is the task packages'
+        declarations, read by the assembly; the interface layer asks this method
+        and names no simulator itself. ``None`` means the active map has no
+        catalog entry, so nothing can be gated.
+        """
+        entry = self._maps.entry(self.status.map)
+        if entry is None:
+            return None
+        return registry.capabilities_for(entry.simulator)
+
+    @property
+    def active_simulator(self) -> str:
+        """Simulator driving the active map; empty when the catalog lacks it."""
+        entry = self._maps.entry(self.status.map)
+        return entry.simulator if entry is not None else ""
+
+    @property
+    def simulator_labels(self) -> dict[str, str]:
+        return registry.labels()
 
     @property
     def state(self) -> ServerState:

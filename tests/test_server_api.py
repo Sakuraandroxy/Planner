@@ -20,6 +20,7 @@ from planner.domain import WEATHER_CATALOG, WEATHER_FIELDS, merge_weather
 from planner.runtime import FrameHub
 from planner.runtime import LogBuffer
 from planner.runtime import TrajectoryHub
+from planner.simulator import registry
 
 
 class FakeController:
@@ -97,6 +98,20 @@ class FakeController:
         self.weather_calls = []
         self.view_calls = []
         self.activate_calls = []
+
+    def capabilities(self):
+        """Mirror ``ServerController.capabilities``: flags for the active map."""
+        entry = self.maps.entry(self.map)
+        return None if entry is None else registry.capabilities_for(entry.simulator)
+
+    @property
+    def active_simulator(self):
+        entry = self.maps.entry(self.map)
+        return entry.simulator if entry is not None else ""
+
+    @property
+    def simulator_labels(self):
+        return registry.labels()
 
     def start(self):
         self.started = True

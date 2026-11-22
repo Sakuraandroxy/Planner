@@ -118,6 +118,7 @@ def test_main_process_never_loads_a_simulator_client():
 
 
 def test_every_registered_simulator_declares_its_slots():
+    from planner.assembly import requirements
     from planner.simulator import registry
 
     assert set(registry.known()) == {"airsim", "projectairsim"}
@@ -125,7 +126,9 @@ def test_every_registered_simulator_declares_its_slots():
     for simulator in registry.known():
         ports = registry.ports_for(simulator)
         assert ports.slot("vehicle") is not None, f"{simulator} has no vehicle port"
-        assert ports.capabilities().task_kinds, f"{simulator} offers no task kind"
+        assert requirements.capabilities_for(ports).task_kinds, (
+            f"{simulator} offers no task kind"
+        )
 
 
 def test_airsim_slots_are_backed_by_real_code():
