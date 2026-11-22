@@ -8,6 +8,7 @@ from planner.domain import VisualGoalStatus
 from planner.domain import VisualGoalCompletionInput
 from planner.errors import ExecutionError
 
+from planner.workflows.common.budget import require_time
 from .termination import VisualGoalFailure
 
 
@@ -31,7 +32,7 @@ class VisualGoalFlightPhase:
             target_observation=session.target_observation)
 
         def checkpoint():
-            session.require_time(self.clock)
+            require_time(session.budget, self.clock)
             self.execution.checkpoint()
             if self.execution.collision_state():
                 raise ExecutionError("collision during completion wait")
@@ -95,7 +96,7 @@ class VisualGoalFlightPhase:
         actions, completed, chords = [], 0, 0.0
         window = session.window
         for index, segment in enumerate(motion.segments):
-            if window.should_refill(session.pending_motion, lambda: session.require_time(self.clock)) and prefetch is not None:
+            if window.should_refill(session.pending_motion, lambda: require_time(session.budget, self.clock)) and prefetch is not None:
                 prefetch()
             before = self.execution.current_pose()
             tail = (*motion.segments[index+1:], *retained_tail)

@@ -28,6 +28,7 @@ from planner.errors import (
 from planner.ports import TargetDetector
 from planner.runtime import BackgroundOperation
 from planner.runtime import freeze_observation, freeze_reference
+from planner.workflows.common.budget import require_time
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +135,7 @@ class VisualGoalRefresh:
         self.submit(observation, parameters, session, trace, force=True)
         while self.job.future is not None:
             checkpoint()
-            session.require_time(self.clock)
+            require_time(session.budget, self.clock)
             self.poll(session, trace)
             if self.job.future is not None:
                 sleep(.01)
