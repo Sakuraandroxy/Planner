@@ -13,13 +13,13 @@ from .motion.loop import ControlLoop
 from .motion.base import MotionPlanner
 from .motion.continuous import reached
 from .motion.continuous_speed import braking_speed
-from .motion.heading_servo import heading_rate_deg_s, tracked_heading_rate_deg_s
-from .motion.synchronized import SMOOTH_PROFILE, sample_segment
+from .motion.heading_servo import heading_rate_deg_s
+from .motion.synchronized import SMOOTH_PROFILE
 from .moving_observations import MovingObservations
 from .observation_snapshot import freeze_observation, freeze_reference
 from .position_hold import PositionHold
 from .resource_cleanup import close_resources
-from .segment_motion import SegmentSetpoint, duration_for, plan_segment, quintic
+from .segment_motion import duration_for, plan_segment, quintic
 from .trajectory_hub import TrajectoryHub
 from .window import PlanningWindow
 
@@ -38,7 +38,6 @@ __all__ = [
     "PositionHold",
     "QueueFollower",
     "SMOOTH_PROFILE",
-    "SegmentSetpoint",
     "SynchronizedMotionPlanner",
     "TrajectoryHub",
     "braking_speed",
@@ -50,6 +49,4 @@ __all__ = [
     "plan_segment",
     "quintic",
     "reached",
-    "sample_segment",
-    "tracked_heading_rate_deg_s",
 ]
