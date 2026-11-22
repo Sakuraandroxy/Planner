@@ -81,7 +81,7 @@ grep -rn "planner.workflows\|planner.assembly\|planner.adapters\|planner.simulat
 4. checkpoint 闭包：给 `pose_checkpoint` 时直接透传，否则每次调用先 `execution.check_safety()` 再问 `pause_when`（loop.py:232-251）。
 5. 单段执行 `_drive_segment`（loop.py:383-520），顺序如下：
    1. 段必须带 `target_speed_mps`（loop.py:385-388）。
-   2. `period = SEGMENT_PERIOD_S = 0.030`（loop.py:42,389）。
+   2. `period = SEGMENT_PERIOD_S = 0.030`（loop.py:42,389），经验值、未标定，不读 `limits.control_hz`。
    3. `goal_yaw = start.yaw + 带符号偏航目标`，`duration = max(段上已有时长, duration_for(实测起点, 段终点, 速度, limits))`（loop.py:390-401）。
    4. 预算预检要求至少 `duration + settle_time_s` 可用，且不短于 `timeout_s`，否则 `BudgetExceeded` / `ExecutionError`（loop.py:402-406）。
    5. 用实测位姿重锚 `active = replace(segment, start=..., duration_s=..., yaw_delta_deg=剩余偏航)`，重置合成器与 `steps`（loop.py:408-416）。
@@ -149,6 +149,8 @@ grep -rn "planner.workflows\|planner.assembly\|planner.adapters\|planner.simulat
 | `ProtocolError` | 队列非空时授权新批量、点数不是 5、快照 token/修订不符、时间线倒退、连续失败超限（queue.py:60-62,88-90,119-126、stream_timeline.py:15-22、window.py:196-197,266-267） | 丢弃本轮授权与模型输出，重新取帧 |
 | `ObservationError` | 移动帧连续失败达上限（moving_observations.py:24-35） | 任务层结束连续阶段 |
 | `ResourceCleanupError` | 至少一个关闭回调抛异常（resource_cleanup.py:18-21） | 记录聚合失败，继续退出流程 |
+| 后台线程关不掉（不抛异常） | 关闭时线程 1 秒内没退出：worker.py:77、model_calls.py:92、background_operation.py:85 都只 `join(timeout=1.0)`；`planner-read-cleanup` 的 `thread.join()` 无超时（background_operation.py:96） | 进程继续退出，线程随进程结束；不要假设调用点返回就已停 |
+| 阶段永久拒绍模型调用（不抛异常） | 上次模型调用超时后线程未返回，`_busy` 常真（model_calls.py:57-62,73-83） | 只能外部停止本阶段，不要等它自行恢复 |
 
 ## 7 测试位置
 
@@ -199,7 +201,6 @@ Qb15 层：runtime 结论：`duration_for` 有两个同名不同签名的实现�
 
 Qb16 层：runtime 结论：`braking_speed`、`heading_rate_deg_s`、`plan_segment`、`quintic` 四个入口导出名没有层外生产调用点，`plan_segment` 与 `quintic` 只被 tests 使用。依据：planner/runtime/__init__.py:14-15,21,42-49、tests/test_motion.py:8、tests/test_heading_servo.py 影响：否
 
-Qb17 层：runtime 结论：`WorldWaypointQueue.load_batch`（五点唯一合法批量）无调用点，实际路径走 `load_prefix`，五点约束改在在途规划器里另外检查。依据：planner/runtime/window/queue.py:58-69,85-97、planner/runtime/window/inflight.py:95 影响：否
 
 Qb18 层：runtime 结论：`PlanningWindow.executed` 在队列为空时直接 `self.queue.items[0]`，抛的是 `IndexError` 而不是本层统一的 `ProtocolError`。依据：planner/runtime/window/window.py:307 影响：否
 
@@ -217,6 +218,39 @@ Qb24 层：runtime 结论：`run_segment` 只捕 `Exception` 与 `KeyboardInterr
 
 Qb25 层：runtime 结论：段执行周期固定 30 ms，与 `MotionLimits.control_hz` 无关，引擎是否按这个时长兑现没有测试。依据：planner/runtime/motion/loop.py:42,389,515-519 影响：否
 
-Qb26 层：runtime 结论：`CollisionRecovery.reset()` 无调用点，任务边界只靠新建实例。依据：planner/runtime/collision_recovery.py:95-102 影响：否
 
 Qb27 层：runtime 结论：`MovingObservations.begin` 里 discard 只在 job 空闲时执行，忙时直接进 `require_available` 并抛"unavailable or quarantined"，错误信息指向的能力状态与真实原因（上一次还在跑）不一致。依据：planner/runtime/moving_observations.py:18-22、planner/runtime/background_operation.py:26-30 影响：否
+
+## 10 已知缺口
+
+M4 契约适配层与生产路径分离
+- 现状：`GuidedVehicle` 八个方法里只有 `current_pose` 有生产调用点（planner/workflows/basic_motion/workflow.py:68,98）；`GuidedVehicle.execute_segment`（planner/runtime/guided_vehicle.py:37）与三个引擎类的同名方法生产零调用，段执行实际走 `ControlLoop.execute`（planner/workflows/basic_motion/workflow.py:97）。
+- 风险：端口要求的方法与真实路径分叉，改控制循环不会带动引擎实现，反之亦然。
+- 触发条件：按 `Vehicle` 端口签名改段执行时，改动落在无人调用的路径上，运行行为不变。
+
+M5 重复实现
+- 生产路径：`QueueFollower.next`（planner/runtime/motion/follower.py:75）服务自由导航；`ContinuousExecution.tick`（planner/runtime/continuous_execution.py:96）服务视觉目标。
+- 死路：`planner/runtime/segment_motion.py` 整模块，`plan_segment`、`quintic`、`duration_for` 只被 tests 使用；生产时长统一走 `synchronized.duration_for`（planner/runtime/motion/loop.py:37）。
+- 其他重复：`StreamRecorder.sample`（motion/record.py:55）与 `ContinuousExecution.sample`（continuous_execution.py:56）；`limit_vector`（motion/tracking.py:38）与 `algorithms.bounded`（planner/algorithms/motion/limits.py:8）；`segment_sink` 与 `stream_sink` 方法体相同（motion/loop.py:103,106）。
+- 风险：改一处漏一处，两条通道行为漂移。
+- 触发条件：改限幅、动作记录或队列消费逻辑时只改了一份。
+
+M6 恒假分支
+- 碰撞状态端口在引擎侧有真实实现：planner/simulators/projectairsim/drone.py:268 消费锁存的非地面接触，planner/simulators/airsim/vehicle.py:205 读 `simGetCollisionInfo`。
+- 恒返 `False` 的是 `ExecutionService.collision_state`（planner/runtime/execution.py:104），因此 `ExecutionService.check_safety`（execution.py:87）永不触发，执行服务自检分支失效。
+- 退避由 `ControlLoop._poll_contact` 与 `_guard` 独立完成（planner/runtime/motion/loop.py:115,109），不经过执行服务。
+- 触发条件：任何指望 `check_safety` 拦碰撞的调用点都拿不到拦截。
+
+M7 经验值未标定
+- `SEGMENT_PERIOD_S = 0.030`（planner/runtime/motion/loop.py:42）固定，与 `MotionLimits.control_hz` 无关；流拍是 `1/control_hz`（loop.py:99）。风险：引擎步长不等于 30 ms 时，停稳判据与超时都按 30 ms 记账。触发条件：换仿真步长或引擎实时性不足。
+- `waypoint_timeout_s` 默认 60.0（continuous_execution.py:23、motion/follower.py:32），同为经验值。
+
+M10 线程关闭与挂死
+- 三处关闭只 `join(timeout=1.0)`：planner/runtime/window/worker.py:77、planner/runtime/model_calls.py:92、planner/runtime/background_operation.py:85；`planner-read-cleanup` 的 `thread.join()` 无超时（background_operation.py:96）。
+- `ModelCallService` 超时后 `_busy` 保持真直到线程返回（model_calls.py:57-62,73-83），HTTP 挂死时该阶段只能外部停止。
+- 触发条件：退出时仍有在途模型调用，或模型端点不返回。
+
+M12 状态机单点问题
+- `PlanningWindow.executed` 在队列为空时直接 `self.queue.items[0]`，抛 `IndexError` 而不是 `ProtocolError`（planner/runtime/window/window.py:307）。触发条件：暂停清队之后又调一次 `executed`。
+- `PlanningWindow._submit` 每次提交前改写共享字段 `background.planner`（window.py:165），请求与上下文的绑定只靠 worker 串行兜住。触发条件：两次提交之间换上下文。
+- 本轮已删 `WorldWaypointQueue.load_batch` 与 `CollisionRecovery.reset`（原 Qb17、Qb26 随代码消失）。
