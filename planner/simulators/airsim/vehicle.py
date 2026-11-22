@@ -5,7 +5,14 @@ import math
 import time
 
 from planner.domain import ExecutionBudget, PoseCheckpoint
-from planner.domain import MotionLimits
+from planner.domain import CollisionState
+from planner.domain import (
+    MotionCapability,
+    MotionCommand,
+    MotionLimits,
+    MotionModel,
+    require_supported,
+)
 from planner.domain import WorldPose
 from planner.domain import TimedVehicleState
 from planner.domain import MotionSegment
@@ -33,6 +40,12 @@ class AirSimVehicle:
         self.timeout_s = timeout_s
         self.holding = None
         self.velocity_command_duration_s = velocity_command_duration_s
+        self._capability = MotionCapability(
+            MotionModel.HOLONOMIC,
+            max_lateral_speed_mps=(motion_limits or MotionLimits()).max_speed_mps,
+            min_turn_radius_m=None,
+            allows_reverse=True,
+        )
         self.motion_tracker = AirSimMotionTracker(
             connection, self.current_pose, motion_limits or MotionLimits(), timeout_s,
             tracking=tracking,
@@ -189,8 +202,13 @@ class AirSimVehicle:
         # loop here would drift from the one motion already depends on.
         self.holding.wait(budget=budget, checkpoint=checkpoint)
 
-    def collision_state(self) -> bool:
-        return bool(self.connection.call("simGetCollisionInfo").has_collided)
+    def motion_capability(self) -> MotionCapability:
+        """The multirotor translates freely in the world frame."""
+        return self._capability
+
+    def collision_state(self) -> CollisionState:
+        collided = bool(self.connection.call("simGetCollisionInfo").has_collided)
+        return CollisionState(collided)
 
     def stream_state(self) -> TimedVehicleState:
         state = self.connection.call("getMultirotorState")
@@ -205,10 +223,13 @@ class AirSimVehicle:
                                    1-2*(q.x_val*q.x_val+q.y_val*q.y_val))),
             yaw_rate_deg_s=math.degrees(k.angular_velocity.z_val))
 
-    def stream_velocity(self, velocity_world, yaw_rate_deg_s, duration_s):
+    def stream_command(self, command: MotionCommand, duration_s):
+        require_supported(command, self._capability)
         if self.holding is not None:
             self.holding.release()
-        self.hold_velocity(velocity_world, yaw_rate_deg_s, duration_s)
+        self.hold_velocity(
+            (command.vx, command.vy, command.vz), command.yaw_rate_deg_s, duration_s
+        )
 
     def hold_velocity(self, velocity_world, yaw_rate_deg_s, duration_s):
         import airsim

@@ -4,6 +4,7 @@ import time
 from collections import deque
 
 from planner.domain import ExecutionRecord
+from planner.domain import CarCommand, HolonomicCommand, MotionModel
 from planner.domain import ContinuousTrackingSettings
 from planner.domain import resolve_yaw_delta_deg
 from planner.domain import ControlTelemetry
@@ -122,10 +123,22 @@ class ContinuousExecution:
             raise ExecutionError("continuous waypoint timed out before position/yaw progress")
         dt = max(.001, min(.25, sample_dt))
         velocity, rate = self.follower.sample(self.queue.items, state.pose, self.yaw, self.goal_yaw, dt)
-        self.vehicle.stream_velocity(velocity, rate, 1/self.limits.control_hz)
+        self.vehicle.stream_command(self._command(velocity, rate), 1/self.limits.control_hz)
         self._record_control(sample_dt, velocity, rate)
         self.holding = False
         return tuple(consumed)
+
+    def _command(self, velocity, rate):
+        """One command in the form this vehicle accepts.
+
+        阿克曼车只能沿车头方向走，世界系速度在这里投影成带符号的前向速度；
+        全向载具直接收世界系三分量。投影值就是适配层以前自己算的那个。
+        """
+        if self.vehicle.motion_capability().model is MotionModel.ACKERMANN:
+            angle = math.radians(self.yaw)
+            forward = velocity[0]*math.cos(angle)+velocity[1]*math.sin(angle)
+            return CarCommand(forward, rate, forward < 0)
+        return HolonomicCommand(*velocity, rate)
 
     def _record_control(self, dt, velocity, rate):
         state, follower = self.state, self.follower

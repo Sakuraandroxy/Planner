@@ -27,6 +27,8 @@ from .engine_family import (
     parse_family_catalog,
 )
 from .execution import (
+    CollisionContact,
+    CollisionState,
     ExecutionBudget,
     ExecutionReceipt,
     ExecutionRecord,
@@ -39,7 +41,19 @@ from .free_navigation import (
     FreeNavigationStatus,
 )
 from .mission import MissionPlan, MissionStage, TaskKind, TaskParameters
-from .motion import ContinuousReference, ContinuousTrackingSettings, MotionLimits
+from .motion import (
+    CarCommand,
+    ContinuousReference,
+    ContinuousTrackingSettings,
+    HeadingHoldSettings,
+    HolonomicCommand,
+    MotionCapability,
+    MotionCommand,
+    MotionLimits,
+    MotionModel,
+    command_type_for,
+    require_supported,
+)
 from .observation import CameraIntrinsics, Observation
 from .planning_window import PlanningWindowInput
 from .pose import (
@@ -162,6 +176,9 @@ __all__ = [
     "BasicMotionStatus",
     "CameraIntrinsics",
     "Capabilities",
+    "CarCommand",
+    "CollisionContact",
+    "CollisionState",
     "CompletionBasis",
     "ContinuationCandidate",
     "ContinuousReference",
@@ -182,6 +199,8 @@ __all__ = [
     "GoalObservation",
     "GoalReference",
     "GoalVisibility",
+    "HeadingHoldSettings",
+    "HolonomicCommand",
     "INVALID_DEPTH_SENTINEL_M",
     "LogBatch",
     "MODE_CONTINUOUS",
@@ -193,6 +212,8 @@ __all__ = [
     "MissionPlan",
     "MissionResult",
     "MissionStage",
+    "MotionCapability",
+    "MotionCommand",
     "MotionLimits",
     "MotionSegment",
     "MotionTrajectory",
@@ -253,6 +274,7 @@ __all__ = [
     "WorldPose",
     "WorldTrajectory",
     "build_queue_snapshot",
+    "command_type_for",
     "cycle_delta",
     "default_view_for",
     "default_weather",
@@ -262,6 +284,7 @@ __all__ = [
     "parse_family_catalog",
     "relative_to_world",
     "render_depth",
+    "require_supported",
     "resolve_yaw_delta_deg",
     "snapshot_from_payload",
     "snapshot_to_payload",

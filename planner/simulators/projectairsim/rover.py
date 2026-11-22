@@ -21,7 +21,15 @@ from planner.domain import Observation
 from planner.domain import WorldPose
 from planner.domain import TimedVehicleState
 from ...errors import ExecutionError
-from planner.domain import MotionLimits
+from planner.domain import (
+    CollisionContact,
+    CollisionState,
+    MotionCapability,
+    MotionCommand,
+    MotionLimits,
+    MotionModel,
+    require_supported,
+)
 from .collision import CollisionEvent, CollisionMonitor
 from .connection import ProjectAirSimConnection
 from .coordinates import (
@@ -31,6 +39,7 @@ from .drive import (
     RoverControls,
     RoverDriveModel,
     SpeedPid,
+    controls_from_command,
     controls_from_reference,
 )
 from .motion import SteppedMotionTracker, tracking_limits
@@ -46,6 +55,12 @@ SETTLE_DURATION_S = 2.0
 #: 车宽量级的走廊（0.6 m），让“冲过一点但仍在走廊内”直接推进下一个航点，而不是
 #: 回头精确命中一个它够不到的点——后者会退化成身后的目标，触发倒车与原地卡死。
 ROVER_PASSED_LATERAL_TOLERANCE_M = 0.6
+
+#: 阿克曼车的最小转弯半径：由 drive 模型的标定值推出，v / ω 在打满方向盘且
+#: 纯前向时取最小，即 ``180 / (π · yaw_rate_per_steer_mps · max_steering)``。
+ROVER_MIN_TURN_RADIUS_M = 180.0 / (
+    math.pi * RoverDriveModel.yaw_rate_per_steer_mps * RoverDriveModel.max_steering
+)
 
 
 def rover_tracking_limits(motion):
@@ -127,6 +142,12 @@ class ProjectAirSimRover:
         # above the road, so the session replaces it with the resting pose
         # measured by ``measure_resting_pose``.
         self._home_pose = self.current_pose()
+        self._capability = MotionCapability(
+            MotionModel.ACKERMANN,
+            max_lateral_speed_mps=0.0,
+            min_turn_radius_m=ROVER_MIN_TURN_RADIUS_M,
+            allows_reverse=True,
+        )
         self._tracker = SteppedMotionTracker(
             self._apply_reference,
             self.current_pose,
@@ -216,13 +237,19 @@ class ProjectAirSimRover:
             waited += step_s
             pose = self.current_pose()
 
-    def collision_state(self) -> bool:
+    def motion_capability(self) -> MotionCapability:
+        """The rover steers like a car: no lateral speed, minimum turn radius."""
+        return self._capability
+
+    def collision_state(self) -> CollisionState:
         """Consume the latched non-ground contact, if any."""
         event = self._collisions.consume()
         if event is not None:
             self._last_collision = event
-            return True
-        return False
+            return CollisionState(
+                True, CollisionContact(event.object_name, time.monotonic())
+            )
+        return CollisionState(False)
 
     @property
     def last_collision(self) -> CollisionEvent | None:
@@ -249,30 +276,28 @@ class ProjectAirSimRover:
             pose, timestamp_ns, time.monotonic(), velocity, yaw_rate_deg_s=yaw_rate
         )
 
-    def stream_velocity(
-        self,
-        velocity_world: tuple[float, float, float],
-        yaw_rate_deg_s: float,
-        duration_s: float,
-    ) -> None:
+    def stream_command(self, command: MotionCommand, duration_s: float) -> None:
+        require_supported(command, self._capability)
         self._require_started()
         if (
-            len(velocity_world) != 3
-            or not all(
+            not all(
                 math.isfinite(value)
-                for value in (*velocity_world, yaw_rate_deg_s, duration_s)
+                for value in (
+                    command.forward_speed_mps,
+                    command.yaw_rate_deg_s,
+                    duration_s,
+                )
             )
             or duration_s <= 0
         ):
             raise ExecutionError(
-                "non-finite streaming velocity or invalid duration"
+                "non-finite streaming command or invalid duration"
             )
         state = self.stream_state()
-        controls = controls_from_reference(
+        controls = controls_from_command(
             self._drive_model,
             self._pid,
-            velocity_world,
-            yaw_rate_deg_s,
+            command,
             state.velocity_world,
             state.pose.yaw_deg,
             duration_s,

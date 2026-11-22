@@ -8,7 +8,7 @@ from planner.workflows.visual_goal_navigation import TargetApproach
 from planner.workflows.visual_goal_navigation import VisualGoalCompletion
 from planner.algorithms import GeometricTargetPlanner
 from planner.algorithms.targeting import DepthGeometry
-from planner.domain import MissionStage, TaskKind
+from planner.domain import CollisionState, MissionStage, TaskKind
 from planner.domain import MotionLimits
 from planner.domain import CameraIntrinsics, Observation
 from planner.domain import RelativePoseDelta, WorldPose
@@ -55,7 +55,7 @@ class FakeVehicle:
         pass
 
     def collision_state(self):
-        return False
+        return CollisionState(False)
 
 
 class FakeSource:

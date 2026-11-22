@@ -1,10 +1,9 @@
 """Optional measured velocity-control port; called only by the flight owner."""
 from typing import Protocol
 
-from planner.domain import TimedVehicleState
+from planner.domain import MotionCommand, TimedVehicleState
 
 
 class StreamingVehicle(Protocol):
     def stream_state(self) -> TimedVehicleState: ...
-    def stream_velocity(self, velocity_world: tuple[float, float, float],
-                        yaw_rate_deg_s: float, duration_s: float) -> None: ...
+    def stream_command(self, command: MotionCommand, duration_s: float) -> None: ...

@@ -139,6 +139,8 @@ def test_airsim_slots_are_backed_by_real_code():
     from planner.ports import Vehicle
     from planner.simulator.ports import SimulatorPorts
     from planner.simulators.airsim.vehicle import AirSimVehicle
+    from planner.simulators.projectairsim.drone import ProjectAirSimDrone
+    from planner.simulators.projectairsim.rover import ProjectAirSimRover
 
     known = {item.name for item in dc_fields(SimulatorPorts)}
     for simulator in ("airsim", "projectairsim"):
@@ -146,9 +148,11 @@ def test_airsim_slots_are_backed_by_real_code():
         unknown = [slot for slot in module.PORT_SLOTS if slot not in known]
         assert not unknown, f"{simulator} declares slots the bundle has no field for: {unknown}"
 
-    for port, cls in ((Vehicle, AirSimVehicle), (StreamingVehicle, AirSimVehicle)):
-        for name, value in vars(port).items():
-            if callable(value) and not name.startswith("_") and name != "__subclasshook__":
-                assert hasattr(cls, name), f"AirSim {cls.__name__} lost {port.__name__}.{name}"
+    adapters = (AirSimVehicle, ProjectAirSimRover, ProjectAirSimDrone)
+    for port in (Vehicle, StreamingVehicle):
+        for cls in adapters:
+            for name, value in vars(port).items():
+                if callable(value) and not name.startswith("_") and name != "__subclasshook__":
+                    assert hasattr(cls, name), f"{cls.__name__} lost {port.__name__}.{name}"
 
 

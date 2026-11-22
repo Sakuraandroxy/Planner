@@ -502,18 +502,18 @@ def test_heading_settings_are_read_from_the_config_file(tmp_path):
         }
     })
     config = load_config(path)
-    assert config.motion.heading_hold_gain == pytest.approx(0.8)
-    assert config.motion.heading_deadband_deg == pytest.approx(0.7)
+    assert config.motion.heading.heading_hold_gain == pytest.approx(0.8)
+    assert config.motion.heading.heading_deadband_deg == pytest.approx(0.7)
     tracking = config.motion
-    assert tracking.heading_hold_gain == pytest.approx(0.8)
+    assert tracking.heading.heading_hold_gain == pytest.approx(0.8)
 
 
 def test_heading_settings_fall_back_to_the_values_the_flight_was_tuned_with(tmp_path):
     """A config that omits the heading keys must get the validated pair."""
     motion = load_config(_write(tmp_path, {})).motion
 
-    assert motion.heading_hold_gain == pytest.approx(0.4)
-    assert motion.heading_rate_damping == pytest.approx(0.0)
+    assert motion.heading.heading_hold_gain == pytest.approx(0.4)
+    assert motion.heading.heading_rate_damping == pytest.approx(0.0)
 
 
 def test_drone_takeoff_climb_is_configured_and_cannot_be_negative(tmp_path):

@@ -64,7 +64,7 @@ class VisualGoalContinuous:
 
     def prepare(self):
         if not all(callable(getattr(self.execution.vehicle, name, None))
-                   for name in ('stream_state', 'stream_velocity')):
+                   for name in ('stream_state', 'stream_command')):
             raise ExecutionError("continuous execution requires streaming vehicle capability")
         if self.frames.job.busy or self.targets.job.busy:
             raise ExecutionError("previous capture or target request remains quarantined")
@@ -238,7 +238,7 @@ class VisualGoalContinuous:
     def _discard_pretask_contact(self):
         """Drop a contact latched before this stage started (teleport/settle)."""
         consume = getattr(self.execution.vehicle, "collision_state", None)
-        if callable(consume) and consume():
+        if callable(consume) and consume().in_contact:
             last = getattr(self.execution.vehicle, "last_collision", None)
             logger.info("[VisualGoal] discarding a contact latched before the stage started (object=%s)",
                         getattr(last, "object_name", "unknown"))
@@ -327,7 +327,7 @@ class VisualGoalContinuous:
                 window.record = self.stream.record
                 self._reset_recovery_budget_after_progress()
                 check_collision = getattr(self.execution.vehicle, "collision_state", None)
-                if callable(check_collision) and check_collision():
+                if callable(check_collision) and check_collision().in_contact:
                     observation = self._recover_from_collision(session)
                     used_capture = None
                     queue_was_empty = True

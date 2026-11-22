@@ -37,7 +37,6 @@ from planner.errors import (
     ObservationError,
     ProtocolError,
 )
-from planner.ports import CollisionCheck
 from planner.ports import GoalObserver
 from planner.ports import MovingObservationSource, ObservationSource
 from planner.ports import TaskCompletionChecker
@@ -73,7 +72,6 @@ class VisualGoalNavigationWorkflow:
                  trigger_rules: VisualGoalTriggerRules = VisualGoalTriggerRules(),
                  sliding_window: SlidingWindowSettings = SlidingWindowSettings(),
                  motion_limits: MotionLimits = MotionLimits(),
-                 collision_check: CollisionCheck | None = None,
                  moving_observation_source: MovingObservationSource | None = None, stream_speed_mps: float = 2.0,
                  stream_waypoint_timeout_s: float = 60.0,
                  continuous_tracking: ContinuousTrackingSettings = ContinuousTrackingSettings(),
@@ -81,7 +79,6 @@ class VisualGoalNavigationWorkflow:
         self.source, self.goal_observer, self.planner = observation_source, goal_observer, trajectory_planner
         self.validator, self.motion, self.execution = validator, motion_planner, execution
         self.geometry, self.completion, self.limits = geometry, completion, limits
-        self.collision_check = collision_check
         self.trace_factory, self.clock, self.sleep = trace_factory, clock, sleep
         self.trigger_rules = trigger_rules
         self.model_calls = ModelCallService(clock)
@@ -131,11 +128,9 @@ class VisualGoalNavigationWorkflow:
         leased = False
         try:
             self.prepare()
-            self.execution.acquire_flight(self, collision_check=self.collision_check)
+            self.execution.acquire_flight(self)
             leased = True
             self.execution.set_deadline(session.budget.deadline_monotonic)
-            logger.info("[VisualGoal %s] collision_check_enabled=%s", stage.stage_id,
-                        self.collision_check is not None)
             if self.window is not None:
                 self.window.begin(deadline_monotonic=session.budget.deadline_monotonic,
                                   maximum_planning_rounds=session.policy.limits.maximum_planning_rounds)
@@ -151,8 +146,7 @@ class VisualGoalNavigationWorkflow:
                 trace = self.trace_factory()
                 trace.event("task_start", stage_id=stage.stage_id, parameters=parameters, limits=self.limits,
                             arrival_radius_m=self.trigger_rules.effective_pause_radius_m,
-                            completion_radius_m=self.trigger_rules.radius_m,
-                            collision_check_enabled=self.collision_check is not None)
+                            completion_radius_m=self.trigger_rules.radius_m)
             status, reason = self._run(parameters, session, trace)
             self._settle_completed_calls(session)
             stop = StopResult(True)  # Last observation verified stopped, with no intervening motion.

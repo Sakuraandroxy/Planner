@@ -3,7 +3,7 @@ from dataclasses import replace
 
 import pytest
 
-from planner.domain import ContinuousTrackingSettings, MotionLimits
+from planner.domain import ContinuousTrackingSettings, HeadingHoldSettings, MotionLimits
 from planner.domain import WorldPose
 from planner.domain import TimedVehicleState
 from planner.errors import ExecutionError
@@ -20,10 +20,12 @@ LIMITS = MotionLimits(
     stopped_yaw_rate_deg_s=2.0,
     settle_time_s=0.1,
     min_duration_s=0.2,
-    heading_hold_gain=2.0,
-    heading_rate_damping=0.6,
-    heading_deadband_deg=0.5,
-    heading_rate_deadband_dps=1.5,
+    heading=HeadingHoldSettings(
+        heading_hold_gain=2.0,
+        heading_rate_damping=0.6,
+        heading_deadband_deg=0.5,
+        heading_rate_deadband_dps=1.5,
+    ),
 )
 TRACKING = ContinuousTrackingSettings()
 
@@ -198,7 +200,11 @@ def test_hold_uses_its_own_gain_not_the_flight_path_gain():
     """The hold faces a fixed angle, so its gain is tuned apart from ``yaw_gain``."""
     clock = FakeClock()
     vehicle = HoldVehicle(WorldPose(0.0, 0.0, -3.0, 10.0), clock, apply=False)
-    limits = replace(LIMITS, yaw_gain=2.0, heading_hold_gain=0.4, heading_rate_damping=0.0)
+    limits = replace(
+        LIMITS,
+        yaw_gain=2.0,
+        heading=replace(LIMITS.heading, heading_hold_gain=0.4, heading_rate_damping=0.0),
+    )
     hold = PositionHold(vehicle, limits, TRACKING, 2.0, 5.0, clock=clock, sleep=clock.sleep)
     hold.start(WorldPose(0.0, 0.0, -3.0, 20.0))
     for _ in range(200):

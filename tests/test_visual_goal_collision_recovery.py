@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from planner.domain import WorldPose
+from planner.domain import CollisionState, WorldPose
 from planner.errors import ExecutionError
 from planner.workflows.visual_goal_navigation import VisualGoalContinuous
 
@@ -85,7 +85,7 @@ class _Vehicle:
         self.last_collision = SimpleNamespace(object_name="WhiteCar")
 
     def collision_state(self):
-        return False
+        return CollisionState(False)
 
 
 class _Execution:

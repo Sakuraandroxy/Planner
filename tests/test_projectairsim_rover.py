@@ -3,7 +3,7 @@ import math
 import pytest
 
 from planner.config import CameraSettings, DepthSettings
-from planner.domain import WorldPose
+from planner.domain import CarCommand, HolonomicCommand, MotionModel, WorldPose
 from planner.errors import ExecutionError
 from planner.domain import MotionLimits as ConfiguredMotionLimits
 from planner.simulators.projectairsim.rover import (
@@ -163,11 +163,32 @@ def test_start_enables_api_control_arms_and_holds_the_brake():
     rover.close()
 
 
-def test_stream_velocity_maps_the_reference_and_advances_one_step():
+def test_motion_capability_declares_an_ackermann_drive_model():
+    rover, _, _ = make_rover()
+    capability = rover.motion_capability()
+    assert capability.model is MotionModel.ACKERMANN
+    assert capability.max_lateral_speed_mps == 0.0
+    assert capability.min_turn_radius_m == pytest.approx(3.20, abs=0.05)
+    rover.close()
+
+
+def test_stream_command_rejects_a_holonomic_command_before_the_engine():
     rover, connection, _ = make_rover()
     rover.start()
     connection.requests.clear()
-    rover.stream_velocity((2.0, 0.0, 0.0), 0.0, 0.05)
+    connection.advances.clear()
+    with pytest.raises(ValueError):
+        rover.stream_command(HolonomicCommand(0.0, 0.3, 0.0, 0.0), 0.05)
+    assert connection.control_requests() == []
+    assert connection.advances == []
+    rover.close()
+
+
+def test_stream_command_maps_the_command_and_advances_one_step():
+    rover, connection, _ = make_rover()
+    rover.start()
+    connection.requests.clear()
+    rover.stream_command(CarCommand(2.0, 0.0, False), 0.05)
     assert connection.requests[-1][0] == CONTROLS_TOPIC
     controls = connection.requests[-1][1]
     assert controls["engine"] == pytest.approx(2.0 / 23.3 + 0.004 * 2 + 0.1 * (2 * 0.05))
@@ -191,22 +212,20 @@ def test_stream_state_measures_speed_from_the_pose_because_the_twist_is_a_placeh
     assert second.yaw_rate_deg_s == pytest.approx(50.0)
 
 
-def test_stream_velocity_requires_api_control():
+def test_stream_command_requires_api_control():
     rover, _, _ = make_rover()
     with pytest.raises(ExecutionError, match="start"):
-        rover.stream_velocity((1.0, 0.0, 0.0), 0.0, 0.05)
+        rover.stream_command(CarCommand(1.0, 0.0, False), 0.05)
     rover.close()
 
 
-def test_stream_velocity_rejects_bad_requests():
+def test_stream_command_rejects_bad_requests():
     rover, _, _ = make_rover()
     rover.start()
     with pytest.raises(ExecutionError):
-        rover.stream_velocity((float("nan"), 0.0, 0.0), 0.0, 0.05)
+        rover.stream_command(CarCommand(float("nan"), 0.0, False), 0.05)
     with pytest.raises(ExecutionError):
-        rover.stream_velocity((1.0, 0.0, 0.0), 0.0, 0.0)
-    with pytest.raises(ExecutionError):
-        rover.stream_velocity((1.0, 0.0), 0.0, 0.05)
+        rover.stream_command(CarCommand(1.0, 0.0, False), 0.0)
     rover.close()
 
 
@@ -267,7 +286,7 @@ def test_collision_state_latches_one_non_ground_contact():
             "penetration_depth": 0.0,
         },
     )
-    assert rover.collision_state() is False
+    assert rover.collision_state().in_contact is False
     callback(
         None,
         {
@@ -278,8 +297,10 @@ def test_collision_state_latches_one_non_ground_contact():
             "penetration_depth": 0.2,
         },
     )
-    assert rover.collision_state() is True
-    assert rover.collision_state() is False
+    contact = rover.collision_state()
+    assert contact.in_contact is True
+    assert contact.last_contact.counterpart == "Building_3"
+    assert rover.collision_state().in_contact is False
     assert rover.last_collision.object_name == "Building_3"
     assert rover.last_collision.timestamp_ns == 500
     rover.close()

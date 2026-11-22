@@ -121,7 +121,7 @@ class FreeNavigationContinuous:
             raise ExecutionError("free navigation continuous mode is closed")
         if not all(
             callable(getattr(self.execution.vehicle, name, None))
-            for name in ("stream_state", "stream_velocity")
+            for name in ("stream_state", "stream_command")
         ):
             raise ExecutionError(
                 "continuous execution requires streaming vehicle capability"
@@ -169,7 +169,7 @@ class FreeNavigationContinuous:
         try:
             while True:
                 tick_started = self.clock()
-                if self.execution.vehicle.collision_state():
+                if self.execution.vehicle.collision_state().in_contact:
                     observation = self._recover_from_collision(window)
                     used_capture = None
                     progress_m = self.stream.path_length_m
@@ -293,7 +293,7 @@ class FreeNavigationContinuous:
         would otherwise trigger a spurious reverse on the very first tick.
         """
         consume = getattr(self.execution.vehicle, "collision_state", None)
-        if not callable(consume) or not consume():
+        if not callable(consume) or not consume().in_contact:
             return
         last = getattr(self.execution.vehicle, "last_collision", None)
         logger.info(

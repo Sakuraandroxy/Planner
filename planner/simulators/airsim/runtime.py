@@ -55,7 +55,7 @@ def build_ports(
     return SimulatorPorts(
         vehicle=vehicle,
         observation=observation,
-        streaming=vehicle,                 # AirSimVehicle implements stream_velocity
+        streaming=vehicle,                 # AirSimVehicle implements stream_command
         moving_capture=moving_capture if moving_capture is not None else observation,
         weather=weather,
         vehicles=VEHICLES,

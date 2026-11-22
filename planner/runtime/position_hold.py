@@ -92,13 +92,13 @@ class PositionHold:
         yaw_error = wrap_yaw_deg(t.yaw_deg-p.yaw_deg)
         yaw_rate = heading_rate_deg_s(
             yaw_error, state.yaw_rate_deg_s,
-            gain=self.limits.heading_hold_gain,
+            gain=self.limits.heading.heading_hold_gain,
             maximum_rate_dps=self.limits.max_yaw_rate_deg_s,
             acceleration_dps2=self.limits.max_yaw_acceleration_deg_s2,
             jerk_dps3=self.tracking.max_yaw_jerk_deg_s3,
-            damping=self.limits.heading_rate_damping,
-            deadband_deg=self.limits.heading_deadband_deg,
-            rate_deadband_dps=self.limits.heading_rate_deadband_dps,
+            damping=self.limits.heading.heading_rate_damping,
+            deadband_deg=self.limits.heading.heading_deadband_deg,
+            rate_deadband_dps=self.limits.heading.heading_rate_deadband_dps,
         )
         rate = self.rotation.step((yaw_rate,), dt)[0]
         self.vehicle.hold_velocity(velocity, rate, 1/self.limits.control_hz)
