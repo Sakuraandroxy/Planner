@@ -26,7 +26,6 @@ from starlette.concurrency import run_in_threadpool
 from planner.domain import BackendUnavailable, ServerState
 from planner.domain import TrajectorySnapshot
 from planner.domain import default_view_for
-from ...simulator import registry
 from .video import BOUNDARY, mjpeg_chunks
 
 CONSOLE_DIR = Path(__file__).resolve().parents[3] / "console"
@@ -152,17 +151,14 @@ def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAP
 
     Every optional control is gated on the active map's ``capabilities``: an
     action the map's simulator does not offer returns 501 with
-    ``detail.unsupported``. Those flags come from the simulator registry, not
-    from a config file, so a simulator cannot advertise a port it lacks.
+    ``detail.unsupported``. The flags come from the controller, which derives
+    them from the simulator's port bundle, so a simulator cannot advertise a
+    port it lacks and this layer names no simulator of its own.
     """
 
     def capabilities():
-        """Flags derived from the ports of the simulator driving the active map."""
-        catalog = getattr(controller, "maps", None)
-        entry = catalog.entry(controller.status.map) if catalog is not None else None
-        if entry is None:
-            return None, ""
-        return registry.capabilities_for(entry.simulator), entry.simulator
+        """Flags for the active map's simulator, as the controller reports them."""
+        return controller.capabilities(), controller.active_simulator
 
     def require(action):
         caps, simulator = capabilities()
@@ -319,7 +315,7 @@ def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAP
             payload["map_simulators"] = {
                 entry.id: entry.simulator for entry in maps.maps
             }
-            payload["simulator_labels"] = registry.labels()
+            payload["simulator_labels"] = controller.simulator_labels
             payload["simulator"] = simulator
             payload["capabilities"] = caps.as_dict()
         return payload

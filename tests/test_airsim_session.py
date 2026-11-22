@@ -16,6 +16,7 @@ import types
 import pytest
 
 from planner.assembly import MissionResources
+from planner.assembly import requirements
 from planner.config import default_config_path, load_config
 from planner.domain import WEATHER_FIELDS
 from planner.errors import ProtocolError
@@ -96,7 +97,9 @@ def test_the_session_fills_exactly_the_declared_slots():
 
 def test_the_live_bundle_agrees_with_the_advertised_capabilities():
     session = _session()
-    assert session.ports.capabilities() == airsim_runtime.describe().capabilities()
+    assert requirements.capabilities_for(session.ports) == requirements.capabilities_for(
+        airsim_runtime.describe()
+    )
 
 
 def test_free_navigation_is_not_built_for_ue4():
