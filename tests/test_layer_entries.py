@@ -34,8 +34,8 @@ LAYERS = (
 ENTRY_MODULES = frozenset({"planner.errors"})
 
 #: 各源层当前仍有的跨层深层 import 条数，数字口径同 `_deep_import_offenders`。
-#: 阶段 1g 除 simulators 外已清零；标记留给文档表对齐后再删。
-DEEP_IMPORTS = {"assembly": 0, "simulators": 4, "workflows": 0}
+#: 阶段 1g 已清零；标记留给文档表对齐后再删。
+DEEP_IMPORTS = {"assembly": 0, "simulators": 0, "workflows": 0}
 
 
 def _files_under(root: Path, *parts: str):

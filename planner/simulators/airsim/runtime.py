@@ -7,7 +7,7 @@ asserts the two agree, so the advertised flags cannot drift from the code.
 
 from __future__ import annotations
 
-from ...simulator.ports import SimulatorPorts
+from ...simulator import SimulatorPorts
 
 #: Slots AirSim implements. Absent slots are capabilities UE4 does not offer:
 #: no streaming camera cycle, no appearance models, no frame stream, and no

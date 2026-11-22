@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from planner.domain import VIEW_MODES
 from planner.domain import WEATHER_CATALOG, WEATHER_FIELDS
-from ...simulator.ports import SimulatorPorts
+from ...simulator import SimulatorPorts
 
 PORT_SLOTS: tuple[str, ...] = (
     "vehicle",
