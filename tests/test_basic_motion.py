@@ -1,7 +1,7 @@
 
 import pytest
 
-from planner.capabilities.basic_motion_conversion import BasicMotionConverter
+from planner.algorithms.basic_motion_conversion import BasicMotionConverter
 from planner.domain.basic_motion import (
     BasicMotionParameters,
     BasicMotionStatus,

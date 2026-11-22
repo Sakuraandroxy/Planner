@@ -3,8 +3,8 @@ import math
 
 import pytest
 
-from planner.services.motion.continuous_speed import braking_speed
-from planner.services.motion.heading_servo import heading_rate_deg_s
+from planner.runtime.motion.continuous_speed import braking_speed
+from planner.runtime.motion.heading_servo import heading_rate_deg_s
 
 LIMITS = dict(
     gain=2.0,

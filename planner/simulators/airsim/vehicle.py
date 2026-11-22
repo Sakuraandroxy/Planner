@@ -10,7 +10,7 @@ from planner.domain.pose import WorldPose
 from planner.domain.streaming import TimedVehicleState
 from planner.domain.trajectory import MotionSegment
 from planner.errors import ExecutionError
-from planner.services.motion.synchronized import SMOOTH_PROFILE
+from planner.runtime.motion.synchronized import SMOOTH_PROFILE
 from planner.simulators.airsim.connection import AirSimConnection
 from planner.simulators.airsim.motion_tracker import AirSimMotionTracker
 

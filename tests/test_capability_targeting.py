@@ -1,15 +1,15 @@
 import numpy as np
 import pytest
 
-from planner.capabilities.targeting.association import (
+from planner.algorithms.targeting.association import (
     accept_position,
     bound_target_geometry,
     make_reference,
 )
-from planner.capabilities.targeting.bbox_goal_observation import BBoxGoalObserver
-from planner.capabilities.targeting.depth_foreground import DepthForegroundFilter
-from planner.capabilities.targeting.depth_surface_sampling import sample_surface_depth
-from planner.capabilities.targeting.visual_goal_refresh import VisualGoalRefresh
+from planner.algorithms.targeting.bbox_goal_observation import BBoxGoalObserver
+from planner.algorithms.targeting.depth_foreground import DepthForegroundFilter
+from planner.algorithms.targeting.depth_surface_sampling import sample_surface_depth
+from planner.algorithms.targeting.visual_goal_refresh import VisualGoalRefresh
 from planner.domain.depth_foreground import DepthForegroundSettings
 from planner.domain.execution import ExecutionBudget
 from planner.domain.observation import CameraIntrinsics, Observation

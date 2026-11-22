@@ -41,11 +41,11 @@ SIMULATOR_PACKAGE = "planner.simulators"
 #: Layers that must stay simulator-agnostic.
 SHARED_PACKAGES = (
     "planner/domain",
-    "planner/services",
-    "planner/capabilities",
+    "planner/runtime",
+    "planner/algorithms",
     "planner/workflows",
     "planner/ports",
-    "planner/application",
+    "planner/assembly",
     "planner/adapters/http",
     "planner/simulator",
 )
@@ -53,7 +53,7 @@ MAIN_PROCESS_MODULES = (
     "planner.config",
     "planner.server_bootstrap",
     "planner.adapters.http.server_api",
-    "planner.application.server_controller",
+    "planner.assembly.server_controller",
 )
 
 

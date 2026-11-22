@@ -1,7 +1,7 @@
 from collections.abc import Callable
 
-from planner.application.mission_runner import MissionRunner
-from planner.application.mission_validator import MissionValidator
+from planner.assembly.mission_runner import MissionRunner
+from planner.assembly.mission_validator import MissionValidator
 from planner.domain.mission import MissionPlan
 from planner.domain.result import MissionResult
 from planner.ports.task_parser import TaskParser

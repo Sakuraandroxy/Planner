@@ -9,8 +9,8 @@ import pytest
 
 from planner.domain.pose import WorldPose
 from planner.domain.sliding_window import QueuedWaypoint
-from planner.services.motion.continuous import reached
-from planner.services.segment_motion import MotionLimits as ConfiguredMotionLimits
+from planner.runtime.motion.continuous import reached
+from planner.runtime.segment_motion import MotionLimits as ConfiguredMotionLimits
 from planner.simulators.projectairsim.rover import (
     ROVER_PASSED_LATERAL_TOLERANCE_M,
     rover_tracking_limits,

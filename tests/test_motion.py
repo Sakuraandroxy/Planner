@@ -4,7 +4,7 @@ import math
 import pytest
 
 from planner.domain.pose import RelativePoseDelta, WorldPose
-from planner.services.segment_motion import (
+from planner.runtime.segment_motion import (
     MotionLimits,
     duration_for,
     plan_segment,

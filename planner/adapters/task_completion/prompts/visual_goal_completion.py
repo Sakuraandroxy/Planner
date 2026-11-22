@@ -3,7 +3,7 @@ import json
 
 from planner.adapters.model_visual_inputs import aligned_depth_image
 from planner.adapters.task_completion.prompt import CompletionMessages
-from planner.capabilities.completion.visual_goal_request import (
+from planner.algorithms.completion.visual_goal_request import (
     require_visual_completion_evidence,
 )
 from planner.domain.depth import depth_display_description

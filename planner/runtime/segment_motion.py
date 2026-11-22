@@ -28,7 +28,7 @@ class MotionLimits:
     #: “已驶过端点”横向走廊；映射进 domain tracking limits。默认与位置容差同宽，
     #: 全向载具行为不变；无人车适配构造期会放宽（见 rover.rover_tracking_limits）。
     passed_lateral_tolerance_m: float = 0.3
-    #: 航向伺服的四个参数，含义见 planner/services/motion/heading_servo.py。
+    #: 航向伺服的四个参数，含义见 planner/runtime/motion/heading_servo.py。
     heading_hold_gain: float = 0.4
     heading_rate_damping: float = 0.0
     heading_deadband_deg: float = 0.5

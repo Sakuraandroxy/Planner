@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, fields
 
-from ..domain.runtime import Capabilities
+from ..domain.engine_family import Capabilities
 from ..ports.capabilities import (
     AppearanceModelControl,
     FramePublisher,

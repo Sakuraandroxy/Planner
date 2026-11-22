@@ -4,10 +4,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from planner.capabilities.approach import TargetApproach
-from planner.capabilities.completion.visual_goal import VisualGoalCompletion
-from planner.capabilities.planning import GeometricTargetPlanner
-from planner.capabilities.targeting import DepthGeometry
+from planner.algorithms.approach import TargetApproach
+from planner.algorithms.completion.visual_goal import VisualGoalCompletion
+from planner.algorithms.planning import GeometricTargetPlanner
+from planner.algorithms.targeting import DepthGeometry
 from planner.domain.mission import MissionStage, TaskKind
 from planner.domain.motion import MotionLimits
 from planner.domain.observation import CameraIntrinsics, Observation
@@ -23,9 +23,9 @@ from planner.domain.visual_goal import (
 from planner.domain.visual_goal_completion import VisualGoalTriggerRules
 from planner.domain.visual_goal_limits import VisualGoalLimits
 from planner.errors import MotionPaused
-from planner.services.execution import ExecutionService
-from planner.services.motion import SynchronizedMotionPlanner
-from planner.services.trajectory_validation import TrajectoryValidator
+from planner.runtime.execution import ExecutionService
+from planner.runtime.motion import SynchronizedMotionPlanner
+from planner.runtime.trajectory_validation import TrajectoryValidator
 from planner.workflows.visual_goal_navigation import VisualGoalNavigationWorkflow
 from tests.support import ue_camera_matrix
 

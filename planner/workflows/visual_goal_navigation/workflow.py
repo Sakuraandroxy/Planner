@@ -6,17 +6,17 @@ from collections.abc import Callable
 from dataclasses import replace
 from functools import partial
 
-from planner.capabilities.completion.visual_goal import VisualGoalCompletion
-from planner.capabilities.completion.visual_goal_trigger import VisualGoalRadiusTrigger
-from planner.capabilities.completion.visual_goal_verification import (
+from planner.algorithms.completion.visual_goal import VisualGoalCompletion
+from planner.algorithms.completion.visual_goal_trigger import VisualGoalRadiusTrigger
+from planner.algorithms.completion.visual_goal_verification import (
     VisualGoalVerification,
 )
-from planner.capabilities.targeting.association import (
+from planner.algorithms.targeting.association import (
     bound_target_geometry,
     bound_target_goal,
 )
-from planner.capabilities.targeting.depth_geometry import DepthGeometry
-from planner.capabilities.targeting.visual_goal_refresh import VisualGoalRefresh
+from planner.algorithms.targeting.depth_geometry import DepthGeometry
+from planner.algorithms.targeting.visual_goal_refresh import VisualGoalRefresh
 from planner.domain.execution import ExecutionBudget, StopResult
 from planner.domain.mission import MissionStage
 from planner.domain.motion import ContinuousTrackingSettings, MotionLimits
@@ -56,14 +56,14 @@ from planner.ports.observation_source import MovingObservationSource, Observatio
 from planner.ports.task_completion import TaskCompletionChecker
 from planner.ports.task_trace import TaskTrace
 from planner.ports.trajectory_planner import TrajectoryPlanner
-from planner.services.execution import ExecutionService
-from planner.services.model_calls import ModelCallService
-from planner.services.motion.base import MotionPlanner
-from planner.services.observation_snapshot import freeze_observation
-from planner.services.planning_window import PlanningWindow
-from planner.services.resource_cleanup import close_resources
-from planner.services.trajectory_transform import relative_to_world
-from planner.services.trajectory_validation import TrajectoryValidator
+from planner.runtime.execution import ExecutionService
+from planner.runtime.model_calls import ModelCallService
+from planner.runtime.motion.base import MotionPlanner
+from planner.runtime.observation_snapshot import freeze_observation
+from planner.runtime.planning_window import PlanningWindow
+from planner.runtime.resource_cleanup import close_resources
+from planner.runtime.trajectory_transform import relative_to_world
+from planner.runtime.trajectory_validation import TrajectoryValidator
 
 from .approach import VisualGoalApproachPhase
 from .flight import VisualGoalFlightPhase

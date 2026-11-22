@@ -3,11 +3,11 @@ import logging
 import math
 from functools import partial
 
-from planner.capabilities.targeting.association import (
+from planner.algorithms.targeting.association import (
     bound_target_geometry,
     bound_target_goal,
 )
-from planner.capabilities.targeting.visual_goal_refresh import VisualGoalRefresh
+from planner.algorithms.targeting.visual_goal_refresh import VisualGoalRefresh
 from planner.domain.motion import ContinuousTrackingSettings
 from planner.domain.pose import RelativePoseDelta
 from planner.domain.streaming import QueueObservationAnchor
@@ -20,11 +20,11 @@ from planner.domain.visual_goal import (
     VisualGoalStatus,
 )
 from planner.errors import ExecutionError, ObservationError, ProtocolError
-from planner.services.continuous_execution import ContinuousExecution
-from planner.services.moving_observations import MovingObservations
-from planner.services.observation_snapshot import freeze_observation, freeze_reference
-from planner.services.target_coordinates import point_in_horizontal_body
-from planner.services.trajectory_transform import relative_to_world
+from planner.runtime.continuous_execution import ContinuousExecution
+from planner.runtime.moving_observations import MovingObservations
+from planner.runtime.observation_snapshot import freeze_observation, freeze_reference
+from planner.runtime.target_coordinates import point_in_horizontal_body
+from planner.runtime.trajectory_transform import relative_to_world
 
 from .session import model_call
 from .termination import VisualGoalFailure

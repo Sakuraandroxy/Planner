@@ -19,7 +19,7 @@ import cv2
 import numpy as np
 from starlette.concurrency import run_in_threadpool
 
-from ...services.frame_hub import FrameHub
+from ...runtime.frame_hub import FrameHub
 
 BOUNDARY = b"frame"
 _DELIMITER = b"--" + BOUNDARY + b"\r\n"

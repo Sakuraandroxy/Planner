@@ -7,7 +7,7 @@ from planner.domain.motion import MotionLimits
 from planner.domain.pose import WorldPose
 from planner.domain.trajectory import MotionSegment
 from planner.errors import BudgetExceeded, ExecutionError, MotionPaused
-from planner.services.motion.synchronized import SMOOTH_PROFILE
+from planner.runtime.motion.synchronized import SMOOTH_PROFILE
 from planner.simulators.projectairsim.motion import SteppedMotionTracker, limit_vector
 
 LIMITS = MotionLimits(
