@@ -1,8 +1,10 @@
 """AirSim (UE4) simulator: which ports it fills, and how to build them.
 
 ``PORT_SLOTS`` is what the console is told before any simulator is running.
-``build_ports`` is what the mission actually uses. ``tests/test_simulator_ports.py``
-asserts the two agree, so the advertised flags cannot drift from the code.
+``build_ports`` is what the mission actually uses.
+``tests/test_architecture.py::test_airsim_slots_are_backed_by_real_code`` checks
+that every declared slot is a real bundle field and that the three vehicle classes
+carry the port methods, so the advertised flags cannot drift from the code.
 """
 
 from __future__ import annotations
