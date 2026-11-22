@@ -131,7 +131,6 @@ CALIBRATED = {
             "MissionResources",
             "ServerController",
             "ServerState",
-            "ServerStatus",
             "VehicleArm",
             "assemble_missions",
             "build_detector",
