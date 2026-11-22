@@ -165,23 +165,24 @@ HARDCODED = {
     ),
     "ports": frozenset(
         {
-            "Vehicle",
-            "StreamingVehicle",
-            "StreamGoalSource",
-            "PositionHoldVehicle",
-            "ObservationSource",
-            "ControlledObservationSource",
-            "MovingObservationSource",
-            "ReturnHome",
-            "WeatherControl",
-            "StreamingViews",
             "AppearanceModelControl",
+            "ControlledObservationSource",
             "FramePublisher",
             "GoalObserver",
+            "MovingObservationSource",
+            "ObservationSource",
+            "PositionHoldVehicle",
+            "ReturnHome",
+            "StreamGoalSource",
+            "StreamingVehicle",
+            "StreamingViews",
             "TargetDetector",
+            "TaskCompletionChecker",
             "TaskParser",
-            "TrajectoryPlanner",
             "TaskTrace",
+            "TrajectoryPlanner",
+            "Vehicle",
+            "WeatherControl",
         }
     ),
 }
@@ -192,7 +193,8 @@ ENTRIES = ("domain", "ports", "algorithms", "runtime", "workflows", "assembly")
 STILL_OPEN = {
     "domain": "R21 削面未落地：A 类 115 个仍在入口；entry 另导 16 个文档判搬出但仍有调用点的类型"
     "（`server.py` 9、`approach.py` 4、`streaming.py` 3）",
-    "ports": "阶段 1、2：R23 的 13 个文件与 R20 扩入口未落地，`CollisionCheck`、`BackendWorker` 等仍在",
+    "ports": "R23 收口差 1 文件：`planner/ports/backend_worker.py` 仍在，"
+    "`assembly/controller/__init__.py` 两处注解在用；文件搬到 `simulator/worker_protocol.py` 才能到 13 个",
     "algorithms": "阶段 1：A 表削面未落地，`motion/`、`depth/`、`targeting/` 二级入口未建",
     "runtime": "阶段 3、4、5：`ControlLoop`、`GuidedVehicle`、`QueueFollower` 尚未上移",
     "workflows": "阶段 5：任务包声明与 `common/` 未落地，入口仍未导出 `TASK_KIND` 一族",
