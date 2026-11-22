@@ -146,6 +146,7 @@ class VehicleArm:
     application: PlannerApplication | None
     model_calls: ModelCallService | None
     workflows: tuple
+    loop: ControlLoop | None = None
 
 
 def build_mission_common(config, *, planner, detector, log) -> MissionCommon:
@@ -217,7 +218,16 @@ def build_vehicle_arm(
     # AirSim passes an execution service it has already bound to the position hold and
     # the observation gate; every other caller gets a plain one.
     execution = ExecutionService(vehicle) if execution is None else execution
-    loop = ControlLoop(execution, vehicle)
+    loop = ControlLoop(
+        execution,
+        vehicle,
+        limits=vehicle.tracking_limits,
+        tracking=config.continuous,
+        timeout_s=config.drone.move_timeout_s,
+    )
+    attach = getattr(vehicle, "attach_loop", None)
+    if attach is not None:
+        attach(loop)
     source = vehicle if observation_source is None else observation_source
     motion = SynchronizedMotionPlanner(config.motion.max_speed_mps, vehicle.tracking_limits)
     goal_observer = BBoxGoalObserver(
@@ -345,6 +355,7 @@ def build_vehicle_arm(
         application,
         model_calls,
         tuple(closed),
+        loop,
     )
 
 

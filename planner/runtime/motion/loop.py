@@ -1,7 +1,7 @@
 """把目标变成合法命令的两条控制循环。
 
-``run_segment`` 按段走一条 ``MotionTrajectory``：以实测位姿重锚、预算预检、
-逐段执行、停稳后填回执，任何一步失败都带着已完成段数与剩余轨迹上抛。
+``run_segment`` 按段走一条 ``MotionTrajectory``：以实测位姿重锚、预算预检、逐拍
+采样五次曲线、限幅后下发、停稳验证，任何一步失败都带着已完成段数与剩余轨迹上抛。
 ``run_stream`` 是连续路径的一拍：读一次状态、向目标源要期望命令、限幅后下发。
 它可以重复调用，返回即交给任务层；取帧、窗口轮询与暂停判定都在两次调用之间，
 调用方不调用它就是暂停。两个周期只住在这里：段拍的 ``SEGMENT_PERIOD_S`` 与
@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import math
 import time
+from contextlib import nullcontext
 from dataclasses import replace
 
 from planner.domain import (
@@ -27,8 +28,14 @@ from planner.domain import (
 )
 from planner.errors import BudgetExceeded, ExecutionError, MotionPaused
 
+from .synchronized import duration_for
+from .tracking import SegmentSynthesizer, command_for
+
 #: 段执行一拍。固定值，不进配置（裁决 R9）。
 SEGMENT_PERIOD_S = 0.030
+
+#: 段执行在停稳前允许花掉的最长时间，装配层按载具配置覆盖。
+DEFAULT_MOTION_TIMEOUT_S = 60.0
 
 
 def measured_action(start, end, yaw):
@@ -63,12 +70,13 @@ class ControlLoop:
         recovery=None,
         window=None,
         limits=None,
+        tracking=None,
+        timeout_s=None,
         clock=time.monotonic,
         sleep=time.sleep,
     ):
         self.execution = execution
         self.streaming = streaming
-        self.synthesizer = synthesizer
         self.limiter = limiter
         self.recovery = recovery
         self.window = window
@@ -77,7 +85,13 @@ class ControlLoop:
         )
         if self.limits is None:
             self.limits = MotionLimits()
+        self.synthesizer = synthesizer or SegmentSynthesizer(self.limits, tracking)
+        self.timeout_s = (
+            DEFAULT_MOTION_TIMEOUT_S if timeout_s is None else float(timeout_s)
+        )
         self.clock, self.sleep = clock, sleep
+        #: UE4 的取帧门：段执行每拍服务一次在途取帧请求，恢复后从实测位姿重锚。
+        self.observation_gate = None
         self.state = None
         self.holding = True
         self._running = False
@@ -101,6 +115,10 @@ class ControlLoop:
         if budget is not None and budget.remaining(self.clock()) <= 0:
             raise BudgetExceeded("stage time budget exhausted")
 
+    def _check_budget(self, budget: ExecutionBudget | None, required_s: float = 0.0):
+        if budget is not None and budget.remaining(self.clock()) <= required_s:
+            raise BudgetExceeded("motion/task deadline exhausted")
+
     def execute(self, trajectory: MotionTrajectory) -> ExecutionRecord:
         self.execution.checkpoint()
         start = self.streaming.current_pose()
@@ -119,6 +137,7 @@ class ControlLoop:
         *,
         budget: ExecutionBudget | None = None,
         pause_when=None,
+        pose_checkpoint=None,
     ) -> ExecutionReceipt:
         self.execution.assert_owner()
         if self._running:
@@ -148,16 +167,23 @@ class ControlLoop:
                 observed_yaw = measurement_start_yaw
                 active = segment
 
-                def checkpoint(pose, unwrapped_yaw):
-                    nonlocal observed_yaw
-                    observed_yaw = unwrapped_yaw
-                    self.execution.check_safety()
-                    return pause_when(pose) if pause_when is not None else False
+                if pose_checkpoint is not None:
+                    checkpoint = pose_checkpoint
+
+                    def checkpoint(pose, unwrapped_yaw):
+                        nonlocal observed_yaw
+                        observed_yaw = unwrapped_yaw
+                        return pose_checkpoint(pose, unwrapped_yaw)
+                else:
+
+                    def checkpoint(pose, unwrapped_yaw):
+                        nonlocal observed_yaw
+                        observed_yaw = unwrapped_yaw
+                        self.execution.check_safety()
+                        return pause_when(pose) if pause_when is not None else False
 
                 try:
-                    self.streaming.execute_segment(
-                        segment, budget=budget, pose_checkpoint=checkpoint
-                    )
+                    self._drive_segment(segment, sink, budget, checkpoint)
                 except MotionPaused as paused:
                     stop = self.execution.stop()
                     if stop.errors:
@@ -171,7 +197,9 @@ class ControlLoop:
                         current.yaw_deg - paused.pose.yaw_deg
                     )
                     actions.append(
-                        measured_action(previous, current, actual_yaw - measurement_start_yaw)
+                        measured_action(
+                            previous, current, actual_yaw - measurement_start_yaw
+                        )
                     )
                     measured_chords += math.dist(
                         (previous.x, previous.y, previous.z),
@@ -191,7 +219,11 @@ class ControlLoop:
                     )
                 completed += 1
                 current = self.streaming.current_pose()
-                yaw = observed_yaw + wrap_yaw_deg(current.yaw_deg - observed_yaw) - measurement_start_yaw
+                yaw = (
+                    observed_yaw
+                    + wrap_yaw_deg(current.yaw_deg - observed_yaw)
+                    - measurement_start_yaw
+                )
                 actions.append(measured_action(previous, current, yaw))
                 measured_chords += math.dist(
                     (previous.x, previous.y, previous.z),
@@ -216,9 +248,13 @@ class ControlLoop:
             try:
                 current = self.streaming.current_pose()
                 if active is not None and previous is not None:
-                    actual_yaw = observed_yaw + wrap_yaw_deg(current.yaw_deg - observed_yaw)
+                    actual_yaw = observed_yaw + wrap_yaw_deg(
+                        current.yaw_deg - observed_yaw
+                    )
                     actions.append(
-                        measured_action(previous, current, actual_yaw - measurement_start_yaw)
+                        measured_action(
+                            previous, current, actual_yaw - measurement_start_yaw
+                        )
                     )
                     measured_chords += math.dist(
                         (previous.x, previous.y, previous.z),
@@ -247,6 +283,144 @@ class ControlLoop:
             raise wrapped from exc
         finally:
             self._running = False
+
+    def _drive_segment(self, segment, sink, budget, pose_checkpoint) -> None:
+        """按 ``SEGMENT_PERIOD_S`` 一拍走完一段，并在停稳窗口内验证到位。"""
+        limits = self.limits
+        speed = segment.target_speed_mps
+        if speed is None:
+            raise ExecutionError("smooth motion requires a speed limit")
+        period = SEGMENT_PERIOD_S
+        goal_yaw = segment.start.yaw_deg + resolve_yaw_delta_deg(
+            segment.start.yaw_deg, segment.end.yaw_deg, segment.yaw_delta_deg
+        )
+        start = self.streaming.current_pose()
+        measured_yaw = segment.start.yaw_deg + resolve_yaw_delta_deg(
+            segment.start.yaw_deg, start.yaw_deg
+        )
+        remaining_yaw = goal_yaw - measured_yaw
+        duration = max(
+            segment.duration_s or 0,
+            duration_for(start, segment.end, speed, limits, yaw_delta_deg=remaining_yaw),
+        )
+        self._check_budget(budget, duration + limits.settle_time_s)
+        if duration + limits.settle_time_s >= self.timeout_s:
+            raise ExecutionError(
+                f"smooth duration {duration:.2f}s exceeds available execution timeout"
+            )
+        # 把插值起点重锚到实测位姿，但保留原始世界终点与带符号偏航目标。
+        active = replace(
+            segment, start=start, duration_s=duration, yaw_delta_deg=remaining_yaw
+        )
+        self.synthesizer.reset()
+        capability = self.streaming.motion_capability()
+        gate = self.observation_gate
+        generation = gate.generation if gate is not None else 0
+        steps = 0
+        previous_pose = start
+        settled_since = None
+        while True:
+            guard = gate.step() if gate is not None else nullcontext(generation)
+            with guard as current_generation:
+                if current_generation != generation:
+                    # 段内做过一次取帧：从实测位姿恢复，参考曲线与时长重算。
+                    generation = current_generation
+                    start = self.streaming.current_pose()
+                    measured_yaw += resolve_yaw_delta_deg(
+                        previous_pose.yaw_deg, start.yaw_deg
+                    )
+                    remaining_yaw = goal_yaw - measured_yaw
+                    duration = duration_for(
+                        start,
+                        active.end,
+                        speed,
+                        limits,
+                        yaw_delta_deg=remaining_yaw,
+                    )
+                    self._check_budget(budget, duration + limits.settle_time_s)
+                    if duration + limits.settle_time_s >= self.timeout_s:
+                        raise ExecutionError("resumed motion exceeds execution timeout")
+                    active = replace(
+                        active,
+                        start=start,
+                        duration_s=duration,
+                        yaw_delta_deg=remaining_yaw,
+                    )
+                    self.synthesizer.reset()
+                    steps = 0
+                    previous_pose = start
+                    settled_since = None
+                self._check_budget(budget)
+                elapsed = steps * period
+                if elapsed >= self.timeout_s:
+                    raise ExecutionError(
+                        "synchronized motion timed out before position/yaw settled"
+                    )
+                actual = self.streaming.current_pose()
+                if steps:
+                    measured_yaw += resolve_yaw_delta_deg(
+                        previous_pose.yaw_deg, actual.yaw_deg
+                    )
+                moved = math.dist(
+                    (actual.x, actual.y, actual.z),
+                    (previous_pose.x, previous_pose.y, previous_pose.z),
+                )
+                measured_speed = moved / period
+                measured_yaw_rate = (
+                    abs(wrap_yaw_deg(actual.yaw_deg - previous_pose.yaw_deg)) / period
+                )
+                goal = active.end
+                distance = math.dist(
+                    (actual.x, actual.y, actual.z), (goal.x, goal.y, goal.z)
+                )
+                yaw_error = abs(goal_yaw - measured_yaw)
+                settled = (
+                    elapsed >= duration
+                    and distance <= limits.position_tolerance_m
+                    and yaw_error <= limits.yaw_tolerance_deg
+                    and measured_speed <= limits.stopped_speed_mps
+                    and measured_yaw_rate <= limits.stopped_yaw_rate_deg_s
+                )
+                settled_since = (
+                    (elapsed if settled_since is None else settled_since)
+                    if settled
+                    else None
+                )
+                if (
+                    settled_since is not None
+                    and elapsed - settled_since >= limits.settle_time_s
+                ):
+                    final = self.streaming.current_pose()
+                    final_distance = math.dist(
+                        (final.x, final.y, final.z), (goal.x, goal.y, goal.z)
+                    )
+                    final_yaw = abs(
+                        goal_yaw
+                        - (measured_yaw + wrap_yaw_deg(final.yaw_deg - actual.yaw_deg))
+                    )
+                    if (
+                        final_distance > limits.position_tolerance_m
+                        or final_yaw > limits.yaw_tolerance_deg
+                    ):
+                        raise ExecutionError(
+                            "position/yaw drifted outside tolerance while hovering"
+                        )
+                    return
+                if pose_checkpoint is not None and pose_checkpoint(
+                    actual, measured_yaw
+                ):
+                    raise MotionPaused(actual, measured_yaw)
+                velocity, yaw_rate = self.synthesizer.command(
+                    active, elapsed, actual, period
+                )
+                if not all(math.isfinite(v) for v in (*velocity, yaw_rate, period)):
+                    raise ExecutionError("non-finite control velocity or yaw rate")
+                sink(
+                    command_for(capability, velocity, yaw_rate, actual.yaw_deg),
+                    period,
+                )
+                previous_pose = actual
+                steps += 1
 
     def run_stream(self, goals, sink, *, deadline_monotonic=None) -> None:
         """连续路径的一拍。

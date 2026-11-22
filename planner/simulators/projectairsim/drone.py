@@ -23,7 +23,7 @@ from projectairsim.drone import YawControlMode
 from projectairsim.types import LandedState
 
 from ...config import CameraSettings, DepthSettings
-from planner.domain import Observation
+from planner.domain import MotionTrajectory, Observation
 from planner.domain import WorldPose
 from planner.domain import TimedVehicleState
 from ...errors import ExecutionError
@@ -47,7 +47,7 @@ from .coordinates import (
     velocity_from_kinematics,
     yaw_rate_deg_from_kinematics,
 )
-from .motion import SteppedMotionTracker, tracking_limits
+from .motion import tracking_limits
 from .observation import ProjectAirSimObservationSource
 
 logger = logging.getLogger(__name__)
@@ -138,15 +138,7 @@ class ProjectAirSimDrone:
             clock=clock,
             sleep=sleep,
         )
-        self._tracker = SteppedMotionTracker(
-            self._apply_reference,
-            self.current_pose,
-            self._tracking,
-            self._motion_timeout_s,
-            clock=clock,
-            cancelled=self._cancel.is_set,
-            tracking=self._hold_tracking,
-        )
+        self._loop = None
 
     # -- lifecycle ---------------------------------------------------------
     def start(self) -> None:
@@ -470,6 +462,10 @@ class ProjectAirSimDrone:
     def current_pose(self) -> WorldPose:
         return pose_from_kinematics(self._kinematics())
 
+    def attach_loop(self, loop) -> None:
+        """Transitional: assembly injects the shared control loop."""
+        self._loop = loop
+
     def execute_segment(
         self, segment, *, budget=None, pose_checkpoint=None
     ) -> None:
@@ -480,8 +476,11 @@ class ProjectAirSimDrone:
                 f"unsupported motion profile: {segment.profile}"
             )
         self._cancel.clear()
-        self._tracker.execute(
-            segment, budget=budget, pose_checkpoint=pose_checkpoint
+        self._loop.run_segment(
+            MotionTrajectory((segment,)),
+            self._loop.segment_sink(),
+            budget=budget,
+            pose_checkpoint=pose_checkpoint,
         )
         self._holding.start(segment.end)
         self._holding.wait(budget=budget)
@@ -651,16 +650,6 @@ class ProjectAirSimDrone:
         return self._observations.capture_moving(budget=budget)
 
     # -- internals ---------------------------------------------------------
-    def _apply_reference(
-        self,
-        velocity_world: tuple[float, float, float],
-        yaw_rate_deg_s: float,
-        measured_velocity_world: tuple[float, float, float],
-        yaw_deg: float,
-        period_s: float,
-    ) -> None:
-        self.hold_velocity(velocity_world, yaw_rate_deg_s, period_s)
-
     def _require_started(self) -> None:
         if not self._started:
             raise ExecutionError(

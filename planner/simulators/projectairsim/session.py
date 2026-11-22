@@ -153,8 +153,6 @@ class ProjectAirSimMissionSession:
                 depth=config.depth,
                 camera_id=config.projectairsim.front_camera,
                 motion=config.motion,
-                motion_timeout_s=config.drone.move_timeout_s,
-                tracking=config.continuous,
                 frame_sink=self._sink_for("rover"),
             )
             self._drone = ProjectAirSimDrone(

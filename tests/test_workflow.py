@@ -9,7 +9,7 @@ from planner.workflows.visual_goal_navigation import VisualGoalCompletion
 from planner.algorithms import GeometricTargetPlanner
 from planner.algorithms.targeting import DepthGeometry
 from planner.domain import CollisionState, MissionStage, TaskKind
-from planner.domain import MotionLimits
+from planner.domain import MotionCapability, MotionLimits, MotionModel
 from planner.domain import CameraIntrinsics, Observation
 from planner.domain import RelativePoseDelta, WorldPose
 from planner.domain import SlidingWindowSettings
@@ -49,8 +49,21 @@ class FakeVehicle:
         ):
             raise MotionPaused(self.pose, self.pose.yaw_deg)
 
+    def motion_capability(self):
+        return MotionCapability(
+            MotionModel.HOLONOMIC,
+            max_lateral_speed_mps=2.0,
+            min_turn_radius_m=None,
+            allows_reverse=True,
+        )
+
     def stream_command(self, command, duration_s):
-        pass
+        self.pose = WorldPose(
+            self.pose.x + command.vx * duration_s,
+            self.pose.y + command.vy * duration_s,
+            self.pose.z + command.vz * duration_s,
+            self.pose.yaw_deg + command.yaw_rate_deg_s * duration_s,
+        )
 
     def hover(self):
         pass
@@ -236,8 +249,9 @@ def test_reaches_target_after_pause_and_two_confirmations():
     assert result.planning_calls == 1
     assert result.completion_checks == 1
     assert result.confirmation_count == 2
-    assert result.path_length_m == pytest.approx(3.84, abs=1e-2)
-    assert result.final_distance_m == pytest.approx(6.16, abs=1e-2)
+    # 暂停判据在越过 6.5 m 半径后的下一拍才成立，实测行程比 3.5 m 多一拍。
+    assert result.path_length_m == pytest.approx(3.519, abs=1e-2)
+    assert result.final_distance_m == pytest.approx(6.481, abs=1e-2)
 
 
 def test_missing_target_with_search_disabled_is_blocked():

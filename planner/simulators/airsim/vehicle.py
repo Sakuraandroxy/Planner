@@ -15,11 +15,10 @@ from planner.domain import (
 )
 from planner.domain import WorldPose
 from planner.domain import TimedVehicleState
-from planner.domain import MotionSegment
+from planner.domain import MotionSegment, MotionTrajectory
 from planner.errors import ExecutionError
 from planner.runtime import SMOOTH_PROFILE
 from planner.simulators.airsim.connection import AirSimConnection
-from planner.simulators.airsim.motion_tracker import AirSimMotionTracker
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +32,7 @@ ARRIVAL_TOLERANCE_DEG = 15.0
 
 class AirSimVehicle:
     def __init__(self, connection: AirSimConnection, speed_mps: float, timeout_s: float,
-                 motion_limits: MotionLimits | None = None, *, velocity_command_duration_s: float = .2,
-                 tracking=None):
+                 motion_limits: MotionLimits | None = None, *, velocity_command_duration_s: float = .2):
         self.connection = connection
         self.speed_mps = speed_mps
         self.timeout_s = timeout_s
@@ -46,10 +44,8 @@ class AirSimVehicle:
             min_turn_radius_m=None,
             allows_reverse=True,
         )
-        self.motion_tracker = AirSimMotionTracker(
-            connection, self.current_pose, motion_limits or MotionLimits(), timeout_s,
-            tracking=tracking,
-        )
+        self._limits = motion_limits or MotionLimits()
+        self._loop = None
 
     @property
     def tracking_limits(self) -> MotionLimits:
@@ -60,7 +56,7 @@ class AirSimVehicle:
         built with. The property exists so the shared assembly has one attribute to
         ask every vehicle for instead of branching per simulator.
         """
-        return self.motion_tracker.limits
+        return self._limits
 
     def current_pose(self) -> WorldPose:
         pose = self.connection.call("simGetVehiclePose")
@@ -71,18 +67,18 @@ class AirSimVehicle:
         ))
         return WorldPose(pose.position.x_val, pose.position.y_val, pose.position.z_val, yaw)
 
+    def attach_loop(self, loop) -> None:
+        """Transitional: assembly injects the shared control loop."""
+        self._loop = loop
+
     def execute_segment(self, segment: MotionSegment, *, budget: ExecutionBudget | None = None,
                         pose_checkpoint: PoseCheckpoint | None = None) -> None:
         if self.holding is not None:
             self.holding.release()
         if segment.profile != SMOOTH_PROFILE:
             raise ExecutionError(f"unsupported motion profile: {segment.profile}")
-        if pose_checkpoint is not None:
-            self.motion_tracker.execute(segment, budget=budget, pose_checkpoint=pose_checkpoint)
-        elif budget is None:
-            self.motion_tracker.execute(segment)
-        else:
-            self.motion_tracker.execute(segment, budget=budget)
+        self._loop.run_segment(MotionTrajectory((segment,)), self._loop.segment_sink(),
+                               budget=budget, pose_checkpoint=pose_checkpoint)
         if self.holding is not None:
             self.holding.start(segment.end)
             self.holding.wait(budget=budget)
@@ -136,7 +132,7 @@ class AirSimVehicle:
         distance = math.hypot(*delta)
         if yaw_delta_deg:
             duration = max(distance/self.speed_mps,
-                           abs(yaw_delta_deg)/self.motion_tracker.limits.max_yaw_rate_deg_s)
+                           abs(yaw_delta_deg)/self._limits.max_yaw_rate_deg_s)
             rate = yaw_delta_deg/duration
             if distance:
                 result = self.connection.call_async_and_wait(

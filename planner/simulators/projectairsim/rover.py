@@ -18,7 +18,7 @@ from dataclasses import replace
 
 from ...config import CameraSettings, DepthSettings
 from planner.domain import Observation
-from planner.domain import WorldPose
+from planner.domain import MotionTrajectory, WorldPose
 from planner.domain import TimedVehicleState
 from ...errors import ExecutionError
 from planner.domain import (
@@ -40,9 +40,8 @@ from .drive import (
     RoverDriveModel,
     SpeedPid,
     controls_from_command,
-    controls_from_reference,
 )
-from .motion import SteppedMotionTracker, tracking_limits
+from .motion import tracking_limits
 from .observation import ProjectAirSimObservationSource
 
 # The authored spawn point sits above the rendered road surface, so the
@@ -102,18 +101,13 @@ class ProjectAirSimRover:
         depth: DepthSettings = DepthSettings(),
         camera_id: str = "FrontCamera",
         motion: MotionLimits | None = None,
-        motion_timeout_s: float = 60.0,
         drive_model: RoverDriveModel = RoverDriveModel(),
         frame_sink=None,
-        tracking=None,
     ):
-        from planner.domain import ContinuousTrackingSettings
-
         self._connection = connection
         self._robot = robot
         self._motion = motion or MotionLimits()
         self._tracking = rover_tracking_limits(self._motion)
-        self._hold_tracking = tracking or ContinuousTrackingSettings()
         self._drive_model = drive_model
         self._pid = SpeedPid(drive_model)
         self._period = 1.0 / self._tracking.control_hz
@@ -148,14 +142,7 @@ class ProjectAirSimRover:
             min_turn_radius_m=ROVER_MIN_TURN_RADIUS_M,
             allows_reverse=True,
         )
-        self._tracker = SteppedMotionTracker(
-            self._apply_reference,
-            self.current_pose,
-            self._tracking,
-            motion_timeout_s,
-            cancelled=self._cancel.is_set,
-            tracking=self._hold_tracking,
-        )
+        self._loop = None
 
     # -- lifecycle ---------------------------------------------------------
     def start(self) -> None:
@@ -176,12 +163,19 @@ class ProjectAirSimRover:
     def current_pose(self) -> WorldPose:
         return pose_from_kinematics(self._kinematics())
 
+    def attach_loop(self, loop) -> None:
+        """Transitional: assembly injects the shared control loop."""
+        self._loop = loop
+
     def execute_segment(self, segment, *, budget=None, pose_checkpoint=None) -> None:
         self._require_started()
         self._cancel.clear()
         self._pid.reset()
-        self._tracker.execute(
-            segment, budget=budget, pose_checkpoint=pose_checkpoint
+        self._loop.run_segment(
+            MotionTrajectory((segment,)),
+            self._loop.segment_sink(),
+            budget=budget,
+            pose_checkpoint=pose_checkpoint,
         )
 
     def cancel(self) -> None:
@@ -395,26 +389,6 @@ class ProjectAirSimRover:
             raise ExecutionError(
                 "rover API control is not enabled; call start() first"
             )
-
-    def _apply_reference(
-        self,
-        velocity_world: tuple[float, float, float],
-        yaw_rate_deg_s: float,
-        measured_velocity_world: tuple[float, float, float],
-        yaw_deg: float,
-        period_s: float,
-    ) -> None:
-        controls = controls_from_reference(
-            self._drive_model,
-            self._pid,
-            velocity_world,
-            yaw_rate_deg_s,
-            measured_velocity_world,
-            yaw_deg,
-            period_s,
-        )
-        self._send_controls(controls)
-        self._connection.advance_for_sim_time(period_s)
 
     def _send_controls(self, controls: RoverControls) -> None:
         self._apply_controls(controls.engine, controls.steering, controls.brake)
