@@ -11,7 +11,6 @@ from .motion import SynchronizedMotionPlanner
 from .motion.follower import QueueFollower
 from .motion.loop import ControlLoop
 from .motion.base import MotionPlanner
-from .motion.continuous import reached
 from .motion.continuous_speed import braking_speed
 from .motion.heading_servo import heading_rate_deg_s
 from .motion.synchronized import SMOOTH_PROFILE
@@ -48,5 +47,4 @@ __all__ = [
     "heading_rate_deg_s",
     "plan_segment",
     "quintic",
-    "reached",
 ]

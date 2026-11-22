@@ -1,11 +1,7 @@
 """Stateful, vector-norm acceleration/jerk limits for streaming commands."""
 import math
 
-
-def bounded(vector, maximum):
-    norm = math.hypot(*vector)
-    scale = min(1., maximum/norm) if norm else 1.
-    return tuple(x*scale for x in vector)
+from planner.algorithms import bounded
 
 
 class CommandSmoother:

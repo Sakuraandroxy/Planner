@@ -327,16 +327,18 @@ planner/algorithms/
 
 **`corridor_default(model: MotionModel, limits: MotionLimits) -> float` 与 `passed_lateral_corridor(model: MotionModel, limits: MotionLimits) -> float`**（裁决 R6、R17）
 - 输入输出：载具运动模型与合并后的 `MotionLimits` → 越点横向走廊；`corridor_default` 只给按模型的默认值。
-- 边界条件：`corridor_default` 对 `ACKERMANN` 返回 `ACKERMANN_PASSED_LATERAL_TOLERANCE_M = 1.0`（裁决 R17），对 `HOLONOMIC` 返回 `limits.position_tolerance_m`；`passed_lateral_corridor` 返回 `max(limits.passed_lateral_tolerance_m, corridor_default(...))`，即配置只能抬高不能压低（裁决 R17）；`model` 不是 `MotionModel` 成员 → `ValueError`；配置值非有限或非正 → `ValueError`。
+- 边界条件：`corridor_default` 对 `ACKERMANN` 返回 `ACKERMANN_PASSED_LATERAL_TOLERANCE_M = 1.0`（裁决 R17），对 `HOLONOMIC` 返回 `limits.position_tolerance_m`；`passed_lateral_corridor` 返回 `max(limits.passed_lateral_tolerance_m, corridor_default(...))`，即配置只能抬高不能压低（裁决 R17）；`model` 不是 `MotionModel` 成员 → `ValueError`。配置值已由 `MotionLimits.__post_init__` 保证有限正，这两个函数不重复校验。
 - 数值稳定性：无算术，只有 `max` 与分支；两个默认值都是米级常量，不存在量纲混用。`min_turn_radius_m` 不参与推导（裁决 R6 明确排除这条路）。
-- 单测点：阿克曼默认 1.0；全向默认等于 `position_tolerance_m`（默认 0.3）；配置 0.2 时阿克曼仍得 1.0、全向仍得 0.3；配置 1.5 时两者都得 1.5（裁决 R17）。`tests/test_passed_corridor.py:56-61` 的「只能抬高」断言保留，期望值从 0.6 改成 1.0。
+- 单测点：阿克曼默认 1.0；全向默认等于 `position_tolerance_m`（默认 0.3）；配置 0.2 时阿克曼仍得 1.0、全向仍得 0.3；配置 1.5 时两者都得 1.5（裁决 R17）；`"ackermann"` 字符串抛 `ValueError`。用例在 `tests/test_algorithms_motion.py`；`tests/test_passed_corridor.py` 的 `rover_tracking_limits` 断言同步从 0.6 改成 1.0。
+- 实现位置：`algorithms/motion/corridor.py`；层外唯一调用点是 `planner/simulators/projectairsim/rover.py` 的 `rover_tracking_limits`，`ROVER_PASSED_LATERAL_TOLERANCE_M` 随之删除。
 - 这个常量来自实车宽度量级，不是标定值；裁决 R17 把它从 0.6 抬到 1.0，理由是 0.6 为手工挑值、实测失败率偏高。
 
 **`reached(waypoint, pose, unwrapped_yaw, goal_yaw, position_tolerance, yaw_tolerance, passed_lateral_tolerance=None) -> bool`**
 - 输入输出：队首航点、实测位姿、连续偏航、目标连续偏航、两个容差、可选走廊 → 是否推进队列。
 - 边界条件：距离判据（三维距离 `<= position_tolerance`）与越点判据（投影 `>= 1` 且横向 `<= corridor`）任一成立，且同时满足 `|goal_yaw - unwrapped_yaw| <= yaw_tolerance`；线段长度平方 `<= 1e-12` 时只靠距离判据；`passed_lateral_tolerance is None` 时用 `position_tolerance`。
 - 数值稳定性：投影用 `dot(offset, delta)/|delta|²`；横向用 `offset - projection·delta` 的模长；`1e-12` 是平方量级，10 cm 级的段不会误判。
-- 单测点：冲过 4.0 m 端点 0.14 m、横向 0.355 m 时窄走廊不判过（`tests/test_passed_corridor.py:41`），显式传 0.6 的用例仍判过（`:47`）；默认值改 1.0 后该用例参数不动，只加一条默认值断言（裁决 R17）；偏航未对齐时宽走廊也不判过（`:52`）；零长段只按距离。
+- 单测点：冲过 4.0 m 端点 0.14 m、横向 0.355 m 时窄走廊不判过（`tests/test_passed_corridor.py:31`），显式传 0.6 的用例仍判过（`:37`）；默认值改 1.0 后该用例参数不动，只加一条默认值断言（裁决 R17）；偏航未对齐时宽走廊也不判过（`:50`）；零长段只按距离。
+- 实现位置：`algorithms/motion/reached.py`；层外调用点是 `planner/runtime/window/queue.py:142`，`planner.runtime` 入口不再导出这个名字。
 
 **`settle_check(previous: WorldPose, actual: WorldPose, goal: WorldPose, goal_yaw_deg: float, measured_yaw_deg: float, elapsed: float, duration: float, dt: float, limits: MotionLimits) -> tuple[tuple[float, float, float], float, bool, bool]`**（裁决 R24：替代 `pose_delta_measurement`、`is_settled`、`within_tolerance` 三个名字；返 `(measured_velocity, measured_yaw_rate_dps, settled, drifted)`）
 - 输入输出：相邻两拍位姿、目标位姿与连续偏航、已用时长、`dt`、limits → 本拍测量值与两个判定。内部由私有 `_measure`、`_settled`、`_drift_ok` 三步组成。
@@ -812,13 +814,15 @@ omega  = clamp(degrees(v*kappa), -max_yaw_rate_deg_s, +max_yaw_rate_deg_s)
 | `point_in_horizontal_body` | 11 | `adapters/trajectory_planner/prompts/visual_goal_navigation.py:269,271,282,283`、`workflows/visual_goal_navigation/continuous.py:229,230` | 保留 | 提示词机体系向量 |
 | `relative_to_world` | 20（剔除 domain 同名标量函数） | `workflows/visual_goal_navigation/{continuous.py:289,workflow.py:401,approach.py:36}`、`workflows/free_navigation/{continuous.py:349,workflow.py:273}`、`planner/services/planning_window.py:135` 间接、`capabilities/sliding_window/planning.py:102` | 保留 | 模型输出转世界航点 |
 | `world_to_relative` | 8 | `planner/services/planning_window.py:135,153`、`trajectory_queue.py:71`、`workflows/visual_goal_navigation/approach.py:28` | 保留 | 待执行前缀与遥测 |
-| `bounded` | 13 | `planner/services/position_hold.py:90` | 保留 | 模长钳位，位置保持直接调用 |
+| `bounded` | 10 | `planner/runtime/position_hold.py:91` | 保留 | 模长钳位，位置保持直接调用；实现在 `algorithms/motion/limits.py` |
 | `TrajectoryValidator` | 13 | `application/mission_assembly.py:227`、`planner/services/planning_window.py:66`、`capabilities/sliding_window/planning.py:41`、`workflows/visual_goal_navigation/workflow.py:78` | 保留 | 构造期校验 + 运行期准入 |
 | `require_execution_anchor` | 3 | `planner/services/trajectory_queue.py:103` | 保留 | 执行锚点 |
-| `corridor_default` | 0 | 构造期：`assembly/` 在 `motion.passed_lateral_tolerance_m` 未配置时按模型取默认值 | 保留 | 裁决 R24 的「走廊 2」；构造期调用，不在每拍路径 |
-| `passed_lateral_corridor` | 0（新） | 计划：`runtime/window/queue.py`、`runtime/motion/follower.py` | 保留 | 走廊唯一取值入口 |
-| `reached` | 12（剔除 `"reached"` 字符串） | `planner/services/trajectory_queue.py:131` | 保留 | 队列消耗判据 |
+| `corridor_default` | 6 | 无直接层外调用点：取值经 `passed_lateral_corridor` 落地 | 保留 | 裁决 R6、R17 的「走廊 2」；按模型给默认值 |
+| `passed_lateral_corridor` | 7 | `planner/simulators/projectairsim/rover.py:66`（`rover_tracking_limits`） | 保留 | 走廊唯一取值入口，配置只能抬高 |
+| `reached` | 7（剔除 `"reached"` 字符串） | `planner/runtime/window/queue.py:142` | 保留 | 队列消耗判据 |
 | `RefillScheduler` | 5 | `planner/services/planning_window.py:73`、`capabilities/sliding_window/planning.py:42` | 保留 | 补点策略；与窗口配对，无其他组可放 |
+
+落地实测：入口导出 12 个名字。上表 11 个已全部落地，另多导出 `world_pose_delta_in_reference_frame`——§1.3 按裁决 R22 判它私有，但 `adapters/trajectory_planner/prompts/base.py:61,156` 仍在调用，内部化未做。
 
 #### 8.1.2 `motion/` 入口（14）
 
