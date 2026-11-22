@@ -8,7 +8,7 @@ import threading
 import time
 from functools import partial
 
-from planner.algorithms.targeting.association import (
+from planner.algorithms.targeting import (
     accept_position,
     bound_target_geometry,
     make_reference,
@@ -26,8 +26,8 @@ from planner.errors import (
     ProtocolError,
 )
 from planner.ports import TargetDetector
-from planner.runtime.background_operation import BackgroundOperation
-from planner.runtime.observation_snapshot import freeze_observation, freeze_reference
+from planner.runtime import BackgroundOperation
+from planner.runtime import freeze_observation, freeze_reference
 
 logger = logging.getLogger(__name__)
 

@@ -65,7 +65,7 @@ def _session():
     and the console quietly lost its trajectory panel.
     """
     from planner.assembly.mission_assembly import assemble_missions
-    from planner.runtime.trajectory_hub import TrajectoryHub
+    from planner.runtime import TrajectoryHub
     from planner.simulators.airsim.session import AirSimMissionSession
 
     config = load_config(default_config_path())

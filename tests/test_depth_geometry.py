@@ -3,7 +3,7 @@ import math
 import numpy as np
 import pytest
 
-from planner.algorithms.targeting.depth_geometry import DepthGeometry
+from planner.algorithms.targeting import DepthGeometry
 from planner.domain import CameraIntrinsics, Observation
 from planner.domain import WorldPose
 from planner.domain import GoalObservation, GoalVisibility

@@ -27,10 +27,10 @@ from ..workflows.visual_goal_navigation.policy import (
 )
 from planner.domain import TaskKind
 from ..errors import ProtocolError
-from ..runtime.execution import ExecutionService
-from ..runtime.model_calls import ModelCallService
-from ..runtime.motion import SynchronizedMotionPlanner
-from ..algorithms.trajectory_validation import TrajectoryValidator
+from planner.runtime import ExecutionService
+from planner.runtime import ModelCallService
+from planner.runtime import SynchronizedMotionPlanner
+from planner.algorithms import TrajectoryValidator
 from ..workflows.basic_motion import BasicMotionWorkflow
 from ..workflows.free_navigation import FreeNavigationWorkflow
 from ..workflows.visual_goal_navigation import VisualGoalNavigationWorkflow

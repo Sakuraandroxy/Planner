@@ -26,7 +26,7 @@ from planner.domain import QueuedWaypoint
 from planner.domain import MODE_CONTINUOUS
 from planner.domain import WEATHER_FIELDS
 from planner.errors import SimulatorNotOwned
-from planner.runtime.trajectory_hub import TrajectoryHub
+from planner.runtime import TrajectoryHub
 
 
 def _settings(**overrides):

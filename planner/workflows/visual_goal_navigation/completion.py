@@ -7,7 +7,7 @@ import math
 from dataclasses import replace
 
 from planner.workflows.visual_goal_navigation.policy import TargetApproach
-from planner.algorithms.target_coordinates import horizontal_distance
+from planner.algorithms import horizontal_distance
 from planner.domain import ApproachSettings
 from planner.domain import resolve_yaw_delta_deg, wrap_yaw_deg
 from planner.domain import TargetPositionState
@@ -21,7 +21,7 @@ from planner.domain import (
 from planner.domain import VisualGoalLimits
 from planner.errors import ProtocolError
 from planner.ports import TaskCompletionChecker
-from planner.runtime.model_calls import ModelCallService
+from planner.runtime import ModelCallService
 
 
 # Explicit fresh-depth or stage-bound admission; neither proves semantic completion.

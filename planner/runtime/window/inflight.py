@@ -7,9 +7,9 @@ from concurrent.futures import Future
 from planner.domain import ContinuationCandidate, PlanningOutput, PlanningSnapshot
 from planner.errors import ExecutionError, ProtocolError
 from planner.ports import TrajectoryPlanner
-from planner.algorithms.sliding_window.scheduler import RefillScheduler
-from planner.algorithms.trajectory_transform import relative_to_world
-from planner.algorithms.trajectory_validation import TrajectoryValidator
+from planner.algorithms import RefillScheduler
+from planner.algorithms import relative_to_world
+from planner.algorithms import TrajectoryValidator
 
 from .worker import SlowPlannerWorker
 

@@ -6,7 +6,7 @@ import time
 from planner.domain import ContinuousTrackingSettings
 from planner.domain import WorldPose
 from planner.errors import ExecutionError, SimulatorConnectionError
-from planner.runtime.position_hold import PositionHold
+from planner.runtime import PositionHold
 from planner.simulators.airsim.vehicle import AirSimVehicle
 
 logger = logging.getLogger(__name__)

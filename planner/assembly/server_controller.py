@@ -32,7 +32,7 @@ from planner.domain import default_view_for, validate_view_mode
 from planner.domain import WEATHER_CATALOG, merge_weather
 from ..errors import SimulatorNotOwned, SimulatorRestartError
 from planner.ports import BackendWorker
-from ..runtime.log_buffer import LogBuffer
+from planner.runtime import LogBuffer
 
 logger = logging.getLogger(__name__)
 

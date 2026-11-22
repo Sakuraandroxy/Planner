@@ -1,14 +1,14 @@
 import numpy as np
 import pytest
 
-from planner.algorithms.targeting.association import (
+from planner.algorithms.targeting import (
     accept_position,
     bound_target_geometry,
     make_reference,
 )
 from planner.workflows.visual_goal_navigation.targeting import BBoxGoalObserver
-from planner.algorithms.targeting.depth_foreground import DepthForegroundFilter
-from planner.algorithms.targeting.depth_surface_sampling import sample_surface_depth
+from planner.algorithms.targeting import DepthForegroundFilter
+from planner.algorithms.targeting import sample_surface_depth
 from planner.workflows.visual_goal_navigation.targeting import VisualGoalRefresh
 from planner.domain import DepthForegroundSettings
 from planner.domain import ExecutionBudget

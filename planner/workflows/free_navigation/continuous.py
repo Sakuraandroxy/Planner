@@ -25,9 +25,9 @@ from planner.errors import (
     ObservationError,
     ProtocolError,
 )
-from planner.runtime.continuous_execution import ContinuousExecution
-from planner.runtime.moving_observations import MovingObservations
-from planner.algorithms.trajectory_transform import relative_to_world
+from planner.runtime import ContinuousExecution
+from planner.runtime import MovingObservations
+from planner.algorithms import relative_to_world
 
 logger = logging.getLogger(__name__)
 

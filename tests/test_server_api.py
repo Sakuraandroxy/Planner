@@ -17,9 +17,9 @@ from planner.domain import BackendUnavailable, ServerState, ServerStatus, TaskSu
 from planner.domain import QueuedWaypoint
 from planner.domain import MODE_CONTINUOUS
 from planner.domain import WEATHER_CATALOG, WEATHER_FIELDS, merge_weather
-from planner.runtime.frame_hub import FrameHub
-from planner.runtime.log_buffer import LogBuffer
-from planner.runtime.trajectory_hub import TrajectoryHub
+from planner.runtime import FrameHub
+from planner.runtime import LogBuffer
+from planner.runtime import TrajectoryHub
 
 
 class FakeController:

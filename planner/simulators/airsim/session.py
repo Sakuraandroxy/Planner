@@ -35,7 +35,7 @@ from planner.domain import MissionResult
 from planner.domain import TaskSubmission
 from planner.domain import WEATHER_CATALOG, validate_weather_values
 from planner.errors import ProtocolError
-from planner.runtime.execution import ExecutionService
+from planner.runtime import ExecutionService
 
 from .connection import AirSimConnection
 from .observation_gate import ObservationGate

@@ -27,8 +27,8 @@ from planner.domain import Observation
 from planner.domain import WorldPose
 from planner.domain import TimedVehicleState
 from ...errors import ExecutionError
-from ...runtime.motion.synchronized import SMOOTH_PROFILE
-from ...runtime.position_hold import PositionHold
+from planner.runtime import SMOOTH_PROFILE
+from planner.runtime import PositionHold
 from planner.domain import MotionLimits
 from .async_bridge import AsyncBridge
 from .collision import CollisionEvent, CollisionMonitor

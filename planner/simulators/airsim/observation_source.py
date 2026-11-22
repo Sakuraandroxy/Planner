@@ -22,7 +22,7 @@ from planner.errors import (
     SimulatorConnectionError,
 )
 from planner.ports import Vehicle
-from planner.runtime.background_operation import BackgroundOperation
+from planner.runtime import BackgroundOperation
 from planner.simulators.airsim.camera_model import (
     camera_matrix,
     intrinsics_from_horizontal_fov,

@@ -1,6 +1,6 @@
 import pytest
 
-from planner.runtime.log_buffer import LogBuffer
+from planner.runtime import LogBuffer
 
 
 def test_append_and_read_from_cursor():

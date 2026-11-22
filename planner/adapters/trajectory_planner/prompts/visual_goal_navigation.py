@@ -3,9 +3,9 @@ import math
 
 from planner.domain import VisualGoalPlanningContext
 from planner.errors import ProtocolError
-from planner.algorithms.free_space import FreeSpaceProfileSettings, measure_free_space
-from planner.algorithms.target_coordinates import point_in_horizontal_body
-from planner.algorithms.trajectory_transform import relative_to_world
+from planner.algorithms import FreeSpaceProfileSettings, measure_free_space
+from planner.algorithms import point_in_horizontal_body
+from planner.algorithms import relative_to_world
 
 from .base import (
     AERIAL_BASE_TRAJECTORY_SYSTEM_PROMPT,

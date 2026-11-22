@@ -11,11 +11,8 @@ from planner.workflows.visual_goal_navigation.completion import (
     VisualGoalRadiusTrigger,
     VisualGoalVerification,
 )
-from planner.algorithms.targeting.association import (
-    bound_target_geometry,
-    bound_target_goal,
-)
-from planner.algorithms.targeting.depth_geometry import DepthGeometry
+from planner.algorithms.targeting import bound_target_geometry, bound_target_goal
+from planner.algorithms.targeting import DepthGeometry
 from planner.workflows.visual_goal_navigation.targeting import VisualGoalRefresh
 from planner.domain import ExecutionBudget, StopResult
 from planner.domain import MissionStage
@@ -48,14 +45,14 @@ from planner.ports import MovingObservationSource, ObservationSource
 from planner.ports import TaskCompletionChecker
 from planner.ports import TaskTrace
 from planner.ports import TrajectoryPlanner
-from planner.runtime.execution import ExecutionService
-from planner.runtime.model_calls import ModelCallService
-from planner.runtime.motion.base import MotionPlanner
-from planner.runtime.observation_snapshot import freeze_observation
-from planner.runtime.window import PlanningWindow
-from planner.runtime.resource_cleanup import close_resources
-from planner.algorithms.trajectory_transform import relative_to_world
-from planner.algorithms.trajectory_validation import TrajectoryValidator
+from planner.runtime import ExecutionService
+from planner.runtime import ModelCallService
+from planner.runtime import MotionPlanner
+from planner.runtime import freeze_observation
+from planner.runtime import PlanningWindow
+from planner.runtime import close_resources
+from planner.algorithms import relative_to_world
+from planner.algorithms import TrajectoryValidator
 
 from .approach import VisualGoalApproachPhase
 from .flight import VisualGoalFlightPhase

@@ -11,7 +11,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Generic, TypeVar
 
-from planner.algorithms.sliding_window.scheduler import RefillScheduler
+from planner.algorithms import RefillScheduler
 from planner.domain import ExecutionRecord
 from planner.domain import PlanningWindowInput
 from planner.domain import resolve_yaw_delta_deg
@@ -24,8 +24,8 @@ from planner.errors import (
     ProtocolError,
 )
 from planner.ports import TrajectoryPlanner
-from planner.algorithms.trajectory_transform import world_to_relative
-from planner.algorithms.trajectory_validation import TrajectoryValidator
+from planner.algorithms import world_to_relative
+from planner.algorithms import TrajectoryValidator
 from .inflight import BackgroundContinuationPlanner
 from .queue import WorldWaypointQueue
 from .worker import SlowPlannerWorker

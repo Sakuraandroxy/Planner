@@ -6,7 +6,7 @@ import pytest
 
 from planner.workflows.visual_goal_navigation.policy import TargetApproach
 from planner.workflows.visual_goal_navigation.completion import VisualGoalCompletion
-from planner.algorithms.planning import GeometricTargetPlanner
+from planner.algorithms import GeometricTargetPlanner
 from planner.algorithms.targeting import DepthGeometry
 from planner.domain import MissionStage, TaskKind
 from planner.domain import MotionLimits
@@ -23,9 +23,9 @@ from planner.domain import (
 from planner.domain import VisualGoalTriggerRules
 from planner.domain import VisualGoalLimits
 from planner.errors import MotionPaused
-from planner.runtime.execution import ExecutionService
-from planner.runtime.motion import SynchronizedMotionPlanner
-from planner.algorithms.trajectory_validation import TrajectoryValidator
+from planner.runtime import ExecutionService
+from planner.runtime import SynchronizedMotionPlanner
+from planner.algorithms import TrajectoryValidator
 from planner.workflows.visual_goal_navigation import VisualGoalNavigationWorkflow
 from tests.support import ue_camera_matrix
 

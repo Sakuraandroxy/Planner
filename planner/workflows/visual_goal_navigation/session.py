@@ -16,8 +16,8 @@ from planner.domain import (
     VisualGoalStatus,
 )
 from planner.errors import BudgetExceeded, ModelCallTimeout
-from planner.runtime.model_calls import ModelCallService
-from planner.runtime.window import PlanningWindow
+from planner.runtime import ModelCallService
+from planner.runtime import PlanningWindow
 
 from .termination import SearchPolicy, VisualGoalExitPolicy, VisualGoalFailure
 
