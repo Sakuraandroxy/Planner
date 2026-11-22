@@ -122,6 +122,6 @@ git merge --no-ff impl/<流> -m "<流> finished"
 | 视觉目标连续路径 | 仍走自身批次语义，未并入 `workflows/common/streaming.py` 的 `StreamRunner`；巡航已并入 | 后续任务，裁决理由见下 |
 | `CameraIntrinsics` 断言 | 阶段 7 列的运行期校验未加，类型已有 | 引擎侧，接真机时补 |
 | UE5 冒烟 | 三类任务实跑与连续遥测比对未做，本机无模拟器 | 有环境后补 |
-| `algorithms` 四个名字 | 文档表列的 `corridor_default`、`passed_lateral_corridor`、`bounded`、`BackgroundCall` 未落地，入口按实际 8 名导出 | 文档已标注差额 |
+| `algorithms` 入口多一个名字 | 文档 §8.1.1 列的 `corridor_default`、`passed_lateral_corridor`、`bounded`、`reached` 已落地；入口按实际 12 名导出，多出的 `world_pose_delta_in_reference_frame` 文档 §1.3 判私有，但 prompts 仍在调用。`BackgroundCall` 属执行层（`03-runtime.md`），不在本层表里 | 文档已标注差额 |
 
 视觉目标连续路径不并入的理由：每次取帧对应一次确认与重规划，节拍与巡航不同；硬并会让节拍与遥测无法验证。
