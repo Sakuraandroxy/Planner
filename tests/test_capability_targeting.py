@@ -6,10 +6,10 @@ from planner.algorithms.targeting import (
     bound_target_geometry,
     make_reference,
 )
-from planner.workflows.visual_goal_navigation.targeting import BBoxGoalObserver
+from planner.workflows.visual_goal_navigation import BBoxGoalObserver
 from planner.algorithms.targeting import DepthForegroundFilter
 from planner.algorithms.targeting import sample_surface_depth
-from planner.workflows.visual_goal_navigation.targeting import VisualGoalRefresh
+from planner.workflows.visual_goal_navigation import VisualGoalRefresh
 from planner.domain import DepthForegroundSettings
 from planner.domain import ExecutionBudget
 from planner.domain import CameraIntrinsics, Observation

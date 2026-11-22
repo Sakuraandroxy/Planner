@@ -7,7 +7,7 @@ import pytest
 from planner.domain import WorldPose
 from planner.domain import VisualGoalStatus
 from planner.domain import VisualGoalLimits
-from planner.workflows.visual_goal_navigation.termination import (
+from planner.workflows.visual_goal_navigation import (
     VisualGoalExitPolicy,
     VisualGoalFailure,
 )

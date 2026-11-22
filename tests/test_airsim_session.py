@@ -15,7 +15,7 @@ import types
 
 import pytest
 
-from planner.assembly.mission_assembly import MissionResources
+from planner.assembly import MissionResources
 from planner.config import default_config_path, load_config
 from planner.domain import WEATHER_FIELDS
 from planner.errors import ProtocolError
@@ -64,7 +64,7 @@ def _session():
     honest, because the UE4 mission child once skipped one of those resources
     and the console quietly lost its trajectory panel.
     """
-    from planner.assembly.mission_assembly import assemble_missions
+    from planner.assembly import assemble_missions
     from planner.runtime import TrajectoryHub
     from planner.simulators.airsim.session import AirSimMissionSession
 
@@ -226,10 +226,7 @@ def test_assembly_refuses_to_run_without_a_trajectory_sink():
     console lost the remaining-path panel with no error anywhere -- and the
     capability list blamed the simulator instead.
     """
-    from planner.assembly.mission_assembly import (
-        MissionInputs,
-        assemble_missions,
-    )
+    from planner.assembly import MissionInputs, assemble_missions
 
     config = load_config(default_config_path())
     resources = MissionResources(

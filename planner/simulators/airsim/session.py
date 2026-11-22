@@ -27,10 +27,7 @@ import threading
 import time
 from collections.abc import Callable
 
-from planner.assembly.mission_assembly import (
-    MissionInputs,
-    require_application,
-)
+from planner.assembly import MissionInputs, require_application
 from planner.domain import MissionResult
 from planner.domain import TaskSubmission
 from planner.domain import WEATHER_CATALOG, validate_weather_values

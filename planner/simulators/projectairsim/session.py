@@ -35,11 +35,7 @@ import numpy as np
 from projectairsim import Drone, Rover
 from projectairsim.types import WeatherParameter
 
-from ...assembly.mission_assembly import (
-    MissionInputs,
-    VehicleArm,
-    require_application,
-)
+from planner.assembly import MissionInputs, VehicleArm, require_application
 from ...config import AppConfig
 from planner.domain import WorldPose
 from planner.domain import MissionResult

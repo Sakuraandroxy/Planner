@@ -27,9 +27,7 @@ sys.path.insert(0, str(ROOT))
 
 from projectairsim import Rover
 
-from planner.assembly.factories import (
-    build_free_navigation_planner,
-)
+from planner.assembly import build_free_navigation_planner
 from planner.config import default_config_path, load_config
 from planner.domain import BasicMotionParameters
 from planner.domain import FreeNavigationParameters

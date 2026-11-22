@@ -11,7 +11,7 @@ import queue
 import threading
 from collections.abc import Callable
 
-from ..assembly.reporting import task_finish_events
+from planner.assembly import task_finish_events
 from planner.domain import TaskSubmission, WorkerEvent, WorkerEventKind
 
 

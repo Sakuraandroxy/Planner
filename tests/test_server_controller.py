@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-from planner.assembly.server_controller import ServerController
+from planner.assembly import ServerController
 from planner.config import (
     MapCatalog,
     MapEntry,

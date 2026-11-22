@@ -3,8 +3,8 @@ import time
 import numpy as np
 import pytest
 
-from planner.workflows.visual_goal_navigation.policy import TargetApproach
-from planner.workflows.visual_goal_navigation.completion import (
+from planner.workflows.visual_goal_navigation import TargetApproach
+from planner.workflows.visual_goal_navigation import (
     VisualGoalCompletion,
     VisualGoalRadiusTrigger,
     VisualGoalVerification,

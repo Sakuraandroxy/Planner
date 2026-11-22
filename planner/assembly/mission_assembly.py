@@ -17,14 +17,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from ..workflows.visual_goal_navigation.policy import TargetApproach
-from ..workflows.visual_goal_navigation.completion import VisualGoalCompletion
-from ..workflows.visual_goal_navigation.targeting import BBoxGoalObserver
-from ..workflows.basic_motion.policy import BasicMotionStageValidator
-from ..workflows.free_navigation.policy import FreeNavigationStageValidator
-from ..workflows.visual_goal_navigation.policy import (
-    VisualGoalStageValidator,
-)
+from planner.workflows.visual_goal_navigation import TargetApproach
+from planner.workflows.visual_goal_navigation import VisualGoalCompletion
+from planner.workflows.visual_goal_navigation import BBoxGoalObserver
+from planner.workflows.basic_motion import BasicMotionStageValidator
+from planner.workflows.free_navigation import FreeNavigationStageValidator
+from planner.workflows.visual_goal_navigation import VisualGoalStageValidator
 from planner.domain import TaskKind
 from ..errors import ProtocolError
 from planner.runtime import ExecutionService

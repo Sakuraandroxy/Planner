@@ -17,9 +17,7 @@ from planner.adapters.trajectory_planner.prompts import (
     FREE_NAVIGATION_SYSTEM_PROMPT,
     FreeNavigationTrajectoryPrompt,
 )
-from planner.workflows.free_navigation.policy import (
-    FreeNavigationStageValidator,
-)
+from planner.workflows.free_navigation import FreeNavigationStageValidator
 from planner.domain import BasicMotionParameters
 from planner.domain import ExecutionBudget, ExecutionRecord, StopResult
 from planner.domain import FreeNavigationParameters, FreeNavigationStatus
@@ -38,9 +36,7 @@ from planner.errors import (
     ProtocolError,
 )
 from planner.workflows.free_navigation import FreeNavigationWorkflow
-from planner.workflows.free_navigation.continuous import (
-    FreeNavigationContinuous,
-)
+from planner.workflows.free_navigation import FreeNavigationContinuous
 
 START = WorldPose(0.0, 0.0, 0.0, 0.0)
 

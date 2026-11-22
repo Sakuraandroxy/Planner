@@ -35,18 +35,10 @@ sys.path.insert(0, str(ROOT))
 
 from projectairsim import Drone
 
-from planner.assembly.factories import (
-    build_detector,
-    build_geometry,
-    build_planner,
-)
-from planner.workflows.visual_goal_navigation.policy import TargetApproach
-from planner.workflows.visual_goal_navigation.completion import (
-    VisualGoalCompletion,
-)
-from planner.workflows.visual_goal_navigation.targeting import (
-    BBoxGoalObserver,
-)
+from planner.assembly import build_detector, build_geometry, build_planner
+from planner.workflows.visual_goal_navigation import TargetApproach
+from planner.workflows.visual_goal_navigation import VisualGoalCompletion
+from planner.workflows.visual_goal_navigation import BBoxGoalObserver
 from planner.config import default_config_path, load_config
 from planner.domain import BasicMotionParameters
 from planner.domain import render_depth

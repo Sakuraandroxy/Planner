@@ -12,7 +12,7 @@ from planner.adapters.trajectory_planner.prompts import (
     FreeNavigationTrajectoryPrompt,
     VisualGoalTrajectoryPrompt,
 )
-from planner.assembly.factories import (
+from planner.assembly import (
     build_completion_checker,
     build_free_navigation_planner,
     build_planner,
