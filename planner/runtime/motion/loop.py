@@ -25,9 +25,15 @@ from planner.domain import (
     resolve_yaw_delta_deg,
     wrap_yaw_deg,
 )
-from planner.errors import BudgetExceeded, ExecutionError, MotionPaused
+from planner.errors import (
+    BudgetExceeded,
+    CollisionInterrupt,
+    ExecutionError,
+    MotionPaused,
+)
 from planner.ports import StreamGoalSource
 
+from ..collision_recovery import CollisionRecovery
 from .synchronized import duration_for
 from .record import StreamRecorder
 from .tracking import SegmentSynthesizer, command_for, measured_action
@@ -56,7 +62,7 @@ class ControlLoop:
         *,
         synthesizer=None,
         limiter=None,
-        recovery=None,
+        collision=None,
         window=None,
         limits=None,
         tracking=None,
@@ -67,7 +73,10 @@ class ControlLoop:
         self.execution = execution
         self.streaming = streaming
         self.limiter = limiter
-        self.recovery = recovery
+        #: 碰撞退避；装配层在 ``motion.collision.enabled`` 关时传 ``None``。
+        self.recovery = (
+            CollisionRecovery(collision) if collision is not None else None
+        )
         self.window = window
         self.limits = limits if limits is not None else getattr(
             streaming, "tracking_limits", None
@@ -99,8 +108,81 @@ class ControlLoop:
 
     def _guard(self, budget: ExecutionBudget | None) -> None:
         self.execution.checkpoint()
+        self._poll_contact()
         if budget is not None and budget.remaining(self.clock()) <= 0:
             raise BudgetExceeded("stage time budget exhausted")
+
+    def _poll_contact(self) -> None:
+        """读一次接触状态；有未处理的接触就抛 ``CollisionInterrupt``。"""
+        if self.recovery is None:
+            return
+        self.recovery.note_progress(self.recorder.path_length_m)
+        contact = self.recovery.poll(self.streaming.collision_state())
+        if contact is not None:
+            raise CollisionInterrupt(contact)
+
+    def _recover(self, contact, *, clear_queue: bool) -> None:
+        """停稳、按运动律后退 ``backoff_m * attempts``、作废推测输出。
+
+        ``clear_queue`` 在连续路径上为真：授权队列、在途规划与执行历史都从恢复
+        位姿重开，下一拍由任务层重新取帧补点。段执行由调用方持有的轨迹决定，
+        队列不动，后退后把剩余轨迹交给 receipt。
+        """
+        self.execution.stop()
+        plan = self.recovery.begin(contact, self.streaming.current_pose())
+        self._back_off(plan)
+        self.recovery.finish()
+        self.holding = True
+        self.synthesizer.reset()
+        reset = getattr(self.limiter, "reset", None)
+        if reset is not None:
+            reset()
+        if clear_queue and self.window is not None:
+            self.window.interrupt()
+        self.recorder.reset(self.streaming.current_pose())
+
+    def _back_off(self, plan) -> None:
+        """沿当前航向倒车 ``plan.distance_m``，按 ``SEGMENT_PERIOD_S`` 每拍下发。"""
+        limits = self.limits
+        period = SEGMENT_PERIOD_S
+        if limits.max_speed_mps <= 0:
+            raise ExecutionError("collision backoff requires a positive speed limit")
+        expected = (
+            plan.distance_m / limits.max_speed_mps
+            + limits.max_speed_mps / limits.max_acceleration_mps2
+        )
+        maximum_steps = math.ceil(expected / period) * 3 + 10
+        capability = self.streaming.motion_capability()
+        sink = self.stream_sink()
+        previous = self.streaming.current_pose()
+        angle = math.radians(previous.yaw_deg)
+        speed = travelled = 0.0
+        for _ in range(maximum_steps):
+            if travelled >= plan.distance_m:
+                sink(
+                    command_for(capability, (0.0, 0.0, 0.0), 0.0, previous.yaw_deg),
+                    period,
+                )
+                return
+            speed = min(
+                limits.max_speed_mps, speed + limits.max_acceleration_mps2 * period
+            )
+            sink(
+                command_for(
+                    capability,
+                    (-speed * math.cos(angle), -speed * math.sin(angle), 0.0),
+                    0.0,
+                    previous.yaw_deg,
+                ),
+                period,
+            )
+            current = self.streaming.current_pose()
+            travelled += math.dist(
+                (previous.x, previous.y, previous.z),
+                (current.x, current.y, current.z),
+            )
+            previous = current
+        raise ExecutionError("collision backoff made no measurable progress")
 
     def _check_budget(self, budget: ExecutionBudget | None, required_s: float = 0.0):
         if budget is not None and budget.remaining(self.clock()) <= required_s:
@@ -178,8 +260,6 @@ class ControlLoop:
                             "failed to cancel/hover after execution pause"
                         )
                     current = self.streaming.current_pose()
-                    if self.execution.collision_state():
-                        raise ExecutionError("collision while pausing execution")
                     actual_yaw = paused.unwrapped_yaw_deg + wrap_yaw_deg(
                         current.yaw_deg - paused.pose.yaw_deg
                     )
@@ -204,6 +284,36 @@ class ControlLoop:
                         remaining,
                         tuple(actions),
                     )
+                except CollisionInterrupt as interrupt:
+                    contact_pose = self.streaming.current_pose()
+                    self._recover(interrupt.contact, clear_queue=False)
+                    current = self.streaming.current_pose()
+                    actual_yaw = measurement_start_yaw + wrap_yaw_deg(
+                        current.yaw_deg - contact_pose.yaw_deg
+                    )
+                    actions.append(
+                        measured_action(
+                            previous, current, actual_yaw - measurement_start_yaw
+                        )
+                    )
+                    measured_chords += math.dist(
+                        (previous.x, previous.y, previous.z),
+                        (current.x, current.y, current.z),
+                    )
+                    remaining = _remaining(
+                        current,
+                        actual_yaw,
+                        segment,
+                        trajectory.segments[index + 1 :],
+                    )
+                    return ExecutionReceipt(
+                        completed,
+                        current,
+                        self.clock() - began,
+                        measured_chords,
+                        remaining=remaining,
+                        measured_actions=tuple(actions),
+                    )
                 completed += 1
                 current = self.streaming.current_pose()
                 yaw = (
@@ -219,8 +329,7 @@ class ControlLoop:
                 previous = current
                 active = None
                 self.execution.checkpoint()
-                if self.execution.collision_state():
-                    raise ExecutionError("AirSim reported a collision")
+                self._poll_contact()
                 if budget is not None and budget.remaining(self.clock()) <= 0:
                     raise BudgetExceeded("deadline after segment")
             return ExecutionReceipt(
@@ -338,6 +447,7 @@ class ControlLoop:
                     previous_pose = start
                     settled_since = None
                 self._check_budget(budget)
+                self._poll_contact()
                 elapsed = steps * period
                 if elapsed >= self.timeout_s:
                     raise ExecutionError(
@@ -424,13 +534,18 @@ class ControlLoop:
 
         目标源返回 ``None`` 或队列为空时正常返回，并在返回前调 ``execution.stop()``；
         ``deadline_monotonic`` 到期抛 ``BudgetExceeded``，检查点抛 ``ExecutionError``，
-        两者都由任务层决定怎么收尾。
+        两者都由任务层决定怎么收尾。这一拍读到接触事件时，先退避并作废队列，
+        然后正常返回，下一拍由任务层重新取帧补点。
         """
         self.execution.assert_owner()
         budget = (
             None if deadline_monotonic is None else ExecutionBudget(deadline_monotonic)
         )
-        self._guard(budget)
+        try:
+            self._guard(budget)
+        except CollisionInterrupt as interrupt:
+            self._recover(interrupt.contact, clear_queue=True)
+            return
         state = self.sample()
         command = goals.next(state, self.recorder.yaw)
         if command is None:

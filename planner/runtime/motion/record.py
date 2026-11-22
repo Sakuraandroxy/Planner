@@ -40,6 +40,18 @@ class StreamRecorder:
         self.actions = []
         self.path_length_m = 0.0
 
+    def reset(self, at) -> None:
+        """从 ``at`` 重开执行历史；累计路程与时间线不清。
+
+        碰撞退避结束后用：失败的段不能给重规划当锚点，而 ``path_length_m``
+        还要给遥测与卡死看门狗继续用。
+        """
+        self.state = self.last_state = None
+        self.yaw = None
+        self.initial = at
+        self.actions = []
+        self.record = None
+
     def sample(self, state):
         """记录一次实测状态，返回连续偏航与位姿差分构成的执行记录。"""
         if self.state is None:
