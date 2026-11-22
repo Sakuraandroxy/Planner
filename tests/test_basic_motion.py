@@ -1,7 +1,7 @@
 
 import pytest
 
-from planner.algorithms import BasicMotionConverter
+from planner.algorithms.targeting import BasicMotionConverter
 from planner.domain import BasicMotionParameters, BasicMotionStatus
 from planner.domain import StopResult
 from planner.domain import MissionStage, TaskKind

@@ -11,7 +11,7 @@ from ...adapters.trajectory_planner.prompts import (
     FreeNavigationTrajectoryPrompt,
     VisualGoalTrajectoryPrompt,
 )
-from planner.algorithms import GeometricTargetPlanner
+from planner.algorithms.targeting import GeometricTargetPlanner
 from ...config import AppConfig
 
 logger = logging.getLogger(__name__)

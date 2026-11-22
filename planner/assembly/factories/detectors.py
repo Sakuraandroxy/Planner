@@ -7,8 +7,8 @@ from ...adapters.target_detection import (
     ManualTargetDetector,
     OpenAICompatibleTargetDetector,
 )
-from ...algorithms.targeting import DepthGeometry
-from planner.algorithms.targeting import DepthForegroundFilter
+from ...algorithms.depth import DepthGeometry
+from planner.algorithms.depth import DepthForegroundFilter
 from ...config import AppConfig
 from planner.domain import NormalizedBoundingBox
 from . import planners

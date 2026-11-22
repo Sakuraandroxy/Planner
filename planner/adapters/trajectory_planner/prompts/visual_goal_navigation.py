@@ -3,7 +3,7 @@ import math
 
 from planner.domain import VisualGoalPlanningContext
 from planner.errors import ProtocolError
-from planner.algorithms import FreeSpaceProfileSettings, measure_free_space
+from planner.algorithms.depth import FreeSpaceProfileSettings, measure_free_space
 from planner.algorithms import point_in_horizontal_body
 from planner.algorithms import relative_to_world
 

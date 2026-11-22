@@ -10,7 +10,7 @@ from planner.adapters.trajectory_planner.prompts.free_navigation import (
 from planner.domain import INVALID_DEPTH_SENTINEL_M
 from planner.domain import CameraIntrinsics, Observation
 from planner.domain import WorldPose
-from planner.algorithms import FreeSpaceProfileSettings, measure_free_space
+from planner.algorithms.depth import FreeSpaceProfileSettings, measure_free_space
 
 K = CameraIntrinsics.from_horizontal_fov(640, 480, 90.0)
 COLUMNS = np.arange(K.width, dtype=np.float64)[None, :]

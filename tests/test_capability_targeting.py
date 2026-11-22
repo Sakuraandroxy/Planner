@@ -7,8 +7,8 @@ from planner.algorithms.targeting import (
     make_reference,
 )
 from planner.workflows.visual_goal_navigation import BBoxGoalObserver
-from planner.algorithms.targeting import DepthForegroundFilter
-from planner.algorithms.targeting import sample_surface_depth
+from planner.algorithms.depth import DepthForegroundFilter
+from planner.algorithms.depth import sample_surface_depth
 from planner.workflows.visual_goal_navigation import VisualGoalRefresh
 from planner.domain import DepthForegroundSettings
 from planner.domain import ExecutionBudget

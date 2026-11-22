@@ -3,7 +3,7 @@ import math
 import numpy as np
 import pytest
 
-from planner.algorithms import GeometricPlannerSettings, GeometricTargetPlanner
+from planner.algorithms.targeting import GeometricPlannerSettings, GeometricTargetPlanner
 from planner.domain import CameraIntrinsics, Observation
 from planner.domain import RelativePoseDelta, WorldPose
 from planner.domain import RelativeTrajectory

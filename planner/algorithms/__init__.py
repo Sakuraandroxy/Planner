@@ -1,6 +1,9 @@
-from .basic_motion_conversion import BasicMotionConverter
-from .free_space import FreeSpaceProfile, FreeSpaceProfileSettings, measure_free_space
-from .planning import GeometricPlannerSettings, GeometricTargetPlanner
+"""计算层入口：几何、变换、校验与本层通用的纯函数（裁决 R19a、R24）。
+
+按组划分的名字在二级入口 ``planner.algorithms.depth``、``planner.algorithms.targeting``，
+运动律与片段采样目前仍在 ``planner.runtime.motion``，未成为本层入口。
+"""
+
 from .sliding_window.scheduler import RefillScheduler
 from .target_coordinates import horizontal_distance, point_in_horizontal_body
 from .trajectory_transform import (
@@ -11,15 +14,9 @@ from .trajectory_transform import (
 from .trajectory_validation import TrajectoryValidator, require_execution_anchor
 
 __all__ = [
-    "BasicMotionConverter",
-    "FreeSpaceProfile",
-    "FreeSpaceProfileSettings",
-    "GeometricPlannerSettings",
-    "GeometricTargetPlanner",
     "RefillScheduler",
     "TrajectoryValidator",
     "horizontal_distance",
-    "measure_free_space",
     "point_in_horizontal_body",
     "relative_to_world",
     "require_execution_anchor",

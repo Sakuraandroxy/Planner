@@ -6,8 +6,8 @@ import pytest
 
 from planner.workflows.visual_goal_navigation import TargetApproach
 from planner.workflows.visual_goal_navigation import VisualGoalCompletion
-from planner.algorithms import GeometricTargetPlanner
-from planner.algorithms.targeting import DepthGeometry
+from planner.algorithms.targeting import GeometricTargetPlanner
+from planner.algorithms.depth import DepthGeometry
 from planner.domain import CollisionState, MissionStage, TaskKind
 from planner.domain import MotionCapability, MotionLimits, MotionModel
 from planner.domain import CameraIntrinsics, Observation

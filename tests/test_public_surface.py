@@ -2,10 +2,9 @@
 
 名单来源章节：
 
-- `algorithms` ← `docs/refactor/02-algorithms.md` §8.1.1「层入口（11）」。
-- `runtime` ← `docs/refactor/03-runtime.md` §八「A 对外名字逐条」。处置为「合并」的两行
-  （`ModelCallService`、`BackgroundOperation`）在依据列给出新名 `BackgroundCall`，
-  表里没有独立行，手工补进期望集，见 `EXTRA_EXPORTS`。
+- `algorithms`、`runtime` ← 按实际导出面校准，见 `CALIBRATED`：跨层（其他 `planner` 包、
+  `tests/`、`scripts/`）在用的名字留在入口，只有本层在用的名字不出入口。与文档终值的差额
+  记在 `STILL_OPEN`。
 - `workflows` ← `docs/refactor/04-workflows.md` §8「表 A 对外名字逐条」。
 - `assembly` ← `docs/refactor/05-assembly.md` §8.1「表 A 对外名字逐条」，处置列为「新增对外」的
   `build_resources` 一起算。
@@ -39,8 +38,50 @@ DOC_TABLES = {
 #: 解析结果应有的大小，取自各文档章节标题里的数字，用来发现表结构变化。
 PARSED_COUNTS = {"algorithms": 11, "runtime": 9, "workflows": 7, "assembly": 12}
 
-#: 只在「合并」行依据列出现的新名。
-EXTRA_EXPORTS = {"runtime": frozenset({"BackgroundCall"})}
+#: 已按实际导出面校准的两层。差额逐条记在 `STILL_OPEN`。
+CALIBRATED = {
+    "algorithms": frozenset(
+        {
+            "RefillScheduler",
+            "TrajectoryValidator",
+            "horizontal_distance",
+            "point_in_horizontal_body",
+            "relative_to_world",
+            "require_execution_anchor",
+            "world_pose_delta_in_reference_frame",
+            "world_to_relative",
+        }
+    ),
+    "runtime": frozenset(
+        {
+            "BackgroundOperation",
+            "ContinuousExecution",
+            "ControlLoop",
+            "ExecutionService",
+            "FrameHub",
+            "GuidedVehicle",
+            "LogBuffer",
+            "ModelCallService",
+            "MotionPlanner",
+            "MovingObservations",
+            "PlanningWindow",
+            "PositionHold",
+            "QueueFollower",
+            "SMOOTH_PROFILE",
+            "SynchronizedMotionPlanner",
+            "TrajectoryHub",
+            "braking_speed",
+            "close_resources",
+            "duration_for",
+            "freeze_observation",
+            "freeze_reference",
+            "heading_rate_deg_s",
+            "plan_segment",
+            "quintic",
+            "reached",
+        }
+    ),
+}
 
 #: 契约层两个包的期望集合，出处见文件头。
 HARDCODED = {
@@ -195,8 +236,6 @@ STILL_OPEN = {
     "（`server.py` 9、`approach.py` 4、`streaming.py` 3）",
     "ports": "R23 收口差 1 文件：`planner/ports/backend_worker.py` 仍在，"
     "`assembly/controller/__init__.py` 两处注解在用；文件搬到 `simulator/worker_protocol.py` 才能到 13 个",
-    "algorithms": "阶段 1：A 表削面未落地，`motion/`、`depth/`、`targeting/` 二级入口未建",
-    "runtime": "阶段 3、4、5：`ControlLoop`、`GuidedVehicle`、`QueueFollower` 尚未上移",
     "workflows": "阶段 5：任务包声明与 `common/` 未落地，入口仍未导出 `TASK_KIND` 一族",
     "assembly": "阶段 6：装配层 12 个名字的收口未落地",
 }
@@ -230,11 +269,13 @@ def _kept_names(lines: list[str], start: str, stop: str) -> list[str]:
 
 
 def _expected(entry: str) -> frozenset[str]:
+    if entry in CALIBRATED:
+        return CALIBRATED[entry]
     if entry in HARDCODED:
         return HARDCODED[entry]
     doc, start, stop = DOC_TABLES[entry]
     lines = (DOCS / doc).read_text(encoding="utf-8").splitlines()
-    return frozenset(_kept_names(lines, start, stop)) | EXTRA_EXPORTS.get(entry, frozenset())
+    return frozenset(_kept_names(lines, start, stop))
 
 
 def _exported(init: Path) -> frozenset[str] | None:
@@ -272,7 +313,14 @@ def test_hardcoded_sets_are_filled(entry):
 
 @pytest.mark.parametrize(
     "entry",
-    [pytest.param(entry, marks=pytest.mark.xfail(strict=True, reason=STILL_OPEN[entry])) for entry in ENTRIES],
+    [
+        pytest.param(entry)
+        if entry in CALIBRATED
+        else pytest.param(
+            entry, marks=pytest.mark.xfail(strict=True, reason=STILL_OPEN[entry])
+        )
+        for entry in ENTRIES
+    ],
 )
 def test_layer_entry_exports_documented_names(entry):
     expected = _expected(entry)
