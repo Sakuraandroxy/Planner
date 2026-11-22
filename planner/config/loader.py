@@ -9,7 +9,11 @@ import yaml
 
 from ..domain.depth_foreground import DepthForegroundSettings
 from ..domain.engine_family import FamilyCatalog, parse_family_catalog
-from ..domain.motion import ContinuousTrackingSettings, MotionLimits
+from ..domain.motion import (
+    ContinuousTrackingSettings,
+    HeadingHoldSettings,
+    MotionLimits,
+)
 from ..domain.sliding_window import SlidingWindowSettings
 from ..domain.visual_goal_completion import VisualGoalTriggerRules
 from ..domain.visual_goal_limits import VisualGoalLimits
@@ -222,16 +226,18 @@ def load_config(path: str | Path) -> AppConfig:
         control_hz=float(motion_raw.get("control_hz", 20.0)),
         min_duration_s=float(motion_raw.get("min_duration_s", 1.0)),
         passed_lateral_tolerance_m=float(motion_raw.get("passed_lateral_tolerance_m", 0.3)),
-        **{
-            # 回落值取 dataclass 默认值：默认值是实机验过的那一组，不在这里重写一份。
-            name: float(motion_raw.get(name, getattr(MotionLimits, name)))
-            for name in (
-                "heading_hold_gain",
-                "heading_rate_damping",
-                "heading_deadband_deg",
-                "heading_rate_deadband_dps",
-            )
-        },
+        heading=HeadingHoldSettings(
+            **{
+                # 回落值取 dataclass 默认值：默认值是实机验过的那一组，不在这里重写一份。
+                name: float(motion_raw.get(name, getattr(HeadingHoldSettings, name)))
+                for name in (
+                    "heading_hold_gain",
+                    "heading_rate_damping",
+                    "heading_deadband_deg",
+                    "heading_rate_deadband_dps",
+                )
+            }
+        ),
     )
     depth_raw = _section(raw, "depth")
     depth = DepthSettings(

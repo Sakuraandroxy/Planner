@@ -47,6 +47,44 @@ class StopResult:
 
 
 @dataclass(frozen=True)
+class CollisionContact:
+    """一次已捕获的接触：撞到了什么，适配层是什么时候读到的。
+
+    ``at_monotonic_s`` 填适配层读到事件那一刻的 ``time.monotonic()``：仿真时间戳与
+    本地单调钟之间没有已标定的映射，字段名叫 monotonic 就必须是单调钟。
+    """
+
+    counterpart: str
+    at_monotonic_s: float
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.counterpart, str) or not self.counterpart:
+            raise ValueError("collision counterpart must be a non-empty string")
+        if (
+            isinstance(self.at_monotonic_s, bool)
+            or not isinstance(self.at_monotonic_s, (int, float))
+            or not math.isfinite(self.at_monotonic_s)
+        ):
+            raise ValueError("collision at_monotonic_s must be finite")
+
+
+@dataclass(frozen=True)
+class CollisionState:
+    """一次碰撞端口读取的结果；读取会消费已捕获的事件。"""
+
+    in_contact: bool
+    last_contact: CollisionContact | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.in_contact, bool):
+            raise ValueError("collision in_contact must be a boolean")
+        if self.last_contact is not None and not isinstance(
+            self.last_contact, CollisionContact
+        ):
+            raise ValueError("collision last_contact must be CollisionContact or None")
+
+
+@dataclass(frozen=True)
 class ExecutionRecord:
     """Measured endpoint history, scoped to one executed batch (not pending)."""
 
