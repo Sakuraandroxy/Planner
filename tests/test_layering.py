@@ -54,6 +54,42 @@ def _imports(path: Path) -> set[str]:
     return found
 
 
+def test_domain_ports_never_import_another_layer():
+    """D1：契约层只定义类型，不 import 任何其他层（``planner.errors`` 除外）。"""
+    offenders = set()
+    for package in ("domain", "ports"):
+        for path in sorted((ROOT / "planner" / package).rglob("*.py")):
+            if "__pycache__" in path.parts:
+                continue
+            for module in _imports(path):
+                if not module.startswith("planner."):
+                    continue
+                if module.split(".")[1] in ("domain", "ports", "errors"):
+                    continue
+                offenders.add((str(path.relative_to(ROOT)), module))
+    assert not offenders, (
+        "planner/domain 与 planner/ports 依赖了其他层："
+        f"{sorted(offenders)}"
+    )
+
+
+def test_motion_and_engine_capability_types_stay_in_their_own_module():
+    """``MotionCapability`` 谈载具运动学，``Capabilities`` 谈引擎控件。"""
+    definitions = {
+        "MotionCapability": set(),
+        "Capabilities": set(),
+    }
+    for path in sorted((ROOT / "planner").rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef) and node.name in definitions:
+                definitions[node.name].add(str(path.relative_to(ROOT)))
+    assert definitions["MotionCapability"] == {"planner/domain/motion.py"}
+    assert definitions["Capabilities"] == {"planner/domain/engine_family.py"}
+
+
 def test_algorithms_never_import_an_upper_layer():
     offenders = set()
     for path in sorted(ALGORITHMS.rglob("*.py")):

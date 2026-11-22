@@ -3,7 +3,7 @@ import math
 import pytest
 
 from planner.config import CameraSettings, DepthSettings
-from planner.domain import CarCommand, WorldPose
+from planner.domain import CarCommand, HolonomicCommand, MotionModel, WorldPose
 from planner.errors import ExecutionError
 from planner.domain import MotionLimits as ConfiguredMotionLimits
 from planner.simulators.projectairsim.rover import (
@@ -160,6 +160,27 @@ def test_start_enables_api_control_arms_and_holds_the_brake():
         "steering_angle": 0.0,
         "brake": 1.0,
     }
+    rover.close()
+
+
+def test_motion_capability_declares_an_ackermann_drive_model():
+    rover, _, _ = make_rover()
+    capability = rover.motion_capability()
+    assert capability.model is MotionModel.ACKERMANN
+    assert capability.max_lateral_speed_mps == 0.0
+    assert capability.min_turn_radius_m == pytest.approx(3.20, abs=0.05)
+    rover.close()
+
+
+def test_stream_command_rejects_a_holonomic_command_before_the_engine():
+    rover, connection, _ = make_rover()
+    rover.start()
+    connection.requests.clear()
+    connection.advances.clear()
+    with pytest.raises(ValueError):
+        rover.stream_command(HolonomicCommand(0.0, 0.3, 0.0, 0.0), 0.05)
+    assert connection.control_requests() == []
+    assert connection.advances == []
     rover.close()
 
 

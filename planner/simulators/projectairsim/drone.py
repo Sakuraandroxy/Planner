@@ -36,6 +36,7 @@ from planner.domain import (
     MotionCommand,
     MotionLimits,
     MotionModel,
+    require_supported,
 )
 from .async_bridge import AsyncBridge
 from .collision import CollisionEvent, CollisionMonitor
@@ -573,6 +574,7 @@ class ProjectAirSimDrone:
         )
 
     def stream_command(self, command: MotionCommand, duration_s: float) -> None:
+        require_supported(command, self._capability)
         self._holding.release()
         self.hold_velocity(
             (command.vx, command.vy, command.vz), command.yaw_rate_deg_s, duration_s

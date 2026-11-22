@@ -28,6 +28,7 @@ from planner.domain import (
     MotionCommand,
     MotionLimits,
     MotionModel,
+    require_supported,
 )
 from .collision import CollisionEvent, CollisionMonitor
 from .connection import ProjectAirSimConnection
@@ -276,6 +277,7 @@ class ProjectAirSimRover:
         )
 
     def stream_command(self, command: MotionCommand, duration_s: float) -> None:
+        require_supported(command, self._capability)
         self._require_started()
         if (
             not all(

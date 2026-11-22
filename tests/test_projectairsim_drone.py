@@ -7,7 +7,7 @@ from projectairsim.drone import YawControlMode
 from projectairsim.types import LandedState
 
 from planner.config import CameraSettings, DepthSettings
-from planner.domain import HolonomicCommand, WorldPose
+from planner.domain import CarCommand, HolonomicCommand, MotionModel, WorldPose
 from planner.errors import ExecutionError
 from planner.domain import MotionLimits as ConfiguredMotionLimits
 from planner.simulators.projectairsim.drone import ProjectAirSimDrone
@@ -452,6 +452,23 @@ def test_prepare_takes_off_again_after_a_lagging_land():
     assert drone.land() is True
     drone.prepare(takeoff_if_landed=True)
     assert robot.z < GROUND_Z - 0.5
+    drone.close()
+
+
+def test_motion_capability_declares_holonomic_flight():
+    drone, _, _, _ = make_drone()
+    capability = drone.motion_capability()
+    assert capability.model is MotionModel.HOLONOMIC
+    assert capability.max_lateral_speed_mps > 0
+    assert capability.min_turn_radius_m is None
+    drone.close()
+
+
+def test_stream_command_rejects_a_car_command():
+    drone, _, _, _ = make_drone()
+    drone.start()
+    with pytest.raises(ValueError):
+        drone.stream_command(CarCommand(1.0, 0.0, False), 0.05)
     drone.close()
 
 

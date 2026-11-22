@@ -6,7 +6,13 @@ import time
 
 from planner.domain import ExecutionBudget, PoseCheckpoint
 from planner.domain import CollisionState
-from planner.domain import MotionCapability, MotionCommand, MotionLimits, MotionModel
+from planner.domain import (
+    MotionCapability,
+    MotionCommand,
+    MotionLimits,
+    MotionModel,
+    require_supported,
+)
 from planner.domain import WorldPose
 from planner.domain import TimedVehicleState
 from planner.domain import MotionSegment
@@ -218,6 +224,7 @@ class AirSimVehicle:
             yaw_rate_deg_s=math.degrees(k.angular_velocity.z_val))
 
     def stream_command(self, command: MotionCommand, duration_s):
+        require_supported(command, self._capability)
         if self.holding is not None:
             self.holding.release()
         self.hold_velocity(
