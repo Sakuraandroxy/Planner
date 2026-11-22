@@ -38,7 +38,18 @@
 | tools | `impl/tools` | 已合并 | `streaming_views.py` 移到 `scripts/` |
 | lint | `impl/lint` | 已合并 | 提交信息检查脚本与用例 |
 
-测试基线：主干 1110 条全绿。
+测试基线：主干 1129 通过、9 条 xfail。xfail 是未来阶段的守门条目，每个都写了等哪个阶段修。
+
+| xfail | 等哪个阶段 |
+| --- | --- |
+| workflows 1 条深层 import | 阶段 1g 收尾 |
+| assembly 16 条深层 import | 阶段 6 |
+| simulators 4 条深层 import | 阶段 7 |
+| domain、ports 入口导出面 | 阶段 2 |
+| algorithms 二级入口与削面 | 阶段 3 |
+| runtime 的 ControlLoop 一族 | 阶段 3、4、5 |
+| workflows 的任务包声明 | 阶段 5 |
+| assembly 的 12 个名字收口 | 阶段 6 |
 
 合并记录：controller 以 `4218de6 controller finished` 合入，冲突三处（测试 import、bootstrap import、config.py 与 server_controller 的删除），按分支侧或主干侧分别解掉后跑绿。
 
