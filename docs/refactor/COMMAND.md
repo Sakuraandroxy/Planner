@@ -114,3 +114,14 @@ git merge --no-ff impl/<流> -m "<流> finished"
 - 收工要关掉对应 herdr 标签，用户不喜欢闲置窗口。
 - 每次合并前先看提交信息是否过了检查脚本，不合格的用 `git filter-branch --msg-filter` 重写。
 - 合并完成后在主干跑一次全量测试，再 `git worktree remove` 清掉已合并的 worktree。
+
+## 八、遗留项（截至 docs 更新时）
+
+| 项 | 说明 | 归属 |
+| --- | --- | --- |
+| 视觉目标连续路径 | 仍走自身批次语义，未并入 `workflows/common/streaming.py` 的 `StreamRunner`；巡航已并入 | 后续任务，裁决理由见下 |
+| `CameraIntrinsics` 断言 | 阶段 7 列的运行期校验未加，类型已有 | 引擎侧，接真机时补 |
+| UE5 冒烟 | 三类任务实跑与连续遥测比对未做，本机无模拟器 | 有环境后补 |
+| `algorithms` 四个名字 | 文档表列的 `corridor_default`、`passed_lateral_corridor`、`bounded`、`BackgroundCall` 未落地，入口按实际 8 名导出 | 文档已标注差额 |
+
+视觉目标连续路径不并入的理由：每次取帧对应一次确认与重规划，节拍与巡航不同；硬并会让节拍与遥测无法验证。
