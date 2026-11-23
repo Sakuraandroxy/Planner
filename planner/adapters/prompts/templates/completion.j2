@@ -1,0 +1,103 @@
+判断当前阶段是否已完成。
+
+视觉输入：
+- 图片1：停稳后采集的当前前视RGB图像，允许观测容差内的残余漂移
+- 图片2：同一次采集的前视深度可视化
+{% if has_reference %}
+- 图片3：首次绑定的目标参考图
+{% endif %}
+- 深度显示协议：{{ depth_protocol }}
+- 数值距离取本地测量结果
+
+当前阶段：
+- 阶段编号：{{ stage_id }}
+- 任务类型：visual_goal_navigation
+
+当前阶段的原始任务指令：
+{{ instruction }}
+
+本阶段指定目标：
+- 目标描述：{{ target_description }}
+- 目标引用：{{ reference_description }}
+- 目标关联证据来源：{{ association_source }}
+{% if bound %}
+- 首次锁定世界坐标：{{ anchor_world_point }}
+- 已绑定表面点集合：{{ known_surfaces }}
+- 位置来源观测：{{ bound_capture_id }}，距当前观测 {{ bound_age_s }} 秒
+{% else %}
+- 本次关联目标框：{{ current_bbox_json }}
+{% endif %}
+- 目标世界坐标：{{ target_world_point }}
+- 位置来源：{{ position_source }}
+- 保持目标在前视画面内：{{ keep_target_in_view }}
+- 阶段起始位姿 [world x,y,z,yaw_deg]：{{ initial_pose_json }}
+- 方向描述以阶段起始视角为基准
+
+本阶段目标绑定与当前观测：
+{% if bound %}
+- 本阶段已绑定目标，当前画面沿用该绑定
+{% else %}
+- 目标关联来自本次观测，本阶段没有位置绑定
+{% endif %}
+{% if has_evidence %}
+- 检测来源观测：{{ evidence_capture_id }}，距当前观测 {{ evidence_age_s }} 秒
+- 与本次停稳图像同一观测：{{ same_observation }}
+- 检测器状态：{{ status }}；声称同一目标：{{ same_target }}
+- 检测器描述：{{ description }}；检测器关联来源：{{ evidence_association_source }}
+- 检测器依据：{{ evidence_text }}
+- 本次观测的目标框（归一化）：{{ evidence_bbox_json }}
+{% if has_surface_points %}
+- 本次观测的表面点：{{ surface_points_json }}
+{% endif %}
+{% if rejection %}
+- 本次坐标更新未接受：{{ rejection }}。沿用原绑定位置
+{% else %}
+- 本地已接受本次位置更新
+{% endif %}
+{% else %}
+- 本阶段无近期检测
+{% endif %}
+
+本地触发规则：
+- 触发方式：进入目标半径触发暂停
+{% if bound %}
+- 距离口径：到本阶段绑定表面点集合的最小水平距离，只用世界 x、y
+{% else %}
+- 距离口径：到本次所选表面点的水平距离，只用世界 x、y
+{% endif %}
+- 急停触发半径：{{ pause_radius_m }} 米，只触发暂停
+- 完成距离上限：{{ radius_m }} 米，圈内任意位置均可
+- 测距不确定性余量：{{ uncertainty_margin_m }} 米，距离加余量不超过上限
+{% if height_tolerance is none %}
+- 高度约束：无
+{% else %}
+- 高度约束：相对阶段起点的世界 z 变化不超过 {{ height_tolerance }} 米
+{% endif %}
+
+停稳后的本地测量结果：
+- 当前车辆世界坐标：{{ pose_json }}
+- 当前车辆偏航角：{{ yaw_deg }} 度
+- 当前水平距离：{{ distance_m }} 米
+- 完成距离上限条件满足：{{ radius_met }}
+- 高度约束满足：{{ height_met }}
+- 本地检查：目标关联、停稳条件通过
+- 独立新鲜观测确认次数：{{ confirmation_count }}/{{ required_confirmation_count }}
+
+本阶段的全部必需完成条件：
+{% for condition in required_conditions %}
+- {{ condition }}
+{% endfor %}
+
+针对当前导航任务的判断说明：
+- 当前证据与原目标矛盾时，以当前证据为准
+- 目标身份依据本阶段绑定或本次目标关联证据确认
+- 任务要求目标保持在前视画面内时，画面中有可关联的部分即满足
+- 距离条件、高度条件按本地测量结果判断
+- 原始任务要求看清某个部位、门牌、入口或全景时，须确认该观察已满足
+- 不得用其他局部视图代替原始任务点名的观察目标
+- 观察要求只来自原始任务
+{% if has_reference %}
+- 当前视图可以与参考图不同，允许局部或背面
+{% else %}
+- 本阶段没有参考图，按目标关联、描述、位置、当前观测判断
+{% endif %}

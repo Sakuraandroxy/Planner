@@ -144,7 +144,7 @@
 
 1. 轨迹类模板在**模块导入期**读取：`base.py:17`、`base.py:23`、`free_navigation.py:16-25`、`visual_goal_navigation.py:19-33`、`visual_goal_navigation.py:67-68`。
 2. 检测类也在导入期读：`target_detection/prompts/system.py:4`、`visual_goal_target_detection.py:5`。
-3. 完成判定类在**调用期**读：`visual_goal_completion.py:79-80` 才 `load_fragment("system")`。
+3. 完成判定类在**调用期**渲染：`render_prompt("completion_system")` 与 `render_prompt("completion", **completion_values(request))`（`visual_goal_completion.py:27-32`、`prompts/values.py:95`）。
 4. 片段用 `load_fragment` 去掉文件末尾换行，分隔符由组合代码决定（`prompts/render.py:21-23`）。
 5. 占位符只支持 `\$\{name\}`，缺值抛 `KeyError`（`prompt_render.py:11-23`）。
 

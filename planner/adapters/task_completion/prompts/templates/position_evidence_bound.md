@@ -1,4 +1,0 @@
-- 首次锁定世界坐标：${anchor_world_point}
-- 已绑定目标表面点集合：${known_surfaces}
-- 位置来源观测ID：${capture_id}
-- 位置估计距当前观测的年龄：${age_s}秒。
