@@ -150,16 +150,16 @@
 
 | 层 | 文件 | 行数 |
 | --- | --- | --- |
-| domain | 25 | 2678 |
-| ports | 13 | 291 |
-| algorithms | 20 | 993 |
-| runtime | 35 | 3378 |
-| workflows | 23 | 2687 |
-| assembly | 20 | 2558 |
-| adapters | 44 | 2947 |
-| simulator | 13 | 2503 |
-| simulators | 31 | 5400 |
-| 合计 | 224 | 23435 |
+| domain | 23 | 2162 |
+| ports | 13 | 311 |
+| algorithms | 21 | 1060 |
+| runtime | 33 | 3601 |
+| workflows | 23 | 2702 |
+| assembly | 20 | 2555 |
+| adapters | 44 | 2990 |
+| simulator | 13 | 2618 |
+| simulators | 31 | 5410 |
+| 合计 | 221 | 23409 |
 
 ## 11 测试与守门
 
