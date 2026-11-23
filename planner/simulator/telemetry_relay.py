@@ -17,8 +17,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 
-from planner.domain import TrajectorySnapshot
-from planner.runtime import TrajectoryHub
+from planner.runtime import TrajectoryHub, TrajectorySnapshot
 
 #: How often a snapshot may cross the pipe while a task is running.
 DEFAULT_MIN_INTERVAL_S = 0.4

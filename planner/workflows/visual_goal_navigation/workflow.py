@@ -20,7 +20,7 @@ from planner.domain import RelativePoseDelta, wrap_yaw_deg
 from planner.domain import CompletionBasis, ResultMeasurement, StageResult, StageSummary
 from planner.domain import SlidingWindowSettings
 from planner.domain import MotionTrajectory, RelativeTrajectory
-from planner.domain import MODE_STOPPED_BATCH
+from planner.runtime import MODE_STOPPED_BATCH
 from planner.domain import (
     GoalVisibility,
     VisualGoalNavigationParameters,

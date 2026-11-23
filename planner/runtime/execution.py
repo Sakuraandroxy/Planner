@@ -113,7 +113,7 @@ class ExecutionService:
     def stop(self) -> StopResult:
         self.assert_owner()
         errors = []
-        for action in (self.vehicle.cancel, self.vehicle.hover):
+        for action in (self.vehicle.cancel, self.vehicle.hold):
             try:
                 action()
             except Exception as exc:

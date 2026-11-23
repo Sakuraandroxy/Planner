@@ -12,7 +12,7 @@ from functools import partial
 import numpy as np
 from PIL import Image
 
-from planner.domain import render_depth
+from planner.algorithms import render_depth
 from planner.domain import ExecutionBudget
 from planner.domain import Observation
 from planner.errors import (

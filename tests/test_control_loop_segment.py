@@ -69,7 +69,7 @@ class PerfectPlant:
     def cancel(self):
         pass
 
-    def hover(self):
+    def hold(self):
         pass
 
 

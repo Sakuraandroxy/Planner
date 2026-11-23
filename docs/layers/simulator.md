@@ -185,7 +185,7 @@
 | 上游 | `planner.assembly`（`ServerController`、`MissionResources`、`assemble_missions`、`task_finish_events`） | `mission_child.py:31-33`、`worker.py:14`、`registry.py:74` 直接 import；装配层通过 `BackendWorker` 协议驱动本层 |
 | 上游 | `planner.config` | `MapCatalog`、`MapEntry`、`SimulatorSettings`、`family` 段（`argv.py:49-78`、`xpra_start.py:66-90`） |
 | 下游 | `planner.simulators.<name>.runtime` | 只按 `RUNTIME_MODULES` 表用 `import_module` 取 `describe()`/`build_session()`（`registry.py:18-21`、`:59-69`） |
-| 下游 | `planner.domain` | `snapshot_from_payload`、`weather_catalog_from_payload`、`snapshot_to_payload`、`TrajectorySnapshot` |
+| 下游 | `planner.runtime` / `planner.domain` | `snapshot_from_payload`、`snapshot_to_payload`、`TrajectorySnapshot`（runtime）；`weather_catalog_from_payload`（domain） |
 | 下游 | `planner.runtime` | `TrajectoryHub`（`telemetry_relay.py:40`） |
 | 数据形态 | 子进程序列化 | 事件是每行一个 JSON 对象；`WEATHER` 回灌成 `WeatherCatalog`、`TRAJECTORY` 回灌成 `TrajectorySnapshot`，其余保持裸 JSON（`subprocess_worker.py:92-110`） |
 

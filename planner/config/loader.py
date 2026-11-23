@@ -8,7 +8,7 @@ from pathlib import Path
 import yaml
 
 from ..domain.depth_foreground import DepthForegroundSettings
-from ..domain.engine_family import FamilyCatalog, parse_family_catalog
+from .engine_family import FamilyCatalog, parse_family_catalog
 from ..domain.motion import (
     ContinuousTrackingSettings,
     HeadingHoldSettings,

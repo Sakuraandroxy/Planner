@@ -42,7 +42,7 @@
 
 ### 契约类型
 
-读：`planner.domain` 的 `Observation`、`WorldPose`、`ExecutionBudget`、`VisualGoalCompletionInput`、`VisualGoalPlanningContext`、`TargetDetectionInput`、`LocalizedGoal` 系列、`TrajectorySnapshot`、`default_view_for`。
+读：`planner.domain` 的 `Observation`、`WorldPose`、`ExecutionBudget`、`VisualGoalCompletionInput`、`VisualGoalPlanningContext`、`TargetDetectionInput`、`LocalizedGoal` 系列、`default_view_for`，以及 `planner.runtime` 的 `TrajectorySnapshot`。
 
 写：`MissionPlan`/`MissionStage`、`RelativeTrajectory`、`TargetDetection`、`bool`、`SuccessResponse` 等 HTTP 响应体。
 

@@ -33,7 +33,7 @@ from planner.assembly import MissionResources
 from planner.assembly import task_finish_events
 from ..config import load_config
 from .worker_protocol import TaskSubmission, WorkerEventKind
-from planner.domain import snapshot_to_payload
+from planner.runtime import snapshot_to_payload
 from . import registry
 from .subprocess_worker import EVENT_FD_ENV
 from .telemetry_relay import RelayedTelemetry

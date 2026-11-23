@@ -65,7 +65,7 @@ class FakeVehicle:
             self.pose.yaw_deg + command.yaw_rate_deg_s * duration_s,
         )
 
-    def hover(self):
+    def hold(self):
         pass
 
     def cancel(self):

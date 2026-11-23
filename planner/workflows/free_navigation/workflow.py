@@ -25,7 +25,7 @@ from planner.domain import MissionStage
 from planner.domain import ContinuousTrackingSettings, MotionLimits
 from planner.domain import CompletionBasis, ResultMeasurement, StageResult, StageSummary
 from planner.domain import SlidingWindowSettings
-from planner.domain import MODE_STOPPED_BATCH
+from planner.runtime import MODE_STOPPED_BATCH
 from planner.errors import (
     BudgetExceeded,
     ExecutionError,

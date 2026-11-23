@@ -40,8 +40,8 @@ from planner.workflows.visual_goal_navigation import TargetApproach
 from planner.workflows.visual_goal_navigation import VisualGoalCompletion
 from planner.workflows.visual_goal_navigation import BBoxGoalObserver
 from planner.config import default_config_path, load_config
+from planner.algorithms import render_depth
 from planner.domain import BasicMotionParameters
-from planner.domain import render_depth
 from planner.domain import MissionStage, TaskKind
 from planner.domain import VisualGoalNavigationParameters
 from planner.runtime import ExecutionService

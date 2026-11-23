@@ -19,7 +19,7 @@ from planner.domain import FreeNavigationParameters
 from planner.domain import ContinuousTrackingSettings
 from planner.domain import PlanningWindowInput
 from planner.domain import QueueObservationAnchor
-from planner.domain import MODE_CONTINUOUS
+from planner.runtime import MODE_CONTINUOUS
 from planner.errors import (
     ExecutionError,
     FreeNavigationStalled,
@@ -221,7 +221,7 @@ class FreeNavigationContinuous:
         # CARLA is synchronous: with no command the world would not advance, so
         # a moving capture could never complete while the queue waits for
         # planning. Hovering keeps the car at its pose and advances one step.
-        self.execution.vehicle.hover()
+        self.execution.vehicle.hold()
 
     def _measure(self, window, instruction, stage_id) -> None:
         self._update_measurements()

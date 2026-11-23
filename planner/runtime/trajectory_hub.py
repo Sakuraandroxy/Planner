@@ -7,7 +7,7 @@ import time
 from dataclasses import replace
 
 from planner.domain import WorldPose
-from planner.domain import (
+from .telemetry import (
     MODE_IDLE,
     MODE_NO_QUEUE,
     MODE_PENDING,

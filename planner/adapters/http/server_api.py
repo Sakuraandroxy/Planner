@@ -17,8 +17,8 @@ from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from planner.assembly import ServerState
-from planner.domain import TrajectorySnapshot
 from planner.domain import default_view_for
+from planner.runtime import TrajectorySnapshot
 from .schemas import (
     HomeRequest,
     ModelsRequest,

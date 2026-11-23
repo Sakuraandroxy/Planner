@@ -1,7 +1,7 @@
 """``Vehicle`` 端口的兑现：读侧转给引擎，段执行转给控制循环。
 
 引擎只提供 ``current_pose``、``motion_capability``、``collision_state``、``cancel``、
-``hover`` 与 ``stream_command``；段执行、节拍与停稳判定都在 ``ControlLoop`` 里。
+``hold`` 与 ``stream_command``；段执行、节拍与停稳判定都在 ``ControlLoop`` 里。
 """
 
 from __future__ import annotations
@@ -25,8 +25,8 @@ class GuidedVehicle:
     def cancel(self) -> None:
         return self.streaming.cancel()
 
-    def hover(self) -> None:
-        return self.streaming.hover()
+    def hold(self) -> None:
+        return self.streaming.hold()
 
     def stream_state(self):
         return self.streaming.stream_state()

@@ -5,7 +5,7 @@ import math
 
 import numpy as np
 
-from .depth import (
+from ...domain import (
     FAR_VALID_PIXEL_VALUE,
     INVALID_DEPTH_SENTINEL_M,
     LEGACY_DEPTH_MAPPING,

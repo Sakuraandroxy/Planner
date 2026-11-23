@@ -30,7 +30,7 @@ grep -rn "^from \.\|^from planner\." planner/algorithms/ | grep -v "planner.doma
 
 ## 3 输入与输出
 
-入口 `planner/algorithms/__init__.py`，导出 12 个名字（`__all__` 在 planner/algorithms/__init__.py:17）。二级入口三个：`planner.algorithms.motion`（planner/algorithms/motion/__init__.py:7）、`planner.algorithms.depth`（planner/algorithms/depth/__init__.py:8）、`planner.algorithms.targeting`（planner/algorithms/targeting/__init__.py:12）。
+入口 `planner/algorithms/__init__.py`，导出 13 个名字（`__all__` 在 planner/algorithms/__init__.py:18）。二级入口三个：`planner.algorithms.motion`（planner/algorithms/motion/__init__.py:7）、`planner.algorithms.depth`（planner/algorithms/depth/__init__.py:8）、`planner.algorithms.targeting`（planner/algorithms/targeting/__init__.py:12）。
 
 输入是契约类型：`Observation`、`GoalObservation`、`GoalGeometry`、`TargetPositionState`、`WorldPose`、`RelativeTrajectory`、`WorldTrajectory`、`MotionLimits`、`CameraIntrinsics`、`VisualGoalPlanningContext`、`DepthForegroundSettings`、`ContinuousTrackingSettings`。
 
@@ -55,9 +55,10 @@ grep -rn "^from \.\|^from planner\." planner/algorithms/ | grep -v "planner.doma
 | `relative_to_world` | 函数 | 车体系增量序列转世界航点，保留带符号偏航 | planner/runtime/window/inflight.py:98 |
 | `require_execution_anchor` | 函数 | 实测位姿偏离锚点超差即抛 `ExecutionError` | planner/runtime/window/queue.py:114 |
 | `world_pose_delta_in_reference_frame` | 函数 | 世界位姿差转到起点水平系 | planner/adapters/trajectory_planner/prompts/base.py:61 |
+| `render_depth` | 函数 | 米制深度渲成三通道显示图，不改输入，按映射协议选灰度曲线（planner/algorithms/depth/render.py:18） | planner/simulators/airsim/observation_source.py:15、planner/simulators/projectairsim/observation.py:24、scripts/smoke_projectairsim_drone.py:43 |
 | `world_to_relative` | 函数 | 世界航点转车体系增量，偏航用元数据不重新测量 | planner/runtime/window/queue.py:82、planner/runtime/window/window.py:131、planner/workflows/visual_goal_navigation/approach.py:25 |
 
-二级入口额外对外（不在顶层 12 名里）：`measure_free_space`、`FreeSpaceProfile`、`FreeSpaceProfileSettings`、`DepthGeometry`、`DepthForegroundFilter`、`sample_surface_depth`（depth 组）；`BasicMotionConverter`、`GeometricTargetPlanner`、`GeometricPlannerSettings`、`accept_position`、`bound_target_geometry`、`bound_target_goal`、`make_reference`（targeting 组）。调用点：planner/adapters/trajectory_planner/prompts/visual_goal_navigation.py:6、planner/assembly/factories/detectors.py:60、planner/workflows/basic_motion/workflow.py:14、planner/workflows/visual_goal_navigation/targeting.py:12。
+二级入口额外对外（不在顶层 13 名里）：`measure_free_space`、`FreeSpaceProfile`、`FreeSpaceProfileSettings`、`DepthGeometry`、`DepthForegroundFilter`、`sample_surface_depth`（depth 组）；`BasicMotionConverter`、`GeometricTargetPlanner`、`GeometricPlannerSettings`、`accept_position`、`bound_target_geometry`、`bound_target_goal`、`make_reference`（targeting 组）。调用点：planner/adapters/trajectory_planner/prompts/visual_goal_navigation.py:6、planner/assembly/factories/detectors.py:60、planner/workflows/basic_motion/workflow.py:14、planner/workflows/visual_goal_navigation/targeting.py:12。
 
 ## 5 关键流程
 

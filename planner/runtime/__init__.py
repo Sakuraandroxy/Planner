@@ -20,6 +20,21 @@ from .position_hold import PositionHold
 from .resource_cleanup import close_resources
 from .segment_motion import duration_for, plan_segment, quintic
 from .trajectory_hub import TrajectoryHub
+from .telemetry import (
+    MODE_CONTINUOUS,
+    MODE_IDLE,
+    MODE_NO_QUEUE,
+    MODE_PENDING,
+    MODE_STOPPED_BATCH,
+    QueueSnapshot,
+    TrajectoryPointSnapshot,
+    TrajectorySnapshot,
+    VehicleSnapshot,
+    build_queue_snapshot,
+    snapshot_from_payload,
+    snapshot_to_payload,
+    vehicle_snapshot,
+)
 from .window import PlanningWindow
 
 __all__ = [
@@ -38,7 +53,20 @@ __all__ = [
     "QueueFollower",
     "SMOOTH_PROFILE",
     "SynchronizedMotionPlanner",
+    "MODE_CONTINUOUS",
+    "MODE_IDLE",
+    "MODE_NO_QUEUE",
+    "MODE_PENDING",
+    "MODE_STOPPED_BATCH",
+    "QueueSnapshot",
     "TrajectoryHub",
+    "TrajectoryPointSnapshot",
+    "TrajectorySnapshot",
+    "VehicleSnapshot",
+    "build_queue_snapshot",
+    "snapshot_from_payload",
+    "snapshot_to_payload",
+    "vehicle_snapshot",
     "braking_speed",
     "close_resources",
     "duration_for",

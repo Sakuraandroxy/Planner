@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
 
+from planner.algorithms import render_depth
 from planner.domain import FAR_VALID_PIXEL_VALUE, SHARED_DEPTH_MAPPING
-from planner.domain import render_depth
 
 
 def test_legacy_mapping_is_near_bright_and_black_out_of_range():

@@ -25,7 +25,7 @@ from planner.domain import RelativePoseDelta, WorldPose
 from planner.domain import QueuedWaypoint, SlidingWindowSettings
 from planner.domain import QueueObservationAnchor
 from planner.domain import RelativeTrajectory
-from planner.domain import MODE_CONTINUOUS
+from planner.runtime import MODE_CONTINUOUS
 from planner.errors import (
     ExecutionError,
     FreeNavigationStalled,
@@ -565,7 +565,7 @@ class FakeStreamingExecution:
             stream_command=lambda *args: None,
             motion_capability=lambda: HOLONOMIC,
             collision_state=lambda: CollisionState(False),
-            hover=lambda: None,
+            hold=lambda: None,
         )
         self.checkpoints = 0
         self.stops = 0

@@ -79,7 +79,8 @@ class AirSimVehicle:
     def cancel(self) -> None:
         self.connection.call("cancelLastTask")
 
-    def hover(self) -> None:
+    def hold(self) -> None:
+        """Start the position hold and command one control period of it."""
         if self.holding is None:
             raise ExecutionError("AirSim position hold service was not assembled")
         self.holding.start()
@@ -92,7 +93,7 @@ class AirSimVehicle:
     def begin_observation_hold(self):
         """Keep the existing fixed reference across consecutive image captures."""
         if self.holding is None or not self.holding.active:
-            self.hover()
+            self.hold()
         else:
             self.holding.tick()
 
