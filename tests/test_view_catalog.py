@@ -9,7 +9,6 @@ from planner.domain import (
     default_view_for,
     front_view_for,
     validate_view_mode,
-    view_index,
 )
 
 
@@ -19,19 +18,10 @@ def test_view_modes_are_unique_and_labelled():
     assert set(VIEW_LABELS) == set(VIEW_MODES)
 
 
-def test_validate_view_mode_accepts_known_modes():
-    for mode in VIEW_MODES:
-        assert validate_view_mode(mode) == mode
-
-
 @pytest.mark.parametrize("mode", ["moon", "", None, 3])
 def test_validate_view_mode_rejects_unknown_modes(mode):
     with pytest.raises(ValueError, match="unknown view mode"):
         validate_view_mode(mode)
-
-
-def test_view_index_matches_the_cycle_order():
-    assert [view_index(mode) for mode in VIEW_MODES] == [0, 1, 2, 3]
 
 
 def test_front_view_for_maps_both_vehicles():

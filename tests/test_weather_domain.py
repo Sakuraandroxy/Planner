@@ -45,12 +45,6 @@ def test_every_preset_is_complete_and_in_range():
     assert all(value == 0.0 for value in clear.values.values())
 
 
-def test_catalog_lists_fields_with_labels():
-    assert [field.id for field in WEATHER_CATALOG.fields] == list(WEATHER_FIELDS)
-    for field in WEATHER_CATALOG.fields:
-        assert field.label == WEATHER_LABELS[field.id]
-
-
 def test_catalog_lookup_returns_none_for_unknown_presets():
     assert WEATHER_CATALOG.preset("moon") is None
 

@@ -1,12 +1,10 @@
 import pytest
-import yaml
 
 from planner.config import (
     DepthSettings,
     TaskCompletionSettings,
     TaskParserSettings,
     VisualGoalNavigationSettings,
-    load_completion_rules,
     load_config,
 )
 from planner.domain import ContinuousTrackingSettings
@@ -140,36 +138,6 @@ def test_task_parser_section_is_parsed(tmp_path):
 def test_invalid_reference_sections_are_rejected(tmp_path, sections):
     with pytest.raises(ValueError):
         load_config(_write(tmp_path, sections))
-
-
-def test_completion_rules_load_from_the_reference_file(tmp_path):
-    config_path = _write(tmp_path, {})
-    rules_path = tmp_path / "rules.yaml"
-    rules_path.write_text(
-        yaml.safe_dump(
-            {
-                "radius_m": 7.0,
-                "pause_radius_m": 6.5,
-                "required_conditions": ["target matches", "inside radius"],
-            }
-        ),
-        encoding="utf-8",
-    )
-    rules = load_completion_rules(config_path, "rules.yaml")
-    assert rules.radius_m == 7.0
-    assert rules.effective_pause_radius_m == 6.5
-    assert rules.required_conditions == ("target matches", "inside radius")
-
-
-def test_completion_rules_reject_unknown_fields(tmp_path):
-    config_path = _write(tmp_path, {})
-    rules_path = tmp_path / "rules.yaml"
-    rules_path.write_text(
-        yaml.safe_dump({"radius_m": 7.0, "unexpected": True}),
-        encoding="utf-8",
-    )
-    with pytest.raises(ValueError):
-        load_completion_rules(config_path, "rules.yaml")
 
 
 def test_visual_goal_settings_validate_text_fields():

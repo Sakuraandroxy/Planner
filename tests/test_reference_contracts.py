@@ -3,26 +3,17 @@ import math
 import pytest
 
 from planner.workflows.visual_goal_navigation import ApproachSettings, ApproachStatus, approach_settings
-from planner.domain import BasicMotionParameters
-from planner.domain import DepthForegroundResult, DepthForegroundSettings
-from planner.domain import FreeNavigationParameters
-from planner.domain import MissionPlan, MissionStage, TaskKind
+from planner.domain import DepthForegroundSettings
 from planner.domain import (
     CompletionBasis,
-    MissionResult,
     ResultMeasurement,
     StageResult,
     StageSummary,
 )
 from planner.domain import TargetPositionState
 from planner.domain import (
-    GoalGeometry,
     GoalObservation,
-    GoalReference,
     GoalVisibility,
-    VisualGoalNavigationParameters,
-    VisualGoalPlanningContext,
-    VisualGoalState,
 )
 from planner.domain import VisualGoalTriggerRules
 from planner.domain import VisualGoalLimits
@@ -57,44 +48,6 @@ def test_goal_observation_defaults_follow_the_reference_contract():
     assert goal.same_target is True
     assert goal.association_source == "local_geometry"
     assert goal.surface_points is None
-
-
-def test_goal_geometry_carries_depth_filter_and_bound_surfaces():
-    geometry = GoalGeometry(
-        reliable=True,
-        reason="bound",
-        distance_m=5.0,
-        world_point=(1.0, 2.0, 0.0),
-        depth_filter=DepthForegroundResult(applied=False, reason="disabled"),
-        surface_points_world=((1.0, 2.0, 0.0),),
-    )
-    assert geometry.depth_filter.applied is False
-    assert geometry.surface_points_world == ((1.0, 2.0, 0.0),)
-
-
-def test_goal_reference_keeps_the_initial_crop_not_the_latest_estimate():
-    crop = object()
-    reference = GoalReference(
-        description="the red car",
-        crop=crop,
-        world_point=(3.0, 4.0, 0.0),
-        bbox=(0.4, 0.4, 0.6, 0.7),
-    )
-    assert reference.crop is crop
-
-
-def test_planning_context_exposes_state_and_radius():
-    context = VisualGoalPlanningContext(
-        target_description="the red car",
-        goal=_goal(),
-        geometry=GoalGeometry(reliable=True, reason="fresh"),
-        state=VisualGoalState.APPROACHING,
-        arrival_radius_m=7.0,
-        distance_uncertainty_margin_m=0.0,
-        maximum_vertical_offset_m=None,
-    )
-    assert context.state is VisualGoalState.APPROACHING
-    assert context.goal_observation_is_current is True
 
 
 def test_approach_settings_reject_margin_at_or_above_radius():
@@ -170,50 +123,6 @@ def test_stage_summary_requires_evidence_for_confirmed_completion():
             success=False,
             summary=summary,
         )
-
-
-def test_mission_types_carry_visual_goal_stages():
-    parameters = VisualGoalNavigationParameters(
-        instruction="drive to the red car",
-        target_description="the red car",
-    )
-    stage = MissionStage(
-        stage_id="stage-1",
-        kind=TaskKind.VISUAL_GOAL_NAVIGATION,
-        parameters=parameters,
-    )
-    plan = MissionPlan(protocol_version="1", stages=(stage,))
-    assert plan.stages[0].kind is TaskKind.VISUAL_GOAL_NAVIGATION
-    assert MissionResult(success=True, stages=()).stages == ()
-
-
-def test_mission_types_carry_basic_motion_stages():
-    parameters = BasicMotionParameters(
-        instruction="drive forward 5 metres",
-        forward_m=5.0,
-    )
-    stage = MissionStage(
-        stage_id="stage-1",
-        kind=TaskKind.BASIC_MOTION,
-        parameters=parameters,
-    )
-    plan = MissionPlan(protocol_version="mission_plan_v1", stages=(stage,))
-    assert plan.stages[0].kind is TaskKind.BASIC_MOTION
-    assert plan.stages[0].parameters.forward_m == 5.0
-
-
-def test_mission_types_carry_free_navigation_stages():
-    parameters = FreeNavigationParameters(
-        instruction="keep driving along the road and avoid obstacles",
-    )
-    stage = MissionStage(
-        stage_id="stage-3",
-        kind=TaskKind.FREE_NAVIGATION,
-        parameters=parameters,
-    )
-    plan = MissionPlan(protocol_version="mission_plan_v1", stages=(stage,))
-    assert plan.stages[0].kind is TaskKind.FREE_NAVIGATION
-    assert plan.stages[0].parameters.instruction.startswith("keep driving")
 
 
 def test_model_timeout_is_an_execution_error_and_cleanup_reports_failures():

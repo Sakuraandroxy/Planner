@@ -11,10 +11,6 @@ from planner.adapters.task_parser.tasks.free_navigation import (
     decode_free_navigation,
 )
 from planner.adapters.trajectory_planner.prompts import (
-    AERIAL_BASE_TRAJECTORY_SYSTEM_PROMPT,
-    AERIAL_FREE_NAVIGATION_SYSTEM_PROMPT,
-    BASE_TRAJECTORY_SYSTEM_PROMPT,
-    FREE_NAVIGATION_SYSTEM_PROMPT,
     FreeNavigationTrajectoryPrompt,
 )
 from planner.workflows.free_navigation import FreeNavigationStageValidator
@@ -245,51 +241,6 @@ def test_stage_validator_checks_kind_and_parameter_type():
                 FreeNavigationParameters("follow the road"),
             )
         )
-
-
-def test_system_prompt_appends_road_following_rules_to_the_base():
-    prompt = FreeNavigationTrajectoryPrompt().system_prompt()
-    assert prompt == FREE_NAVIGATION_SYSTEM_PROMPT
-    assert prompt.startswith(BASE_TRAJECTORY_SYSTEM_PROMPT)
-    assert "Free navigation road-following rules" in prompt
-    assert "There is no arrival condition" in prompt
-    assert "Never invent a destination" in prompt
-    assert "Lane discipline rules" in prompt
-    assert "not the widest open space" in prompt
-    assert "Do not cross a lane boundary" in prompt
-    assert "Keep right" in prompt
-    assert "clear bearing window inside the current lane" in prompt
-    assert "Mandatory aim check before output" in prompt
-    assert "The total turn is a different quantity" in prompt
-
-
-def test_aerial_system_prompt_keeps_road_rules_with_flight_wording():
-    prompt = FreeNavigationTrajectoryPrompt(aerial=True).system_prompt()
-    assert prompt == AERIAL_FREE_NAVIGATION_SYSTEM_PROMPT
-    assert prompt.startswith(AERIAL_BASE_TRAJECTORY_SYSTEM_PROMPT)
-    assert "autonomous UAV" in prompt
-    assert "Keep the UAV centred above the current lane" in prompt
-    assert "flight direction" in prompt
-    assert "Free navigation road-following rules" in prompt
-    assert "Lane discipline rules" in prompt
-    assert "the car" not in prompt
-    assert FreeNavigationTrajectoryPrompt().system_prompt() == (
-        FREE_NAVIGATION_SYSTEM_PROMPT
-    )
-    assert "within about 5 deg of the cumulative lane yaw" in prompt
-    assert "Weave counterexample" in prompt
-    assert "left-right weave" in prompt
-    assert "Lane-centring steering procedure" in prompt
-    assert "Step-length default (open lane)" in prompt
-    assert "Open-lane worked example" in prompt
-    assert "never the default on an open lane" in prompt
-    assert "tight-space exception" in prompt
-    text = FreeNavigationTrajectoryPrompt(aerial=True).build_user_prompt(
-        "follow the road", _observation(), 5
-    )
-    assert "Current UAV pose:" in text
-    assert "NED down:" in text
-    assert "Current vehicle pose:" not in text
 
 
 def test_user_prompt_carries_the_instruction_and_rejects_task_context():

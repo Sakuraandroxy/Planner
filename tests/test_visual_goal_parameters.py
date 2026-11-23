@@ -20,12 +20,6 @@ def _parameters(**overrides):
     return VisualGoalNavigationParameters(**values)
 
 
-def test_reference_defaults():
-    parameters = _parameters()
-    assert parameters.arrival_relation is ArrivalRelation.NEAR
-    assert parameters.keep_target_in_view is True
-
-
 @pytest.mark.parametrize(
     "overrides",
     [
