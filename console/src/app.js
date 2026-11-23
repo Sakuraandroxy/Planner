@@ -79,7 +79,8 @@ async function pollStatus() {
     if (currentState === "connecting" && state === "idle") vehicleTouched = false;
     // Take the family flags first: the vehicle buttons below must be filtered
     // by them, because server.vehicles is global while the active map is not.
-    if (body && body.capabilities) caps = body.capabilities;
+    // An explicit null means "no capability report": reset, do not keep stale flags.
+    if (body && "capabilities" in body) caps = body.capabilities;
     if (body && Array.isArray(body.vehicles) && body.vehicles.length) {
       vehicles = body.vehicles.filter(
         (name) =>
@@ -404,12 +405,18 @@ function init() {
       markVideoLoaded();
     }
   });
-  $("video").addEventListener("error", () => {
+  $("video").addEventListener("error", async () => {
     if (viewMode !== "camera") return;
     clearInterval(videoWatch);
     videoWatch = null;
     videoLoaded = false;
     $("video-overlay").hidden = false;
+    // 501 表示这台部署没有帧源，重试不会变好，把原因写在状态行上。
+    const reason = await videoUnavailableReason();
+    if (reason) {
+      $("stream-status").textContent = `画面不可用：${reason}`;
+      return;
+    }
     $("stream-status").textContent = "画面中断，3 秒后重试";
     scheduleVideoRetry();
   });

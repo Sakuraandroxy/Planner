@@ -18,7 +18,6 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from planner.assembly import ServerState
 from planner.domain import default_view_for
-from planner.runtime import TrajectorySnapshot
 from .schemas import (
     HomeRequest,
     ModelsRequest,
@@ -35,7 +34,9 @@ from .wiring import (
     capability_gate,
     invoke,
     missing_catalog,
+    missing_hub,
     mount_console,
+    unsupported,
 )
 
 
@@ -44,9 +45,13 @@ def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAP
 
     Every optional control is gated on the active map's ``capabilities``: an
     action the map's simulator does not offer returns 501 with
-    ``detail.unsupported``. The flags come from the controller, which derives
-    them from the simulator's port bundle, so a simulator cannot advertise a
-    port it lacks and this layer names no simulator of its own.
+    ``detail.unsupported`` and a ``detail.reason``. The flags come from the
+    controller, which derives them from the simulator's port bundle, so a
+    simulator cannot advertise a port it lacks and this layer names no
+    simulator of its own.
+
+    A route whose hub was not passed in still exists: it answers 503 with a
+    reason instead of disappearing or serving an empty payload.
     """
 
     app = build_app(controller, settings, frames)
@@ -65,21 +70,21 @@ def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAP
     def status():
         payload = asdict(controller.status)
         caps, simulator = capabilities(controller)
+        # Versions: an explicit ``null`` means the active map has no capability
+        # report, which the console reads as "controls unavailable".
+        payload["capabilities"] = None if caps is None else caps.as_dict()
         if caps is not None:
             payload["simulator"] = simulator
-            payload["capabilities"] = caps.as_dict()
         return payload
 
     @app.get("/api/trajectory")
     def trajectory():
         # No capability gate: the remaining path is produced by the shared
-        # workflows into this service's hub, for every simulator family.
-        snapshot = (
-            TrajectorySnapshot()
-            if trajectory_hub is None
-            else trajectory_hub.read()
-        )
-        return asdict(snapshot)
+        # workflows into this service's hub, for every simulator family. A
+        # missing hub is a wiring bug, so it must not look like an empty queue.
+        if trajectory_hub is None:
+            raise missing_hub("trajectory")
+        return asdict(trajectory_hub.read())
 
     @app.get("/api/logs")
     def logs(cursor: int = Query(default=0, ge=0)):
@@ -133,7 +138,7 @@ def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAP
             }
             payload["simulator_labels"] = controller.simulator_labels
             payload["simulator"] = simulator
-            payload["capabilities"] = caps.as_dict()
+        payload["capabilities"] = None if caps is None else caps.as_dict()
         return payload
 
     @app.post("/api/world")
@@ -250,19 +255,25 @@ def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAP
         return {"view_mode": mode, "deferred": deferred}
 
 
-    if frames is not None:
-
-        @app.get("/api/video")
-        def video():
-            # The frame hub only ever fills while the active family publishes.
-            require("video")
-            return StreamingResponse(
-                mjpeg_chunks(frames),
-                media_type=(
-                    "multipart/x-mixed-replace; boundary="
-                    + BOUNDARY.decode("ascii")
-                ),
+    @app.get("/api/video")
+    def video():
+        # Two causes answer the same 501 for the same action: the active family
+        # has no video port, or this service was built without a frame hub.
+        require("video")
+        if frames is None:
+            raise unsupported(
+                "video",
+                capabilities(controller)[1],
+                "frame_hub_missing",
+                "this service was built without a frame hub",
             )
+        return StreamingResponse(
+            mjpeg_chunks(frames),
+            media_type=(
+                "multipart/x-mixed-replace; boundary="
+                + BOUNDARY.decode("ascii")
+            ),
+        )
 
     mount_console(app)
 

@@ -86,7 +86,9 @@ def test_service_level_features_are_not_gated_by_the_simulator():
     api = Path(__file__).resolve().parents[1] / "planner/adapters/http/server_api.py"
     body = api.read_text(encoding="utf-8")
     route = re.search(
-        r'@app\.get\("/api/trajectory"\).*?return asdict\(snapshot\)', body, flags=re.DOTALL
+        r'@app\.get\("/api/trajectory"\).*?return asdict\(trajectory_hub\.read\(\)\)',
+        body,
+        flags=re.DOTALL,
     ).group(0)
     assert 'require("trajectory")' not in route, route
 
