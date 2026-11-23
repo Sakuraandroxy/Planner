@@ -30,7 +30,6 @@ pip install --no-deps projectairsim==1.0.2
 
 `projectairsim` 单独装的原因写在 `requirements.txt` 里：它声明 GUI 版 opencv，会与 `opencv-python-headless` 抢同一个 `cv2` 目录。它的运行时依赖已列在该文件末尾。
 
-提示词模板由 `jinja2` 渲染，`requirements.txt` 里已声明 `jinja2>=3.1`，上面的安装命令会一并装上，不需要另装。
 
 UE4 支持是可选的：
 
