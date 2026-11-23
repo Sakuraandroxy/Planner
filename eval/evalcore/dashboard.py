@@ -22,6 +22,7 @@ import signal
 import subprocess
 import sys
 import threading
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -35,12 +36,30 @@ _SAVED_DIR = os.environ.get("AVLN_EVAL_SAVED", "/data/sakura/AVLN/Planner/eval/s
 _CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "application/javascript",
                   ".css": "text/css", ".png": "image/png", ".json": "application/json"}
 
+# 规划器主服务的 HTTP 基址（拉起 dashboard 时由主服务经 AVLN_PLANNER_API 传下来）。
+# 评测没有独立规划器：起评测前读主服务 /api/profile 拿当前 profile（世界模型/普通VLM），
+# 透传给 run.py，保证与主界面选择一致。
+_PLANNER_API = os.environ.get("AVLN_PLANNER_API", "http://127.0.0.1:8000").rstrip("/")
+
 # --- 发跑评测：一次只允许一个子进程 ------------------------------------------
 # 与只读看板分离：这些状态属于"当前发起的评测"，看板数据仍来自磁盘 run 目录。
 _ACTIVE_LOCK = threading.Lock()
-_ACTIVE = {"proc": None, "scene": None, "uuids": None, "mode": None, "log": None}
+_ACTIVE = {"proc": None, "scene": None, "uuids": None, "profile": None, "log": None}
 _EPISODE_CACHE: list | None = None
 _EPISODE_LOCK = threading.Lock()
+
+
+def _planner_profile() -> dict:
+    """读主服务当前 profile（只读镜像）；连不上则 online=False，评测回退 default。"""
+    try:
+        req = urllib.request.Request(_PLANNER_API + "/api/profile", method="GET")
+        with urllib.request.urlopen(req, timeout=2.0) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return {"online": True,
+                "current": data.get("current"),
+                "profiles": data.get("profiles") or []}
+    except Exception:
+        return {"online": False, "current": None, "profiles": []}
 
 
 def _all_episodes(cfg):
@@ -91,24 +110,27 @@ def _run_status() -> dict:
             "active": active,
             "scene": _ACTIVE["scene"],
             "uuids": _ACTIVE["uuids"],
-            "mode": _ACTIVE["mode"],
+            "profile": _ACTIVE["profile"],
             "returncode": None if proc is None else proc.poll(),
             "log": _ACTIVE["log"],
         }
 
 
-def _start_run(cfg, scene: str, uuids: list[str], mode: str) -> dict:
-    """在 eval 目录起 `run.py batch` 跑一个场景（或其中若干 episode）。"""
+def _start_run(cfg, scene: str, uuids: list[str], profile: str | None = None) -> dict:
+    """在 eval 目录起 `run.py batch` 跑一个场景（或其中若干 episode）。
+
+    profile 由前端下拉传入（可改，仅影响评测）；未指定时现读主服务当前 profile。
+    """
     if not scene:
         raise ValueError("必须指定 scene")
-    if mode not in ("real", "sanity"):
-        mode = "real"
     with _ACTIVE_LOCK:
         proc = _ACTIVE["proc"]
         if proc is not None and proc.poll() is None:
             raise RuntimeError(f"已有评测在跑（scene={_ACTIVE['scene']}），先等它结束或停止")
-        argv = [sys.executable, "-u", "run.py", "batch", "--scenes", scene,
-                "--planner-mode", mode]
+        profile = (profile or "").strip() or _planner_profile().get("current")
+        argv = [sys.executable, "-u", "run.py", "batch", "--scenes", scene]
+        if profile:
+            argv += ["--planner-profile", profile]
         if uuids:
             argv += ["--uuids", ",".join(uuids)]
         log_path = os.path.join(_EVAL_DIR, "served_run_last.log")
@@ -117,9 +139,9 @@ def _start_run(cfg, scene: str, uuids: list[str], mode: str) -> dict:
             argv, cwd=_EVAL_DIR, stdout=log, stderr=subprocess.STDOUT,
             env=os.environ.copy(), start_new_session=True,
         )
-        _ACTIVE.update(proc=proc, scene=scene, uuids=uuids, mode=mode, log=log_path)
+        _ACTIVE.update(proc=proc, scene=scene, uuids=uuids, profile=profile, log=log_path)
         return {"started": True, "pid": proc.pid, "scene": scene,
-                "uuids": uuids, "mode": mode, "log": log_path}
+                "uuids": uuids, "profile": profile, "log": log_path}
 
 
 def _stop_run() -> dict:
@@ -166,6 +188,7 @@ def _list_saved() -> list[dict]:
             "created": record.get("created"),
             "kind": record.get("kind"),
             "map": record.get("map"),
+            "planner_profile": record.get("planner_profile"),
         })
     out.sort(key=lambda r: (r.get("created") or "", r.get("dir") or ""), reverse=True)
     return out
@@ -301,7 +324,44 @@ def _state(cfg, run_path):
                         "collided": r.get("collided"), "final_ne": r.get("final_ne"),
                         "steps": r.get("steps")})
     return {"run": os.path.basename(run_path), "progress": prog,
-            "metrics": metrics.get("metrics"), "episodes": eps}
+            "metrics": metrics.get("metrics"), "planner": metrics.get("planner"),
+            "episodes": eps}
+
+
+def _history(cfg, limit: int = 800) -> list[dict]:
+    """把所有 run 的每集结果拍平成一条时间线（新 → 旧）。
+
+    run 按 mtime 新到旧；同一批内已完成集在 metrics.json 里按完成顺序存，倒序让最后完成的在上。
+    运行中的 run 还没有 metrics.json，回退扫各集 result.json（含 planner_profile）。
+    """
+    out = []
+    for r in _list_runs(cfg):                # 已按 mtime 新到旧
+        run_path = r["path"]
+        metrics = _read_json(os.path.join(run_path, "metrics.json"), {}) or {}
+        prof = metrics.get("planner")
+        eps = metrics.get("episodes")
+        if eps is None:                      # 运行中：metrics.json 还没写
+            eps = []
+            for uuid, d in _episode_dirs(run_path).items():
+                res = _read_json(os.path.join(d, "result.json"), {}) or {}
+                eps.append({"uuid": uuid, "scene": res.get("scene"),
+                            "success": res.get("success"), "collided": res.get("collided"),
+                            "final_ne": res.get("final_ne"), "steps": res.get("steps"),
+                            "planner_profile": res.get("planner_profile")})
+        for e in reversed(eps):              # 批内新→旧
+            out.append({
+                "run": r["name"],
+                "scene": e.get("scene"),
+                "uuid": e.get("uuid"),
+                "success": e.get("success"),
+                "collided": e.get("collided"),
+                "final_ne": e.get("final_ne"),
+                "steps": e.get("steps"),
+                "planner": prof or e.get("planner_profile"),
+            })
+        if len(out) >= limit:
+            break
+    return out[:limit]
 
 
 def _traj(run_path, uuid):
@@ -373,6 +433,9 @@ class _Handler(BaseHTTPRequestHandler):
             if not run_path:
                 self._send(404, {"error": "run not found"}); return
             self._send(200, _state(cfg, run_path))
+        elif u.path == "/api/history":
+            # 平铺时间线：所有 run 的每集结果，按时间新→旧。
+            self._send(200, {"episodes": _history(cfg)})
         elif u.path == "/api/traj":
             run_path = _safe_run(cfg, (q.get("run") or [None])[0])
             uuid = (q.get("id") or [""])[0]
@@ -395,6 +458,9 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(200, {"scene": scene, "episodes": _scene_episodes(cfg, scene)})
         elif u.path == "/api/runstatus":
             self._send(200, _run_status())
+        elif u.path == "/api/eval/profile":
+            # 只读镜像：主服务当前 profile（世界模型/普通VLM）及其可选项。
+            self._send(200, _planner_profile())
         elif u.path == "/api/saved":
             self._send(200, {"records": _list_saved()})
         elif u.path == "/api/saved/traj":
@@ -420,9 +486,9 @@ class _Handler(BaseHTTPRequestHandler):
             if isinstance(uuids, str):
                 uuids = [x.strip() for x in uuids.split(",") if x.strip()]
             uuids = [str(x).strip() for x in uuids if str(x).strip()]
-            mode = str(body.get("mode") or "real")
+            profile = str(body.get("profile") or "").strip() or None
             try:
-                self._send(200, _start_run(self.cfg, scene, uuids, mode))
+                self._send(200, _start_run(self.cfg, scene, uuids, profile))
             except RuntimeError as exc:
                 self._send(409, {"error": str(exc)})
             except Exception as exc:

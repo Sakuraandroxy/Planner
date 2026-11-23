@@ -89,14 +89,20 @@ def build_family(scene) -> SimulatorFamily:
 
 
 def build_planner_config(cfg):
-    """加载 Planner 的 core profile，并按需覆盖成 eval 的口径。
+    """加载主界面当前 profile 的 core 配置，按需覆盖成 eval 的口径。
 
+    profile 是主界面「世界模型 / 普通 VLM」的只读镜像（default / vlm），起评测时由
+    dashboard 读取主服务 /api/profile 后经 ``--planner-profile`` 透传；读不到则用 default。
     eval 的相机 rig（FrontCamera 偏移 (1,0,0)、rpy (0,0,0)、hfov 90、AirSim 深度是
-    ray_range）恰好与 default profile 的无人机默认值一致，所以这里基本是零覆盖；
-    只把 eval 侧可调的滑窗开关透传下去（滑窗关闭时工作流走 stopped-segments 模式，
-    更简单，便于对照）。
+    ray_range）恰好与 profile 的无人机默认值一致，所以这里基本是零覆盖；只把 eval 侧可调
+    的滑窗开关透传下去（滑窗关闭时工作流走 stopped-segments 模式，更简单，便于对照）。
     """
-    base = os.path.join(_PLANNER_ROOT, "config", "core", "default", "base.yaml")
+    profile = getattr(cfg.planner, "profile", "") or "default"
+    base = os.path.join(_PLANNER_ROOT, "config", "core", profile, "base.yaml")
+    if not os.path.isfile(base):
+        _log(f"找不到 profile '{profile}' 的配置 ({base})，回退 default", "WARNING")
+        profile = "default"
+        base = os.path.join(_PLANNER_ROOT, "config", "core", "default", "base.yaml")
     app = load_config(base)
     if getattr(cfg.planner, "disable_sliding_window", False):
         # 数据类多为 frozen，用 object.__setattr__ 覆盖单个字段。
@@ -129,6 +135,9 @@ class _RealStack:
         )
         if "drone" not in arms:
             raise RuntimeError("mission assembly returned no drone arm")
+        # 关键：把装配好的臂交给会话，否则 session._arm 不存在，run() 一调用就崩。
+        # 与主服务 registry.build_session 的 session.attach_arms(assemble_missions(...)) 一致。
+        self.session.attach_arms(arms)
         self.arm = arms["drone"]
 
     def run(self, instruction):
@@ -223,7 +232,7 @@ def run_episode_real(scene, episode, cfg, out_root: str, on_step=None) -> dict:
     """用真实规划器在 pygame 已拉起的 scene 上跑一个 episode。"""
     stack = _get_stack(scene, cfg)
 
-    # episode 布置：清场 → 回起点 → 生成目标物（与 sanity 路径一致）。
+    # episode 布置：清场 → 回起点 → 生成目标物。
     scene.clear_objects()
     scene.set_pose(episode.start_position, episode.start_orientation)
     scene.spawn_object(episode.asset_name, episode.object_position,
@@ -264,7 +273,7 @@ def run_episode_real(scene, episode, cfg, out_root: str, on_step=None) -> dict:
         "final_ne": ne,
         "elapsed_s": time.time() - t0,
         "target_position": episode.object_position,
-        "planner_mode": "real",
+        "planner_profile": cfg.planner.profile,
         "mission_success": mission_success,
         "mission_error": error,
     }

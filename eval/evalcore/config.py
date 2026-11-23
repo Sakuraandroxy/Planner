@@ -42,13 +42,12 @@ class CaptureSettings:
 
 @dataclass
 class PlannerSettings:
-    # sanity = 直线朝目标（Phase 0 验证用）
-    # real   = 在进程内复用 Planner 的 visual-goal 工作流（真检测+真VLM规划+完成判定+滑窗）
-    # http/import = 预留（把观测 POST 到外部规划器端点）
-    mode: str = "sanity"
-    endpoint: str = "http://127.0.0.1:8000"
-    timeout_s: float = 30.0
-    # real 模式：位姿采样频率（写 metric 帧）；关闭滑窗时工作流走 stopped-segments（更简单）
+    # 评测不再有独立规划器：始终在进程内复用 Planner 的 visual-goal 工作流
+    # （真检测+真VLM规划+完成判定+滑窗），见 :mod:`evalcore.planner_runtime`。
+    # profile 选择哪套 config/core/<profile>/base.yaml（世界模型=default、普通VLM=vlm）。
+    # 这是主界面当前 profile 的只读镜像：起评测时由 dashboard 读主服务 /api/profile 覆盖。
+    profile: str = "default"
+    # 位姿采样频率（写 metric 帧）；关闭滑窗时工作流走 stopped-segments（更简单）
     sampler_hz: float = 5.0
     disable_sliding_window: bool = False
 
@@ -139,8 +138,8 @@ def parse_args(argv=None) -> CoordinateArgs:
     p.add_argument("--success-radius", type=float, default=None)
     p.add_argument("--max-steps", type=int, default=None)
     p.add_argument("--limit-episodes", type=int, default=None, help="只跑前 N 个 episode（0=不限）")
-    p.add_argument("--planner-mode", choices=["sanity", "real", "http", "import"], default=None)
-    p.add_argument("--planner-endpoint", default=None)
+    p.add_argument("--planner-profile", default=None,
+                   help="规划器 profile（config/core/<profile>），缺省跟随主服务当前 profile")
     p.add_argument("--move-velocity", type=float, default=None)
     p.add_argument("--clock-speed", type=int, default=None)
     p.add_argument("mode", choices=["one", "batch", "serve"], nargs="?",
@@ -172,10 +171,8 @@ def parse_args(argv=None) -> CoordinateArgs:
         cfg.max_steps = ns.max_steps
     if ns.limit_episodes is not None:
         cfg.limit_episodes = ns.limit_episodes
-    if ns.planner_mode:
-        cfg.planner.mode = ns.planner_mode
-    if ns.planner_endpoint:
-        cfg.planner.endpoint = ns.planner_endpoint
+    if ns.planner_profile:
+        cfg.planner.profile = ns.planner_profile
     if ns.move_velocity is not None:
         cfg.move.velocity = ns.move_velocity
     if ns.clock_speed is not None:

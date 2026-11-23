@@ -1,13 +1,16 @@
 "use strict";
 
 const state = {
-  run: null,
+  run: null,           // 当前所选 episode 所属的 run（看轨迹/画面用）
+  latestRun: null,     // 最新一批 run 名（顶部指标来源）
+  history: [],         // 平铺时间线：所有 run 的每集结果
   selectedUuid: null,
   traj: null,          // {positions, target, start, radius}
   cam: "front",
   viewSaved: false,    // 正在看已保存记录（无相机帧）
   viewDir: null,       // 正在看的那条已保存记录目录名
   savedTabVisible: false,
+  profileTouched: false, // 用户手动选过 profile 后，不再自动跟随主界面当前值
   az: -Math.PI / 4,    // 方位角
   el: Math.PI / 6,     // 俯仰角
   dragging: false,
@@ -27,35 +30,24 @@ async function getJSON(url) {
   return r.json();
 }
 
-async function loadRuns() {
-  const data = await getJSON("/api/runs");
-  const sel = $("runSelect");
-  sel.innerHTML = "";
-  for (const run of data.runs) {
-    const opt = document.createElement("option");
-    opt.value = run.name;
-    opt.textContent = `${run.name}  (${run.state})`;
-    sel.appendChild(opt);
-  }
-  if (data.runs.length) {
-    state.run = data.runs[0].name;
-    sel.value = state.run;
-  } else {
-    state.run = null;
-  }
-  $("runDelete").disabled = !state.run;
-  sel.onchange = () => { state.run = sel.value; state.selectedUuid = null; state.viewSaved = false; poll(); };
+// run_YYYYmmdd_HHMMSS -> "MM-DD HH:MM"（历史卡片上显示跑批时间）
+function runTimeLabel(run) {
+  const m = /^run_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})$/.exec(run || "");
+  return m ? `${m[2]}-${m[3]} ${m[4]}:${m[5]}` : (run || "");
 }
 
 async function poll() {
-  if (!state.run) { await loadRuns(); }
-  if (!state.run) return;
-  let s;
-  try { s = await getJSON(`/api/state?run=${encodeURIComponent(state.run)}`); }
-  catch (e) { return; }
-
+  let hist = null, s = null;
+  try { hist = await getJSON("/api/history"); } catch (e) {}
+  try { s = await getJSON("/api/state"); } catch (e) {}   // 不带 run = 最新一批
+  if (hist) {
+    state.history = hist.episodes || [];
+    renderCards(state.history);
+  }
+  if (!s) return;
   const m = s.metrics || {};
   const prog = s.progress || {};
+  state.latestRun = s.run || null;
   // 看已保存记录时，顶部指标保留该记录自身的值，不被 run 覆盖。
   if (!state.viewSaved) {
     $("m-sr").textContent = m.sr != null ? m.sr.toFixed(1) + "%" : "—";
@@ -64,58 +56,57 @@ async function poll() {
     $("m-spl").textContent = m.spl != null ? m.spl.toFixed(1) + "%" : "—";
     $("m-prog").textContent = `${prog.done ?? 0}/${prog.total ?? "?"}`;
   }
-  const badge = $("stateBadge");
-  badge.textContent = prog.state || "—";
-  badge.className = "badge " + (prog.state || "");
-
-  renderCards(s.episodes || []);
-  // 若当前有运行中 episode 且没手选，自动跟随（看已保存记录时不抢焦点）
-  if (!state.viewSaved && !state.selectedUuid && prog.current
-      && (s.episodes || []).some(e => e.uuid === prog.current)) {
-    selectEpisode(prog.current);
+  // 若当前有运行中 episode 且没手选，自动跟到时间线上（看已保存记录时不抢焦点）
+  if (!state.viewSaved && !state.selectedUuid && prog.current) {
+    const hit = state.history.find(e => e.uuid === prog.current && e.run === s.run);
+    if (hit) selectEpisode(hit.uuid, hit.run);
   }
 }
 
-function renderCards(episodes) {
+function renderCards(entries) {
   const box = $("cards");
   box.innerHTML = "";
-  for (const e of episodes) {
+  for (const e of entries) {
     const div = document.createElement("div");
-    div.className = "card" + (e.uuid === state.selectedUuid ? " active" : "");
-    const success = e.success;
-    const badge = success
+    const active = e.uuid === state.selectedUuid && e.run === state.run;
+    div.className = "card" + (active ? " active" : "");
+    const badge = e.success
       ? `<span class="pill ok">成功</span>`
       : (e.collided ? `<span class="pill coll">碰撞</span>` : `<span class="pill fail">未成</span>`);
+    const ptxt = profileText(e.planner);
+    const ptag = ptxt ? `<span class="pill model">${ptxt}</span>` : "";
+    const tlabel = runTimeLabel(e.run);
     div.innerHTML =
       `<div class="row1"><span class="uuid">${(e.uuid || "").slice(0, 13)}</span>
-         <span class="row1-right">${badge}<button class="card-del" title="删除该集结果">×</button></span></div>
-       <div class="scene">${e.scene || ""}</div>
+         <span class="row1-right">${ptag}${badge}<button class="card-del" title="删除该集结果">×</button></span></div>
+       <div class="scene">${e.scene || ""}${tlabel ? " · " + tlabel : ""}</div>
        <div class="meta"><span>NE ${fmt(e.final_ne, "m")}</span><span>步 ${e.steps ?? "—"}</span></div>`;
-    div.querySelector(".card-del").onclick = (ev) => deleteEpisode(e.uuid, div, ev);
-    div.onclick = () => selectEpisode(e.uuid);
+    div.querySelector(".card-del").onclick = (ev) => deleteEpisode(e.run, e.uuid, div, ev);
+    div.onclick = () => selectEpisode(e.uuid, e.run);
     box.appendChild(div);
   }
 }
 
-async function deleteEpisode(uuid, card, ev) {
+async function deleteEpisode(run, uuid, card, ev) {
   ev.stopPropagation();
   if (!confirm(`删除该集结果？\n${uuid}`)) return;
   card.remove();                                  // 先从界面移除，立刻见效
-  if (state.selectedUuid === uuid) {
-    state.selectedUuid = null; state.traj = null;
+  if (state.selectedUuid === uuid && state.run === run) {
+    state.selectedUuid = null; state.run = null; state.traj = null;
     $("epTitle").textContent = "选择左侧某个 episode";
     $("epStats").innerHTML = "";
     refreshCamView(); draw();
   }
-  try { await postJSON("/api/episode/delete", { run: state.run, id: uuid }); }
+  try { await postJSON("/api/episode/delete", { run, id: uuid }); }
   catch (e) { alert("删除失败：" + e.message); }
   await poll();                                   // 拉最新列表与重算后的指标
 }
 
-async function selectEpisode(uuid) {
+async function selectEpisode(uuid, run) {
   state.viewSaved = false;
   state.selectedUuid = uuid;
-  document.querySelectorAll(".card").forEach(c => c.classList.remove("active"));
+  state.run = run || state.run;
+  if (state.history && state.history.length) renderCards(state.history);  // 立即高亮
   $("epTitle").textContent = "Episode " + uuid.slice(0, 13);
   try {
     state.traj = await getJSON(`/api/traj?run=${encodeURIComponent(state.run)}&id=${encodeURIComponent(uuid)}`);
@@ -346,7 +337,7 @@ function bindDrag() {
     const dx = e.clientX - state.lastMouse[0];
     const dy = e.clientY - state.lastMouse[1];
     state.lastMouse = [e.clientX, e.clientY];
-    state.az += dx * 0.01;
+    state.az -= dx * 0.01;
     state.el = Math.max(-1.4, Math.min(1.4, state.el + dy * 0.01));
     draw();
   });
@@ -387,6 +378,50 @@ function setRunState(text, on) {
 function setLaunchDisabled(disabled) {
   $("batchBtn").disabled = disabled;
   document.querySelectorAll(".ep-test").forEach(b => b.disabled = disabled);
+}
+
+let lastProfileSig = null;
+const profileLabels = {};   // profile id -> 中文名（default→世界模型，vlm→普通VLM）
+// 只返回已知的中文名；未知/缺失返回空串（老数据没有 profile 就不显示，不显示裸 id）。
+function profileText(id) {
+  if (!id) return "";
+  return profileLabels[id] || "";
+}
+// 规划器下拉：选项来自主服务（世界模型/普通VLM）。默认为主界面当前 profile，可手动改；
+// 选了就用所选 profile 跑评测（仅影响评测，不动主界面实时会话）。
+async function loadPlannerProfile() {
+  const sel = $("modeSelect");
+  let p;
+  try { p = await getJSON("/api/eval/profile"); }
+  catch (e) { p = { online: false }; }
+  if (!p.online) {
+    if (lastProfileSig !== "offline") {
+      sel.innerHTML = "";
+      const opt = document.createElement("option");
+      opt.value = ""; opt.textContent = "主界面未连接";
+      sel.appendChild(opt);
+      lastProfileSig = "offline";
+    }
+    return;
+  }
+  const profiles = p.profiles || [];
+  for (const info of profiles) {
+    if (info.id) profileLabels[info.id] = info.label || info.id;
+  }
+  const sig = profiles.map(x => x.id + ":" + x.label).join(",");
+  if (sig !== lastProfileSig) {
+    lastProfileSig = sig;
+    sel.innerHTML = "";
+    for (const info of profiles) {
+      const opt = document.createElement("option");
+      opt.value = info.id;
+      opt.textContent = info.label || info.id;
+      sel.appendChild(opt);
+    }
+    state.profileTouched = false;  // 选项变了，重置为跟随主界面
+  }
+  // 默认跟随主界面当前值；用户手动选过就不再覆盖。
+  if (!state.profileTouched && p.current) sel.value = p.current;
 }
 
 async function loadDataset() {
@@ -434,10 +469,11 @@ async function loadEpisodes(scene) {
 
 async function startRun(scene, uuids) {
   if (!scene) { setRunState("先选一个场景", false); return; }
-  const mode = $("modeSelect").value;
-  setRunState(`提交中: ${scene}${uuids ? " / 1集" : " / 全场景"} (${mode})…`, false);
+  const profile = $("modeSelect").value || null;
+  const label = ($("modeSelect").selectedOptions[0] || {}).textContent || "";
+  setRunState(`提交中: ${scene}${uuids ? " / 1集" : " / 全场景"}${label ? " (" + label + ")" : ""}…`, false);
   try {
-    await postJSON("/api/start", { scene, uuids: uuids || null, mode });
+    await postJSON("/api/start", { scene, uuids: uuids || null, profile });
     setRunState(`已提交，场景 ${scene} 启动中…`, true);
     await pollRunStatusOnce();
   } catch (e) {
@@ -451,14 +487,13 @@ async function pollRunStatusOnce() {
   const active = !!s.active;
   setLaunchDisabled(active);
   if (active) {
-    setRunState(`运行中: ${s.scene} (${s.mode})…`, true);
+    const pn = profileText(s.profile) || s.profile;
+    setRunState(`运行中: ${s.scene}${pn ? " (" + pn + ")" : ""}…`, true);
     // 跟随最新 run（刚起的那个）
-    await loadRuns();
     await poll();
   } else if (lastActive) {
     const code = s.returncode;
     setRunState(`已结束${code != null ? " (exit " + code + ")" : ""}`, false);
-    await loadRuns();
     await poll();
   } else if (s.scene) {
     setRunState(`上次: ${s.scene}${s.returncode != null ? " 已结束" : ""}`, false);
@@ -496,9 +531,11 @@ async function loadSaved() {
     const pill = r.success
       ? '<span class="pill ok">成功</span>'
       : '<span class="pill fail">未成</span>';
+    const ptxt = profileText(r.planner_profile);
+    const ptag = ptxt ? `<span class="pill model">${ptxt}</span>` : "";
     div.innerHTML =
       `<div class="row1"><span class="uuid">${r.name || r.dir}</span>
-         <span class="row1-right">${pill}<button class="card-del" title="删除该记录">×</button></span></div>
+         <span class="row1-right">${ptag}${pill}<button class="card-del" title="删除该记录">×</button></span></div>
        <div class="scene">${r.map || ""}</div>
        <div class="meta"><span>SR ${sr}</span><span>末距 ${r.final_distance_m != null ? r.final_distance_m.toFixed(2) + "m" : "—"}</span></div>`;
     div.querySelector(".card-del").onclick = (ev) => deleteSaved(r.dir, div, ev);
@@ -522,25 +559,6 @@ async function deleteSaved(dir, card, ev) {
   try { await postJSON("/api/saved/delete", { dir }); }
   catch (e) { alert("删除失败：" + e.message); }
   await loadSaved();      // 对齐服务器（删除失败则该卡片会重新出现）
-}
-
-async function deleteRun() {
-  if (!state.run) return;
-  if (!confirm(`删除该 run 的全部评测数据？\n${state.run}`)) return;
-  try { await postJSON("/api/runs/delete", { run: state.run }); }
-  catch (e) { alert("删除失败：" + e.message); return; }
-  state.selectedUuid = null;
-  state.traj = null;
-  state.viewSaved = false;
-  $("epTitle").textContent = "选择左侧某个 episode";
-  $("epStats").innerHTML = "";
-  refreshCamView(); draw();
-  await loadRuns();
-  if (!state.run) {
-    $("cards").innerHTML = "";
-    for (const id of ["m-sr", "m-osr", "m-ne", "m-spl", "m-prog"]) $(id).textContent = "—";
-  }
-  await poll();
 }
 
 async function viewSaved(dir) {
@@ -594,11 +612,14 @@ async function main() {
   bindCamImages();
   bindResTabs();
   $("batchBtn").onclick = () => startRun($("sceneSelect").value, null);
-  $("runDelete").onclick = deleteRun;
+  // 用户手动选 profile 后停止自动跟随主界面当前值。
+  $("modeSelect").onchange = () => { state.profileTouched = true; };
   await loadDataset();
-  await loadRuns();
+  await loadPlannerProfile();
   await poll();
   setInterval(poll, 2000);
+  // 每 3s 同步一次主界面 profile（只读镜像），主界面切了这里跟着变。
+  setInterval(loadPlannerProfile, 3000);
   // 「已保存评测」标签可见时，每 2s 拉一次，新增/删除都自动反映（无增删则跳过多余重建）。
   setInterval(() => { if (state.savedTabVisible) loadSaved(); }, 2000);
   pollRunStatus();

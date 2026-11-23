@@ -9,12 +9,6 @@
 <body>
 <header>
   <h1>UAV-VLN 在线评测</h1>
-  <div class="run-sel">
-    <label>Run</label>
-    <select id="runSelect"></select>
-    <span id="stateBadge" class="badge">—</span>
-    <button id="runDelete" class="run-del" title="删除当前 run 的全部评测数据">删除</button>
-  </div>
 </header>
 
 <section class="metrics" id="metrics">
@@ -30,10 +24,7 @@
     <div class="block block-launch">
       <div class="block-head">
         <select id="sceneSelect" title="选择场景"></select>
-        <select id="modeSelect" title="规划器模式">
-          <option value="real">真规划器(real)</option>
-          <option value="sanity">sanity(冒烟)</option>
-        </select>
+        <select id="modeSelect" title="规划器（世界模型 / 普通 VLM；默认跟随主界面，可改，仅影响评测）"></select>
         <button id="batchBtn">批量测试本场景</button>
       </div>
       <div class="runstate" id="runState">—</div>

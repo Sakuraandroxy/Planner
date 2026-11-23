@@ -16,7 +16,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from evalcore.config import parse_args          # noqa: E402
 from evalcore.dataset import load_episodes      # noqa: E402
 from evalcore.metrics import run_metric         # noqa: E402
-from evalcore.policy import PlannerBridge       # noqa: E402
 from evalcore.report import write_progress, write_reports  # noqa: E402
 from evalcore.runner import run_episode         # noqa: E402
 from evalcore.sim import open_scene             # noqa: E402
@@ -37,20 +36,20 @@ def _new_run_dir(cfg) -> str:
 
 
 def run_batch(cfg, episodes, run_dir, gpu_for=None, total=None) -> list[dict]:
-    policy = PlannerBridge(cfg.planner, chunk_size=cfg.chunk_size)
     results = []
     total = total or len(episodes)
     write_progress(run_dir, total=total, done=0, current=None, state="running")
     for scene_id, eps in _group_by_scene(episodes).items():
         gpu = gpu_for(scene_id) if gpu_for else cfg.gpus[0]
-        print(f"\n[eval] ===== scene={scene_id} episodes={len(eps)} gpu={gpu} =====")
+        print(f"\n[eval] ===== scene={scene_id} episodes={len(eps)} gpu={gpu} "
+              f"profile={cfg.planner.profile} =====")
         with open_scene(scene_id, cfg, gpu=gpu) as scene:
             for i, ep in enumerate(eps, 1):
                 print(f"[eval] ({i}/{len(eps)}) {ep.uuid}")
                 write_progress(run_dir, total=total, done=len(results),
                                current=ep.uuid, state="running")
                 try:
-                    r = run_episode(scene, ep, cfg, policy, run_dir,
+                    r = run_episode(scene, ep, cfg, run_dir,
                                     on_step=lambda **kw: print(
                                         f"    step={kw['step']} ne={kw['ne']:.2f} "
                                         f"coll={kw['collided']}"))
@@ -60,9 +59,8 @@ def run_batch(cfg, episodes, run_dir, gpu_for=None, total=None) -> list[dict]:
                          "success": False, "final_ne": float("nan")}
                 results.append(r)
         # 关闭这张图的真实规划器栈（会话持有连接）；要在进程被 kill 前做。
-        if getattr(cfg.planner, "mode", "sanity") == "real":
-            from evalcore.planner_runtime import close_scene
-            close_scene(scene)
+        from evalcore.planner_runtime import close_scene
+        close_scene(scene)
     return results
 
 

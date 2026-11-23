@@ -36,7 +36,7 @@ def write_reports(run_dir: str, results: list[dict], metrics: dict | None, cfg) 
             "scenes": cfg.scenes or "all",
             "success_radius_m": cfg.success_radius_m,
         },
-        "planner": cfg.planner.mode,
+        "planner": cfg.planner.profile,
         "episodes": [
             {k: r.get(k) for k in _CSV_FIELDS} for r in results
         ],

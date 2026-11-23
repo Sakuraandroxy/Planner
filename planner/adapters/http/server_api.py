@@ -135,10 +135,12 @@ def _kill_eval_service() -> None:
             time.sleep(0.15)
 
 
-def _start_eval_service() -> dict:
+def _start_eval_service(planner_api_base: str) -> dict:
     """关掉旧的评测仪表盘再拉起一个新的，返回 {"started": bool, "port": int}。
 
     每次点「评测」都重启：避免旧代码/旧进程残留（改完代码刷新即可生效）。
+    ``planner_api_base`` 经环境变量传给 dashboard，让它起评测前读本服务当前 profile，
+    评测因此始终复用主界面选择的规划器（世界模型/普通 VLM），没有独立的一套。
     """
     global _EVAL_PROC
     _kill_eval_service()
@@ -157,6 +159,7 @@ def _start_eval_service() -> dict:
         cwd=str(_EVAL_DIR),
         stdout=log,
         stderr=subprocess.STDOUT,
+        env={**os.environ, "AVLN_PLANNER_API": planner_api_base},
         start_new_session=True,  # 脱离规划器进程组，规划器退出也留着
     )
     deadline = time.time() + 30.0
@@ -700,6 +703,8 @@ def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAP
                 "start": positions[0] if positions else None,
                 "vehicle": vehicle,
                 "map": map_id,
+                # 保存时用的正是主界面当前 profile（世界模型/普通 VLM），记进日志便于区分。
+                "planner_profile": controller.profile,
                 "created": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             }
             slug = _slug(name)
@@ -718,7 +723,11 @@ def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAP
     @app.post("/api/eval/start", status_code=200)
     def start_eval():
         # 懒启动评测仪表盘：控制台点「评测」先调这里，再打开返回的端口。
-        return _start_eval_service()
+        # settings 是 ServerSettings（create_api 传的是 config.server）。
+        host = settings.host
+        if host in ("", "0.0.0.0"):
+            host = "127.0.0.1"
+        return _start_eval_service(f"http://{host}:{settings.port}")
 
 
     if frames is not None:

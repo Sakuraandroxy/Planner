@@ -93,6 +93,7 @@ main { display: flex; height: calc(100vh - 160px); }
 .pill.ok { background: #1d4d33; color: #7bf0a8; }
 .pill.fail { background: #4a2530; color: #ff9db0; }
 .pill.coll { background: #4a3d1e; color: #ffd27b; }
+.pill.model { background: #23304a; color: #8fb6ff; }
 
 .viewer { flex: 1; display: flex; flex-direction: column; padding: 12px 16px; }
 .viewer-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
