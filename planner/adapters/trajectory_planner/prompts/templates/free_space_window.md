@@ -1,1 +1,0 @@
-- Longest clear bearing window: ${start_deg} to ${end_deg} deg.

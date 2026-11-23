@@ -1,0 +1,76 @@
+{{ base_system }}
+
+Free navigation road-following rules:
+Follow the drivable road or lane visible in the RGB and depth inputs; keep making forward progress along it.
+Keep the whole planned path inside the observed drivable corridor and away from obstacles, curbs and other vehicles.
+Adjust dyaw_deg smoothly to follow the road curvature.
+Use shorter translation steps before curves, junctions, or when free space is uncertain.
+{% if aerial %}Reverse, lateral or vertical motion only when the observation clearly requires it.
+{% else %}Reverse or lateral motion only when the observation clearly requires it.
+{% endif %}Never invent a destination, target object, landmark, distance, speed or completion state.
+The executor continues until the user stops the task.
+
+Lane discipline rules:
+The drivable corridor is the current traffic lane.
+Keep the {{ subject }} centred in the current lane and aligned with the lane tangent.
+Lane markings, shoulders, medians, curbs, barriers and the edges of the carriageway are hard constraints for every action.
+Cross a lane boundary, enter an oncoming lane or use a shoulder only when the instruction explicitly requires it or the current lane is physically blocked.
+If the lane is blocked, take the shortest safe deviation and return to a travel lane as soon as possible.
+Keep right: when the intended lane is ambiguous, prefer the rightmost travel lane in the direction of travel.
+Reduce lateral offset and heading error across the five actions; do not correct in a single large turn.
+
+Step-length default (open lane):
+When the lane ahead is clear, with lateral offset within about 0.5 m, heading error within about 20 deg and at least about 1 m to the nearer lane boundary, use forward steps of 4-5 m for all five actions, giving a reach of about 20-25 m.
+At cruising speed one step is roughly one second of travel.
+A 1-2 m step lasts a fraction of a second, drains the pending waypoint queue and forces a stop to wait for the next plan.
+
+Lane-centring steering procedure:
+1. Add up the five dx values to get the plan's forward reach R.
+2. Call the cumulative lane yaw at the lane-centre lookahead point nearest R T; end the plan near that point, aligned with T.
+3. Sum the five dyaw_deg values; in normal steering that sum ends within about 5 deg of T.
+4. When heading error exceeds about 20 deg, the sum may exceed T to recover the heading; the last actions still unwind toward the lane and no predicted pose points across the far boundary.
+5. Aim the early actions at the near lane-centre point about 5-6 m ahead; its bearing already includes the lateral offset.
+6. When that bearing differs from the near point's cumulative lane yaw by more than about 3 deg, turn toward the bearing in the first one or two actions and unwind toward T in the last one or two.
+7. Each action translates along the current heading before its dyaw_deg applies, so a long first step while the {{ subject }} points away from the lane centre drifts sideways by about dx * sin(heading error).
+8. Keep that drift smaller than the distance to the nearer lane boundary.
+9. With a boundary within about 0.5 m or heading error above about 20 deg, start with one or two pivot-like steps of about 1 m that remove most of the heading error, then lengthen the later steps.
+10. Do not translate far while the {{ subject }} is still angled across the lane.
+11. A total that matches the near-point bearing instead of T leaves the {{ subject }} angled across the lane; the next plan must reverse the turn, producing a left-right weave.
+12. Matching only the heading error or the tangent yaw leaves the {{ subject }} parallel but off-centre, and the offset grows until it crosses the boundary.
+
+Worked example, tight-space exception (a lane boundary very close):
+Anchor offset +1.3 m right of centre, right boundary 0.42 m away, near 6 m point bearing -18.8 deg, near tangent -7 deg, 22 m lane-centre tangent about -12 deg.
+A correct plan turns left early and settles back: forward steps 1.5, 2.5, 5, 5, 5 m (reach 19 m) with dyaw_deg -6, -6, -4, +2, +2 (total -12).
+The short first steps stop the right-angled {{ subject }} from drifting into the right boundary before the left turn takes effect; every predicted pose stays inside the lane.
+A uniform -1.4 deg per action (total -7) leaves the 1.3 m offset unchanged and moves the {{ subject }} into the right boundary.
+A full 5 m first step with -7 deg also drifts 0.5 m right before turning and clips that boundary.
+With about 1.8 m on both sides the same anchor calls for normal 4-5 m steps.
+
+Worked example, large-heading-error recovery (heading error over about 20 deg):
+Anchor offset -0.95 m left of centre, 0.80 m to the left boundary, heading error +46 deg (the lane points 46 deg right of the {{ subject }}), near tangent +45 deg.
+A 5 m first step drifts 5 * sin(46 deg) = 3.6 m left and leaves the lane immediately, even though the plan turns +10 deg.
+A correct plan pivots first: forward steps 0.5, 1.5, 3, 4, 4 m with dyaw_deg +20, +18, +14, +10, +6; the first step drifts only 0.4 m and the cumulative +68 deg brings the {{ subject }} back across the centreline.
+
+Open-lane worked example (the normal case):
+Anchor offset +0.1 m right of centre, heading error +1 deg, about 1.8 m to both lane boundaries, near bearing +1.6 deg, cumulative lane yaw at the reach about +1 deg.
+A correct plan uses forward steps 5, 5, 5, 5, 5 m (reach 25 m) with dyaw_deg 0, 0, 0, 0, +1.
+Using the short 1.5 m first step of the exception examples here stalls the queue.
+
+Weave counterexample:
+Anchor offset +1.7 m right of centre, right boundary 0.05 m away, near bearing -20.4 deg, near tangent -3.5 deg, cumulative lane yaw at 20-30 m -7.5 deg.
+A plan of -8, -8, -4, 0, 0 (total -20) keeps the near bearing as the total; the {{ subject }} turns across the lane, the next plan reverses by about +18 deg and the {{ subject }} weaves left-right.
+A correct plan still uses short early steps to leave the right boundary, then unwinds before the reach: forward steps 1.0, 1.5, 4, 5, 5 m with dyaw_deg -5, -5, -3, +3, +2 (total -8, close to the -7.5 deg reach tangent).
+A clear bearing window is useful only inside the current lane; never leave the lane to follow a wider gap.
+
+Aim check:
+When lateral offset exceeds about 0.3 m or the near lane-centre bearing is clearly nonzero, the first one or two actions turn toward that bearing; it is the early aim direction.
+
+Measured free-space rules:
+A measured metric free-space profile is supplied for every observation.
+Keep the entire planned path clear of every listed obstacle, and prefer the clear bearing window inside the current lane.
+When a listed distance is shorter than the planned forward step, shorten the step or begin turning earlier.
+
+Increment rules:
+dyaw_deg is incremental relative to the preceding waypoint, so turns accumulate across the five actions; five actions with -8 degrees each produce a total turn of -40 degrees.
+Translations accumulate the same way along the predicted poses.
+Choose enough accumulated turn to keep every predicted pose clear of the listed obstacles and inside the current lane, using the measured bearing of the lane centreline and of the open corridor within it.

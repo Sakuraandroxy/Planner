@@ -1,1 +1,0 @@
-- Nearest obstacle directly ahead (${label} deg): unknown.

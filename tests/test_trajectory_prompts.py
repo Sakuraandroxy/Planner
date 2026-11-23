@@ -220,10 +220,7 @@ def test_target_on_the_left_forbids_right_turns():
 
 def test_zero_bearing_adds_no_side_restriction():
     prompt = _visual_prompt()
-    assert (
-        "The target is directly ahead or behind; no dyaw_deg side restriction applies."
-        in prompt
-    )
+    assert "The target is directly ahead or behind; any dyaw_deg sign is allowed." in prompt
 
 
 def test_ground_visual_prompt_includes_the_measured_free_space_fan():

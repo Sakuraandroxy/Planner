@@ -152,7 +152,7 @@ def test_free_navigation_prompt_carries_measured_profile():
     assert "Metric free-space profile" in prompt
     assert "+20.0 deg: 12.5 m (forward 12.0 m, right +3.5 m)" in prompt
     assert "Longest clear bearing window" in prompt
-    assert "Use these measured distances and bearings" in prompt
+    assert "These distances and bearings are measured values." in prompt
     assert prompt.index("Metric free-space profile") > prompt.index(
         "Generate the next short trajectory."
     )
