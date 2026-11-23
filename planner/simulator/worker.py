@@ -31,6 +31,11 @@ class ThreadedMissionWorker:
         self._stop_event = threading.Event()
         self._stop_requested = False
         self._closing = threading.Event()
+        # The session the worker thread built, kept so ``terminate`` can release the
+        # connection under a thread that is stuck inside a simulator RPC.
+        self._session = None
+        #: Set once ``terminate`` gave up on the thread: later tasks are refused.
+        self._abandoned = False
         # Set when the world itself is about to be replaced (map or model
         # switch): the drone does not need to land in a scene being destroyed.
         self._skip_landing = False
@@ -45,6 +50,13 @@ class ThreadedMissionWorker:
         self._thread.start()
 
     def submit(self, task: TaskSubmission) -> None:
+        if self._abandoned:
+            self._log(
+                "refusing a task: the mission worker was abandoned inside a "
+                "simulator call and cannot run another one",
+                "ERROR",
+            )
+            return
         self._commands.put(("task", task))
 
     def stop(self) -> None:
@@ -85,7 +97,43 @@ class ThreadedMissionWorker:
         self._join()
 
     def terminate(self) -> None:
+        """Stop the worker, then make a thread that will not stop explicit.
+
+        ``shutdown`` only asks the loop to stop and waits ``join_timeout_s`` for it. A
+        thread stuck inside a simulator RPC never reads that request again, and Python
+        cannot kill it. So the connection is closed from here -- that is what makes the
+        RPC fail and the loop end -- later tasks are refused instead of queued behind a
+        thread that will never collect them, and the leak is logged. The subprocess
+        worker escalates to ``SIGKILL`` at the same point; a thread has no equivalent.
+        """
         self.shutdown()
+        thread = self._thread
+        if thread is None or not thread.is_alive():
+            return
+        self._abandoned = True
+        session = self._session
+        close = getattr(session, "close", None)
+        self._log(
+            f"the mission worker did not stop within {self._join_timeout_s:g}s; "
+            "closing its connection and refusing further tasks",
+            "WARNING",
+        )
+        if not callable(close):
+            return
+
+        def release() -> None:
+            try:
+                close(skip_landing=True)
+            except Exception as error:
+                self._log(
+                    "releasing the abandoned mission session failed: "
+                    f"{type(error).__name__}: {error}",
+                    "WARNING",
+                )
+
+        # On its own thread: the close waits on the same stuck transport and must not
+        # hold up the caller that is shutting the service down.
+        threading.Thread(target=release, name="vln-worker-release", daemon=True).start()
 
     # -- internals ---------------------------------------------------------
     def _join(self) -> None:
@@ -116,6 +164,7 @@ class ThreadedMissionWorker:
                 )
                 return
             self._emit(WorkerEvent(WorkerEventKind.READY))
+            self._session = session
             catalog = getattr(session, "weather_catalog", None)
             if catalog is not None:
                 try:
@@ -130,7 +179,9 @@ class ThreadedMissionWorker:
                     )
             self._loop(session)
         finally:
-            if session is not None:
+            # ``terminate`` already released an abandoned session; closing it twice
+            # would only add a second pass over a dead transport.
+            if session is not None and not self._abandoned:
                 try:
                     session.close(skip_landing=self._skip_landing)
                 except Exception as error:
@@ -138,6 +189,7 @@ class ThreadedMissionWorker:
                         f"ProjectAirSim session close failed: {error}", "WARNING"
                     )
             self._emit(WorkerEvent(WorkerEventKind.CLOSED))
+            self._session = None
 
     def _loop(self, session) -> None:
         idle_tick = getattr(session, "idle_tick", None)
