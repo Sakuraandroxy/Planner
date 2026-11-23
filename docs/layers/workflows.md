@@ -171,7 +171,7 @@
 - Qdocc09 层：workflows 结论：巡航连续路径用 `raise AssertionError` 表达"函数不该返回"，随后被 `except Exception` 吞成 `BLOCKED`，异常类型即控制流 依据：`planner/workflows/free_navigation/workflow.py:218-224`、`planner/workflows/free_navigation/workflow.py:285-301` 影响：否
 - Qdocc10 层：workflows 结论：视觉连续实现没有 `_closed` 标志，`prepare()` 也不查关闭态，与巡航连续实现不对称 依据：`planner/workflows/visual_goal_navigation/continuous.py:48-61`、对比 `planner/workflows/free_navigation/continuous.py:103-127` 影响：否
 - Qdocc11 层：workflows 结论：两个连续实现都穿过 `ExecutionService` 直取 `execution.vehicle` 端口并调 `stream_state`/`hover`，本层声明的 Protocol 面没有这几个方法 依据：`planner/workflows/free_navigation/continuous.py:109-114`、`planner/workflows/free_navigation/continuous.py:220-224`；`planner/workflows/visual_goal_navigation/continuous.py:49-51` 影响：是（ports.md 的 `StreamingVehicle` 说明）
-- Qdocc12 层：workflows 结论：`approach.checkpoint` 与 `flight.verify` 里的"碰撞中"分支不可达，因为 `ExecutionService.collision_state()` 恒返回 `False` 依据：`planner/workflows/visual_goal_navigation/approach.py:69-73`、`planner/workflows/visual_goal_navigation/flight.py:34-38`、`planner/runtime/execution.py:104-111` 影响：是（runtime.md 的碰撞职责条目）
+- Qdocc12 层：workflows 结论：已处置。`approach.checkpoint` 与 `flight.verify` 里的"碰撞中"分支连同 `ExecutionService.collision_state()` 一并删除；碰撞接触只由 `ControlLoop._guard` 判定。依据：`planner/workflows/visual_goal_navigation/approach.py:68-70`、`planner/workflows/visual_goal_navigation/flight.py:34-36`、`planner/runtime/motion/loop.py:120` 影响：否
 
 ## 10 已知缺口
 

@@ -92,7 +92,7 @@ class PassiveExecution:
         if self._stopped:
             raise ExecutionError("flight stop requested")
 
-    def check_safety(self):
+    def check_deadline(self):
         pass
 
     def collision_state(self):

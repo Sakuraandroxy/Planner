@@ -84,31 +84,22 @@ class ExecutionService:
     def bind_observation_checkpoint(self, checkpoint, cancel):
         self._observation_checkpoint, self._cancel_observations = checkpoint, cancel
 
-    def check_safety(self):
-        """Owner-only, non-reentrant check usable during observation and motion."""
-        if self.collision_state():
-            raise ExecutionError("collision detected by enabled workflow collision check")
-
     def checkpoint(self):
-        self.check_safety()
+        """Owner-only stop/deadline check plus the bound hold and observation checks.
+
+        碰撞不在这里判：接触状态由 ``ControlLoop._guard`` 经 ``CollisionRecovery.poll``
+        单独取，引擎的 ``collision_state()`` 是消费式的，多一个读取者就会把它抢走。
+        """
+        self.check_deadline()
         if self._hold_checkpoint is not None:
             self._hold_checkpoint()
         if self._observation_checkpoint is not None:
             self._observation_checkpoint()
-        self.check_safety()
+        self.check_deadline()
 
     def current_pose(self):
         self.checkpoint()
         return self.vehicle.current_pose()
-
-    def collision_state(self):
-        """Always no contact: the vehicle collision port is no longer wired here.
-
-        碰撞读取从执行服务移到控制循环（``ControlLoop._guard`` 调
-        ``CollisionRecovery.poll``），这一层只保留停止与预算检查。
-        """
-        self.check_deadline()
-        return False
 
     def stop(self) -> StopResult:
         self.assert_owner()

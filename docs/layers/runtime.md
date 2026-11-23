@@ -86,7 +86,7 @@ grep -rn "planner.workflows\|planner.assembly\|planner.adapters\|planner.simulat
 1. 入口两种。`ControlLoop.execute` 只做 checkpoint、取起点、调 `run_segment`、封装 `ExecutionRecord`，不传 budget（planner/runtime/motion/loop.py:191-200）；带预算的调用方直接用 `run_segment`（planner/workflows/visual_goal_navigation/flight.py:76）。
 2. 前置断言。`execution.assert_owner()`、`_running` 防重入、空轨迹拒收（loop.py:203-208）。
 3. 每段前：`execution.checkpoint()`、预算剩余大于 0、用 `resolve_yaw_delta_deg` 取原始段的偏航分支作为量测起点（loop.py:222-230）。
-4. checkpoint 闭包：给 `pose_checkpoint` 时直接透传，否则每次调用先 `execution.check_safety()` 再问 `pause_when`（loop.py:232-251）。
+4. checkpoint 闭包：给 `pose_checkpoint` 时直接透传，否则每次调用先 `execution.check_deadline()` 再问 `pause_when`（loop.py:232-251）。
 5. 单段执行 `_drive_segment`（loop.py:383-520），顺序如下：
    1. 段必须带 `target_speed_mps`（loop.py:385-388）。
    2. `period = SEGMENT_PERIOD_S = 0.030`（loop.py:42,389），经验值、未标定，不读 `limits.control_hz`。
@@ -202,9 +202,9 @@ Qb9 层：runtime 结论：`Vehicle.execute_segment` 端口方法与 `GuidedVehi
 
 Qb10 层：runtime 结论：`ControlLoop.sample()` 隐含要求 `StreamRecorder.begin()` 先被调用，否则抛 `AttributeError: 'NoneType' object has no attribute 'revision'`（已用探针脚本复现），docstring 未写这个前置条件。依据：planner/runtime/motion/loop.py:522-528、planner/runtime/motion/record.py:79、planner/runtime/stream_timeline.py:17 影响：否
 
-Qb11 层：runtime 结论：`ExecutionService.collision_state()` 恒返 `False`，`check_safety()` 永不触发，docstring 描述的碰撞检查分支在代码里不存在。依据：planner/runtime/execution.py:87-90,104-111 影响：否
+Qb11 层：runtime 结论：已处置。`ExecutionService.collision_state()` 与 `check_safety()` 删除，`checkpoint()` 只做 stopping/deadline 检查与绑定的保持、观测检查；碰撞接触只由 `ControlLoop._guard` 消费，因为引擎的 `collision_state()` 是消费式的。依据：planner/runtime/execution.py:87-98、planner/runtime/motion/loop.py:120。影响：否
 
-Qb12 层：runtime 结论：`ExecutionService.stop()` 恒返 `StopResult(False, ...)`，执行层的 `confirmed` 永远为假，调用方只能读 `errors`。依据：planner/runtime/execution.py:113-123、planner/domain/execution.py:44-46 影响：否
+Qb12 层：runtime 结论：`ExecutionService.stop()` 恒返 `StopResult(False, ...)`，执行层的 `confirmed` 永远为假，调用方只能读 `errors`。依据：planner/runtime/execution.py:104-114、planner/domain/execution.py:44-46 影响：否
 
 Qb13 层：runtime 结论：已处置。`ContinuousExecution` 的自驱整拍、采样记账与遥测并入 `QueueFollower`，`next` 与 `tick` 共用同一条消费路径。依据：planner/runtime/motion/follower.py:1-306。影响：否
 
@@ -242,12 +242,6 @@ M5 重复实现
 - `segment_sink` 与 `stream_sink` 方法体相同（motion/loop.py:103,106）。
 - 风险：改动作记录逻辑时只改一份，两套路径的 receipt 与 `path_length_m` 漂移。
 - 触发条件：给执行记录加字段或改 200 条窗口时。
-
-M6 恒假分支
-- 碰撞状态端口在引擎侧有真实实现：planner/simulators/projectairsim/drone.py:268 消费锁存的非地面接触，planner/simulators/airsim/vehicle.py:205 读 `simGetCollisionInfo`。
-- 恒返 `False` 的是 `ExecutionService.collision_state`（planner/runtime/execution.py:104），因此 `ExecutionService.check_safety`（execution.py:87）永不触发，执行服务自检分支失效。
-- 退避由 `ControlLoop._poll_contact` 与 `_guard` 独立完成（planner/runtime/motion/loop.py:115,109），不经过执行服务。
-- 触发条件：任何指望 `check_safety` 拦碰撞的调用点都拿不到拦截。
 
 M7 经验值未标定
 - `SEGMENT_PERIOD_S = 0.030`（planner/runtime/motion/loop.py:42）固定，与 `MotionLimits.control_hz` 无关；流拍是 `1/control_hz`（loop.py:99）。风险：引擎步长不等于 30 ms 时，停稳判据与超时都按 30 ms 记账。触发条件：换仿真步长或引擎实时性不足。

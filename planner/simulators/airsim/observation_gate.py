@@ -13,7 +13,7 @@ from planner.errors import BudgetExceeded, ExecutionError
 
 class ObservationGate:
     def __init__(self, vehicle, limits, timeout_s, clock=time.monotonic, sleep=time.sleep,
-                 *, owner_thread_id=None, check_safety=None):
+                 *, owner_thread_id=None, checkpoint=None):
         self.vehicle = vehicle
         self.limits = limits
         self.timeout_s = timeout_s
@@ -23,7 +23,7 @@ class ObservationGate:
         self._generation = 0
         self._failed = False
         self._owner = owner_thread_id
-        self._check_safety = check_safety
+        self._checkpoint = checkpoint
         self._requests = deque()
         self._request_lock = threading.Lock()
 
@@ -79,8 +79,8 @@ class ObservationGate:
             try:
                 if self._failed:
                     raise ExecutionError("observation failed; restart runtime before retrying")
-                if self._check_safety:
-                    self._check_safety()
+                if self._checkpoint:
+                    self._checkpoint()
                 begin_hold = getattr(self.vehicle, "begin_observation_hold", None)
                 if callable(begin_hold):
                     begin_hold()
@@ -114,7 +114,7 @@ class ObservationGate:
         self._assert_owner()
         wait_observation = getattr(self.vehicle, "wait_for_observation", None)
         if callable(wait_observation):
-            wait_observation(budget=budget, checkpoint=self._check_safety)
+            wait_observation(budget=budget, checkpoint=self._checkpoint)
             return
         started = previous_time = self.clock()
         previous = self.vehicle.current_pose()
@@ -122,13 +122,13 @@ class ObservationGate:
         while self.clock() - started < self.timeout_s:
             if budget is not None and budget.remaining(self.clock()) <= 0:
                 raise BudgetExceeded("deadline while waiting for stopped observation")
-            if self._check_safety:
-                self._check_safety()
+            if self._checkpoint:
+                self._checkpoint()
             self.sleep(1 / self.limits.control_hz)
             now = self.clock()
             current = self.vehicle.current_pose()
-            if self._check_safety:
-                self._check_safety()
+            if self._checkpoint:
+                self._checkpoint()
             dt = now - previous_time
             speed = math.dist((previous.x, previous.y, previous.z),
                               (current.x, current.y, current.z)) / dt if dt > 0 else math.inf
@@ -144,8 +144,8 @@ class ObservationGate:
 
     def keep_holding(self):
         self._assert_owner()
-        if self._check_safety:
-            self._check_safety()
+        if self._checkpoint:
+            self._checkpoint()
         tick = getattr(self.vehicle, 'hold_tick', None)
         if callable(tick):
             tick()
