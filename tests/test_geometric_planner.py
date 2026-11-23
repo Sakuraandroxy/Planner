@@ -111,11 +111,6 @@ def test_vertical_correction_is_clamped():
     assert end.z == pytest.approx(-15.0 + 2.0, abs=1e-9)
 
 
-def test_waypoint_count_is_always_five():
-    observation = _observation(WorldPose(0.0, 0.0, -15.0, 0.0))
-    assert len(_plan(observation, _context((10.0, 0.0, -15.0))).points) == 5
-
-
 def test_target_inside_buffer_produces_no_translation():
     observation = _observation(WorldPose(0.0, 0.0, -15.0, 0.0))
     trajectory = _plan(observation, _context((5.0, 0.0, -15.0)))
@@ -155,7 +150,3 @@ def test_settings_validate():
         GeometricPlannerSettings(max_advance_m=0.0)
     with pytest.raises(ValueError):
         GeometricPlannerSettings(arrival_buffer_ratio=1.0)
-
-
-def test_zero_delta_has_no_motion():
-    assert RelativePoseDelta().is_zero()

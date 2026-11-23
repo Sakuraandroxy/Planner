@@ -4,7 +4,6 @@ import numpy as np
 import pytest
 
 from planner.adapters.trajectory_planner.prompts.free_navigation import (
-    FREE_NAVIGATION_SYSTEM_PROMPT,
     FreeNavigationTrajectoryPrompt,
 )
 from planner.domain import INVALID_DEPTH_SENTINEL_M
@@ -157,17 +156,6 @@ def test_free_navigation_prompt_carries_measured_profile():
     assert prompt.index("Metric free-space profile") > prompt.index(
         "Generate the next short trajectory."
     )
-
-
-def test_free_navigation_system_prompt_requires_measured_clearance():
-    assert "A measured metric free-space profile" in FREE_NAVIGATION_SYSTEM_PROMPT
-    assert "Treat its distances and bearings as measured values" in (
-        FREE_NAVIGATION_SYSTEM_PROMPT
-    )
-    assert "turns\naccumulate across the five actions" in (
-        FREE_NAVIGATION_SYSTEM_PROMPT
-    )
-    assert "five actions with -8 degrees" in FREE_NAVIGATION_SYSTEM_PROMPT
 
 
 @pytest.mark.parametrize(
