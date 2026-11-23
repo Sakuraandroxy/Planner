@@ -15,7 +15,7 @@
 - 四个模型端口的实现：任务解析、轨迹规划、目标检测、任务完成判定。
 - 模型 HTTP 传输与三种方言（`openai`/`deepseek`/`anthropic`）：`planner/adapters/multimodal_chat.py:45`、`planner/adapters/chat_request_options.py:6`。
 - MJPEG 分帧：`planner/adapters/http/video.py:36`。
-- 提示词模板加载与 `${name}` 占位符替换：`planner/adapters/prompt_render.py:14`、`planner/adapters/trajectory_planner/prompts/render.py:16`。
+- 提示词模板加载与渲染：`planner/adapters/prompts/render.py:31` 的 `render_prompt`，模板在 `planner/adapters/prompts/templates/`，Jinja2 语法，缺失变量由 `StrictUndefined` 报错。
 - 模型输入图像的校验：`planner/adapters/model_visual_inputs.py:32`。
 - 落盘诊断 trace：`planner/adapters/diagnostics/visual_goal_trace.py:36`。
 
@@ -54,7 +54,7 @@
 | `BudgetExceeded` | `qwen_vl_planner.py:90-91`、`qwen_vl_planner.py:99-100` | 预算已耗尽 |
 | `ValueError` | `image_encoding.py:15`、`chat_request_options.py:8`、`client.py:43`、`qwen_vl_planner.py:28-29` | 构造期参数非法 |
 | `ObservationError` | `model_visual_inputs.py:20` | 深度图或内参不满足模型输入前提 |
-| `KeyError` | `prompt_render.py:20` | 模板占位符没有取值 |
+| `UndefinedError` | `planner/adapters/prompts/render.py:31` | 模板引用了调用方没传的变量 |
 | `HTTPException` | `wiring.py:24`、`wiring.py:36`、`wiring.py:51`、`wiring.py:66` | 路由层状态码 |
 
 ### 端点清单（全部 17 条 + 静态页）
@@ -146,7 +146,7 @@
 2. 检测类也在导入期读：`target_detection/prompts/system.py:4`、`visual_goal_target_detection.py:5`。
 3. 完成判定类在**调用期**渲染：`render_prompt("completion_system")` 与 `render_prompt("completion", **completion_values(request))`（`visual_goal_completion.py:27-32`、`prompts/values.py:95`）。
 4. 片段用 `load_fragment` 去掉文件末尾换行，分隔符由组合代码决定（`prompts/render.py:21-23`）。
-5. 占位符只支持 `\$\{name\}`，缺值抛 `KeyError`（`prompt_render.py:11-23`）。
+5. 模板是 Jinja2 文件，缺变量抛 `UndefinedError`（`planner/adapters/prompts/render.py:31`）；变量由 `values.py` 的纯函数产出。
 
 ### 5.5 视频流
 
@@ -168,7 +168,7 @@
 | `ProtocolError("task completion must return exactly true or false")` | 模型输出带标点、大小写不符、附解释（`task_completion/client.py:25-26`） | 判为失败，不回退到启发式 |
 | `ValueError("model endpoint URL is empty")` | 配置里 url 为空（`multimodal_chat.py:21`、`:28`） | 装配期就该失败，见 `detectors.py:56-58` 的前置检查 |
 | `ObservationError("model visual inputs require …")` | 深度图、深度内参、尺寸任一缺失或不符（`model_visual_inputs.py:40-49`） | 阶段失败，不发模型请求 |
-| `KeyError("prompt template has no value for …")` | 模板有占位符但调用方没传（`prompt_render.py:19-20`） | 编程错误，本地测试应拦住 |
+| `UndefinedError` | 模板引用的变量调用方没传（`planner/adapters/prompts/render.py:31`） | 编程错误，本地测试应拦住 |
 | `FileNotFoundError` | 模板文件缺失（`prompts/render.py:18`） | 轨迹类与检测类在导入期就炸，服务起不来；完成判定类在首次请求时才炸 |
 | `HTTPException(503)` | 控制器拒绝且状态是 `CONNECTING`/`DISCONNECTED`（`wiring.py:26-33`） | 控制台提示「还没连上」 |
 | `HTTPException(409)` | 控制器拒绝且状态可运行（`wiring.py:29-31`） | 控制台提示「当前状态不允许」 |
