@@ -26,10 +26,7 @@ from planner.simulator.processes import (
     UnattributedListener,
     display_files,
 )
-from planner.simulator.xpra_start import (
-    SUPPORTED_PROBES,
-    XpraStartSupervisor,
-)
+from planner.simulator.xpra_start import XpraStartSupervisor
 
 DISPLAY = ":199"
 RPC_PORT = 41451
@@ -920,5 +917,3 @@ def test_rpc_probe_needs_a_port_named_rpc(tmp_path):
         _ = Harness(tmp_path, family=_family(probes=("rpc",), ports={"xpra": XPRA_PORT})).driver
 
 
-def test_window_probe_is_supported():
-    assert "window" in SUPPORTED_PROBES

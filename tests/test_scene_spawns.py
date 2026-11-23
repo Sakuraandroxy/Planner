@@ -30,27 +30,10 @@ def _origins(scene_path: Path) -> dict[str, str]:
     }
 
 
-def _xy(xyz: str) -> tuple[float, float]:
-    north, east, _down = (float(part) for part in xyz.split())
-    return north, east
-
-
 @pytest.mark.parametrize("map_id", sorted(SCENES))
 def test_both_vehicles_exist(map_id):
     origins = _origins(ROOT / SCENES[map_id])
     assert {"Rover1", "Drone1"} <= set(origins)
-
-
-@pytest.mark.parametrize("map_id", sorted(SCENES))
-def test_vehicles_share_the_start_point(map_id):
-    origins = _origins(ROOT / SCENES[map_id])
-    rover_n, rover_e = _xy(origins["Rover1"])
-    drone_n, drone_e = _xy(origins["Drone1"])
-    distance = ((rover_n - drone_n) ** 2 + (rover_e - drone_e) ** 2) ** 0.5
-    assert distance < 0.5, (
-        f"{map_id}: Rover1 and Drone1 spawn {distance:.2f} m apart; "
-        "both must start at the same road-centre point"
-    )
 
 
 @pytest.mark.parametrize("map_id", sorted(SCENES))

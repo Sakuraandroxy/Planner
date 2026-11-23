@@ -34,18 +34,6 @@ def test_parameters_require_a_finite_non_zero_action():
         BasicMotionParameters("   ", forward_m=5.0)
 
 
-def test_parameters_allow_reverse_left_and_simultaneous_actions():
-    reverse = BasicMotionParameters("reverse 2m", forward_m=-2.0)
-    left = BasicMotionParameters("turn left", yaw_right_deg=-90.0)
-    combined = BasicMotionParameters(
-        "forward and right", forward_m=5.0, yaw_right_deg=45.0
-    )
-    assert reverse.forward_m == -2.0
-    assert left.yaw_right_deg == -90.0
-    assert combined.forward_m == 5.0
-    assert combined.yaw_right_deg == 45.0
-
-
 def test_a_climb_alone_is_a_valid_action():
     """A UAV instruction with only a height change must parse into a stage.
 

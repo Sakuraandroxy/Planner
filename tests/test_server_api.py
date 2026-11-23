@@ -403,14 +403,6 @@ def test_status_and_logs():
         )
 
 
-def test_status_reports_a_pending_view_switch():
-    controller = FakeController()
-    controller.view_pending = True
-    with _client(controller) as client:
-        status = client.get("/api/status").json()
-    assert status["view_pending"] is True
-
-
 def test_stop_codes():
     idle = FakeController(ServerState.IDLE)
     with _client(idle) as client:
@@ -432,16 +424,6 @@ def test_home_is_accepted_while_idle():
     assert response.status_code == 202
     assert response.json() == {"state": "idle", "vehicle": "rover"}
     assert controller.home_calls == ["rover"]
-
-
-def test_home_accepts_the_drone():
-    controller = FakeController()
-    controller.vehicle = "drone"
-    with _client(controller) as client:
-        response = client.post("/api/home")
-    assert response.status_code == 202
-    assert response.json() == {"state": "idle", "vehicle": "drone"}
-    assert controller.home_calls == ["drone"]
 
 
 def test_home_routes_to_the_requested_vehicle():

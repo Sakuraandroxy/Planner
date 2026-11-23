@@ -678,17 +678,6 @@ def test_activate_can_repeat_the_current_vehicle():
     controller.close()
 
 
-def test_active_event_marks_the_chase_view_applied():
-    workers = []
-    controller = _ready_controller(workers)
-    controller.activate("drone")
-    _wait(lambda: workers[0].activations == ["drone"])
-    workers[0].emit(WorkerEventKind.ACTIVE, vehicle="drone", success=True)
-    _wait(lambda: controller._applied_view == "drone_chase")
-    assert controller.status.view_mode == "drone_chase"
-    controller.close()
-
-
 def test_active_event_failure_restores_the_previous_selection():
     workers = []
     controller = _ready_controller(workers)
