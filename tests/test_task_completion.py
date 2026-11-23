@@ -88,7 +88,7 @@ def test_completion_checker_accepts_exact_boolean_text():
     system, text, images, timeout_s, operation = transport.calls[0]
     assert operation == "task completion"
     assert timeout_s == 3.0
-    assert "视觉目标导航任务完成判断器" in system
+    assert "视觉目标导航任务的完成判断器" in system
     assert "drive to the red car" in text
     assert len(images) == 2
     assert images[0][1] == "JPEG"
@@ -133,6 +133,6 @@ def test_completion_prompt_requires_local_completion_evidence():
 
 def test_completion_prompt_reports_local_measurements():
     messages = VisualGoalCompletionPrompt.prepare(_request())
-    assert "完成距离上限：7.0米" in messages.user
+    assert "完成距离上限：7.0 米" in messages.user
     assert "当前车辆世界坐标" in messages.user
-    assert "只输出true或false" in messages.user
+    assert "只输出小写true或false" in messages.system

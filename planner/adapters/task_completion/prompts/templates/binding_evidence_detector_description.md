@@ -1,1 +1,0 @@
-- 检测器报告描述：${description}；关联来源：${association_source}。

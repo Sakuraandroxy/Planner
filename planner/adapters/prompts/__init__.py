@@ -1,5 +1,6 @@
 from .render import render_prompt
 from .values import (
+    completion_values,
     observation_values,
     pose_values,
     target_evidence_values,
@@ -8,6 +9,7 @@ from .values import (
 )
 
 __all__ = [
+    "completion_values",
     "observation_values",
     "pose_values",
     "render_prompt",
