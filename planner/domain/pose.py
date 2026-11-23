@@ -51,19 +51,6 @@ def resolve_yaw_delta_deg(
     return float(signed_delta)
 
 
-def relative_to_world(
-    yaw_deg: float, dx: float, dy: float, dz: float
-) -> tuple[float, float, float]:
-    """Rotate a body-frame offset into the world frame.
-
-    At yaw=90 deg a forward offset points to world +y (right), which is the
-    expected right turn for a clockwise-positive yaw.
-    """
-    yaw = math.radians(yaw_deg)
-    c, s = math.cos(yaw), math.sin(yaw)
-    return (dx * c - dy * s, dx * s + dy * c, dz)
-
-
 def _finite_number(value: float) -> bool:
     """Reject bools, non-numeric values and non-finite numbers."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -88,7 +75,10 @@ class WorldPose:
         dz: float = 0.0,
         dyaw_deg: float = 0.0,
     ) -> WorldPose:
-        wx, wy, wz = relative_to_world(self.yaw_deg, dx, dy, dz)
+        # 体坐标系偏移转到世界系；yaw=90 度时前向偏移指向世界 +y，与顺时针偏航一致。
+        angle = math.radians(self.yaw_deg)
+        c, s = math.cos(angle), math.sin(angle)
+        wx, wy, wz = dx * c - dy * s, dx * s + dy * c, dz
         return WorldPose(
             self.x + wx,
             self.y + wy,

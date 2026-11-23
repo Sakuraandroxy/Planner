@@ -35,7 +35,7 @@
 | 名字 | 定义处 | 方法 | 已存在的实现 | 层外调用点 |
 | --- | --- | --- | --- | --- |
 | `Vehicle` | `vehicle.py:18` | `current_pose`、`tracking_limits`（属性）、`motion_capability`、`execute_segment`、`cancel`、`hold`、`collision_state` | `AirSimVehicle`（`planner/simulators/airsim/vehicle.py:23`）、`ProjectAirSimDrone`（`projectairsim/drone.py`）、`ProjectAirSimRover`（`projectairsim/rover.py`）；`GuidedVehicle`（`planner/runtime/guided_vehicle.py:13`）兑现 `execute_segment`（`planner/runtime/guided_vehicle.py:37`）并转发读侧与命令侧方法（`current_pose`、`motion_capability`、`collision_state`、`cancel`、`hold`、`stream_state`、`stream_command`），`tracking_limits` 由引擎对象直接提供 | `assembly/mission_assembly.py:226`、`runtime/execution.py:104`、`simulator/ports.py:45` |
-| `StreamingVehicle` | `streaming_vehicle.py:7` | `stream_state`、`stream_command` | 同上三个引擎类 | `runtime/continuous_execution.py`、`simulator/ports.py:47` |
+| `StreamingVehicle` | `streaming_vehicle.py:7` | `stream_state`、`stream_command` | 同上三个引擎类 | `runtime/motion/follower.py`、`simulator/ports.py:47` |
 | `PositionHoldVehicle` | `position_hold_vehicle.py:7` | `stream_state`、`cancel`、`hold_velocity` | `ProjectAirSimDrone`（`projectairsim/drone.py:298`）、`AirSimVehicle`（`airsim/vehicle.py:230`）；`ProjectAirSimRover` 没有 `hold_velocity` | `runtime/position_hold.py:22` |
 | `ObservationSource` | `observation_source.py:12` | `capture(*, budget)` | `AirSimObservationSource`（`airsim/observation_source.py:76`）、`ProjectAirSimObservationSource`（`projectairsim/observation.py:107`） | `assembly/mission_assembly.py:230`、`workflows/visual_goal_navigation/workflow.py` |
 | `ControlledObservationSource` | `observation_source.py:16` | `request_capture(timeout_s)` | `AirSimObservationSource`（`airsim/observation_source.py:96`） | `simulator/ports.py:48` |
@@ -62,7 +62,7 @@
 3. AirSim 走真实对象。`planner/simulators/airsim/runtime.py:28` 的 `build_ports` 把已构造的观测源、车辆、天气对象填进 `SimulatorPorts`（`:45` 起），`PORT_SLOTS`（`:17`）与之一致。
 4. ProjectAirSim 走占位对象。`planner/simulators/projectairsim/runtime.py:112` 的 `describe()` 调 `SimulatorPorts.from_slots`（`planner/simulator/ports.py:86`），每个已声明槽位填 `_Slot` 占位（`:106`），只有 `views` 与 `weather` 换成能答 `view_modes`/`fields`/`presets` 的 `_Views`/`_Weather`（`:136` 起）。
 5. 能力位推导。`planner/assembly/requirements.py:97` 的 `capabilities_for(ports)` 读 `ports.implemented()` 与 `ACTION_PORTS`（`:32`），产出 `Capabilities`，由 `adapters/http` 写给控制台。缺失槽位对应的动作在 `planner/adapters/http/wiring.py:66` 变成 HTTP 501。
-6. 运行期取用。`planner/assembly/mission_assembly.py:229` 用 `GuidedVehicle(vehicle, loop)` 把 `Vehicle` 端口接到控制循环，`:231` 读 `vehicle.tracking_limits`；`runtime/position_hold.py:22` 收 `PositionHoldVehicle`；`runtime/motion/loop.py:530` 的 `run_stream` 收 `StreamGoalSource`；`runtime/continuous_execution.py` 收 `StreamingVehicle`。
+6. 运行期取用。`planner/assembly/mission_assembly.py:229` 用 `GuidedVehicle(vehicle, loop)` 把 `Vehicle` 端口接到控制循环，`:231` 读 `vehicle.tracking_limits`；`runtime/position_hold.py:22` 收 `PositionHoldVehicle`；`runtime/motion/loop.py:530` 的 `run_stream` 收 `StreamGoalSource`；`runtime/motion/follower.py` 与 `runtime/motion/loop.py` 收 `StreamingVehicle`。
 7. 实现落在引擎包。三个载具类的 `stream_command` 第一行是 `require_supported`（`airsim/vehicle.py:223`、`drone.py:292`、`rover.py:268`），命令与能力不符即抛 `ValueError`。
 
 ## 6 失败模式

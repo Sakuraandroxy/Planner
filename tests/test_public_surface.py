@@ -63,7 +63,6 @@ CALIBRATED = {
     "runtime": frozenset(
         {
             "BackgroundOperation",
-            "ContinuousExecution",
             "ControlLoop",
             "ExecutionService",
             "FrameHub",
@@ -90,12 +89,9 @@ CALIBRATED = {
             "braking_speed",
             "build_queue_snapshot",
             "close_resources",
-            "duration_for",
             "freeze_observation",
             "freeze_reference",
             "heading_rate_deg_s",
-            "plan_segment",
-            "quintic",
             "snapshot_from_payload",
             "snapshot_to_payload",
             "vehicle_snapshot",
@@ -252,7 +248,6 @@ HARDCODED = {
             "depth_display_description",
             "front_view_for",
             "merge_weather",
-            "relative_to_world",
             "require_supported",
             "resolve_yaw_delta_deg",
             "validate_depth_protocol",

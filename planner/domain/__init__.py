@@ -49,7 +49,6 @@ from .planning_window import PlanningWindowInput
 from .pose import (
     RelativePoseDelta,
     WorldPose,
-    relative_to_world,
     resolve_yaw_delta_deg,
     wrap_deg,
     wrap_yaw_deg,
@@ -217,7 +216,6 @@ __all__ = [
     "depth_display_description",
     "front_view_for",
     "merge_weather",
-    "relative_to_world",
     "require_supported",
     "resolve_yaw_delta_deg",
     "validate_depth_protocol",

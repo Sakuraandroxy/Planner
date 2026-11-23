@@ -1,7 +1,6 @@
 """High-level services (motion planning, later the VLN loop)."""
 
 from .background_operation import BackgroundOperation
-from .continuous_execution import ContinuousExecution
 from .execution import ExecutionService
 from .frame_hub import FrameHub
 from .guided_vehicle import GuidedVehicle
@@ -18,7 +17,6 @@ from .moving_observations import MovingObservations
 from .observation_snapshot import freeze_observation, freeze_reference
 from .position_hold import PositionHold
 from .resource_cleanup import close_resources
-from .segment_motion import duration_for, plan_segment, quintic
 from .trajectory_hub import TrajectoryHub
 from .telemetry import (
     MODE_CONTINUOUS,
@@ -39,7 +37,6 @@ from .window import PlanningWindow
 
 __all__ = [
     "BackgroundOperation",
-    "ContinuousExecution",
     "ControlLoop",
     "ExecutionService",
     "FrameHub",
@@ -69,10 +66,7 @@ __all__ = [
     "vehicle_snapshot",
     "braking_speed",
     "close_resources",
-    "duration_for",
     "freeze_observation",
     "freeze_reference",
     "heading_rate_deg_s",
-    "plan_segment",
-    "quintic",
 ]
