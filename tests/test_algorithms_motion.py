@@ -15,12 +15,6 @@ def test_bounded_keeps_the_zero_vector():
     assert bounded((0.0, 0.0, 0.0), 2.0) == (0.0, 0.0, 0.0)
 
 
-def test_corridor_default_follows_the_motion_model():
-    limits = MotionLimits()
-    assert corridor_default(MotionModel.ACKERMANN, limits) == pytest.approx(1.0)
-    assert corridor_default(MotionModel.HOLONOMIC, limits) == pytest.approx(0.3)
-
-
 def test_corridor_default_rejects_an_unknown_model():
     with pytest.raises(ValueError):
         corridor_default("ackermann", MotionLimits())

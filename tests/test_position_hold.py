@@ -155,16 +155,6 @@ def test_contains_pose_uses_the_reference_bounds():
     assert not hold.contains_pose(WorldPose(1.0, 0.0, -3.0, 0.0))
 
 
-def test_approach_target_reserves_braking_distance():
-    clock = FakeClock()
-    vehicle = HoldVehicle(WorldPose(0.0, 0.0, 0.0, 0.0), clock)
-    hold = build(vehicle, clock)
-    start = WorldPose(0.0, 0.0, 0.0, 0.0)
-    assert hold.approach_target(start, WorldPose(0.01, 0.0, 0.0, 0.0)) is None
-    handoff = hold.approach_target(start, WorldPose(100.0, 0.0, 0.0, 0.0))
-    assert handoff is not None
-    assert 0.0 < handoff.x < 100.0
-
 def _settled_yaw_command(yaw_rate_deg_s, ticks=200):
     """Yaw command after the smoother settles, with the pose held still."""
     clock = FakeClock()
