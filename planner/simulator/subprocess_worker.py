@@ -197,9 +197,18 @@ class SubprocessMissionWorker:
         self._reader.start()
 
     def _pump(self) -> None:
-        """Relay the child's protocol lines, then its raw output, into the event queue."""
+        """Relay the child's protocol lines and its raw output into the event queue.
+
+        The three streams are read at once, each on its own path: the protocol fd on
+        this thread, stdout and stderr on two relay threads. Reading the protocol to
+        EOF first would deadlock against a child that fills its 64 KiB stdout pipe and
+        therefore blocks on the write before it ever closes the protocol fd. Protocol
+        lines are never queued behind a relay thread: they are parsed here as they
+        arrive.
+        """
         process = self._process
         assert process is not None
+        relayers = self._start_log_relays(process)
         for line in iter(self._event_stream.readline, ""):
             line = line.strip()
             if not line:
@@ -214,19 +223,55 @@ class SubprocessMissionWorker:
                     self._trajectory_sink.adopt(event.payload)
                 continue
             self._events.put(event)
-        # Anything the child wrote to stdout or stderr bypassed the protocol on
-        # purpose; forwarding it is what makes a crash diagnosable from the console
-        # instead of only from a terminal.
-        for stream in (process.stdout, process.stderr):
-            for line in iter(stream.readline, ""):
-                if line.strip():
-                    self._events.put(
-                        WorkerEvent(WorkerEventKind.LOG, message=line.rstrip()[:400])
-                    )
+        self._drain_log_relays(relayers)
         code = process.wait()
         self._events.put(
             WorkerEvent(WorkerEventKind.CLOSED, message=f"mission child exited with {code}")
         )
+
+    def _start_log_relays(self, process) -> list[tuple[str, threading.Thread]]:
+        """One reader per raw stream, so neither can wait for the other.
+
+        Anything the child wrote to stdout or stderr bypassed the protocol on purpose;
+        forwarding it is what makes a crash diagnosable from the console instead of
+        only from a terminal.
+        """
+        relayers: list[tuple[str, threading.Thread]] = []
+        for name, stream in (("stdout", process.stdout), ("stderr", process.stderr)):
+            if stream is None:
+                continue
+            thread = threading.Thread(
+                target=self._relay_log_lines,
+                args=(stream,),
+                name=f"mission-child-{name}",
+                daemon=True,
+            )
+            thread.start()
+            relayers.append((name, thread))
+        return relayers
+
+    def _relay_log_lines(self, stream) -> None:
+        for line in iter(stream.readline, ""):
+            if line.strip():
+                self._events.put(
+                    WorkerEvent(WorkerEventKind.LOG, message=line.rstrip()[:400])
+                )
+
+    def _drain_log_relays(self, relayers) -> None:
+        """Bounded wait for the relay threads once the child has closed its protocol.
+
+        A grandchild can hold the inherited stdout open after the mission child is
+        gone. Waiting forever there would hang this reader and the CLOSED event with
+        it, so the wait is bounded and a straggler is named in the log.
+        """
+        for name, thread in relayers:
+            thread.join(timeout=self._join_timeout_s)
+            if thread.is_alive():
+                self._log_fn(
+                    f"mission child {name} is still open {self._join_timeout_s:g}s "
+                    "after the protocol closed; no more of it will be relayed",
+                    "WARNING",
+                )
 
     def _send(self, line: str) -> None:
         if self._stdin is None:

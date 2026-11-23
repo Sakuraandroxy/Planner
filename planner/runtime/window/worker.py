@@ -6,6 +6,8 @@ from concurrent.futures import Future
 from planner.domain import PlanningOutput
 from planner.errors import ExecutionError
 
+from ..resource_cleanup import stop_thread
+
 
 class SlowPlannerWorker:
     def __init__(self):
@@ -70,8 +72,7 @@ class SlowPlannerWorker:
             if self._job is not None:
                 self._job[0].cancel()
             self._condition.notify_all()
-        if self._thread is not None:
-            # HTTP already in progress cannot be killed with Future.cancel().
-            # It has a request timeout, is isolated, and cannot mutate flight
-            # state. A daemon avoids hanging process exit on a broken server.
-            self._thread.join(timeout=1.0)
+        # HTTP already in progress cannot be killed with Future.cancel(). It has a
+        # request timeout, is isolated, and cannot mutate flight state; the join is
+        # bounded and a straggler is named by ``stop_thread``.
+        stop_thread(self._thread, "planner-slow-model")

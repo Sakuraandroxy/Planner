@@ -6,6 +6,8 @@ from concurrent.futures import Future
 
 from planner.errors import ExecutionError, ModelCallTimeout
 
+from .resource_cleanup import stop_thread
+
 
 class BackgroundOperation:
     def __init__(self, clock=time.monotonic):
@@ -81,16 +83,19 @@ class BackgroundOperation:
 
     def close(self, close_idle=None):
         self._closed = True
-        if self._thread is not None:
-            self._thread.join(timeout=1.0)
-        if close_idle is not None:
-            if not self.busy:
+        stop_thread(self._thread, "planner-data-operation")
+        if close_idle is None:
+            return
+        if not self.busy:
+            close_idle()
+        elif self._thread is not None:
+            # A read-only transport is closed only after its pending RPC returns.
+            # This helper cannot send vehicle commands.
+            thread = self._thread
+
+            def finish():
+                if stop_thread(thread, "planner-data-operation"):
+                    return      # still inside its RPC; the transport outlives it
                 close_idle()
-            elif self._thread is not None:
-                # A read-only transport is closed only after its pending RPC
-                # returns. This helper cannot send vehicle commands.
-                thread = self._thread
-                def finish():
-                    thread.join()
-                    close_idle()
-                threading.Thread(target=finish, name="planner-read-cleanup", daemon=True).start()
+
+            threading.Thread(target=finish, name="planner-read-cleanup", daemon=True).start()

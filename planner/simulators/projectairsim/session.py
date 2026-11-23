@@ -44,6 +44,7 @@ from .connection import (
 from .drone import ProjectAirSimDrone
 from .moving_source import BorrowedMovingSource
 from .rover import ProjectAirSimRover
+from .runtime import build_ports
 from .weather import apply_weather
 # The hide bookkeeping moved to ``vehicles``; both constants stay importable
 # from this module because the hide altitude is quoted off the session.
@@ -158,6 +159,24 @@ class ProjectAirSimMissionSession(VehicleRoster):
             )
             self._rover.start()
             self._drone.start()
+            # The bundle the console was told about before a scene existed. Every
+            # object here is the one that already serves the feature: the adapters
+            # for the vehicle side, this session for weather / views / home, the
+            # appearance catalog the models endpoint reads, and the frame sink the
+            # service handed over. ``build_ports`` refuses the boot if a declared
+            # slot has no object, so a capability cannot be advertised without one.
+            active = self._vehicle_for(self._active_vehicle)
+            self.ports = build_ports(
+                vehicle=active,
+                observation=active,
+                streaming=active,
+                moving_capture=active,
+                weather=self,
+                views=self,
+                models=config.vehicle_models,
+                frames=self._frame_sink,
+                home=self,
+            )
             # The arms are assembled by the registry once this session has
             # handed over its ports; the boot below only needs the vehicles.
             # The scene starts paused with both robots on the same ground

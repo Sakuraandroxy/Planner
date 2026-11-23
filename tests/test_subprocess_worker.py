@@ -286,3 +286,45 @@ def test_the_child_reports_its_own_setup_failure_over_the_pipe():
     assert WorkerEventKind.CLOSED in kinds, messages
     failure = " ".join(m for k, m in zip(kinds, messages) if k is WorkerEventKind.ERROR)
     assert "AirSim" in failure, failure
+
+
+def test_a_child_that_fills_stdout_still_gets_its_events_through(tmp_path):
+    """The stdout pipe used to gate the protocol: read protocol to EOF, then stdout.
+
+    A child that writes more than the pipe buffer (64 KiB on Linux) blocks in the
+    write, and the parent is still waiting for the protocol to end, so neither side
+    moves. Here the child writes 256 KiB to stdout *before* it sends its first event;
+    the parent must still see READY and reach CLOSED.
+    """
+    (tmp_path / "flood_child.py").write_text(
+        "import json, os, sys\n"
+        "fd = int(os.environ['PLANNER_MISSION_EVENT_FD'])\n"
+        "sys.stdout.write('noise ' * (256 * 1024 // 6) + '\\n')\n"
+        "sys.stdout.flush()\n"
+        "os.write(fd, (json.dumps({'kind': 'ready'}) + '\\n').encode())\n"
+        "os.write(fd, (json.dumps({'kind': 'closed', 'message': 'done'}) + '\\n').encode())\n",
+        encoding="utf-8",
+    )
+    worker = SubprocessMissionWorker(
+        python=sys.executable,
+        module="flood_child",
+        config_path=str(tmp_path / "base.yaml"),
+        map_id="blocks",
+        project_dir=str(tmp_path),
+    )
+    worker.start()
+    try:
+        deadline = time.monotonic() + 60
+        kinds = []
+        while time.monotonic() < deadline:
+            event = worker.poll()
+            if event is None:
+                time.sleep(0.02)
+                continue
+            kinds.append(event.kind)
+            if event.kind is WorkerEventKind.CLOSED:
+                break
+        assert WorkerEventKind.READY in kinds, kinds
+        assert WorkerEventKind.CLOSED in kinds, kinds
+    finally:
+        worker.terminate()

@@ -38,13 +38,14 @@ def build_ports(
 
     Called by :class:`planner.simulators.airsim.session.AirSimMissionSession`, which
     is also what makes ``describe()`` honest: the slots advertised before a
-    simulator is running are the slots this function can fill once it is running.
+    simulator is running are the slots this function can fill once it is running,
+    and ``verify_slots`` refuses the boot when they disagree.
     ``views``, ``models``, ``frames`` and ``home`` stay empty because UE4 does not
     implement them, and the console hides those controls from that fact. The
     trajectory read is not a port: ``/api/trajectory`` serves the service's own
     hub for every family.
     """
-    return SimulatorPorts(
+    ports = SimulatorPorts(
         vehicle=vehicle,
         observation=observation,
         streaming=vehicle,                 # AirSimVehicle implements stream_command
@@ -52,6 +53,8 @@ def build_ports(
         weather=weather,
         vehicles=VEHICLES,
     )
+    ports.verify_slots(PORT_SLOTS, simulator="airsim")
+    return ports
 
 
 def build_session(*, config, map_entry, family, resources, log):

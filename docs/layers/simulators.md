@@ -61,6 +61,7 @@
 | --- | --- | --- | --- |
 | `PORT_SLOTS` | 常量元组 | 声明槽位 | `planner/simulator/registry.py:35` 间接经 `describe()` |
 | `describe()` | 函数 | 不建客户端的能力报告 | `planner/simulator/registry.py:35` |
+| `build_ports()` | 函数 | 把活对象装成端口 bundle，并在构造期比对声明 | 两个引擎的会话构造（`airsim/session.py:142`、`projectairsim/session.py:169`） |
 | `build_session()` | 函数 | 建会话 | `planner/simulator/registry.py:67` |
 | `AirSimMissionSession` | 类 | UE4 会话 | `airsim/runtime.py:70` |
 | `ProjectAirSimMissionSession` | 类 | UE5 会话 | `projectairsim/runtime.py:66` |
@@ -84,7 +85,7 @@
 1. 建 `ProjectAirSimConnection` 并 `connect(wait_s=max(10, timeout_s))`，失败重试到超时（`connection.py:87-126`）。
 2. `add_advance_hook(self._pin_hook)`：每次推进后钉住隐藏载具（`session.py:120`、`vehicles.py:265-293`）。
 3. `load_scene()`：场景超过普通请求超时，临时把 `recv_timeout` 抬到 ≥60 s，然后 `world.pause()`（`connection.py:129-163`）。
-4. 建 `ProjectAirSimRover` 与 `ProjectAirSimDrone`，各自 `start()`（enable_api_control + arm；`rover.py:142-150`、`drone.py:133-143`）。
+4. 建 `ProjectAirSimRover` 与 `ProjectAirSimDrone`，各自 `start()`（enable_api_control + arm；`rover.py:142-150`、`drone.py:133-143`），随后 `build_ports(...)` 装出端口 bundle 并做一次声明比对（`session.py:160-179`、`projectairsim/runtime.py:34-68`）：载具适配器填 vehicle/observation/streaming/moving_capture，会话自身填 weather/views/home，`config.vehicle_models` 填 models，`resources.frame_sink` 填 frames。
 5. `_hide_quiet("drone")`：场景开局两台机器人同点，必须先让一台离场（`session.py:170`）。
 6. 预热取一帧给空闲观众，然后 `measure_resting_pose()` 量出车的静止高度并 `set_home_pose`（`session.py:174-200`、`rover.py:195-226`）。
 7. `_hide_inactive_at_startup()` 按默认载具复位可见性，`_apply_initial_view()` 把视图切到默认载具的 chase 相机（`session.py:204-207`、`:383-397`）。
@@ -98,7 +99,7 @@
 3. `ExecutionService(control)` 绑定位置保持检查点与取帧闸门的 `service_requests`/`cancel_requests`（`session.py:93-101`）。
 4. 建 `AirSimObservationSource`，带 `observation_gate`、`verify_image_pair=True`（`session.py:103-116`）。
 5. `build_capture_source()` 每次新建一条只读 `AirSimConnection` + 观测源，登记进 `_capture_connections`（`session.py:119-139`）。
-6. `AirSimWeather` + `build_ports(...)` 得到端口 bundle（`session.py:145-150`）。
+6. `AirSimWeather` + `build_ports(...)` 得到端口 bundle，函数末尾 `verify_slots(PORT_SLOTS)` 比对声明与实物（`session.py:145-150`、`airsim/runtime.py:30-58`）。
 7. `run()` 里才第一次飞：`prepare(takeoff_if_landed=True, ground_z=…)`，地面高度取会话见过的最大 z（UE 坐标 z 向下）（`session.py:213-227`）。
 
 ### 5.3 段执行一拍
@@ -127,7 +128,7 @@
 
 | 维度 | UE5 `projectairsim` | UE4 `airsim` | 依据 |
 | --- | --- | --- | --- |
-| 声明槽位 | vehicle、observation、streaming、controlled_capture、moving_capture、weather、views、models、frames、home | vehicle、observation、streaming、moving_capture、weather | `projectairsim/runtime.py:12-23`、`airsim/runtime.py:17-23` |
+| 声明槽位 | vehicle、observation、streaming、moving_capture、weather、views、models、frames、home | vehicle、observation、streaming、moving_capture、weather | `projectairsim/runtime.py:14-24`、`airsim/runtime.py:19-25` |
 | 载具 | `rover` + `drone` 双载具，可切换 | 只有 `drone` | `projectairsim/runtime.py:25`、`airsim/runtime.py:25`、`airsim/session.py:194-199` |
 | 运动模型 | rover `ACKERMANN`（最小转弯半径由标定反算）、drone `HOLONOMIC` | `HOLONOMIC` | `rover.py:56-59`、`:228-231`、`drone.py:80-87`、`airsim/vehicle.py:34-39` |
 | 时钟 | 可自由也可步进；`stream_command` 末尾自己推进 | 引擎自走；`stream_command` 只提交 Future | `connection.py:165-252`、`rover.py:295`、`airsim/vehicle.py:140-147` |
@@ -204,7 +205,9 @@
 | `MIN_CLIMB_M` | 0.5 m | `airsim/connection.py:20` | 起飞成功的爬升下限 |
 | `velocity_command_duration_s` | 0.2 s | `airsim/vehicle.py:28` | 流式命令的最短下发时长，见 Qeng11 |
 
-端口槽位没有构造期校验。`planner/simulator/registry.py:67-84` 建完会话只调 `attach_arms`，不比对声明槽位与实物槽位。UE4 已有 `build_ports`（`airsim/runtime.py:28-52`），拿 `describe().implemented()` 与它比对是一条低成本测试，目前没有。UE5 的端口在会话构造里内联填（`projectairsim/session.py:139-150`），没有 `build_ports`，要做同样的比对得先把构造拆成 builder。`tests/test_architecture.py:134-160` 只校验槽位名是 `SimulatorPorts` 的合法字段，测不出"声明了却没接"。
+端口的对象形态与端口协议不一致。`views` 与 `weather` 槽位填的是会话自身，它的 `set_view_mode(mode)` 返回应用的视图名而非协议要的 bool，`view_modes()`/`fields()`/`presets()` 三个读取方法只存在于 `airsim/weather.py` 与 `from_slots` 的占位对象上。`models` 槽位填 `VehicleModelCatalog`（`group`/`vehicles`/`defaults` 三个成员），`frames` 槽位填 `resources.frame_sink`（`publish(bgra, timestamp_s)`），都不匹配 `AppearanceModelControl` 与 `FramePublisher` 的方法名。没有任何生产代码经这四个槽位调用端口方法：视图与天气由 worker 直接调会话方法，模型由控制器读配置目录，视频由 `/api/video` 读 FrameHub，能力位仍由 `describe()` 的占位对象算出，所以今天不影响运行。签名统一属于待办第 2 项。
+
+`controlled_capture` 从 UE5 的声明里删掉了：UE5 没有 `request_capture` 实现，`planner/ports/observation_source.py:18` 这条契约在全仓库也没有生产调用者。UE4 实现了它但从未声明，`build_ports` 也不填，两边的声明现在都与实物一致。
 
 ## 7 测试位置
 
@@ -212,7 +215,7 @@
 
 - UE5：`tests/test_projectairsim_session.py`（构造顺序、载具切换回滚）、`tests/test_projectairsim_rover.py`（转向标定、teleport 容差、静止高度）、`tests/test_projectairsim_drone.py`（起飞/降落/`_is_landed`）、`tests/test_projectairsim_connection.py`（重连、时钟两种模式）、`tests/test_projectairsim_streaming.py`、`tests/test_projectairsim_geometry.py`、`tests/test_projectairsim_drive.py`。
 - UE4：`tests/test_airsim_session.py`（`test_airsim_vehicle.py` 删到只剩 2 条：`wait_for_observation` 的名字翻译与缺 hold 服务时的拒绝）、`tests/test_airsim_connection.py`、`tests/test_airsim_observation.py`、`tests/test_airsim_server_vehicle.py`、`tests/test_airsim_port_names.py`（用 AST 校验 `getattr` 用到的属性名真在目标类上）。
-- 横切：`tests/test_architecture.py:134-160`（`PORT_SLOTS` 名字必须是 `SimulatorPorts` 的字段，`Vehicle`/`StreamingVehicle` 的方法必须在三个载具类上存在；只做 `hasattr`，签名漂移测不出来）、`tests/test_camera*`/`test_intrinsics_validation.py`、`tests/test_motion_contract.py`。
+- 横切：`tests/test_simulator_port_slots.py`（两个引擎的 `build_ports` 声明与实物一致；缺槽位时报错并给出槽位名；填了未声明的槽位也报错）、`tests/test_architecture.py:134-160`（`PORT_SLOTS` 名字必须是 `SimulatorPorts` 的字段，`Vehicle`/`StreamingVehicle` 的方法必须在三个载具类上存在；只做 `hasattr`，签名漂移测不出来）、`tests/test_camera*`/`test_intrinsics_validation.py`、`tests/test_motion_contract.py`。
 
 没覆盖的空白：
 
@@ -235,12 +238,12 @@
 
 ## 9 疑问与争议
 
-- Qeng1 层：simulators 结论：`airsim` 与 `projectairsim` 的 `describe()` 与真实 `build_ports` 之间没有比对；UE4 有 `build_ports`（`airsim/runtime.py:28`），UE5 完全由 `session.py` 手工填端口、没有任何构造期比对，`PORT_SLOTS` 是唯一声明。依据：`airsim/runtime.py:28-52`、`projectairsim/runtime.py:74-81`、`projectairsim/session.py:79-227`。影响：是（simulator 与 assembly 文档）。
+- Qeng1 层：simulators 结论：已处置。两个引擎的 `build_ports` 末尾都调 `SimulatorPorts.verify_slots`（`planner/simulator/ports.py:68-84`），声明与实物不一致时构造即失败并列出槽位名。依据：`airsim/runtime.py:30-58`、`projectairsim/runtime.py:34-68`、`projectairsim/session.py:160-179`。影响：否。
 - Qeng2 层：simulators 结论：已处置，本轮删除 `airsim/recording.py` 整模块与 `airsim/__init__.py` 的两处重导。依据：`planner/simulators/airsim/__init__.py:1-6`。影响：否。
 - Qeng3 层：simulators 结论：三个载具类都还留着 `execute_segment` + `_loop` 这套过渡委派，生产零调用，`attach_loop` 注入的 loop 只被测试的 `execute_segment` 用到。依据：`airsim/vehicle.py:63-77`、`projectairsim/rover.py:160-173`、`projectairsim/drone.py:194-215`、`planner/assembly/mission_assembly.py:226-229`。影响：是（assembly 的注入点）。
 - Qeng4 层：simulators 结论：已处置，本轮删除 `AirSimVehicle.execute_basic_motion`、`_await_arrival` 与两个到达容差常量，`vehicle.py` 从 239 行降到 149 行。依据：`planner/simulators/airsim/vehicle.py:1-149`。影响：否。
 - Qeng5 层：simulators 结论：`ProjectAirSimDrone` 上有三个方法（`hold_tick`、`begin_observation_hold`、`wait_hold`）是为 UE4 那套 `ObservationGate` 协议准备的，UE5 不走闸门，方法永久悬空。依据：`projectairsim/drone.py:238-262`、`airsim/observation_gate.py:84-88`、`:145-151`。影响：否。
-- Qeng6 层：simulators 结论：`ObservationSource.request_capture` 这条契约（停稳采集 + Future 语义）在两套引擎里都实现了，但没有任何上层调用者；`controlled_capture` 槽位只有在 `ports.py` 与 `from_slots` 里出现，UE4 的 `build_ports` 没有填它。依据：`planner/ports/observation_source.py:18`、`airsim/observation_source.py:96-101`、`airsim/runtime.py:45-52`、`planner/simulator/ports.py:48`。影响：是（ports 与 runtime 文档）。
+- Qeng6 层：simulators 结论：`ObservationSource.request_capture` 这条契约（停稳采集 + Future 语义）只有 UE4 实现（`airsim/observation_source.py:96-101`），没有任何上层调用者；UE5 没有实现，`controlled_capture` 因此从 UE5 的 `PORT_SLOTS` 移除，UE4 的 `build_ports` 也不填它。依据：`planner/ports/observation_source.py:18`、`airsim/observation_source.py:96-101`、`airsim/runtime.py:30-58`、`projectairsim/runtime.py:14-24`。影响：否。
 - Qeng7 层：simulators 结论：`ProjectAirSimMissionSession.view_mode` 属性没有任何读取者，控制台的视图状态由控制器自己维护，同一个"当前视图"存在两份真相。依据：`projectairsim/session.py:331-333`、`planner/assembly/controller/state.py:50`、`:188-218`。影响：是（assembly 文档）。
 - Qeng8 层：simulators 结论：UE5 的隐藏机制是"向上平移 1000 m + 每 2 仿真秒重贴"，两个常量没有配置入口，且注释里的量测（水平 300 m 会插进墙里、约 700 次/分钟接触）在仓库里没有对应脚本或数据。依据：`projectairsim/vehicles.py:36-42`、`:265-293`。影响：否。
 - Qeng9 层：simulators 结论：`ProjectAirSimConnection` 的"进程内只允许一个连接"用模块级全局变量实现，测试若并行建两个会话会互相干扰，且异常信息让调用方以为需要重启进程而不是先 `close`。依据：`projectairsim/connection.py:44-46`、`:337-352`、`:196-206`。影响：否。

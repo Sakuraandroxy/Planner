@@ -16,7 +16,7 @@
 - 任务会话的两种运行形态：线程 `ThreadedMissionWorker`（`planner/simulator/worker.py:18`）与子进程 `SubprocessMissionWorker` + `MissionChild`（`planner/simulator/subprocess_worker.py:113`、`planner/simulator/mission_child.py:141`）。
 - worker 协议类型与事件：`BackendWorker`、`TaskSubmission`、`WorkerEvent`、`WorkerEventKind`（`planner/simulator/worker_protocol.py:14-69`）。
 - 仿真器 id → 模块 → 会话的解析（`planner/simulator/registry.py:18-84`）。
-- 端口 bundle 的数据结构与占位实现：`SimulatorPorts`（`planner/simulator/ports.py:42-106`）。
+- 端口 bundle 的数据结构与占位实现：`SimulatorPorts`（`planner/simulator/ports.py:42-119`）。
 - 地图标记文件读写（`planner/simulator/marker.py:17-35`）。
 - 子进程里可用的轨迹转发 sink（`planner/simulator/telemetry_relay.py:27`）。
 
@@ -44,7 +44,7 @@
 
 ### 契约类型
 
-`SimulatorPorts`（`ports.py:42-106`，字段 `vehicle`、`observation`、`streaming`、`controlled_capture`、`moving_capture`、`weather`、`views`、`models`、`frames`、`home`、`vehicles`）、`BackendWorker`（`worker_protocol.py:50-69`）、`TaskSubmission`（`:31-35`）、`WorkerEvent`（`:38-47`）、`WorkerEventKind`（`:14-27`，九个取值）。
+`SimulatorPorts`（`ports.py:42-119`，字段 `vehicle`、`observation`、`streaming`、`controlled_capture`、`moving_capture`、`weather`、`views`、`models`、`frames`、`home`、`vehicles`）、`BackendWorker`（`worker_protocol.py:50-69`）、`TaskSubmission`（`:31-35`）、`WorkerEvent`（`:38-47`）、`WorkerEventKind`（`:14-27`，九个取值）。
 
 ### 返回与异常
 
@@ -62,7 +62,8 @@
 | --- | --- | --- | --- |
 | `SimulatorPorts` | dataclass | 引擎交回的端口 bundle | `planner/assembly/requirements.py:97` 起的推导链、`planner/simulators/*/runtime.py:45`/`:75` |
 | `SimulatorPorts.from_slots` | 类方法 | 不建客户端先报能力 | `planner/simulators/airsim/runtime.py:75`、`planner/simulators/projectairsim/runtime.py:75` |
-| `SimulatorPorts.implemented` | 方法 | 列出真正填了的槽位 | `tests/test_architecture.py`、`tests/test_requirements.py` |
+| `SimulatorPorts.implemented` | 方法 | 列出真正填了的槽位 | `requirements.capabilities_for`、`tests/test_simulator_port_slots.py` |
+| `SimulatorPorts.verify_slots` | 方法 | 构造期比对声明槽位与实物，缺一个就报错并点名 | 两个引擎的 `build_ports`（`airsim/runtime.py:30-58`、`projectairsim/runtime.py:34-68`） |
 | `BackendWorker` | Protocol | 驱动进程栈的五个 + 四个可选方法 | `planner/assembly/controller/commands.py:194` 等控制器路径 |
 | `TaskSubmission` | dataclass | 一次任务指令 | `planner/assembly/…`、`planner/simulators/*/session.py:32-33` |
 | `WorkerEvent`/`WorkerEventKind` | dataclass/Enum | worker → 控制器的事件 | 控制器事件泵、`planner/assembly/reporting.py:48` 的配合 |
@@ -117,16 +118,18 @@
 4. `_loop` 每 50 ms 取一条命令；空档调 `session.idle_tick()`（`worker.py:142-163`）。
 5. `task` → `_run_task`：重置 stop event、调 `session.run(task, stop_event=…, log=…)`、把结果交给 `task_finish_events` 发 `LOG` 与 `FINISHED`（`worker.py:246-276`）。
 6. `home`/`activate`/`view`/`weather` 用 `getattr(session, 名字, None)` 鸭子调用，会话没有就静默跳过（`worker.py:164-240`）。
-7. `shutdown` 置 stop event、投 `shutdown` 命令、`join(join_timeout_s=10.0)`；`_run` 的 `finally` 调 `session.close(skip_landing=…)` 并发 `CLOSED`（`worker.py:79-89`、`:154-170`）。
+7. `shutdown` 置 stop event、投 `shutdown` 命令、`join(join_timeout_s=10.0)`；`_run` 的 `finally` 调 `session.close(skip_landing=…)` 并发 `CLOSED`（`worker.py:91-97`、`:149-175`）。
+8. `terminate` 走 `shutdown` 之后仍存活的线程：置放弃标记、打一条 WARNING、在 `vln-worker-release` 守护线程上 `session.close(skip_landing=True)` 拆掉底层连接，之后 `submit` 只记一条 ERROR 不再入队（`worker.py:52-60`、`:99-135`）。线程不可强杀，泄漏以日志与拒收显式化（见 5.5 第 6 步的子进程对照）。
 
 ### 5.5 任务会话的子进程形态
 
 1. `SubprocessMissionWorker.start`：`os.pipe()` 自建协议管道，把写端 fd 号塞进 `PLANNER_MISSION_EVENT_FD` 并设为可继承（`subprocess_worker.py:159-175`）。
 2. argv 是 `<runtime_python> -m planner.simulator.mission_child --config … --map …`，`cwd` 是仓库根，`pass_fds=(write_fd,)`（`subprocess_worker.py:176-198`）。
-3. `_pump` 线程逐行读协议 fd；`TRAJECTORY` 事件不进事件队列，直接 `trajectory_sink.adopt(payload)`（`subprocess_worker.py:199-224`）。
-4. 协议流结束后才去读子进程的 stdout/stderr，把每行当 `LOG` 转发（`subprocess_worker.py:225-242`）。
-5. `shutdown` 发命令后同步等 `CLOSED`，超时 `shutdown_timeout_s=60.0`，等到的队列内容原样放回（`subprocess_worker.py:255-295`）。
-6. `terminate` 发 SIGTERM，`join` 超时就 SIGKILL（`subprocess_worker.py:315-345`）。
+3. `_pump` 线程逐行读协议 fd；`TRAJECTORY` 事件不进事件队列，直接 `trajectory_sink.adopt(payload)`（`subprocess_worker.py:199-231`）。
+4. `stdout` 与 `stderr` 各起一个 `mission-child-stdout`/`mission-child-stderr` 守护读线程，与协议 fd 同时排空，每行转发成 `LOG`（`subprocess_worker.py:232-259`）。协议行不排在日志之后：解析在本线程随到随发。
+5. 协议 fd 到 EOF 后，以 `join_timeout_s` 为界等两个日志线程；仍在跑的按名字打 WARNING，再 `process.wait()` 发 `CLOSED`（`subprocess_worker.py:260-274`）。
+5. `shutdown` 发命令后同步等 `CLOSED`，超时 `shutdown_timeout_s=60.0`，等到的队列内容原样放回（`subprocess_worker.py:300-337`）。
+6. `terminate` 发 SIGTERM，`join` 超时就 SIGKILL（`subprocess_worker.py:360-378`）。
 7. 子进程侧 `MissionChild.run`：装 `_LogBridge` 把库日志塞进协议 → 起 stdin 读线程 → 建会话 → 发 `READY` 与 `WEATHER` → 50 ms 循环取命令（`mission_child.py:327-373`）。
 8. 子进程的 `stop` 在 stdin 线程里**立即**设 event，不进命令队列（`mission_child.py:175-215`）；任务号在入队前就占住，`stop` 能取消"已排队未开跑"的任务（`:215-221`）。
 9. 子进程的 `home`/`activate`/`view` 一律记 ERROR：这条路径上不支持（`mission_child.py:315-322`）。
@@ -153,13 +156,9 @@
 
 ### 6.1 已知缺口
 
-先读协议 fd 再读 stdout 的结构性风险：`SubprocessMissionWorker._pump` 在协议 fd 上 `readline` 到 EOF 之后才去排空子进程的 stdout/stderr（`planner/simulator/subprocess_worker.py:199-224` 与 `:225-242`）。子进程若往 stdout 写满管道缓冲（Linux 默认 64 KiB），自己会阻塞在写，而父进程还在等协议 fd，两边互等。触发条件是子进程或其依赖打印大量文本；正常路径下 stdout 只有零星输出。
+同样的"超时即放走"还有两处：`_release_orphan_display` 之前的 `_wait_display_released` 到点返回布尔值而不抛（`planner/simulator/xpra_start.py:555-561`）；`SubprocessMissionWorker._wait_for_closed` 到点后把已取到的事件放回队列就返回，不区分"等到 CLOSED"与"只是超时"（`planner/simulator/subprocess_worker.py:317-337`）。
 
-`ThreadedMissionWorker.terminate()` 没有强杀升级：它就是 `shutdown()` 的别名（`planner/simulator/worker.py:87-89`），而 `shutdown` 末尾只 `join(join_timeout_s=10.0)`（`:23`、`:91-93`）。会话卡在一条 RPC 里时，`join` 超时后线程继续活着，服务照样返回关闭成功。只有子进程版有 SIGTERM → SIGKILL 升级（`planner/simulator/subprocess_worker.py:315-345`）。
-
-同样的"超时即放走"还有两处：`_release_orphan_display` 之前的 `_wait_display_released` 到点返回布尔值而不抛（`planner/simulator/xpra_start.py:555-561`）；`SubprocessMissionWorker._wait_for_closed` 到点后把已取到的事件放回队列就返回，不区分"等到 CLOSED"与"只是超时"（`planner/simulator/subprocess_worker.py:272-295`）。
-
-槽位校验缺失：`registry.build_session` 建完会话只调 `attach_arms`，不比对声明槽位与实物槽位（`planner/simulator/registry.py:67-84`）。UE5 的端口在会话构造里内联填（`planner/simulators/projectairsim/session.py:139-150`），没有 `build_ports`，要做比对得先抽 builder；UE4 已有 `build_ports`（`planner/simulators/airsim/runtime.py:28-52`），补一条 `describe().implemented()` 的比对即可。
+`registry.build_session` 只在会话构造完成后调 `attach_arms`，自己不比对槽位（`planner/simulator/registry.py:67-84`）：比对发生在两个引擎的 `build_ports` 末尾，走 `SimulatorPorts.verify_slots`（`planner/simulator/ports.py:68-84`）。绕过 `build_ports` 手工拼 bundle 的会话不会被检查，今天没有这样的调用点。
 
 ## 7 测试位置
 
@@ -167,16 +166,14 @@
 
 - `tests/test_xpra_start_driver.py`（argv 渲染、探针顺序、归属、停止降级）、`tests/test_family_router.py`（按标记与按地图两种路由、跨 family 换栈）。
 - `tests/test_argv.py`、`tests/test_map_marker.py`。
-- `tests/test_threaded_worker.py`、`tests/test_subprocess_worker.py`、`tests/test_mission_child.py`（重放测试，覆盖协议编解码、停止、关闭确认）。
-- `tests/test_architecture.py:120-135`（两个仿真器都声明了 `PORT_SLOTS` 且槽位名在 `SimulatorPorts` 里存在）、`tests/test_requirements.py`、`tests/test_layering.py`、`tests/test_layer_entries.py`。
+- `tests/test_threaded_worker.py`、`tests/test_subprocess_worker.py`、`tests/test_mission_child.py`（重放测试，覆盖协议编解码、停止、关闭确认）。两个可靠性用例：`test_a_child_that_fills_stdout_still_gets_its_events_through`（真子进程先写 256 KiB stdout 再发协议）、`test_terminate_releases_a_worker_stuck_inside_a_simulator_call`（线程卡在 `idle_tick` 里被放弃）。
+- `tests/test_architecture.py:120-135`（两个仿真器都声明了 `PORT_SLOTS` 且槽位名在 `SimulatorPorts` 里存在）、`tests/test_simulator_port_slots.py`（声明与实物逐项比对、缺槽位报错并点名、填了未声明槽位报错）、`tests/test_requirements.py`、`tests/test_layering.py`、`tests/test_layer_entries.py`。
 
 没覆盖的空白：
 
 - `processes.py` 的 `reclaim_stale_display`、`display_released`、`display_holder`、`terminate_verified_tree` 没有直接单测，全部经由 `test_xpra_start_driver.py` 的注入替身间接验证；`/proc` 与 `ss` 的真实分支没有一条测试。
-- `SubprocessMissionWorker._pump` 的 stdout 缓冲死锁风险（见 Qsim3）没有测试。
-- `ThreadedMissionWorker.shutdown` 超时后线程仍活的路径没有测试。
 - `registry.ports_for` 没有生产调用者，只有测试在调（见 Qsim7）。
-- `projectairsim` 的 `describe()` 与真实端口之间没有比对测试；UE4 侧同样的比对也没有写（`airsim/runtime.py:28-52` 已有 `build_ports` 可用）。
+- UE5 的 `build_ports` 只在构造期跑一次，没有测试起过真实 `ProjectAirSimMissionSession`：`tests/test_projectairsim_session.py` 用 `__new__` 与替身类，验的是它前面的构造顺序与 sink 转发。
 
 ## 8 与其他层的联动
 
@@ -191,10 +188,7 @@
 
 ## 9 疑问与争议
 
-- Qsim1 层：simulator 结论：`SimulatorPorts.vehicle` 与 `.observation` 声明为非可选，但 `from_slots` 在槽位缺失时传 `None`，类型与运行时不符。依据：`planner/simulator/ports.py:45-46` 与 `:88-90`。影响：否。
-- Qsim2 层：simulator 结论：`registry.build_session` 构造完会话后不校验"声明槽位 = 实物槽位"；过期注释已改，指回 `tests/test_architecture.py` 的真实守门测试，但那条测试只校验槽位名合法。依据：`planner/simulator/registry.py:67-84`、`planner/simulators/airsim/runtime.py:4-9`。影响：是（simulators 文档）。
-- Qsim3 层：simulator 结论：`_pump` 先把协议 fd 读到 EOF 才去读 stdout/stderr，子进程若把 stdout 写满 64 KiB 就会阻塞在写，而父进程仍在等协议 fd，形成死锁。依据：`planner/simulator/subprocess_worker.py:246-277`。影响：否。
-- Qsim4 层：simulator 结论：`ThreadedMissionWorker.terminate()` 只是 `shutdown()`，没有 subprocess 版的 SIGKILL 升级；一个卡在 RPC 里的会话会让 `join(10s)` 超时后线程继续活着。依据：`planner/simulator/worker.py:97-102`、`:104-106`。影响：否。
+- Qsim1 层：simulator 结论：`SimulatorPorts.vehicle` 与 `.observation` 声明为非可选，但 `from_slots` 在槽位缺失时传 `None`，类型与运行时不符。依据：`planner/simulator/ports.py:45-46` 与 `:106-107`。影响：否。
 - Qsim5 层：simulator 结论：`idle_tick()` 抛异常时 worker 线程直接 `return`，之后 `submit()` 仍会往队列里塞任务，永远不会被消费，也不会再报错。依据：`planner/simulator/worker.py:174-191`、`:49-50`。影响：是（assembly 的控制器需要看 CLOSED 判活）。
 - Qsim6 层：simulator 结论：子进程侧的 `_handle` 里 `elif cmd == "stop"` 分支不可达，`stop` 在 stdin 线程已被 `continue` 掉。依据：`planner/simulator/mission_child.py:190-217` 与 `:270-273`。影响：否。
 - Qsim7 层：simulator 结论：`registry.ports_for` 只有 `capabilities_for` 与测试在调，是单点抽象；同时 `capabilities_for` 反向 import 装配层，本层的"独立可测"要靠这条反向依赖成立。依据：`planner/simulator/registry.py:38-42`。影响：是（assembly 文档）。

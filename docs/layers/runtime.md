@@ -56,7 +56,7 @@ grep -rn "planner.workflows\|planner.assembly\|planner.adapters\|planner.simulat
 | `MODE_CONTINUOUS` | 常量 `str` | 连续执行写入的遥测模式串 | planner/workflows/free_navigation/continuous.py:22、planner/workflows/visual_goal_navigation/continuous.py:10 |
 | `MODE_IDLE` / `MODE_NO_QUEUE` / `MODE_PENDING` | 常量 `str` | 空闲、无队列与待执行三种遥测模式串 | 无层外调用点，仅 telemetry.py 与 trajectory_hub.py |
 | `MODE_STOPPED_BATCH` | 常量 `str` | 批次结束停稳后的遥测模式串 | planner/workflows/free_navigation/workflow.py:28、planner/workflows/visual_goal_navigation/workflow.py:23 |
-| `ModelCallService` | 类（线程） | 单飞模型调用，超时后隔离在途结果直到线程自然返回 | planner/workflows/visual_goal_navigation/workflow.py:89、planner/workflows/free_navigation/workflow.py:119 |
+| `ModelCallService` | 类（线程） | 单飞模型调用，超时后的在途结果隔离到线程返回，可换下一调用接管 | planner/workflows/visual_goal_navigation/workflow.py:89、planner/workflows/free_navigation/workflow.py:119 |
 | `MotionPlanner` | Protocol | 世界轨迹到运动轨迹的策略接口 | planner/workflows/visual_goal_navigation/workflow.py:69 |
 | `MovingObservations` | 类 | 移动帧的有界抓取泵与失败预算 | planner/workflows/visual_goal_navigation/continuous.py:41、planner/workflows/free_navigation/continuous.py:91 |
 | `PlanningWindow` | 类 | 滑窗：授权队列、补点、在途候选收集 | planner/workflows/visual_goal_navigation/workflow.py:94 |
@@ -136,12 +136,14 @@ grep -rn "planner.workflows\|planner.assembly\|planner.adapters\|planner.simulat
 线程与关闭
 | 线程名 | 创建位置 | 谁关闭 | 关闭语义 |
 | --- | --- | --- | --- |
-| `planner-slow-model` | planner/runtime/window/worker.py:35 | `PlanningWindow.close` → `SlowPlannerWorker.close`（window.py:330-335、worker.py:67-77） | 置 `_closed`、取消 job、`join(timeout=1.0)` |
-| `planner-model-call` | planner/runtime/model_calls.py:66 | `ModelCallService.close`（model_calls.py:85-92） | 每次调用一个新线程，关闭只 `join(timeout=1.0)` |
-| `planner-data-operation` | planner/runtime/background_operation.py:54 | `BackgroundOperation.close`（background_operation.py:82-96） | `join(timeout=1.0)`，再按需 `close_idle()` |
-| `planner-read-cleanup` | planner/runtime/background_operation.py:96 | 自身，不 join | `thread.join()` 无超时，慢 RPC 会一直挂着 |
+| `planner-slow-model` | planner/runtime/window/worker.py:37 | `PlanningWindow.close` → `SlowPlannerWorker.close`（window.py:330-335、worker.py:69-77） | 置 `_closed`、取消 job，`stop_thread(…, "planner-slow-model")` |
+| `planner-model-call` | planner/runtime/model_calls.py:93 | `ModelCallService.close`（model_calls.py:113-118） | 置 `_closed`，`stop_thread(…, "planner-model-call")` |
+| `planner-data-operation` | planner/runtime/background_operation.py:57 | `BackgroundOperation.close`（background_operation.py:84-101） | `stop_thread(…, "planner-data-operation")`，再按需 `close_idle()` |
+| `planner-read-cleanup` | planner/runtime/background_operation.py:99 | 自身，同样过 `stop_thread` | 等 `planner-data-operation` 以 1 s 为界；仍未收就放弃 `close_idle()` 并记 WARNING（background_operation.py:96-100） |
 
-异常回到主循环的方式：全部经 `Future`。`SlowPlannerWorker._run` 用 `set_exception` 传回，`BackgroundContinuationPlanner.poll` 把它变成失败计数与日志（inflight.py:99-105）；`ModelCallService.run` 同样 `set_exception`，`call` 在 owner 线程用 `future.result()` 重新抛出（model_calls.py:50-82）；`BackgroundOperation.poll` 也是 `future.result()`（background_operation.py:63-77）。
+四条关闭走同一个 `stop_thread`（planner/runtime/resource_cleanup.py:35-51）：`join(CLOSE_TIMEOUT_S=1.0)`，线程未收就按名字打一条 WARNING，返回“仍在跑”。调用方在此之前已置 `_closed`，所有 `require_available` 随后一律拒绝新任务；线程是 daemon，随进程结束。
+
+异常回到主循环的方式：全部经 `Future`。`SlowPlannerWorker._run` 用 `set_exception` 传回，`BackgroundContinuationPlanner.poll` 把它变成失败计数与日志（inflight.py:99-105）；`ModelCallService.run` 同样 `set_exception`，`call` 在 owner 线程用 `future.result()` 重新抛出（model_calls.py:58-111）；`BackgroundOperation.poll` 也是 `future.result()`（background_operation.py:63-77）。
 
 任务收尾时 `close_resources` 逐项关闭并聚合失败，`KeyboardInterrupt` / `SystemExit` 优先重抛（planner/runtime/resource_cleanup.py:7-21）。
 
@@ -159,11 +161,12 @@ grep -rn "planner.workflows\|planner.assembly\|planner.adapters\|planner.simulat
 | `MotionPaused` | `pose_checkpoint` 返回真（loop.py:509） | 内部信号，转成 `ExecutionReceipt(paused=True)` |
 | `ValueError("unusable trajectory snapshot: ...")` | 管道消息缺 `active`、`queue`、`points` 等键，或数值不能转 float（telemetry.py:182） | `subprocess_worker` 视为事件损坏，丢掉该事件 |
 | `ModelCallTimeout` | 模型调用超时或结果晚于 deadline（model_calls.py:76-81）；窗口/后台同语义（window.py:189-191,218、background_operation.py:71-77）；`_BoundPlanner` 记图超时（window.py:52-56） | 本阶段失败并隔离在途结果，不要等待 |
+| `ModelCallTimeout` | 模型调用超时或结果晚于 deadline（model_calls.py:58-111）；窗口/后台同语义（window.py:189-191,218、background_operation.py:71-77）；`_BoundPlanner` 记图超时（window.py:52-56） | 本阶段失败；过了 deadline 下一调用可接管，旧结果丢弃。
 | `ProtocolError` | 队列非空时授权新批量、点数不是 5、快照 token/修订不符、时间线倒退、连续失败超限（queue.py:60-62,88-90,119-126、stream_timeline.py:15-22、window.py:196-197,266-267） | 丢弃本轮授权与模型输出，重新取帧 |
 | `ObservationError` | 移动帧连续失败达上限（moving_observations.py:24-35） | 任务层结束连续阶段 |
 | `ResourceCleanupError` | 至少一个关闭回调抛异常（resource_cleanup.py:18-21） | 记录聚合失败，继续退出流程 |
-| 后台线程关不掉（不抛异常） | 关闭时线程 1 秒内没退出：worker.py:77、model_calls.py:92、background_operation.py:85 都只 `join(timeout=1.0)`；`planner-read-cleanup` 的 `thread.join()` 无超时（background_operation.py:96） | 进程继续退出，线程随进程结束；不要假设调用点返回就已停 |
-| 阶段永久拒绍模型调用（不抛异常） | 上次模型调用超时后线程未返回，`_busy` 常真（model_calls.py:57-62,73-83） | 只能外部停止本阶段，不要等它自行恢复 |
+| 后台线程关不掉（不抛异常） | 关闭时线程 1 s 内没退出：四份 close 都走 `stop_thread`（resource_cleanup.py:35-51），按名字打 WARNING 后放走（worker.py:69-77、model_calls.py:113-118、background_operation.py:84-101） | 进程继续退出，线程随进程结束；日志里已有线程名，不要假设调用点返回就已停 |
+| 模型调用挂了很久（不抛异常） | 超时后 `_busy` 仍为真，但过了 `_deadline` 后 `require_available` 放行下一个调用；旧线程返回时按代号丢弃并打 WARNING（model_calls.py:38-56、67-95） | 阶段可以继续推进；`has_pending_call` 仍为真，别把它当“无在途调用” |
 
 ## 7 测试位置
 
@@ -176,11 +179,12 @@ grep -rn "planner.workflows\|planner.assembly\|planner.adapters\|planner.simulat
 - `tests/test_frame_hub.py`、`tests/test_trajectory_hub.py`、`tests/test_log_buffer.py`：三个汇的并发与游标行为。
 - `tests/test_motion.py`、`tests/test_heading_servo.py`、`tests/test_motion_contract.py`、`tests/test_passed_corridor.py`：`plan_segment`、`quintic`、刹车曲线、航向律与越点走廊的数值行为。
 - `tests/test_visual_goal_trace.py`：`ControlTelemetry` 被诊断轨迹消费。
+- `tests/test_runtime_thread_shutdown.py`：`stop_thread` 的 WARNING 与返回值、三份 close 的有界等待与日志、超时后的调用接管与迟到结果丢弃。
 
 未覆盖的空白
 - `ContinuousExecution`（183 行）没有任何测试文件 import，只经 visual_goal 的连续路径间接跑到；`tests/test_public_surface.py` 只断言名字在入口。
 - `SlowPlannerWorker`、`BackgroundContinuationPlanner`、`WorldWaypointQueue`、`StreamTimeline` 无直接测试，覆盖来自 `PlanningWindow` 的间接路径。
-- `ModelCallService`（91 行，含单飞线程、超时隔离、`close` 语义）无功能测试，只有 `tests/test_public_surface.py` 的名字断言。
+- `ModelCallService` 的 takeover 只测了“过期后放行下一个调用”，没有接法测两个调用同时在途的时序。
 - `ControlLoop._back_off` 的步数上限与"无可测进度"分支无测试。
 - 段执行 30 ms 周期与引擎实际步长的一致性无测试。
 
@@ -219,10 +223,6 @@ Qb18 层：runtime 结论：`PlanningWindow.executed` 在队列为空时直接 `
 
 Qb19 层：runtime 结论：`PlanningWindow._submit` 每次提交前改写共享字段 `background.planner`，请求与上下文的绑定只靠 worker 串行兜住，没有断言保护。依据：planner/runtime/window/window.py:165-166、planner/runtime/window/inflight.py:64-74 影响：否
 
-Qb20 层：runtime 结论：三个后台线程的关闭都只 `join(timeout=1.0)`，超时即放走 daemon 线程；`planner-read-cleanup` 里的 `thread.join()` 没有超时。依据：planner/runtime/window/worker.py:77、planner/runtime/model_calls.py:92、planner/runtime/background_operation.py:85,96 影响：否
-
-Qb21 层：runtime 结论：`ModelCallService` 超时后 `_busy` 一直为真，直到挂起的线程真正返回；请求挂死时该阶段只能靠外部停止，代码里没有兜底超时。依据：planner/runtime/model_calls.py:57-62,73-83 影响：否
-
 Qb22 层：runtime 结论：`limit_vector` 与 `algorithms.bounded` 是同一套范数限幅的两份实现，只有非有限值的处理不同。依据：planner/runtime/motion/tracking.py:38-48、planner/algorithms/motion/limits.py:8-11 影响：否
 
 Qb23 层：runtime 结论：`segment_sink` 与 `stream_sink` 方法体相同，`run_stream` 的 `sink` 参数在所有生产调用点都传 `loop.stream_sink()`。依据：planner/runtime/motion/loop.py:103-107,530、planner/workflows/common/streaming.py:87、planner/workflows/visual_goal_navigation/flight.py:76 影响：否
@@ -257,11 +257,6 @@ M6 恒假分支
 M7 经验值未标定
 - `SEGMENT_PERIOD_S = 0.030`（planner/runtime/motion/loop.py:42）固定，与 `MotionLimits.control_hz` 无关；流拍是 `1/control_hz`（loop.py:99）。风险：引擎步长不等于 30 ms 时，停稳判据与超时都按 30 ms 记账。触发条件：换仿真步长或引擎实时性不足。
 - `waypoint_timeout_s` 默认 60.0（continuous_execution.py:23、motion/follower.py:32），同为经验值。
-
-M10 线程关闭与挂死
-- 三处关闭只 `join(timeout=1.0)`：planner/runtime/window/worker.py:77、planner/runtime/model_calls.py:92、planner/runtime/background_operation.py:85；`planner-read-cleanup` 的 `thread.join()` 无超时（background_operation.py:96）。
-- `ModelCallService` 超时后 `_busy` 保持真直到线程返回（model_calls.py:57-62,73-83），HTTP 挂死时该阶段只能外部停止。
-- 触发条件：退出时仍有在途模型调用，或模型端点不返回。
 
 M12 状态机单点问题
 - `PlanningWindow.executed` 在队列为空时直接 `self.queue.items[0]`，抛 `IndexError` 而不是 `ProtocolError`（planner/runtime/window/window.py:307）。触发条件：暂停清队之后又调一次 `executed`。

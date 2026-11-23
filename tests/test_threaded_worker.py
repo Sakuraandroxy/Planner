@@ -1,3 +1,4 @@
+import threading
 import time
 
 import pytest
@@ -379,3 +380,47 @@ def test_failed_activation_keeps_the_worker_alive():
     events = _collect(worker, _value(WorkerEventKind.FINISHED))
     assert events[-1].success is True
     worker.shutdown()
+
+
+class _WedgedSession(FakeSession):
+    """A session whose world tick never returns, like an RPC that stopped answering."""
+
+    def __init__(self):
+        super().__init__()
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def idle_tick(self):
+        self.entered.set()
+        self.release.wait(10.0)
+
+    def close(self, *, skip_landing=False):
+        super().close(skip_landing=skip_landing)
+        self.release.set()
+
+
+def test_terminate_releases_a_worker_stuck_inside_a_simulator_call():
+    """A thread cannot be killed, so the leak has to be visible and bounded.
+
+    ``terminate`` used to be ``shutdown`` under another name: the join timed out, the
+    thread kept sitting in the RPC, and the service reported a clean close. It now
+    closes the connection under that thread, refuses later tasks and says so in the log.
+    """
+    session = _WedgedSession()
+    worker = ThreadedMissionWorker(lambda log: session, join_timeout_s=0.1)
+    worker.start()
+    _collect(worker, _value(WorkerEventKind.READY))
+    assert session.entered.wait(5.0)
+
+    t0 = time.monotonic()
+    worker.terminate()
+    assert time.monotonic() - t0 < 5.0           # bounded, not another blocking join
+
+    assert session.closed                        # the connection was released
+    assert session.skip_landing is True          # and not to land an abandoned session
+    events = _collect(worker, lambda event: "closing its connection" in event.message)
+    assert events[-1].level == "WARNING"
+
+    worker.submit(TaskSubmission("late", "fly"))
+    refused = _collect(worker, lambda event: "refusing a task" in event.message)
+    assert refused[-1].kind is WorkerEventKind.LOG

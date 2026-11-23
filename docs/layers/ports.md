@@ -60,7 +60,7 @@
 1. 读配置。`planner/config/loader.py:127` 调 `parse_family_catalog`，得到 `FamilyCatalog`；地图到引擎的映射在 `planner/config/maps.py`。
 2. 解析引擎模块。`planner/simulator/registry.py:28` 的 `ports_for(simulator)` 按 `RUNTIME_MODULES` 表 import `planner.simulators.<name>.runtime`，调它的 `describe()`。
 3. AirSim 走真实对象。`planner/simulators/airsim/runtime.py:28` 的 `build_ports` 把已构造的观测源、车辆、天气对象填进 `SimulatorPorts`（`:45` 起），`PORT_SLOTS`（`:17`）与之一致。
-4. ProjectAirSim 走占位对象。`planner/simulators/projectairsim/runtime.py:74` 的 `describe()` 调 `SimulatorPorts.from_slots`（`planner/simulator/ports.py:68`），每个已声明槽位填 `_Slot` 占位（`:102`），只有 `views` 与 `weather` 换成能答 `view_modes`/`fields`/`presets` 的 `_Views`/`_Weather`（`:118` 起）。
+4. ProjectAirSim 走占位对象。`planner/simulators/projectairsim/runtime.py:112` 的 `describe()` 调 `SimulatorPorts.from_slots`（`planner/simulator/ports.py:86`），每个已声明槽位填 `_Slot` 占位（`:106`），只有 `views` 与 `weather` 换成能答 `view_modes`/`fields`/`presets` 的 `_Views`/`_Weather`（`:136` 起）。
 5. 能力位推导。`planner/assembly/requirements.py:97` 的 `capabilities_for(ports)` 读 `ports.implemented()` 与 `ACTION_PORTS`（`:32`），产出 `Capabilities`，由 `adapters/http` 写给控制台。缺失槽位对应的动作在 `planner/adapters/http/wiring.py:66` 变成 HTTP 501。
 6. 运行期取用。`planner/assembly/mission_assembly.py:229` 用 `GuidedVehicle(vehicle, loop)` 把 `Vehicle` 端口接到控制循环，`:231` 读 `vehicle.tracking_limits`；`runtime/position_hold.py:22` 收 `PositionHoldVehicle`；`runtime/motion/loop.py:530` 的 `run_stream` 收 `StreamGoalSource`；`runtime/continuous_execution.py` 收 `StreamingVehicle`。
 7. 实现落在引擎包。三个载具类的 `stream_command` 第一行是 `require_supported`（`airsim/vehicle.py:223`、`drone.py:292`、`rover.py:268`），命令与能力不符即抛 `ValueError`。
