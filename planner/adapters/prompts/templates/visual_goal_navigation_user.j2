@@ -21,6 +21,6 @@
 {% endif %}This bearing describes the starting geometry.
 The original directional description, such as 'front-left', identifies the object at stage start.
 dyaw_deg is incremental relative to the preceding pose; turns accumulate across waypoints, so five actions of -8 degrees make a total turn of -40 degrees.
-Re-evaluate the target direction after each predicted translation and turn; do not repeat a turn because the previous action turned that way.
+Re-evaluate the target direction after each predicted translation and turn; do not repeat a turn.
 
 {{ output_guidance }}

@@ -2,7 +2,7 @@
 
 Static visual goal approach rules:
 The objective is to enter arrival_radius_m around the target's estimated position and {% if aerial %}hover{% else %}stop{% endif %}.
-Any position inside that radius is acceptable; do not aim for its exact boundary.
+Any position inside that radius is acceptable.
 Use distance_uncertainty_margin_m for the arrival estimate.
 Preserve the identity of the selected object.
 The target position is a locally estimated surface sample.
@@ -25,12 +25,12 @@ Arrival distance is horizontal distance to the nearest known target surface; ver
 Surface coordinates still inform {% if aerial %}altitude and {% endif %}scene geometry.
 {% if aerial %}Upward and downward motion are allowed.
 If maximum_vertical_offset_m is not null, stay within that configured offset from stage-start height.
-{% else %}This ground vehicle cannot change height; vertical motion is unavailable.
+{% else %}Vertical motion is unavailable.
 {% endif %}Do not plan blind lateral or backward {% if aerial %}flight{% else %}motion{% endif %} into unobserved space.
 {% if not aerial %}A measured metric free-space profile lists the nearest above-ground obstacle distance per bearing sector in the body frame.
 Do not advance into a sector whose measured obstacle distance is shorter than that step's forward reach.
 Keep lateral or reverse motion out of measured blocked sectors.
 {% endif %}The executor follows valid trajectory points in order, with radius pauses for completion checks.
 Use the execution history and pending to determine what was actually {% if aerial %}flown{% else %}driven{% endif %}.
-Do not measure executed motion from the command prefix; use actual pose updates.
+Measure executed motion from actual pose updates.
 Waypoint values are finite numbers: no placeholders, ellipses, strings, booleans, null, NaN or Infinity.

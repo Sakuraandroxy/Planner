@@ -97,7 +97,7 @@ def test_system_prompt_targets_a_ground_vehicle():
     assert "UAV" not in BASE_TRAJECTORY_SYSTEM_PROMPT
     assert VISUAL_GOAL_SYSTEM_PROMPT.startswith(BASE_TRAJECTORY_SYSTEM_PROMPT)
     assert "The objective is to enter arrival_radius_m" in VISUAL_GOAL_SYSTEM_PROMPT
-    assert "vertical motion is unavailable" in VISUAL_GOAL_SYSTEM_PROMPT
+    assert "Vertical motion is unavailable." in VISUAL_GOAL_SYSTEM_PROMPT
 
 
 def test_aerial_system_prompt_targets_a_uav():
@@ -113,7 +113,7 @@ def test_aerial_system_prompt_targets_a_uav():
     )
     assert "Upward and downward motion are allowed" in AERIAL_VISUAL_GOAL_SYSTEM_PROMPT
     assert (
-        "vertical motion is unavailable"
+        "Vertical motion is unavailable."
         not in AERIAL_VISUAL_GOAL_SYSTEM_PROMPT
     )
     assert (
