@@ -151,7 +151,7 @@
 | `tests/test_capability_gating.py` | 9 | 控制台控件从能力位推导 |
 | `tests/test_factories.py` | 13 | 四个工厂的端点、提示词、`request_format`、`kinds` 过滤、`api_key` 优先级、trace 配置写入 |
 | `tests/test_airsim_session.py` | 13 | `assemble_missions` 在 AirSim 会话上的接线、`moving_source_factory` 调用 |
-| `tests/test_layer_entries.py` / `tests/test_layering.py` / `tests/test_public_surface.py` | 3 / 10 / 4 | 跨层 import 只指包入口、任务包互不 import、层入口导出面与文档表一致 |
+| `tests/test_layer_entries.py` / `tests/test_layering.py` / `tests/test_public_surface.py` | 3 / 26 / 4 | 跨层 import 只指包入口、九层各自的允许依赖表、任务包互不 import、层入口导出面与文档表一致 |
 
 空白：
 
@@ -192,7 +192,7 @@
 
 ## 10 已知缺口
 
-1. 与 `planner.simulator` 双向依赖，现存两条边。装配取引擎槽位：`planner/assembly/requirements.py:20`；引擎栈取装配的名字：`planner/simulator/registry.py:40` 惰性 import `capabilities_for`，`planner/simulator/worker.py:14` 与 `planner/simulator/mission_child.py:33` 取 `task_finish_events`。风险：把 `SimulatorPorts` 移出 `planner/simulator`，或让 registry 在模块顶层 import 装配层，都会变成导入环。`tests/test_layering.py:155` 只断言"装配是唯一同时 import 任务与仿真器的层"，不覆盖 adapters，因此 `planner/adapters/task_completion/prompts/visual_goal_completion.py:6` 从任务层二级入口取 `require_visual_completion_evidence` 这条边没有测试盯着。
+1. 与 `planner.simulator` 双向依赖，两向共九条边，全部按（文件, 模块）登记在 `tests/test_layering.py` 的 `EXCEPTIONS` 里并带理由。装配取引擎槽位与事件枚举：`planner/assembly/requirements.py:20`、`planner/assembly/reporting.py:3`、`planner/assembly/controller/{__init__,commands,state,weather}.py`；引擎栈取装配的名字：`planner/simulator/registry.py:74` 惰性 import `capabilities_for`，`planner/simulator/worker.py:14` 与 `planner/simulator/mission_child.py:31-33` 取 `task_finish_events` 与 `build_*`。风险：把 `SimulatorPorts` 移出 `planner/simulator`，或让 registry 在模块顶层 import 装配层，都会变成导入环。白名单之外新增跨层 import 立即失败，白名单条目失效或方向本来就被允许时也报红（`test_exceptions_are_real_documented_and_needed`）。
 2. `capabilities_for` 有两份位置。派生实现在 `planner/assembly/requirements.py:97`，转发包装在 `planner/simulator/registry.py:38`。层入口导出的只有派生版（`planner/assembly/__init__.py:43`）；控制器与配置加载走转发版（`planner/assembly/controller/__init__.py:219`、`planner/config/vehicles.py:181`）。风险：换入口时容易只改一处。
 3. `submit` 在锁内把 `_vehicle` 改成请求值并置 RUNNING，切载具的 park、hide、homing 要到会话 `run` 才发生，失败没有回滚路径（`planner/assembly/controller/commands.py:52-66`、`planner/simulators/projectairsim/session.py:256-280`）。触发条件：提交的目标载具不是当前活动载具，且该载具切换失败。
 4. 代数不符的命令在 `deliver` 里静默 return，而调用方已经改过 `_state` 与 `_pending_activation`，没有日志也没有回执（`planner/assembly/controller/commands.py:127-133`）。触发条件：换代发生在同一轮投递与消费之间。

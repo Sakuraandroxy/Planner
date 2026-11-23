@@ -188,7 +188,7 @@
 
 提示词模板的读取时机有两种：轨迹类与检测类在**模块导入期**读（`planner/adapters/trajectory_planner/prompts/base.py:17`、`planner/adapters/target_detection/prompts/system.py:4`），缺文件则服务起不来；完成判定类在**首次请求**时读（`planner/adapters/task_completion/prompts/visual_goal_completion.py:79-80`），缺文件表现为运行期 500。文件缺失这一种故障因此有两种出现时机。
 
-跨层依赖例外两条。本层 import 装配层的状态枚举与异常类（`planner/adapters/http/wiring.py:19`、`planner/adapters/http/server_api.py:19`），也 import 工作流层的校验函数（`planner/adapters/task_completion/prompts/visual_goal_completion.py:6`）。`tests/test_layering.py` 的检查器只把 `algorithms`（`:129-131`）与 `runtime`（`:140`）当来源层，`planner/adapters/` 从不在被检集合里，所以这条依赖目前没有任何测试拦得住。
+跨层依赖两处。本层 import 装配层的状态枚举与异常类（`planner/adapters/http/wiring.py:19`、`planner/adapters/http/server_api.py:19`），这是 `ALLOWED` 表允许的方向。import 工作流层只有完成判定提示词这一处（`planner/adapters/task_completion/prompts/visual_goal_completion.py:6`），它按（文件, 模块）登记在 `tests/test_layering.py` 的 `EXCEPTIONS` 里并带理由。九个层全部是检查来源，白名单之外新增跨层 import 立即失败。
 
 ## 7 测试位置
 
@@ -224,7 +224,7 @@
 ## 9 疑问与争议
 
 - Qad1 层：adapters 结论：34 个轨迹与检测提示词模板在模块导入期读取，模板缺失时服务起不来但错误栈指向 import 而不是配置；完成判定的模板却是调用期读，同一层出现两种失败时机。依据：`planner/adapters/trajectory_planner/prompts/base.py:17`、`planner/adapters/target_detection/prompts/system.py:4`、`planner/adapters/task_completion/prompts/visual_goal_completion.py:79`。影响：否。
-- Qad2 层：adapters 结论：本层 import 了上层 `planner.workflows`，`tests/test_layering.py` 的 D1-D5 没有约束 adapters 的向上依赖，所以这条依赖只靠人守。依据：`planner/adapters/task_completion/prompts/visual_goal_completion.py:6`。影响：是（workflows 文档需声明这是双向依赖）。
+- Qad2 层：adapters 结论：本层 import 了上层 `planner.workflows`，`ALLOWED` 表禁止这个方向，这条边以文件级白名单登记，新增同类依赖会失败。依据：`planner/adapters/task_completion/prompts/visual_goal_completion.py:6`、`tests/test_layering.py` 的 `EXCEPTIONS`。影响：是（workflows 文档需声明这是双向依赖）。
 - Qad3 层：adapters 结论：HTTP 状态码判定直接依赖装配层的状态枚举与异常类，`adapters` 不能脱离 `assembly` 单独存在。依据：`planner/adapters/http/wiring.py:19`、`planner/adapters/http/server_api.py:19`。影响：是（assembly 文档需写清这是对外契约）。
 - Qad4 层：adapters 结论：同一个「不支持视频」有两个状态码：`frames` 为 `None` 时路由不存在（404），能力位缺 `video` 时是 501，控制台无法用一套逻辑判断。依据：`planner/adapters/http/server_api.py:253`、`planner/adapters/http/wiring.py:69-79`。影响：是（assembly 的传参决定是 404 还是 501）。
 - Qad5 层：adapters 结论：`ManualTargetDetector.detect` 完全忽略 `request`，任何任务都返回构造时那个框，能力位里也没有任何标记说明这是人工模式。依据：`planner/adapters/target_detection/manual.py:43-46`、`planner/assembly/factories/detectors.py:26-36`。影响：是（assembly 的 detector mode 需要暴露给状态接口）。
