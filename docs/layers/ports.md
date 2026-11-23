@@ -34,8 +34,8 @@
 
 | 名字 | 定义处 | 方法 | 已存在的实现 | 层外调用点 |
 | --- | --- | --- | --- | --- |
-| `Vehicle` | `vehicle.py:12` | `current_pose`、`tracking_limits`（属性）、`attach_loop`、`motion_capability`、`execute_segment`、`cancel`、`hold`、`collision_state` | `AirSimVehicle`（`planner/simulators/airsim/vehicle.py:33`）、`ProjectAirSimDrone`（`projectairsim/drone.py`）、`ProjectAirSimRover`（`projectairsim/rover.py`）；`GuidedVehicle`（`planner/runtime/guided_vehicle.py:13`）转发读侧与命令侧方法（`current_pose`、`motion_capability`、`collision_state`、`cancel`、`hold`、`stream_state`、`stream_command`），`tracking_limits` 与 `attach_loop` 由引擎对象直接提供 | `assembly/mission_assembly.py:229`、`runtime/execution.py:104`、`simulator/ports.py:45` |
-| `StreamingVehicle` | `streaming_vehicle.py:7` | `stream_state`、`stream_command` | 同上三个引擎类 | `runtime/continuous_execution.py`、`simulator/ports.py:47` |
+| `Vehicle` | `vehicle.py:18` | `current_pose`、`tracking_limits`（属性）、`motion_capability`、`execute_segment`、`cancel`、`hold`、`collision_state` | `AirSimVehicle`（`planner/simulators/airsim/vehicle.py:23`）、`ProjectAirSimDrone`（`projectairsim/drone.py`）、`ProjectAirSimRover`（`projectairsim/rover.py`）；`GuidedVehicle`（`planner/runtime/guided_vehicle.py:13`）兑现 `execute_segment`（`planner/runtime/guided_vehicle.py:37`）并转发读侧与命令侧方法（`current_pose`、`motion_capability`、`collision_state`、`cancel`、`hold`、`stream_state`、`stream_command`），`tracking_limits` 由引擎对象直接提供 | `assembly/mission_assembly.py:226`、`runtime/motion/loop.py:120`、`simulator/ports.py:45` |
+| `StreamingVehicle` | `streaming_vehicle.py:7` | `stream_state`、`stream_command` | 同上三个引擎类 | `runtime/motion/follower.py`、`simulator/ports.py:47` |
 | `PositionHoldVehicle` | `position_hold_vehicle.py:7` | `stream_state`、`cancel`、`hold_velocity` | `ProjectAirSimDrone`（`projectairsim/drone.py:298`）、`AirSimVehicle`（`airsim/vehicle.py:230`）；`ProjectAirSimRover` 没有 `hold_velocity` | `runtime/position_hold.py:22` |
 | `ObservationSource` | `observation_source.py:12` | `capture(*, budget)` | `AirSimObservationSource`（`airsim/observation_source.py:76`）、`ProjectAirSimObservationSource`（`projectairsim/observation.py:107`） | `assembly/mission_assembly.py:230`、`workflows/visual_goal_navigation/workflow.py` |
 | `ControlledObservationSource` | `observation_source.py:16` | `request_capture(timeout_s)` | `AirSimObservationSource`（`airsim/observation_source.py:96`） | `simulator/ports.py:48` |
@@ -62,7 +62,7 @@
 3. AirSim 走真实对象。`planner/simulators/airsim/runtime.py:28` 的 `build_ports` 把已构造的观测源、车辆、天气对象填进 `SimulatorPorts`（`:45` 起），`PORT_SLOTS`（`:17`）与之一致。
 4. ProjectAirSim 走占位对象。`planner/simulators/projectairsim/runtime.py:112` 的 `describe()` 调 `SimulatorPorts.from_slots`（`planner/simulator/ports.py:86`），每个已声明槽位填 `_Slot` 占位（`:106`），只有 `views` 与 `weather` 换成能答 `view_modes`/`fields`/`presets` 的 `_Views`/`_Weather`（`:136` 起）。
 5. 能力位推导。`planner/assembly/requirements.py:97` 的 `capabilities_for(ports)` 读 `ports.implemented()` 与 `ACTION_PORTS`（`:32`），产出 `Capabilities`，由 `adapters/http` 写给控制台。缺失槽位对应的动作在 `planner/adapters/http/wiring.py:66` 变成 HTTP 501。
-6. 运行期取用。`planner/assembly/mission_assembly.py:229` 用 `GuidedVehicle(vehicle, loop)` 把 `Vehicle` 端口接到控制循环，`:231` 读 `vehicle.tracking_limits`；`runtime/position_hold.py:22` 收 `PositionHoldVehicle`；`runtime/motion/loop.py:530` 的 `run_stream` 收 `StreamGoalSource`；`runtime/continuous_execution.py` 收 `StreamingVehicle`。
+6. 运行期取用。`planner/assembly/mission_assembly.py:229` 用 `GuidedVehicle(vehicle, loop)` 把 `Vehicle` 端口接到控制循环，`:231` 读 `vehicle.tracking_limits`；`runtime/position_hold.py:22` 收 `PositionHoldVehicle`；`runtime/motion/loop.py:530` 的 `run_stream` 收 `StreamGoalSource`；`runtime/motion/follower.py` 与 `runtime/motion/loop.py` 收 `StreamingVehicle`。
 7. 实现落在引擎包。三个载具类的 `stream_command` 第一行是 `require_supported`（`airsim/vehicle.py:223`、`drone.py:292`、`rover.py:268`），命令与能力不符即抛 `ValueError`。
 
 ## 6 失败模式
@@ -105,7 +105,7 @@
 
 - Qports01 层：ports 结论：`ReturnHome.return_home(self, vehicle: str) -> None` 与三个实现都不符，ProjectAirSim 返回 `str` 且参数可选，两个载具类不接参数、返回 `WorldPose`。依据：`planner/ports/capabilities.py:23`、`planner/simulators/projectairsim/vehicles.py:77`、`planner/simulators/projectairsim/drone.py:178`、`planner/simulators/projectairsim/rover.py:308`。影响：是
 - Qports02 层：ports 结论：`StreamingViews.set_view_mode` 声明返回 `bool`（True 立即生效、False 延后），实现返回视图名字符串，`planner/simulator/worker_protocol.py:61` 又是返回 `None`。依据：`planner/ports/capabilities.py:47`、`planner/simulators/projectairsim/session.py:344`。影响：是
-- Qports03 层：ports 结论：`Vehicle` 端口没有 `tracking_limits` 与 `attach_loop`，但三个实现都提供，装配层直接按属性访问，端口签名不够用。依据：`planner/ports/vehicle.py:12`、`planner/assembly/mission_assembly.py:231`、`planner/simulators/airsim/vehicle.py:51`、`:70`。影响：是
+- Qports03 层：ports 结论：`Vehicle` 端口早期缺 `tracking_limits`，装配层直接按引擎属性访问。现持有 `Vehicle.tracking_limits` 声明与三个引擎实现一致；`attach_loop` 已从端口与引擎一并删除，段执行改由 `GuidedVehicle` 兑现。依据：`planner/ports/vehicle.py:12`、`planner/assembly/mission_assembly.py:216-226`。影响：否
 - Qports04 层：ports 结论：`hover` 对阿克曼车是刹车，端口名与语义不符。依据：`planner/ports/vehicle.py:27`、`planner/simulators/projectairsim/rover.py:178`。影响：否
 - Qports05 层：ports 结论：`AppearanceModelControl` 没有任何实现，ProjectAirSim 仍声明 `models` 槽位，能力位因此为真，实际操作走 `assembly/controller` 的 `ModelSwitcher`。依据：`planner/ports/capabilities.py:51`、`planner/simulators/projectairsim/runtime.py:20`、`planner/simulator/ports.py:95`、`planner/assembly/controller/commands.py:139`。影响：是
 - Qports06 层：ports 结论：`FramePublisher` 没有实现，真实帧通路的签名是 `publish(bgra, timestamp_s)`，与端口的 `publish(name, jpeg, timestamp_ns)` 不同，`/api/video` 的门禁靠槽位名而不是对象能力。依据：`planner/ports/capabilities.py:69`、`planner/runtime/frame_hub.py:29`、`planner/simulators/projectairsim/frames.py:53`。影响：是
@@ -119,7 +119,7 @@
 
 ### 10.1 声明与实现已收口（M3）
 
-`ReturnHome.return_home`、`StreamingViews.set_view_mode`、`Vehicle.tracking_limits` 与 `Vehicle.attach_loop`、`Vehicle.hover`（改名为 `hold`）四处已统一成一份，`tests/test_architecture.py::test_port_signatures_match_their_implementations` 逐个端口比对参数名、默认值与两侧都标注了的返回类型。未覆盖的仍是第 10.2 节列出的无实现端口。
+`ReturnHome.return_home`、`StreamingViews.set_view_mode`、`Vehicle.tracking_limits`、`Vehicle.hover`（改名为 `hold`）四处已统一成一份，`tests/test_architecture.py::test_port_signatures_match_their_implementations` 逐个端口比对参数名、默认值与两侧都标注了的返回类型。`Vehicle.attach_loop` 已从端口与引擎一并删除，`execute_segment` 对引擎类不再比对，只由 `tests/test_architecture.py::test_airsim_slots_are_backed_by_real_code` 查 `GuidedVehicle` 上有这个方法。未覆盖的仍是第 10.2 节列出的无实现端口。
 
 ### 10.2 能力矩阵（18 个端口 × UE5 / UE4）
 

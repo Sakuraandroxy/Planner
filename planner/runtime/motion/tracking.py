@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 
+from planner.algorithms import bounded
 from planner.errors import ExecutionError
 from planner.domain import (
     CarCommand,
@@ -41,11 +42,9 @@ def limit_vector(values, maximum):
         math.isfinite(v) for v in values
     ):
         raise ExecutionError("non-finite motion vector or invalid limit")
-    norm = math.hypot(*values)
-    if not math.isfinite(norm):
+    if not math.isfinite(math.hypot(*values)):
         raise ExecutionError("motion vector magnitude overflowed")
-    scale = min(1.0, maximum / norm) if norm else 1.0
-    return tuple(value * scale for value in values)
+    return bounded(tuple(values), maximum)
 
 
 def command_for(capability, velocity, yaw_rate_deg_s, yaw_deg):

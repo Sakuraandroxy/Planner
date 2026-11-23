@@ -4,7 +4,6 @@ from dataclasses import replace
 from functools import partial
 
 from planner.domain import GoalVisibility, VisualGoalPlanningContext, VisualGoalState
-from planner.errors import ExecutionError
 from planner.runtime import freeze_observation
 from planner.algorithms import relative_to_world, world_to_relative
 
@@ -69,5 +68,3 @@ class VisualGoalApproachPhase:
     def checkpoint(self, session):
         require_time(session.budget, self.clock)
         self.execution.checkpoint()
-        if self.execution.collision_state():
-            raise ExecutionError("collision during window model wait")

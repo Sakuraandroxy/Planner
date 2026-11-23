@@ -12,7 +12,7 @@
 管什么
 - 控制权与预算：`ExecutionService` 的 owner 断言、飞行持有、阶段 deadline、停止请求、停止动作。
 - 段执行：`ControlLoop.run_segment` 的五次曲线采样、限幅、停稳验证、暂停与碰撞中断后的 receipt。
-- 流执行：`ControlLoop.run_stream` 一拍、`QueueFollower` / `ContinuousExecution` 的队列消费与连续命令生成。
+- 流执行：`ControlLoop.run_stream` 一拍、`QueueFollower` 的队列消费与连续命令生成。
 - 授权队列与滑窗：`WorldWaypointQueue` 的修订与消费、`PlanningWindow` 的补点与在途结果收集、`SlowPlannerWorker` 的模型线程。
 - 碰撞退避：`CollisionRecovery` 的接触去重、后退距离递增、预算与复位。
 - 位置保持：`PositionHold` 的到位窗口与可见性判定。
@@ -47,7 +47,6 @@ grep -rn "planner.workflows\|planner.assembly\|planner.adapters\|planner.simulat
 | 名字 | 类型 | 一句话用途 | 层外调用点 |
 | --- | --- | --- | --- |
 | `BackgroundOperation` | 类（线程） | 一段只读后台调用：单飞、超时隔离、可关闭 | planner/workflows/visual_goal_navigation/targeting.py:52、planner/simulators/airsim/observation_source.py:107 |
-| `ContinuousExecution` | 类 | 视觉目标连续路径的整拍执行：采样、消费、跟随、命令、遥测 | planner/workflows/visual_goal_navigation/continuous.py:39 |
 | `ControlLoop` | 类 | 段执行与流执行的唯一控制循环 | planner/assembly/mission_assembly.py:216 |
 | `ExecutionService` | 类 | 控制权、预算、deadline、停止；`Vehicle` 端口的停止侧兑现 | planner/assembly/mission_assembly.py:215 |
 | `FrameHub` | 类（锁） | 最新相机帧的线程安全发布与等待 | planner/adapters/http/video.py:41、planner/server_bootstrap.py:30 |
@@ -61,9 +60,9 @@ grep -rn "planner.workflows\|planner.assembly\|planner.adapters\|planner.simulat
 | `MovingObservations` | 类 | 移动帧的有界抓取泵与失败预算 | planner/workflows/visual_goal_navigation/continuous.py:41、planner/workflows/free_navigation/continuous.py:91 |
 | `PlanningWindow` | 类 | 滑窗：授权队列、补点、在途候选收集 | planner/workflows/visual_goal_navigation/workflow.py:94 |
 | `PositionHold` | 类 | owner 线程位置保持与到位窗口判定 | planner/simulators/projectairsim/drone.py:121 |
-| `QueueFollower` | 类 | 连续路径的队列跟随器，只消费航点并给一拍命令 | planner/workflows/free_navigation/continuous.py:83 |
+| `QueueFollower` | 类 | 连续路径的队列跟随器：`next` 只消费航点给一拍命令，`tick` 自驱一拍（采样、消费、下发、记账） | planner/workflows/free_navigation/continuous.py:83、planner/workflows/visual_goal_navigation/continuous.py:39 |
 | `QueueSnapshot` | 冻结 dataclass | 快照里的队列长度与容量 | 仅 tests/test_trajectory_hub.py:150 |
-| `SMOOTH_PROFILE` | 常量 `str` | 五次同步曲线的 profile 标识 | planner/workflows/basic_motion/workflow.py:86、planner/simulators/projectairsim/drone.py:203 |
+| `SMOOTH_PROFILE` | 常量 `str` | 五次同步曲线的 profile 标识 | planner/workflows/basic_motion/workflow.py:86 |
 | `SynchronizedMotionPlanner` | 类 | 世界航点转带时长的 `MotionTrajectory` | planner/assembly/mission_assembly.py:231 |
 | `TrajectoryHub` | 类（锁） | 剩余轨迹面板快照的发布与读取 | planner/simulator/telemetry_relay.py:40、planner/server_bootstrap.py:19 |
 | `TrajectoryPointSnapshot` | 冻结 dataclass | 快照里的一个航点：世界位姿、直线距离与段长 | 仅 tests/test_trajectory_hub.py:151 |
@@ -72,17 +71,14 @@ grep -rn "planner.workflows\|planner.assembly\|planner.adapters\|planner.simulat
 | `braking_speed` | 函数 | jerk 感知的刹车曲线速度上限 | 无层外调用点 |
 | `build_queue_snapshot` | 函数 | 由队列、位姿与容量算出快照，直线距离与段长都算 | 同层 planner/runtime/trajectory_hub.py:106 |
 | `close_resources` | 函数 | 逐项关闭并聚合失败 | planner/workflows/visual_goal_navigation/workflow.py:368、planner/workflows/free_navigation/workflow.py:189 |
-| `duration_for` | 函数 | 按位移/偏航上限算最短时长（`segment_motion` 版） | 仅 planner/runtime/motion/__init__.py:2 转出的另一份同名实现被任务层使用 |
 | `freeze_observation` | 函数 | 拷贝并按只读冻结 rgb 与深度 | planner/workflows/visual_goal_navigation/continuous.py:77、planner/workflows/visual_goal_navigation/workflow.py:286 |
 | `freeze_reference` | 函数 | 拷贝冻结目标参考裁剪图 | planner/workflows/visual_goal_navigation/continuous.py:78、planner/workflows/visual_goal_navigation/targeting.py:112 |
 | `heading_rate_deg_s` | 函数 | 航向误差到角速度命令的唯一律 | 无层外调用点 |
-| `plan_segment` | 函数 | 按控制率采样一条五次段（`segment_motion` 版） | 仅 tests/test_motion.py:8 |
-| `quintic` | 函数 | 归一化五次曲线 | 仅 tests/test_motion.py:8 |
 | `snapshot_from_payload` | 函数 | 管道字典还原快照，缺键或类型不符抛 `ValueError` | planner/simulator/subprocess_worker.py:38 |
 | `snapshot_to_payload` | 函数 | 快照转 JSON 安全字典，带上修订号 | planner/simulator/mission_child.py:36 |
 | `vehicle_snapshot` | 函数 | `WorldPose` 转 `VehicleSnapshot` | 同层 planner/runtime/trajectory_hub.py |
 
-二级入口 `planner.runtime.motion`（planner/runtime/motion/__init__.py:4）另转出 `duration_for`（synchronized 版），任务层从这里拿：planner/workflows/basic_motion/workflow.py:25。`planner.runtime.window`（planner/runtime/window/__init__.py:13）转出 `PlanningWindow`、`WorldWaypointQueue`、`SlowPlannerWorker`、`BackgroundContinuationPlanner`。
+`duration_for` 由二级入口 `planner.runtime.motion`（planner/runtime/motion/__init__.py:4）转出，任务层从这里拿：planner/workflows/basic_motion/workflow.py:25。`planner.runtime.window`（planner/runtime/window/__init__.py:13）转出 `PlanningWindow`、`WorldWaypointQueue`、`SlowPlannerWorker`、`BackgroundContinuationPlanner`。
 
 ## 5 关键流程
 
@@ -90,7 +86,7 @@ grep -rn "planner.workflows\|planner.assembly\|planner.adapters\|planner.simulat
 1. 入口两种。`ControlLoop.execute` 只做 checkpoint、取起点、调 `run_segment`、封装 `ExecutionRecord`，不传 budget（planner/runtime/motion/loop.py:191-200）；带预算的调用方直接用 `run_segment`（planner/workflows/visual_goal_navigation/flight.py:76）。
 2. 前置断言。`execution.assert_owner()`、`_running` 防重入、空轨迹拒收（loop.py:203-208）。
 3. 每段前：`execution.checkpoint()`、预算剩余大于 0、用 `resolve_yaw_delta_deg` 取原始段的偏航分支作为量测起点（loop.py:222-230）。
-4. checkpoint 闭包：给 `pose_checkpoint` 时直接透传，否则每次调用先 `execution.check_safety()` 再问 `pause_when`（loop.py:232-251）。
+4. checkpoint 闭包：给 `pose_checkpoint` 时直接透传，否则每次调用先 `execution.check_deadline()` 再问 `pause_when`（loop.py:232-251）。
 5. 单段执行 `_drive_segment`（loop.py:383-520），顺序如下：
    1. 段必须带 `target_speed_mps`（loop.py:385-388）。
    2. `period = SEGMENT_PERIOD_S = 0.030`（loop.py:42,389），经验值、未标定，不读 `limits.control_hz`。
@@ -120,7 +116,7 @@ grep -rn "planner.workflows\|planner.assembly\|planner.adapters\|planner.simulat
 3. 接触路径：`_recover(contact, clear_queue=True)` 后正常返回，下一拍由任务层重新取帧补点（loop.py:545-547）。
 4. `sample()` 读一次 `stream_state()` 并交给 `StreamRecorder` 记录，任务层的取帧与窗口都读这一次（loop.py:522-528）。
 5. `goals.next(state, recorder.yaw)`：目标源返回 `None` 时停车一次后返回；有命令则过可选 `limiter` 并下发，周期是 `1 / limits.control_hz`（loop.py:548-558）。
-6. 连续命令生成有两条实现：`QueueFollower.next`（planner/runtime/motion/follower.py:75-115）与 `ContinuousExecution.tick`（planner/runtime/continuous_execution.py:96-130）。两者都在队尾或原地转向之前先停稳，都有航点超时，都把世界系速度按运动模型投影成 `CarCommand` / `HolonomicCommand`。
+6. 连续命令生成只有 `QueueFollower` 一份：`next` 供 `run_stream` 当目标源，`tick` 自驱视觉目标那条路径，两者共用 `_step` 的队列消费、停稳边界、航点超时与按运动模型投影成 `CarCommand` / `HolonomicCommand`。
 
 滑窗：授权在 owner 线程，模型在后台线程
 1. `begin` 校验 deadline（`None` 表示不限）与规划轮数，取 `min(调用方 deadline, now + max_task_duration_s)`，清空队列（planner/runtime/window/window.py:78-110）。
@@ -177,12 +173,12 @@ grep -rn "planner.workflows\|planner.assembly\|planner.adapters\|planner.simulat
 - `tests/test_position_hold.py`：到位窗口、`observable`、`approach_target` 的两种返回。
 - `tests/test_batch3_services.py`（`:78` 起）：`PlanningWindow` 的 begin 校验、无界阶段、前缀装载与比对、`next_world` 五点锚定、未清队拒收、`executed` 消费；`MovingObservations` 的失败预算；`close_resources` 聚合与中断重抛。
 - `tests/test_frame_hub.py`、`tests/test_trajectory_hub.py`、`tests/test_log_buffer.py`：三个汇的并发与游标行为。
-- `tests/test_motion.py`、`tests/test_heading_servo.py`、`tests/test_motion_contract.py`、`tests/test_passed_corridor.py`：`plan_segment`、`quintic`、刹车曲线、航向律与越点走廊的数值行为。
+- `tests/test_motion.py`、`tests/test_heading_servo.py`、`tests/test_motion_contract.py`、`tests/test_passed_corridor.py`：`RelativePoseDelta` 的垂直剥离、位姿限高、刹车曲线、航向律与越点走廊的数值行为。
 - `tests/test_visual_goal_trace.py`：`ControlTelemetry` 被诊断轨迹消费。
 - `tests/test_runtime_thread_shutdown.py`：`stop_thread` 的 WARNING 与返回值、三份 close 的有界等待与日志、超时后的调用接管与迟到结果丢弃。
 
 未覆盖的空白
-- `ContinuousExecution`（183 行）没有任何测试文件 import，只经 visual_goal 的连续路径间接跑到；`tests/test_public_surface.py` 只断言名字在入口。
+- `QueueFollower.tick`、`sample`、`pause`、`resume`（自驱那一套）没有直接测试：`tests/test_queue_follower.py` 只覆盖 `next`，视觉目标的连续路径在 tests 里没有入口。
 - `SlowPlannerWorker`、`BackgroundContinuationPlanner`、`WorldWaypointQueue`、`StreamTimeline` 无直接测试，覆盖来自 `PlanningWindow` 的间接路径。
 - `ModelCallService` 的 takeover 只测了“过期后放行下一个调用”，没有接法测两个调用同时在途的时序。
 - `ControlLoop._back_off` 的步数上限与"无可测进度"分支无测试。
@@ -202,28 +198,28 @@ grep -rn "planner.workflows\|planner.assembly\|planner.adapters\|planner.simulat
 
 Qb8 层：runtime 结论：`GuidedVehicle` 八个方法里只有 `current_pose` 有生产调用点，其余七个无人调用。依据：planner/runtime/guided_vehicle.py:16-45、planner/workflows/basic_motion/workflow.py:68,98 影响：否
 
-Qb9 层：runtime 结论：`Vehicle.execute_segment` 端口方法与 `GuidedVehicle.execute_segment` 在生产路径无人调用，段执行实际走 `ControlLoop.execute`。依据：planner/ports/vehicle.py:17、planner/runtime/guided_vehicle.py:37-45、planner/workflows/basic_motion/workflow.py:97 影响：是
+Qb9 层：runtime 结论：`Vehicle.execute_segment` 端口方法与 `GuidedVehicle.execute_segment` 在生产路径无人调用，段执行实际走 `ControlLoop.execute`；引擎类已不再实现该方法。依据：planner/ports/vehicle.py:27、planner/runtime/guided_vehicle.py:37-45、planner/workflows/basic_motion/workflow.py:97 影响：是
 
 Qb10 层：runtime 结论：`ControlLoop.sample()` 隐含要求 `StreamRecorder.begin()` 先被调用，否则抛 `AttributeError: 'NoneType' object has no attribute 'revision'`（已用探针脚本复现），docstring 未写这个前置条件。依据：planner/runtime/motion/loop.py:522-528、planner/runtime/motion/record.py:79、planner/runtime/stream_timeline.py:17 影响：否
 
-Qb11 层：runtime 结论：`ExecutionService.collision_state()` 恒返 `False`，`check_safety()` 永不触发，docstring 描述的碰撞检查分支在代码里不存在。依据：planner/runtime/execution.py:87-90,104-111 影响：否
+Qb11 层：runtime 结论：已处置。`ExecutionService.collision_state()` 与 `check_safety()` 删除，`checkpoint()` 只做 stopping/deadline 检查与绑定的保持、观测检查；碰撞接触只由 `ControlLoop._guard` 消费，因为引擎的 `collision_state()` 是消费式的。依据：planner/runtime/execution.py:87-98、planner/runtime/motion/loop.py:120。影响：否
 
-Qb12 层：runtime 结论：`ExecutionService.stop()` 恒返 `StopResult(False, ...)`，执行层的 `confirmed` 永远为假，调用方只能读 `errors`。依据：planner/runtime/execution.py:113-123、planner/domain/execution.py:44-46 影响：否
+Qb12 层：runtime 结论：`ExecutionService.stop()` 恒返 `StopResult(False, ...)`，执行层的 `confirmed` 永远为假，调用方只能读 `errors`。依据：planner/runtime/execution.py:104-114、planner/domain/execution.py:44-46 影响：否
 
-Qb13 层：runtime 结论：`ContinuousExecution` 与 `QueueFollower` 是两套几乎逐行相同的连续控制实现，职责边界只能靠调用方区分（视觉目标 vs 自由导航）。依据：planner/runtime/continuous_execution.py:96-142、planner/runtime/motion/follower.py:75-115 影响：是
+Qb13 层：runtime 结论：已处置。`ContinuousExecution` 的自驱整拍、采样记账与遥测并入 `QueueFollower`，`next` 与 `tick` 共用同一条消费路径。依据：planner/runtime/motion/follower.py:1-306。影响：否
 
-Qb14 层：runtime 结论：`StreamRecorder.sample` 与 `ContinuousExecution.sample` 重复实现同一套动作记录与 200 条上限逻辑。依据：planner/runtime/motion/record.py:55-82、planner/runtime/continuous_execution.py:56-81 影响：否
+Qb14 层：runtime 结论：`StreamRecorder.sample` 与 `QueueFollower.sample` 重复实现同一套动作记录与 200 条上限逻辑，`run_stream` 路径用前者，视觉目标的连续路径用后者。依据：planner/runtime/motion/record.py:55-82、planner/runtime/motion/follower.py:93-130 影响：否
 
-Qb15 层：runtime 结论：`duration_for` 有两个同名不同签名的实现，包入口导出的是任务层并不使用的那份。依据：planner/runtime/segment_motion.py:26、planner/runtime/motion/synchronized.py:14、planner/runtime/__init__.py:21、planner/workflows/basic_motion/workflow.py:25 影响：否
+Qb15 层：runtime 结论：已处置。`segment_motion` 删除后 `duration_for` 只剩 `synchronized` 一份，本层包入口不再导出它，任务层从 `planner.runtime.motion` 取。依据：planner/runtime/motion/synchronized.py:14、planner/runtime/motion/__init__.py:2、planner/workflows/basic_motion/workflow.py:25 影响：否
 
-Qb16 层：runtime 结论：`braking_speed`、`heading_rate_deg_s`、`plan_segment`、`quintic` 四个入口导出名没有层外生产调用点，`plan_segment` 与 `quintic` 只被 tests 使用。依据：planner/runtime/__init__.py:14-15,21,42-49、tests/test_motion.py:8、tests/test_heading_servo.py 影响：否
+Qb16 层：runtime 结论：`braking_speed`、`heading_rate_deg_s` 两个入口导出名没有层外生产调用点；`plan_segment`、`quintic` 已随 `segment_motion` 删除。依据：planner/runtime/__init__.py:14-15,42-49、tests/test_heading_servo.py 影响：否
 
 
 Qb18 层：runtime 结论：`PlanningWindow.executed` 在队列为空时直接 `self.queue.items[0]`，抛的是 `IndexError` 而不是本层统一的 `ProtocolError`。依据：planner/runtime/window/window.py:307 影响：否
 
 Qb19 层：runtime 结论：`PlanningWindow._submit` 每次提交前改写共享字段 `background.planner`，请求与上下文的绑定只靠 worker 串行兜住，没有断言保护。依据：planner/runtime/window/window.py:165-166、planner/runtime/window/inflight.py:64-74 影响：否
 
-Qb22 层：runtime 结论：`limit_vector` 与 `algorithms.bounded` 是同一套范数限幅的两份实现，只有非有限值的处理不同。依据：planner/runtime/motion/tracking.py:38-48、planner/algorithms/motion/limits.py:8-11 影响：否
+Qb22 层：runtime 结论：已处置。`limit_vector` 只留非有限值与非法上限的拒收，缩放交 `algorithms.bounded`。依据：planner/runtime/motion/tracking.py:38-46、planner/algorithms/motion/limits.py:8-11 影响：否
 
 Qb23 层：runtime 结论：`segment_sink` 与 `stream_sink` 方法体相同，`run_stream` 的 `sink` 参数在所有生产调用点都传 `loop.stream_sink()`。依据：planner/runtime/motion/loop.py:103-107,530、planner/workflows/common/streaming.py:87、planner/workflows/visual_goal_navigation/flight.py:76 影响：否
 
@@ -237,26 +233,19 @@ Qb27 层：runtime 结论：`MovingObservations.begin` 里 discard 只在 job �
 ## 10 已知缺口
 
 M4 契约适配层与生产路径分离
-- 现状：`GuidedVehicle` 八个方法里只有 `current_pose` 有生产调用点（planner/workflows/basic_motion/workflow.py:68,98）；`GuidedVehicle.execute_segment`（planner/runtime/guided_vehicle.py:37）与三个引擎类的同名方法生产零调用，段执行实际走 `ControlLoop.execute`（planner/workflows/basic_motion/workflow.py:97）。
-- 风险：端口要求的方法与真实路径分叉，改控制循环不会带动引擎实现，反之亦然。
+- 现状：`GuidedVehicle` 八个方法里只有 `current_pose` 有生产调用点（planner/workflows/basic_motion/workflow.py:68,98）；`GuidedVehicle.execute_segment`（planner/runtime/guided_vehicle.py:37）生产零调用，段执行实际走 `ControlLoop.execute`（planner/workflows/basic_motion/workflow.py:97）。三个引擎类不再实现 `execute_segment`，装配层也不再向载具注入控制循环。
+- 风险：端口要求的方法与真实路径分叉，改控制循环不会带动 `GuidedVehicle` 的实现，反之亦然。
 - 触发条件：按 `Vehicle` 端口签名改段执行时，改动落在无人调用的路径上，运行行为不变。
 
 M5 重复实现
-- 生产路径：`QueueFollower.next`（planner/runtime/motion/follower.py:75）服务自由导航；`ContinuousExecution.tick`（planner/runtime/continuous_execution.py:96）服务视觉目标。
-- 死路：`planner/runtime/segment_motion.py` 整模块，`plan_segment`、`quintic`、`duration_for` 只被 tests 使用；生产时长统一走 `synchronized.duration_for`（planner/runtime/motion/loop.py:37）。
-- 其他重复：`StreamRecorder.sample`（motion/record.py:55）与 `ContinuousExecution.sample`（continuous_execution.py:56）；`limit_vector`（motion/tracking.py:38）与 `algorithms.bounded`（planner/algorithms/motion/limits.py:8）；`segment_sink` 与 `stream_sink` 方法体相同（motion/loop.py:103,106）。
-- 风险：改一处漏一处，两条通道行为漂移。
-- 触发条件：改限幅、动作记录或队列消费逻辑时只改了一份。
-
-M6 恒假分支
-- 碰撞状态端口在引擎侧有真实实现：planner/simulators/projectairsim/drone.py:268 消费锁存的非地面接触，planner/simulators/airsim/vehicle.py:205 读 `simGetCollisionInfo`。
-- 恒返 `False` 的是 `ExecutionService.collision_state`（planner/runtime/execution.py:104），因此 `ExecutionService.check_safety`（execution.py:87）永不触发，执行服务自检分支失效。
-- 退避由 `ControlLoop._poll_contact` 与 `_guard` 独立完成（planner/runtime/motion/loop.py:115,109），不经过执行服务。
-- 触发条件：任何指望 `check_safety` 拦碰撞的调用点都拿不到拦截。
+- 剩余一处：`StreamRecorder.sample`（motion/record.py:55）与 `QueueFollower.sample`（motion/follower.py:93）都维护实测位姿差分、动作序列与 200 条上限，`run_stream` 路径用前者，视觉目标的连续路径用后者。两处并存的原因是视觉路径自己排节拍，不经过 `run_stream`。
+- `segment_sink` 与 `stream_sink` 方法体相同（motion/loop.py:103,106）。
+- 风险：改动作记录逻辑时只改一份，两套路径的 receipt 与 `path_length_m` 漂移。
+- 触发条件：给执行记录加字段或改 200 条窗口时。
 
 M7 经验值未标定
 - `SEGMENT_PERIOD_S = 0.030`（planner/runtime/motion/loop.py:42）固定，与 `MotionLimits.control_hz` 无关；流拍是 `1/control_hz`（loop.py:99）。风险：引擎步长不等于 30 ms 时，停稳判据与超时都按 30 ms 记账。触发条件：换仿真步长或引擎实时性不足。
-- `waypoint_timeout_s` 默认 60.0（continuous_execution.py:23、motion/follower.py:32），同为经验值。
+- `waypoint_timeout_s` 默认 60.0（motion/follower.py:40），同为经验值。
 
 M12 状态机单点问题
 - `PlanningWindow.executed` 在队列为空时直接 `self.queue.items[0]`，抛 `IndexError` 而不是 `ProtocolError`（planner/runtime/window/window.py:307）。触发条件：暂停清队之后又调一次 `executed`。

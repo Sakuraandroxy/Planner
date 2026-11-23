@@ -152,9 +152,6 @@
 
 | 方法 | 依据 | 说明 |
 | --- | --- | --- |
-| `ProjectAirSimRover.execute_segment` | `projectairsim/rover.py:164`，仅测试 | 过渡期委派残留，`attach_loop` 注入了 `_loop` 但没人调这个入口 |
-| `ProjectAirSimDrone.execute_segment` | `projectairsim/drone.py:198`，仅测试 | 同上 |
-| `AirSimVehicle.execute_segment` | `airsim/vehicle.py:67`，仅测试 | 同上 |
 | `ProjectAirSimDrone.hold_tick` | `projectairsim/drone.py:238` | 只有 UE4 的 `ObservationGate` 会用 `getattr(vehicle,"hold_tick")`；UE5 不走那个闸门 |
 | `ProjectAirSimDrone.begin_observation_hold` | `projectairsim/drone.py:254` | 同上 |
 | `ProjectAirSimDrone.wait_hold` | `projectairsim/drone.py:261` | 无调用者（UE4 侧用的名字是 `wait_for_observation`） |
@@ -164,7 +161,7 @@
 | `ProjectAirSimMissionSession.view_mode` | `projectairsim/session.py:331` | 控制台读的是控制器自己的 `_view_mode`，这个属性没被任何地方读 |
 | `ProjectAirSimRover.last_collision` / `ProjectAirSimDrone.last_collision` | `rover.py:243`、`drone.py:279` | 只在诊断里可能有用，当前无读取者 |
 
-三行 `execute_segment` 同属一类：它是 `Vehicle` 端口要求的入口，生产路径改成 `GuidedVehicle` + `ControlLoop` 经 `stream_command` 之后不再有调用者，而 `attach_loop` 注入的 `_loop` 只被这个入口使用。结果是两套并存的形状：契约适配层（方法齐备、装配层用 `hasattr` 找得到）与生产路径（控制循环自己走 `stream_command`）。删任一侧都要同时改 `planner/assembly/mission_assembly.py:226-229` 的注入与 [ports](ports.md) 的声明，所以本轮不删。
+三个载具类都不实现 `execute_segment`：`Vehicle` 端口的这一项由 runtime 的 `GuidedVehicle` 兑现（`planner/runtime/guided_vehicle.py:37`），生产路径走 `ControlLoop` 的 `stream_command`。装配层不再向载具注入控制循环，引擎侧也没有留兼容入口。
 
 ## 6 失败模式
 
@@ -230,7 +227,7 @@
 | --- | --- | --- |
 | 上游 | `planner.assembly` | `MissionInputs`、`VehicleArm`、`require_application`（`projectairsim/session.py:30`、`airsim/session.py:30`）；`require_application` 决定任务真的跑不跑 |
 | 上游 | `planner.simulator` | `SimulatorPorts`、`TaskSubmission`（`airsim/session.py:32`、`projectairsim/session.py:33`） |
-| 上游 | `planner.runtime` | `PositionHold`、`ExecutionService`、`SMOOTH_PROFILE`、`BackgroundOperation`、`TrajectoryHub` 形状的 sink |
+| 上游 | `planner.runtime` | `PositionHold`、`ExecutionService`、`BackgroundOperation`、`TrajectoryHub` 形状的 sink |
 | 下游 | `planner.domain` | 位姿/状态/观测/碰撞/能力位全部用 domain 类型，引擎不自定义契约 |
 | 下游 | `planner.algorithms` | rover 用 `passed_lateral_corridor`，提示词层用 depth 算法（后者不在本层） |
 | 引擎依赖 | `projectairsim`（pynng，单消费者 topic 链路） | `connection.py:36-40`、`:129-163` |
@@ -240,7 +237,7 @@
 
 - Qeng1 层：simulators 结论：已处置。两个引擎的 `build_ports` 末尾都调 `SimulatorPorts.verify_slots`（`planner/simulator/ports.py:68-84`），声明与实物不一致时构造即失败并列出槽位名。依据：`airsim/runtime.py:30-58`、`projectairsim/runtime.py:34-68`、`projectairsim/session.py:160-179`。影响：否。
 - Qeng2 层：simulators 结论：已处置，本轮删除 `airsim/recording.py` 整模块与 `airsim/__init__.py` 的两处重导。依据：`planner/simulators/airsim/__init__.py:1-6`。影响：否。
-- Qeng3 层：simulators 结论：三个载具类都还留着 `execute_segment` + `_loop` 这套过渡委派，生产零调用，`attach_loop` 注入的 loop 只被测试的 `execute_segment` 用到。依据：`airsim/vehicle.py:63-77`、`projectairsim/rover.py:160-173`、`projectairsim/drone.py:194-215`、`planner/assembly/mission_assembly.py:226-229`。影响：是（assembly 的注入点）。
+- Qeng3 层：simulators 结论：已处置。三个载具类的 `execute_segment` 与 `attach_loop` 删除，`_loop` 字段随之消失；段执行由 `GuidedVehicle` 兑现，装配层不再注入控制循环。依据：`planner/runtime/guided_vehicle.py:37`、`planner/assembly/mission_assembly.py:216-226`。影响：否。
 - Qeng4 层：simulators 结论：已处置，本轮删除 `AirSimVehicle.execute_basic_motion`、`_await_arrival` 与两个到达容差常量，`vehicle.py` 从 239 行降到 149 行。依据：`planner/simulators/airsim/vehicle.py:1-149`。影响：否。
 - Qeng5 层：simulators 结论：`ProjectAirSimDrone` 上有三个方法（`hold_tick`、`begin_observation_hold`、`wait_hold`）是为 UE4 那套 `ObservationGate` 协议准备的，UE5 不走闸门，方法永久悬空。依据：`projectairsim/drone.py:238-262`、`airsim/observation_gate.py:84-88`、`:145-151`。影响：否。
 - Qeng6 层：simulators 结论：`ObservationSource.request_capture` 这条契约（停稳采集 + Future 语义）只有 UE4 实现（`airsim/observation_source.py:96-101`），没有任何上层调用者；UE5 没有实现，`controlled_capture` 因此从 UE5 的 `PORT_SLOTS` 移除，UE4 的 `build_ports` 也不填它。依据：`planner/ports/observation_source.py:18`、`airsim/observation_source.py:96-101`、`airsim/runtime.py:30-58`、`projectairsim/runtime.py:14-24`。影响：否。

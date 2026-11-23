@@ -41,7 +41,7 @@
 | --- | --- | --- | --- |
 | `MotionModel` | `str, Enum` | 全向 / 阿克曼两种运动模型（入口 import 但不在 `__all__`，见 Qdomain13） | `simulators/airsim/vehicle.py:41`、`simulators/projectairsim/drone.py:89`、`rover.py:133` |
 | `MotionCapability` | 冻结 dataclass | 一台载具的运动学上限，构造期拒绝矛盾组合 | `runtime/motion/tracking.py`、三个引擎实现 |
-| `HolonomicCommand` | 冻结 dataclass | 一拍世界系速度与偏航角速度 | `runtime/continuous_execution.py:142`、`runtime/motion/tracking.py:61` |
+| `HolonomicCommand` | 冻结 dataclass | 一拍世界系速度与偏航角速度 | `runtime/motion/tracking.py:60`、`runtime/motion/follower.py:126` |
 | `CarCommand` | 冻结 dataclass | 一拍有符号前向速度与偏航角速度 | `runtime/motion/tracking.py:60`、`simulators/projectairsim/drive.py` |
 | `MotionCommand` | 类型别名 | `HolonomicCommand \| CarCommand`，只用于标注 | 三个引擎的 `stream_command` |
 | `command_type_for` | 函数 | 按能力给出命令类 | 只被 `require_supported` 调用 |
@@ -56,9 +56,9 @@
 
 | 名字 | 类型 | 用途 | 层外调用点 |
 | --- | --- | --- | --- |
-| `WorldPose` | 冻结 dataclass | 世界系位姿，z 向下，yaw 顺时针为正 | 27 个 `planner/` 文件，`runtime/segment_motion.py`、`simulators/projectairsim/coordinates.py` 等 |
+| `WorldPose` | 冻结 dataclass | 世界系位姿，z 向下，yaw 顺时针为正 | 27 个 `planner/` 文件，`runtime/motion/follower.py`、`simulators/projectairsim/coordinates.py` 等 |
 | `RelativePoseDelta` | 冻结 dataclass | 机体系位移请求，轨迹模型输出的单位 | `algorithms/trajectory_transform.py`、`adapters/trajectory_planner/response_parser.py` |
-| `wrap_deg` | 函数 | 角度绕回到 (-180, 180] | `runtime/segment_motion.py`、`simulators/projectairsim/coordinates.py` |
+| `wrap_deg` | 函数 | 角度绕回到 (-180, 180] | `simulators/projectairsim/coordinates.py` |
 | `wrap_yaw_deg` | 函数 | 流式变换用的绕回，吸附亚毫度噪声 | 12 个文件，`runtime/motion/tracking.py`、`workflows/basic_motion/workflow.py` 等 |
 | `resolve_yaw_delta_deg` | 函数 | 保留显式转向方向的偏航增量 | `runtime/motion/loop.py`、`runtime/window/queue.py`、`workflows/visual_goal_navigation/completion.py` |
 | `relative_to_world` | 函数 | 机体系偏移旋到世界系 | `algorithms/trajectory_transform.py`、`runtime/window/inflight.py`、`workflows/visual_goal_navigation/approach.py` |

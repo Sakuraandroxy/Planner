@@ -15,7 +15,7 @@ from planner.domain import (
     VisualGoalStatus,
 )
 from planner.errors import ExecutionError, ObservationError, ProtocolError
-from planner.runtime import ContinuousExecution
+from planner.runtime import QueueFollower
 from planner.runtime import ControlLoop
 from planner.runtime import MovingObservations
 from planner.runtime import freeze_observation, freeze_reference
@@ -36,8 +36,8 @@ class VisualGoalContinuous:
         self.loop = loop
         self.flight, self.capture_stopped, self.search = flight, capture_stopped, search
         self.clock, self.sleep, self.event = clock, sleep, event
-        self.stream = ContinuousExecution(execution, execution.vehicle, motion_limits, speed_mps, clock,
-                                          waypoint_timeout_s, settings=tracking_settings)
+        self.stream = QueueFollower(execution, execution.vehicle, motion_limits, speed_mps, clock,
+                                    waypoint_timeout_s, settings=tracking_settings)
         self.frames = MovingObservations(moving_source, clock, limits.model_request_timeout_s,
                                          limits.maximum_anchor_refresh_failures+1)
         self.targets = target_updates if target_updates is not None else VisualGoalRefresh(observer, geometry, limits, clock, event)
@@ -227,6 +227,8 @@ class VisualGoalContinuous:
         while observation is None:
             observation = self._observe_stopped(parameters, session, trace)
         self.stream.begin(session.window.queue, session.window.background.stage_token)
+        self.stream.sample()
+        self.stream.follower.reset(self.stream.state.velocity_world)
         used_capture = None
         queue_was_empty = True
         try:

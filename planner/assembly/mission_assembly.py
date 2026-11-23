@@ -223,9 +223,6 @@ def build_vehicle_arm(
             config.collision.recovery() if config.collision.enabled else None
         ),
     )
-    attach = getattr(vehicle, "attach_loop", None)
-    if attach is not None:
-        attach(loop)
     guided = GuidedVehicle(vehicle, loop)
     source = vehicle if observation_source is None else observation_source
     motion = SynchronizedMotionPlanner(config.motion.max_speed_mps, vehicle.tracking_limits)

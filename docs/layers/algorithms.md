@@ -123,7 +123,7 @@ grep -rn "^from \.\|^from planner\." planner/algorithms/ | grep -v "planner.doma
 
 Qb1 层：algorithms 结论：包入口自称"纯函数与纯策略"，但唯一带状态的 `RefillScheduler` 在 `record_latency` 里改写 `latency_s`。依据：planner/algorithms/__init__.py:1、planner/algorithms/sliding_window/scheduler.py:8,16 影响：否
 
-Qb2 层：algorithms 结论：`relative_to_world` / `world_to_relative` 在契约层与计算层各有一份同名不同签名的实现，两个运行时调用点分别指向不同层的同名函数。依据：planner/domain/pose.py:54、planner/algorithms/trajectory_transform.py:26,43、planner/runtime/segment_motion.py:58、planner/runtime/window/inflight.py:11 影响：是
+Qb2 层：algorithms 结论：已处置。契约层的同名 `relative_to_world(yaw_deg, dx, dy, dz)` 已删除，单个车体系偏移的旋转内联进 `WorldPose.offset`，本层的轨迹版是唯一实现。依据：planner/algorithms/trajectory_transform.py:26、planner/domain/pose.py:78-81。影响：否
 
 Qb3 层：algorithms 结论：`ACKERMANN_PASSED_LATERAL_TOLERANCE_M = 1.0` 没有标定出处，注释只说明是"量级依据"，而测试把这个值钉住了。依据：planner/algorithms/motion/corridor.py:7-9、tests/test_algorithms_motion.py:20 影响：否
 
@@ -139,7 +139,7 @@ Qb7 层：algorithms 结论：`FreeSpaceProfileSettings` 十个阈值的合法�
 
 M5 同名变换两份
 - 生产名 `planner.algorithms.trajectory_transform.relative_to_world(RelativeTrajectory, WorldPose)` 把整条相对轨迹落到世界，逐点保留带符号偏航（planner/algorithms/trajectory_transform.py:26）。调用方：planner/runtime/window/inflight.py:98、planner/workflows/visual_goal_navigation/approach.py:25。
-- 契约层另有一份同名不同签名的 `planner.domain.pose.relative_to_world(yaw_deg, dx, dy, dz) -> tuple`（planner/domain/pose.py:54），只把单个车体系偏移转到世界。调用方：planner/runtime/segment_motion.py:58。
+- 契约层不再有同名实现：单个车体系偏移的旋转内联在 `WorldPose.offset` 里（planner/domain/pose.py:78-81），没有对外名字。
 - 风险：按名字检索会混两条路径，改一处漏另一处；两份都叫 `relative_to_world`，没有 `_trajectory` 式的区分后缀。
 
 M7 经验值未标定

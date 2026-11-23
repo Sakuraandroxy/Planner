@@ -95,7 +95,7 @@ class AirSimMissionSession:
             limits,
             config.drone.move_timeout_s,
             owner_thread_id=threading.get_ident(),
-            check_safety=self.execution.check_safety,
+            checkpoint=self.execution.check_deadline,
         )
         self.execution.bind_observation_checkpoint(
             self.gate.service_requests, self.gate.cancel_requests

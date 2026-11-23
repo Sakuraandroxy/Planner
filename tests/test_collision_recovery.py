@@ -104,7 +104,7 @@ class PassiveExecution:
     def checkpoint(self):
         pass
 
-    def check_safety(self):
+    def check_deadline(self):
         pass
 
     def stop(self):

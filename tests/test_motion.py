@@ -1,20 +1,6 @@
-import itertools
-
 import pytest
 
 from planner.domain import RelativePoseDelta, WorldPose
-from planner.runtime import quintic
-
-
-def test_quintic_boundaries_and_midpoint():
-    assert quintic(0.0) == pytest.approx(0.0)
-    assert quintic(0.5) == pytest.approx(0.5)
-    assert quintic(1.0) == pytest.approx(1.0)
-
-
-def test_quintic_is_monotonic():
-    values = [quintic(i / 50.0) for i in range(51)]
-    assert all(b >= a for a, b in itertools.pairwise(values))
 
 
 def test_delta_without_vertical_drops_dz():

@@ -61,7 +61,7 @@ class PassiveExecution:
         if self._deadline_error is not None:
             raise self._deadline_error
 
-    def check_safety(self):
+    def check_deadline(self):
         pass
 
     def stop(self):

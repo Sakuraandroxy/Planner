@@ -34,8 +34,6 @@ class VisualGoalFlightPhase:
         def checkpoint():
             require_time(session.budget, self.clock)
             self.execution.checkpoint()
-            if self.execution.collision_state():
-                raise ExecutionError("collision during completion wait")
 
         verdict = self.verification.check(request, session.budget, self.limits.model_request_timeout_s,
             self.limits.model_retry_count, checkpoint, self.clock)

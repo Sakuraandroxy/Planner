@@ -50,6 +50,17 @@ class FakeQueue:
         return True
 
 
+class FakeExecution:
+    def checkpoint(self):
+        pass
+
+    def check_deadline(self):
+        pass
+
+    def stop(self):
+        raise AssertionError("the follower must not stop a queue it never drove")
+
+
 class FakeStreaming:
     def __init__(self):
         self.pose = START
@@ -68,6 +79,7 @@ def waypoint(waypoint_id, start, end, yaw_delta_deg=0.0):
 def follower_for(queue, clock=None):
     clock = clock or FakeClock()
     follower = QueueFollower(
+        FakeExecution(),
         FakeStreaming(),
         LIMITS,
         2.0,

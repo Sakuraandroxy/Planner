@@ -1,6 +1,6 @@
 """Reference velocity/yaw stream -> ProjectAirSim rover controls.
 
-``ContinuousExecution`` and ``SynchronizedMotionPlanner`` emit a world-frame
+``QueueFollower`` and ``SynchronizedMotionPlanner`` emit a world-frame
 velocity and a yaw rate; the rover only accepts ``engine``, ``steering_angle``
 and ``brake``. This module is that actuator mapping (approach A in
 ``docs/archive/measurements.md``), measured on CityEnviron's ``fast-physics`` OffroadCar:

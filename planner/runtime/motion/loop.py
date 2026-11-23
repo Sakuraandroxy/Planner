@@ -248,7 +248,7 @@ class ControlLoop:
                     def checkpoint(pose, unwrapped_yaw):
                         nonlocal observed_yaw
                         observed_yaw = unwrapped_yaw
-                        self.execution.check_safety()
+                        self.execution.check_deadline()
                         return pause_when(pose) if pause_when is not None else False
 
                 try:

@@ -81,6 +81,7 @@ class FreeNavigationContinuous:
         self.model_request_timeout_s = float(model_request_timeout_s)
         self.stall_timeout_s = float(stall_timeout_s)
         self.follower = QueueFollower(
+            execution,
             execution.vehicle,
             motion_limits,
             speed_mps,
