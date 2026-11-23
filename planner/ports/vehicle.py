@@ -22,9 +22,6 @@ class Vehicle(Protocol):
     def tracking_limits(self) -> MotionLimits:
         """The envelope the planner tracks against, in domain units."""
 
-    def attach_loop(self, loop) -> None:
-        """Take the control loop the assembly bound to this vehicle."""
-
     def motion_capability(self) -> MotionCapability: ...
 
     def execute_segment(
@@ -33,7 +30,13 @@ class Vehicle(Protocol):
         *,
         budget: ExecutionBudget | None = None,
         pose_checkpoint: PoseCheckpoint | None = None,
-    ) -> None: ...
+    ) -> None:
+        """Execute one segment before returning.
+
+        The run path does not call this: ``ControlLoop.execute`` drives segments
+        through ``stream_command``. ``GuidedVehicle`` is the implementation this
+        port asks for.
+        """
 
     def cancel(self) -> None: ...
 

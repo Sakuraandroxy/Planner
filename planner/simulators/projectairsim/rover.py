@@ -18,7 +18,7 @@ from dataclasses import replace
 
 from ...config import CameraSettings, DepthSettings
 from planner.domain import Observation
-from planner.domain import MotionTrajectory, WorldPose
+from planner.domain import WorldPose
 from planner.domain import TimedVehicleState
 from ...errors import ExecutionError
 from planner.domain import (
@@ -136,7 +136,6 @@ class ProjectAirSimRover:
             min_turn_radius_m=ROVER_MIN_TURN_RADIUS_M,
             allows_reverse=True,
         )
-        self._loop = None
 
     # -- lifecycle ---------------------------------------------------------
     def start(self) -> None:
@@ -156,21 +155,6 @@ class ProjectAirSimRover:
     # -- Vehicle port ------------------------------------------------------
     def current_pose(self) -> WorldPose:
         return pose_from_kinematics(self._kinematics())
-
-    def attach_loop(self, loop) -> None:
-        """Transitional: assembly injects the shared control loop."""
-        self._loop = loop
-
-    def execute_segment(self, segment, *, budget=None, pose_checkpoint=None) -> None:
-        self._require_started()
-        self._cancel.clear()
-        self._pid.reset()
-        self._loop.run_segment(
-            MotionTrajectory((segment,)),
-            self._loop.segment_sink(),
-            budget=budget,
-            pose_checkpoint=pose_checkpoint,
-        )
 
     def cancel(self) -> None:
         self._cancel.set()

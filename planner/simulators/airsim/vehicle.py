@@ -4,7 +4,6 @@ import logging
 import math
 import time
 
-from planner.domain import ExecutionBudget, PoseCheckpoint
 from planner.domain import CollisionState
 from planner.domain import (
     MotionCapability,
@@ -15,9 +14,7 @@ from planner.domain import (
 )
 from planner.domain import WorldPose
 from planner.domain import TimedVehicleState
-from planner.domain import MotionSegment, MotionTrajectory
 from planner.errors import ExecutionError
-from planner.runtime import SMOOTH_PROFILE
 from planner.simulators.airsim.connection import AirSimConnection
 
 logger = logging.getLogger(__name__)
@@ -38,7 +35,6 @@ class AirSimVehicle:
             allows_reverse=True,
         )
         self._limits = motion_limits or MotionLimits()
-        self._loop = None
 
     @property
     def tracking_limits(self) -> MotionLimits:
@@ -59,22 +55,6 @@ class AirSimVehicle:
             1.0 - 2.0 * (q.y_val * q.y_val + q.z_val * q.z_val),
         ))
         return WorldPose(pose.position.x_val, pose.position.y_val, pose.position.z_val, yaw)
-
-    def attach_loop(self, loop) -> None:
-        """Transitional: assembly injects the shared control loop."""
-        self._loop = loop
-
-    def execute_segment(self, segment: MotionSegment, *, budget: ExecutionBudget | None = None,
-                        pose_checkpoint: PoseCheckpoint | None = None) -> None:
-        if self.holding is not None:
-            self.holding.release()
-        if segment.profile != SMOOTH_PROFILE:
-            raise ExecutionError(f"unsupported motion profile: {segment.profile}")
-        self._loop.run_segment(MotionTrajectory((segment,)), self._loop.segment_sink(),
-                               budget=budget, pose_checkpoint=pose_checkpoint)
-        if self.holding is not None:
-            self.holding.start(segment.end)
-            self.holding.wait(budget=budget)
 
     def cancel(self) -> None:
         self.connection.call("cancelLastTask")

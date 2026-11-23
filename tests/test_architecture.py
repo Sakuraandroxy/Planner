@@ -140,6 +140,7 @@ def test_airsim_slots_are_backed_by_real_code():
 
     from planner.ports import StreamingVehicle
     from planner.ports import Vehicle
+    from planner.runtime import GuidedVehicle
     from planner.simulator.ports import SimulatorPorts
     from planner.simulators.airsim.vehicle import AirSimVehicle
     from planner.simulators.projectairsim.drone import ProjectAirSimDrone
@@ -152,11 +153,16 @@ def test_airsim_slots_are_backed_by_real_code():
         assert not unknown, f"{simulator} declares slots the bundle has no field for: {unknown}"
 
     adapters = (AirSimVehicle, ProjectAirSimRover, ProjectAirSimDrone)
+    #: 段执行由 runtime 的 ``GuidedVehicle`` 兑现，引擎不再留委派。
+    delegated = {"execute_segment": GuidedVehicle}
     for port in (Vehicle, StreamingVehicle):
         for cls in adapters:
             for name, value in vars(port).items():
                 if callable(value) and not name.startswith("_") and name != "__subclasshook__":
-                    assert hasattr(cls, name), f"{cls.__name__} lost {port.__name__}.{name}"
+                    owner = delegated.get(name, cls)
+                    assert hasattr(owner, name), (
+                        f"{owner.__name__} lost {port.__name__}.{name}"
+                    )
 
 
 

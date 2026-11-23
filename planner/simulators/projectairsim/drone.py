@@ -22,11 +22,10 @@ import time
 from projectairsim.types import LandedState
 
 from ...config import CameraSettings, DepthSettings
-from planner.domain import MotionTrajectory, Observation
+from planner.domain import Observation
 from planner.domain import WorldPose
 from planner.domain import TimedVehicleState
 from ...errors import ExecutionError
-from planner.runtime import SMOOTH_PROFILE
 from planner.runtime import PositionHold
 from planner.domain import (
     CollisionContact,
@@ -127,7 +126,6 @@ class ProjectAirSimDrone:
             clock=clock,
             sleep=sleep,
         )
-        self._loop = None
 
     # -- lifecycle ---------------------------------------------------------
     def start(self) -> None:
@@ -194,29 +192,6 @@ class ProjectAirSimDrone:
 
     def current_pose(self) -> WorldPose:
         return pose_from_kinematics(self._kinematics())
-
-    def attach_loop(self, loop) -> None:
-        """Transitional: assembly injects the shared control loop."""
-        self._loop = loop
-
-    def execute_segment(
-        self, segment, *, budget=None, pose_checkpoint=None
-    ) -> None:
-        self._require_started()
-        self._holding.release()
-        if segment.profile != SMOOTH_PROFILE:
-            raise ExecutionError(
-                f"unsupported motion profile: {segment.profile}"
-            )
-        self._cancel.clear()
-        self._loop.run_segment(
-            MotionTrajectory((segment,)),
-            self._loop.segment_sink(),
-            budget=budget,
-            pose_checkpoint=pose_checkpoint,
-        )
-        self._holding.start(segment.end)
-        self._holding.wait(budget=budget)
 
     def park(self) -> None:
         """Stop flying without waiting for a touchdown.

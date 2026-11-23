@@ -202,7 +202,7 @@ grep -rn "planner.workflows\|planner.assembly\|planner.adapters\|planner.simulat
 
 Qb8 层：runtime 结论：`GuidedVehicle` 八个方法里只有 `current_pose` 有生产调用点，其余七个无人调用。依据：planner/runtime/guided_vehicle.py:16-45、planner/workflows/basic_motion/workflow.py:68,98 影响：否
 
-Qb9 层：runtime 结论：`Vehicle.execute_segment` 端口方法与 `GuidedVehicle.execute_segment` 在生产路径无人调用，段执行实际走 `ControlLoop.execute`。依据：planner/ports/vehicle.py:17、planner/runtime/guided_vehicle.py:37-45、planner/workflows/basic_motion/workflow.py:97 影响：是
+Qb9 层：runtime 结论：`Vehicle.execute_segment` 端口方法与 `GuidedVehicle.execute_segment` 在生产路径无人调用，段执行实际走 `ControlLoop.execute`；引擎类已不再实现该方法。依据：planner/ports/vehicle.py:27、planner/runtime/guided_vehicle.py:37-45、planner/workflows/basic_motion/workflow.py:97 影响：是
 
 Qb10 层：runtime 结论：`ControlLoop.sample()` 隐含要求 `StreamRecorder.begin()` 先被调用，否则抛 `AttributeError: 'NoneType' object has no attribute 'revision'`（已用探针脚本复现），docstring 未写这个前置条件。依据：planner/runtime/motion/loop.py:522-528、planner/runtime/motion/record.py:79、planner/runtime/stream_timeline.py:17 影响：否
 
@@ -237,8 +237,8 @@ Qb27 层：runtime 结论：`MovingObservations.begin` 里 discard 只在 job �
 ## 10 已知缺口
 
 M4 契约适配层与生产路径分离
-- 现状：`GuidedVehicle` 八个方法里只有 `current_pose` 有生产调用点（planner/workflows/basic_motion/workflow.py:68,98）；`GuidedVehicle.execute_segment`（planner/runtime/guided_vehicle.py:37）与三个引擎类的同名方法生产零调用，段执行实际走 `ControlLoop.execute`（planner/workflows/basic_motion/workflow.py:97）。
-- 风险：端口要求的方法与真实路径分叉，改控制循环不会带动引擎实现，反之亦然。
+- 现状：`GuidedVehicle` 八个方法里只有 `current_pose` 有生产调用点（planner/workflows/basic_motion/workflow.py:68,98）；`GuidedVehicle.execute_segment`（planner/runtime/guided_vehicle.py:37）生产零调用，段执行实际走 `ControlLoop.execute`（planner/workflows/basic_motion/workflow.py:97）。三个引擎类不再实现 `execute_segment`，装配层也不再向载具注入控制循环。
+- 风险：端口要求的方法与真实路径分叉，改控制循环不会带动 `GuidedVehicle` 的实现，反之亦然。
 - 触发条件：按 `Vehicle` 端口签名改段执行时，改动落在无人调用的路径上，运行行为不变。
 
 M5 重复实现
