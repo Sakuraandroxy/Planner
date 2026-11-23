@@ -198,7 +198,7 @@
 - `tests/test_video.py`（分帧格式、取消、编码失败）、`tests/test_http_errors.py`（401/404/503/连接失败）。
 - `tests/test_batch3_chat.py`（三种方言的请求体、空 key、URL 补全）、`tests/test_batch3_services.py`（检测与完成判定的服务栈）。
 - `tests/test_task_parser.py`、`tests/test_target_detection.py`、`tests/test_task_completion.py`、`tests/test_trajectory_parser.py`。
-- `tests/test_trajectory_prompts.py`、`tests/test_prompt_render.py`（含 `prompt_render_baseline.json` 基线快照）。
+- `tests/test_trajectory_prompts.py`、`tests/test_prompt_jinja.py`（`tests/prompts/golden.json` 逐字基线）。
 - `tests/test_visual_goal_trace.py`、`tests/test_model_visual_inputs.py`、`tests/test_factories.py`。
 
 没覆盖的空白：

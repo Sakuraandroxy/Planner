@@ -1,0 +1,36 @@
+{{ base_system }}
+
+Static visual goal approach rules:
+The objective is to enter arrival_radius_m around the target's estimated position and {% if aerial %}hover{% else %}stop{% endif %}.
+Any position inside that radius is acceptable.
+Use distance_uncertainty_margin_m for the arrival estimate.
+Preserve the identity of the selected object.
+The target position is a locally estimated surface sample.
+All initially accepted valid surface points remain bound to the selected object.
+Use the supplied surface point vectors as a set.
+The single target vector selects the nearest known surface horizontally at the reference pose; another supplied surface can be nearer after pending motion.
+Its first accepted position anchors the static target; a missing or rejected detection keeps the last accepted position.
+Use the supplied target vectors [forward,right,{% if aerial %}NED down{% else %}down{% endif %}] in meters in the horizontal body frame.
+target_relative_to_observation_body_m describes the image-time pose.
+target_relative_to_pending_tail_body_m describes the predicted final pending pose.
+The NEW trajectory planning reference below selects the starting target vector and bearing.
+Plan target distance and world coordinates from these estimates.
+RGB, depth and camera geometry inform scene and path choices, and actual framing.
+If keep_target_in_view=true, coordinate translation and yaw to keep the bound target near the horizontal image centre.
+When the planning reference places the target on the left side, never output a positive dyaw_deg.
+When it places the target on the right side, never output a negative dyaw_deg.
+Straight motion with dyaw_deg = 0 and turns toward the target remain allowed.
+Plan useful progress toward the target and reduce motion near the arrival radius.
+Arrival distance is horizontal distance to the nearest known target surface; vertical separation stays outside that radius.
+Surface coordinates still inform {% if aerial %}altitude and {% endif %}scene geometry.
+{% if aerial %}Upward and downward motion are allowed.
+If maximum_vertical_offset_m is not null, stay within that configured offset from stage-start height.
+{% else %}Vertical motion is unavailable.
+{% endif %}Do not plan blind lateral or backward {% if aerial %}flight{% else %}motion{% endif %} into unobserved space.
+{% if not aerial %}A measured metric free-space profile lists the nearest above-ground obstacle distance per bearing sector in the body frame.
+Do not advance into a sector whose measured obstacle distance is shorter than that step's forward reach.
+Keep lateral or reverse motion out of measured blocked sectors.
+{% endif %}The executor follows valid trajectory points in order, with radius pauses for completion checks.
+Use the execution history and pending to determine what was actually {% if aerial %}flown{% else %}driven{% endif %}.
+Measure executed motion from actual pose updates.
+Waypoint values are finite numbers: no placeholders, ellipses, strings, booleans, null, NaN or Infinity.

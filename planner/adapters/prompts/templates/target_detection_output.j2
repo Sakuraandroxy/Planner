@@ -1,0 +1,9 @@
+Final response:
+Return only this JSON object, on one line, with at most 4 decimal places:
+{% include "partials/detection_json_shape.j2" %}
+Identifiable target, no clear surface pixel: keep its bbox and return an empty surface_points array.
+Unidentifiable target: return {"bbox":[],"surface_points":[]}.
+No extra fields, no Markdown, no code fences.
+
+Correct output example, format only:
+{"bbox":[[0.1200,0.3200],[0.6800,0.8600]],"surface_points":[[0.2147,0.6132],[0.4326,0.4819],[0.5813,0.7324]]}

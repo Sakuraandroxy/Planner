@@ -1,0 +1,24 @@
+Locate the specified target in image 1 and select visible surface points on it.
+With a reference image, match the same physical object.
+
+Return exactly one JSON object with exactly these two fields:
+{% include "partials/detection_json_shape.j2" %}
+
+Coordinate convention:
+- All coordinates are normalized to [0,1] against the full image 1, never against a reference crop.
+- The origin is the top-left image boundary; x increases rightward and y increases downward.
+- bbox holds exactly two corners: top-left, then bottom-right, with x1 < x2 and y1 < y2.
+- Return one tight box around the visible target. A partly visible target is acceptable when identifiable.
+- Surface points lie inside this bbox.
+
+Surface point selection:
+- Select up to 5 points on clearly visible surfaces of the specified target; choose their number and positions yourself.
+- Accuracy outranks spread and count: one accurate point beats five uncertain ones.
+- Every point lies on an opaque solid part of the specified target in image 1.
+- For open-frame, lattice or perforated structures, select visible structural members or solid components, never their openings or empty interiors.
+- Prefer broad solid regions, thick members and solid joints, with visible material around each point.
+- Avoid silhouettes, material boundaries, thin edges, holes, transparent glass, reflections and occluding objects.
+- Any arrangement of the selected points is acceptable.
+- Select the geometric center only when that exact pixel visibly belongs to a solid part of the target.
+- Do not infer points on hidden surfaces.
+- Check each rounded coordinate against image 1 before answering; keep only the points you can confidently attribute to the target.

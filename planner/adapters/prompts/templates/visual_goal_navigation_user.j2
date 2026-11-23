@@ -1,0 +1,26 @@
+{{ base_user }}
+
+{% if free_space_profile %}{{ free_space_profile }}
+
+{% endif %}Visual goal context:
+{{ payload_json }}
+
+{% if view_guidance %}{{ view_guidance }}
+
+{% endif %}NEW trajectory planning reference:
+{% if has_pending %}Start your NEW trajectory AFTER all pending actions, at their predicted final pose.
+{% else %}Pending is empty. Start your NEW trajectory at the current observation pose.
+{% endif %}At this NEW trajectory start:
+- Target relative position [forward,right,down], meters: {{ target_vector_json }}
+{% if bearing_deg %}- Target horizontal bearing: {{ bearing_deg }} degrees. Positive bearing means right; negative bearing means left.
+{% else %}- Target horizontal bearing: undefined; the horizontal target distance is near zero.
+{% endif %}{% if side == "left" %}The target is currently on the LEFT side. Positive dyaw_deg (turning right, away from the target) is forbidden in this NEW trajectory; dyaw_deg = 0 is allowed.
+{% elif side == "right" %}The target is currently on the RIGHT side. Negative dyaw_deg (turning left, away from the target) is forbidden in this NEW trajectory; dyaw_deg = 0 is allowed.
+{% elif side == "ahead" %}The target is directly ahead or behind; any dyaw_deg sign is allowed.
+{% else %}The target horizontal direction is undefined; any dyaw_deg sign is allowed.
+{% endif %}This bearing describes the starting geometry.
+The original directional description, such as 'front-left', identifies the object at stage start.
+dyaw_deg is incremental relative to the preceding pose; turns accumulate across waypoints, so five actions of -8 degrees make a total turn of -40 degrees.
+Re-evaluate the target direction after each predicted translation and turn; do not repeat a turn.
+
+{{ output_guidance }}

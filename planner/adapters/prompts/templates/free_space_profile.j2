@@ -1,0 +1,25 @@
+Metric free-space profile (measured from the aligned metric depth at this observation):
+- Units are metres in the current body horizontal frame; bearing is measured from the current forward axis and is positive to the right.
+- Each sector lists the nearest surface at least {{ min_height_m }} m above the local ground, within {{ max_range_m }} m.
+{% for sector in sectors %}
+{% if sector.state == "unknown" %}
+  {{ sector.label }} deg: unknown (no ground reference in view)
+{% elif sector.state == "clear" %}
+  {{ sector.label }} deg: clear beyond {{ max_range_m }} m
+{% else %}
+  {{ sector.label }} deg: {{ sector.distance_m }} m (forward {{ sector.forward_m }} m, right {{ sector.right_m }} m)
+{% endif %}
+{% endfor %}
+{% if ahead %}
+{% if ahead.state == "unknown" %}
+- Nearest obstacle directly ahead ({{ ahead.label }} deg): unknown.
+{% elif ahead.state == "clear" %}
+- Nearest obstacle directly ahead ({{ ahead.label }} deg): clear beyond {{ max_range_m }} m.
+{% else %}
+- Nearest obstacle directly ahead ({{ ahead.label }} deg): {{ ahead.distance_m }} m.
+{% endif %}
+{% endif %}
+{% if window %}
+- Longest clear bearing window: {{ window.start_deg }} to {{ window.end_deg }} deg.
+{% endif %}
+These distances and bearings are measured values.

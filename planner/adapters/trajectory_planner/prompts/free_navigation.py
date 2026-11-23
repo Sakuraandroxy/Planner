@@ -1,12 +1,15 @@
-from planner.domain import Observation
-from planner.domain import WorldPose
-from planner.domain import RelativeTrajectory
-from planner.errors import ProtocolError
+from planner.adapters.prompts import render_prompt
+from planner.adapters.prompts.values import free_space_profile_values
+from planner.adapters.prompts.values import vehicle_values
 from planner.algorithms.depth import (
     FreeSpaceProfile,
     FreeSpaceProfileSettings,
     measure_free_space,
 )
+from planner.domain import Observation
+from planner.domain import RelativeTrajectory
+from planner.domain import WorldPose
+from planner.errors import ProtocolError
 
 from .base import (
     AERIAL_BASE_TRAJECTORY_SYSTEM_PROMPT,
@@ -14,24 +17,21 @@ from .base import (
     build_aerial_base_user_prompt,
     build_base_user_prompt,
 )
-from .render import load, load_fragment, render
-
-FREE_NAVIGATION_SYSTEM_PROMPT = (
-    BASE_TRAJECTORY_SYSTEM_PROMPT + "\n\n" + load("free_navigation_rules")
-)
-
-# The reference Planner has no free-navigation prompt, so the drone keeps the
-# same road-following procedure with flight wording on top of the UAV base.
-AERIAL_FREE_NAVIGATION_SYSTEM_PROMPT = (
-    AERIAL_BASE_TRAJECTORY_SYSTEM_PROMPT + "\n\n" + load("aerial_free_navigation_rules")
-)
 
 
 def free_navigation_system_prompt(*, aerial: bool = False) -> str:
     """Return the UAV or ground-vehicle free-navigation system prompt."""
-    if aerial:
-        return AERIAL_FREE_NAVIGATION_SYSTEM_PROMPT
-    return FREE_NAVIGATION_SYSTEM_PROMPT
+    base = AERIAL_BASE_TRAJECTORY_SYSTEM_PROMPT if aerial else BASE_TRAJECTORY_SYSTEM_PROMPT
+    return render_prompt(
+        "free_navigation", base_system=base.rstrip("\n"), **vehicle_values(aerial)
+    )
+
+
+FREE_NAVIGATION_SYSTEM_PROMPT = free_navigation_system_prompt()
+
+# The reference Planner has no free-navigation prompt, so the drone keeps the
+# same road-following procedure with flight wording on top of the UAV base.
+AERIAL_FREE_NAVIGATION_SYSTEM_PROMPT = free_navigation_system_prompt(aerial=True)
 
 
 class FreeNavigationTrajectoryPrompt:
@@ -81,72 +81,13 @@ class FreeNavigationTrajectoryPrompt:
             previous_trajectory_start=previous_trajectory_start,
         )
         profile = measure_free_space(observation, self.free_space)
-        return (
-            base
-            + "\n\n"
-            + format_free_space_profile(profile)
+        return render_prompt(
+            "free_navigation_user",
+            base_user=base.rstrip("\n"),
+            free_space_profile=format_free_space_profile(profile).rstrip("\n"),
         )
 
 
 def format_free_space_profile(profile: FreeSpaceProfile) -> str:
-    lines = [
-        render(
-            load_fragment("free_space_profile_head"),
-            min_height_m=f"{profile.min_height_above_ground_m:.2f}",
-            max_range_m=f"{profile.max_range_m:.1f}",
-        )
-    ]
-    for sector in profile.sectors:
-        label = _bearing_label(sector.bearing_deg)
-        if not sector.ground_available:
-            lines.append(render(load_fragment("free_space_sector_unknown"), label=label))
-        elif sector.distance_m is None:
-            lines.append(render(
-                load_fragment("free_space_sector_clear"),
-                label=label,
-                max_range_m=f"{profile.max_range_m:.1f}",
-            ))
-        else:
-            lines.append(render(
-                load_fragment("free_space_sector_distance"),
-                label=label,
-                distance_m=f"{sector.distance_m:.1f}",
-                forward_m=f"{sector.forward_m:.1f}",
-                right_m=f"{sector.right_m:+.1f}",
-            ))
-    ahead = min(
-        profile.sectors, key=lambda sector: abs(sector.bearing_deg), default=None
-    )
-    if ahead is not None:
-        label = _bearing_label(ahead.bearing_deg)
-        if not ahead.ground_available:
-            lines.append(render(load_fragment("free_space_ahead_unknown"), label=label))
-        elif ahead.distance_m is None:
-            lines.append(render(
-                load_fragment("free_space_ahead_clear"),
-                label=label,
-                max_range_m=f"{profile.max_range_m:.1f}",
-            ))
-        else:
-            lines.append(render(
-                load_fragment("free_space_ahead_distance"),
-                label=label,
-                distance_m=f"{ahead.distance_m:.1f}",
-            ))
-    window = profile.clear_window_deg
-    if window is not None:
-        lines.append(render(
-            load_fragment("free_space_window"),
-            start_deg=_bearing_label(window[0]),
-            end_deg=_bearing_label(window[1]),
-        ))
-    lines.append(load_fragment("free_space_footnote"))
-    return "\n".join(lines)
-
-
-def _bearing_label(value: float) -> str:
-    return _signed_deg(value)
-
-
-def _signed_deg(value: float) -> str:
-    return "0.0" if abs(value) < 0.05 else f"{value:+.1f}"
+    """Render the measured free-space profile block."""
+    return render_prompt("free_space_profile", **free_space_profile_values(profile))
