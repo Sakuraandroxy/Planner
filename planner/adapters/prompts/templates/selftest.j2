@@ -1,0 +1,6 @@
+Prompt {{ prompt_id }} for {{ vehicle }}.
+{% for point in points %}
+- forward {{ point.dx }}, right {{ point.dy }}
+{% endfor %}
+Pose: {{ pose.x }}, {{ pose.y }}, {{ pose.z }}, {{ pose.yaw_deg }}
+Tail: {{ tail }}
