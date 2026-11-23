@@ -1,0 +1,50 @@
+Visual inputs:
+- Image 1 is the current front RGB image.
+- Image 2 is the aligned front depth visualization.
+- {{ depth_protocol }}
+
+Original navigation instruction for the current stage:
+{{ instruction }}
+
+Current guidance:
+{% if guidance_text %}
+{{ guidance_text }}
+{% if guidance_reference_pose %}
+Guidance reference {{ vehicle }} pose [world x,y,z,yaw_deg]: {{ guidance_reference_pose }}
+Account for the motion and the pending queue since that pose.
+{% endif %}
+{% else %}
+Not supplied.
+{% endif %}
+
+Execution context:
+- Planning round: {{ round_index }}
+- Task state: {{ state }}
+{% if previous_points_json %}
+- Recent confirmed executed actions, not a complete previous planning batch (do not execute it again): {{ previous_points_json }}
+{% if previous_start_pose_json %}
+  Execution-history reference start pose: {{ previous_start_pose_json }}
+{% endif %}
+{% elif round_index == 1 %}
+- No previous trajectory has been executed.
+{% else %}
+- Execution history is not supplied. Treat earlier motion as unknown.
+{% endif %}
+- Measured net pose change since the stage start, in that pose's horizontal body frame:
+  - Forward: {{ "%.3f"|format(measured.dx) }} m
+  - Right: {{ "%.3f"|format(measured.dy) }} m
+  - {{ down_label }}: {{ "%.3f"|format(measured.dz) }} m
+  - Yaw change: {{ "%.3f"|format(measured.dyaw_deg) }} degrees
+
+Current {{ vehicle }} pose:
+- World position: [{{ "%.3f"|format(pose.x) }}, {{ "%.3f"|format(pose.y) }}, {{ "%.3f"|format(pose.z) }}]
+- Yaw: {{ "%.3f"|format(pose.yaw_deg) }} degrees
+
+Camera geometry (JSON): {{ camera_json }}
+
+Pending incremental pose waypoints: {{ pending_json }}
+Continue from the final pending predicted pose, or from the current {{ vehicle }} pose
+when pending is empty.
+
+Generate the next short trajectory.
+Return exactly 5 NEW incremental pose waypoints as a JSON list.

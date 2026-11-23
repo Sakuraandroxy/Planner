@@ -266,6 +266,9 @@ def build_cases() -> dict[str, str]:
         "base_user_continuing": build_base_user_prompt(
             INSTRUCTION, observation, 5, **context
         ),
+        "base_user_continuing_unknown_history": build_base_user_prompt(
+            INSTRUCTION, observation, 5, round_index=2
+        ),
         "base_user_continuing_aerial": build_aerial_base_user_prompt(
             INSTRUCTION, observation, 5, **context
         ),

@@ -1,34 +1,34 @@
-import json
+"""Trajectory prompt builders for the ground vehicle and the UAV.
+
+System text comes from ``trajectory_ground``/``trajectory_aerial`` and user text
+from ``trajectory_refine``; the values those templates read come from
+``planner.adapters.prompts.values``.
+
+In this prompt, "original instruction" means the instruction of the current
+MissionStage, not the user's complete multi-stage mission. "Previous trajectory"
+means confirmed executed actions within that MissionStage. Pending describes the
+remaining queue at the frozen observation, not live progress while the model
+request is in flight.
+"""
+
 from typing import Protocol, TypeVar
 
-from planner.domain import depth_display_description
+from planner.adapters.prompts import render_prompt
+from planner.adapters.prompts.values import trajectory_refine_values
 from planner.domain import Observation
-from planner.domain import WorldPose
 from planner.domain import RelativeTrajectory
-from planner.algorithms import world_pose_delta_in_reference_frame
-
-from .render import load, load_fragment, render
-
-# In this prompt, "original instruction" means the instruction of the current
-# MissionStage, not the user's complete multi-stage mission. "Previous
-# trajectory" means confirmed executed actions within that MissionStage.
-# Pending describes the remaining queue at the frozen observation, not live
-# progress while the model request is in flight.
-BASE_TRAJECTORY_SYSTEM_PROMPT = load("base_system")
+from planner.domain import WorldPose
 
 
-# Trajectory prompt for the drone, ported verbatim from the reference UAV
-# Planner (/roxy/zhusai/Planner). The rover keeps the ground-vehicle prompt
-# above; the two differ only in motion semantics, not in the output protocol.
-AERIAL_BASE_TRAJECTORY_SYSTEM_PROMPT = load("aerial_base_system")
+BASE_TRAJECTORY_SYSTEM_PROMPT = render_prompt("trajectory_ground")
+
+# The drone arm keeps the reference UAV wording, so vertical motion stays
+# available; every ground-vehicle caller keeps the carla-vln wording.
+AERIAL_BASE_TRAJECTORY_SYSTEM_PROMPT = render_prompt("trajectory_aerial")
 
 
 def base_system_prompt(*, aerial: bool = False) -> str:
-    """Return the UAV or ground-vehicle baseline system prompt.
-
-    The drone arm uses the reference Planner's UAV wording so vertical motion
-    stays available; every ground-vehicle caller keeps the carla-vln wording.
-    """
+    """Return the UAV or ground-vehicle baseline system prompt."""
     if aerial:
         return AERIAL_BASE_TRAJECTORY_SYSTEM_PROMPT
     return BASE_TRAJECTORY_SYSTEM_PROMPT
@@ -48,79 +48,18 @@ def build_base_user_prompt(
     pending_trajectory: RelativeTrajectory | None = None,
 ) -> str:
     """Build the baseline dynamic user prompt shared by trajectory tasks."""
-    if max_points != 5:
-        raise ValueError("trajectory prompt requires exactly 5 new points")
-    if pending_trajectory is not None and not isinstance(pending_trajectory, RelativeTrajectory):
-        raise TypeError("pending_trajectory must be a RelativeTrajectory or None")
-    pending = [] if pending_trajectory is None else [
-        [point.dx, point.dy, point.dz, point.dyaw_deg] for point in pending_trajectory.points
-    ]
-    if len(pending) > 5:
-        raise ValueError("pending queue must contain 0 to 5 points")
-    start_pose = initial_pose or observation.pose
-    measured = world_pose_delta_in_reference_frame(start_pose, observation.pose)
-    camera = {
-        "camera_id": observation.camera_id,
-        "horizontal_fov_deg": round(observation.intrinsics.horizontal_fov_deg, 3),
-        "camera_position_world": [round(value, 4) for value in observation.camera_position_world],
-        "rotation_camera_to_world": [
-            [round(value, 6) for value in row]
-            for row in observation.rotation_camera_to_world
-        ],
-    }
-    state = "initial" if round_index == 1 else "continuing"
-    if current_guidance and current_guidance.strip():
-        guidance = current_guidance.strip()
-    else:
-        guidance = load_fragment("guidance_not_supplied")
-    if current_guidance and guidance_start is not None:
-        guidance += "\n" + render(
-            load_fragment("guidance_reference"),
-            vehicle="vehicle",
-            pose_json=json.dumps(
-                [guidance_start.x, guidance_start.y, guidance_start.z, guidance_start.yaw_deg],
-                separators=(",", ":")),
-        )
-    if previous_trajectory is None:
-        history = load_fragment(
-            "history_initial" if round_index == 1 else "history_unknown")
-    else:
-        history = render(
-            load_fragment("history_recent"),
-            points_json=json.dumps(
-                [[point.dx, point.dy, point.dz, point.dyaw_deg]
-                 for point in previous_trajectory.points],
-                separators=(",", ":"),
-            ),
-        )
-    if previous_trajectory is not None and previous_trajectory_start is not None:
-        history += "\n" + render(
-            load_fragment("history_start_pose"),
-            pose_json=json.dumps(
-                [previous_trajectory_start.x, previous_trajectory_start.y,
-                 previous_trajectory_start.z, previous_trajectory_start.yaw_deg],
-                separators=(",", ":")),
-        )
-    pose = observation.pose
-    return render(
-        load_fragment("base_user_prompt"),
-        depth_protocol=depth_display_description(
-            observation.depth_mapping, observation.depth_min_m, observation.depth_max_m),
-        instruction=instruction.strip(),
-        guidance=guidance,
+    return _user_prompt(
+        instruction,
+        observation,
+        max_points,
+        aerial=False,
+        current_guidance=current_guidance,
+        guidance_start=guidance_start,
         round_index=round_index,
-        state=state,
-        history=history,
-        measured_dx=f"{measured.dx:.3f}",
-        measured_dy=f"{measured.dy:.3f}",
-        measured_dz=f"{measured.dz:.3f}",
-        measured_dyaw=f"{measured.dyaw_deg:.3f}",
-        pose_x=f"{pose.x:.3f}",
-        pose_y=f"{pose.y:.3f}",
-        pose_z=f"{pose.z:.3f}",
-        pose_yaw=f"{pose.yaw_deg:.3f}",
-        camera_json=json.dumps(camera, separators=(",", ":")),
-        pending_json=json.dumps(pending, separators=(",", ":")),
+        initial_pose=initial_pose,
+        previous_trajectory=previous_trajectory,
+        previous_trajectory_start=previous_trajectory_start,
+        pending_trajectory=pending_trajectory,
     )
 
 
@@ -137,85 +76,57 @@ def build_aerial_base_user_prompt(
     previous_trajectory_start: WorldPose | None = None,
     pending_trajectory: RelativeTrajectory | None = None,
 ) -> str:
-    """Build the UAV dynamic user prompt, ported verbatim from the reference Planner.
+    """Build the UAV dynamic user prompt, in the reference Planner's wording."""
+    return _user_prompt(
+        instruction,
+        observation,
+        max_points,
+        aerial=True,
+        current_guidance=current_guidance,
+        guidance_start=guidance_start,
+        round_index=round_index,
+        initial_pose=initial_pose,
+        previous_trajectory=previous_trajectory,
+        previous_trajectory_start=previous_trajectory_start,
+        pending_trajectory=pending_trajectory,
+    )
 
-    The reference stores the robot pose as ``observation.vehicle_pose``; this
-    project stores the same data as ``observation.pose``. Everything else is
-    the reference wording, so the drone arm matches /roxy/zhusai/Planner.
-    """
+
+def _user_prompt(
+    instruction: str,
+    observation: Observation,
+    max_points: int,
+    *,
+    aerial: bool,
+    current_guidance: str | None,
+    guidance_start: WorldPose | None,
+    round_index: int,
+    initial_pose: WorldPose | None,
+    previous_trajectory: RelativeTrajectory | None,
+    previous_trajectory_start: WorldPose | None,
+    pending_trajectory: RelativeTrajectory | None,
+) -> str:
+    """Validate one planning round, then render ``trajectory_refine``."""
     if max_points != 5:
         raise ValueError("trajectory prompt requires exactly 5 new points")
     if pending_trajectory is not None and not isinstance(pending_trajectory, RelativeTrajectory):
         raise TypeError("pending_trajectory must be a RelativeTrajectory or None")
-    pending = [] if pending_trajectory is None else [
-        [point.dx, point.dy, point.dz, point.dyaw_deg] for point in pending_trajectory.points
-    ]
-    if len(pending) > 5:
+    if pending_trajectory is not None and len(pending_trajectory.points) > 5:
         raise ValueError("pending queue must contain 0 to 5 points")
-    start_pose = initial_pose or observation.pose
-    measured = world_pose_delta_in_reference_frame(start_pose, observation.pose)
-    camera = {
-        "camera_id": observation.camera_id,
-        "horizontal_fov_deg": round(observation.intrinsics.horizontal_fov_deg, 3),
-        "camera_position_world": [round(value, 4) for value in observation.camera_position_world],
-        "rotation_camera_to_world": [
-            [round(value, 6) for value in row]
-            for row in observation.rotation_camera_to_world
-        ],
-    }
-    state = "initial" if round_index == 1 else "continuing"
-    if current_guidance and current_guidance.strip():
-        guidance = current_guidance.strip()
-    else:
-        guidance = load_fragment("guidance_not_supplied")
-    if current_guidance and guidance_start is not None:
-        guidance += "\n" + render(
-            load_fragment("guidance_reference"),
-            vehicle="UAV",
-            pose_json=json.dumps(
-                [guidance_start.x, guidance_start.y, guidance_start.z, guidance_start.yaw_deg],
-                separators=(",", ":")),
-        )
-    if previous_trajectory is None:
-        history = load_fragment(
-            "history_initial" if round_index == 1 else "history_unknown")
-    else:
-        history = render(
-            load_fragment("history_recent"),
-            points_json=json.dumps(
-                [[point.dx, point.dy, point.dz, point.dyaw_deg]
-                 for point in previous_trajectory.points],
-                separators=(",", ":"),
-            ),
-        )
-    if previous_trajectory is not None and previous_trajectory_start is not None:
-        history += "\n" + render(
-            load_fragment("history_start_pose"),
-            pose_json=json.dumps(
-                [previous_trajectory_start.x, previous_trajectory_start.y,
-                 previous_trajectory_start.z, previous_trajectory_start.yaw_deg],
-                separators=(",", ":")),
-        )
-    pose = observation.pose
-    return render(
-        load_fragment("aerial_base_user_prompt"),
-        depth_protocol=depth_display_description(
-            observation.depth_mapping, observation.depth_min_m, observation.depth_max_m),
-        instruction=instruction.strip(),
-        guidance=guidance,
-        round_index=round_index,
-        state=state,
-        history=history,
-        measured_dx=f"{measured.dx:.3f}",
-        measured_dy=f"{measured.dy:.3f}",
-        measured_dz=f"{measured.dz:.3f}",
-        measured_dyaw=f"{measured.dyaw_deg:.3f}",
-        pose_x=f"{pose.x:.3f}",
-        pose_y=f"{pose.y:.3f}",
-        pose_z=f"{pose.z:.3f}",
-        pose_yaw=f"{pose.yaw_deg:.3f}",
-        camera_json=json.dumps(camera, separators=(",", ":")),
-        pending_json=json.dumps(pending, separators=(",", ":")),
+    return render_prompt(
+        "trajectory_refine",
+        **trajectory_refine_values(
+            instruction,
+            observation,
+            aerial=aerial,
+            current_guidance=current_guidance,
+            guidance_start=guidance_start,
+            round_index=round_index,
+            initial_pose=initial_pose,
+            previous_trajectory=previous_trajectory,
+            previous_trajectory_start=previous_trajectory_start,
+            pending_trajectory=pending_trajectory,
+        ),
     )
 
 
