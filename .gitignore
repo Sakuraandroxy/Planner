@@ -10,6 +10,9 @@ __pycache__/
 output/
 *.log
 
+# 评测仪表盘「保存评测结果」写入的记录（用户数据，不入库）。
+eval/saved/
+
 # Simulator binaries, maps, scene packages and their bundled configs.
 # This directory is multi-GB; download it separately, never commit it.
 sim/

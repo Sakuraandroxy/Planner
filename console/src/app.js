@@ -272,6 +272,33 @@ async function returnHome() {
   }
 }
 
+async function saveEvalResult() {
+  if ($("eval-save").disabled || submitPending) return;
+  setFeedback("正在保存评测结果…");
+  try {
+    const body = await request("/api/eval/save", { method: "POST" });
+    const names = (body.saved || []).map((item) => item.name).join("、");
+    setFeedback(
+      `已保存 ${body.count || 0} 条评测记录：${names || "—"}（点「评测」查看）`,
+      "ok"
+    );
+  } catch (error) {
+    setFeedback("保存评测结果失败：" + error.message, "error");
+  }
+}
+
+// 只有「最近一次任务已结束且含带目标子任务」时，「保存评测结果」才可点。
+async function pollEvalPending() {
+  const button = $("eval-save");
+  if (!button) return;
+  try {
+    const body = await request("/api/eval/pending");
+    button.disabled = !(body && body.savable);
+  } catch (error) {
+    button.disabled = true;
+  }
+}
+
 // 预设指令读 console/presets.json：一个字符串数组，一条一行。后端把 console/ 目录
 // 当静态文件伺服，加指令只改这个文件再刷新页面。
 let presetCommands = [];
@@ -325,6 +352,31 @@ function init() {
   // address bar.
   $("world-model").href =
     `${location.protocol}//${location.hostname}:${WORLD_MODEL_PORT}/`;
+  $("eval-dash").href =
+    `${location.protocol}//${location.hostname}:${EVAL_PORT}/`;
+  // 点「评测」→ 先让规划器后端把评测仪表盘拉起来（没跑的话），再打开它。
+  $("eval-dash").addEventListener("click", (event) => {
+    event.preventDefault();
+    const url = $("eval-dash").href;
+    // 同步开窗，避免 await 之后被浏览器当成非用户手势而拦截弹窗。
+    const win = window.open("", "_blank");
+    if (win) {
+      win.document.write(
+        "<!doctype html><title>评测</title>" +
+          "<p style='font-family:sans-serif;padding:2rem'>正在启动评测服务…</p>"
+      );
+      win.document.close();
+    }
+    request("/api/eval/start", { method: "POST" })
+      .then(() => {
+        if (win) win.location = url;
+        else window.open(url, "_blank", "noopener");
+      })
+      .catch((error) => {
+        if (win) win.close();
+        setFeedback("启动评测服务失败：" + error.message, "error");
+      });
+  });
   $("task-form").addEventListener("submit", submitTask);
   $("stop").addEventListener("click", stopTask);
   $("clear-instruction").addEventListener("click", () => {
@@ -341,6 +393,9 @@ function init() {
     }
   });
   $("home").addEventListener("click", returnHome);
+  $("eval-save").addEventListener("click", saveEvalResult);
+  pollEvalPending();
+  setInterval(pollEvalPending, 1500);
   $("retry-video").addEventListener("click", retryView);
   $("focus-view").addEventListener("click", focusXpra);
   $("xpra-frame").addEventListener("load", () => {

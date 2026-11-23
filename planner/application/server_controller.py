@@ -92,6 +92,11 @@ class ServerController:
         self._active: str | None = None
         self._instruction = ""
         self._last_result: str | None = None
+        #: Per-stage summary of the last finished task (from its FINISHED payload),
+        #: or None. The console's eval save button reads this to snapshot each
+        #: goal-bearing subtask into the eval subsystem.
+        self._last_task_summary: dict | None = None
+        self._last_task_summary_vehicle: str = ""
         self._next_start = 0.0
         self._started_at = 0.0
         # Task-level vehicle routing: every submission names one accepted id.
@@ -177,6 +182,17 @@ class ServerController:
     @property
     def vehicle_models(self) -> VehicleModelCatalog | None:
         return self._model_catalog
+
+    @property
+    def last_task_summary(self) -> dict | None:
+        """Per-stage summary of the last finished task, or None."""
+        with self._lock:
+            return self._last_task_summary
+
+    @property
+    def last_task_vehicle(self) -> str:
+        with self._lock:
+            return self._last_task_summary_vehicle
 
     @property
     def profile(self) -> str:
@@ -283,6 +299,9 @@ class ServerController:
             )
             self._active = task.task_id
             self._instruction = task.instruction
+            # A new task invalidates the previous saveable snapshot.
+            self._last_task_summary = None
+            self._last_task_summary_vehicle = ""
             self._vehicle = requested
             self._state = ServerState.RUNNING
             self._commands.put(("task", self._generation, task))
@@ -949,6 +968,11 @@ class ServerController:
                     self._last_result = event.message or (
                         "reached" if event.success else "failed"
                     )
+                    if isinstance(event.payload, dict):
+                        self._last_task_summary = event.payload
+                        self._last_task_summary_vehicle = self._vehicle
+                    else:
+                        self._last_task_summary = None
                     self._state = ServerState.IDLE
                     self._instruction = ""
                     if self._view_mode != self._applied_view:

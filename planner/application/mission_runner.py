@@ -44,5 +44,5 @@ class MissionRunner:
                 )
             results.append(result)
             if not result.success:
-                return MissionResult(False, tuple(results), error=result.error)
-        return MissionResult(True, tuple(results))
+                return MissionResult(False, tuple(results), error=result.error, plan=plan)
+        return MissionResult(True, tuple(results), plan=plan)

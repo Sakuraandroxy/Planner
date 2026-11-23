@@ -65,3 +65,7 @@ class MissionResult:
     success: bool
     stages: tuple[StageResult[object], ...]
     error: str | None = None
+    #: The plan that produced these stages (kept as ``object`` so this module
+    #: stays free of mission.py's imports). The console reads it to snapshot a
+    #: finished task into the eval subsystem, subtask by subtask.
+    plan: object | None = None

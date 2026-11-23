@@ -1,0 +1,465 @@
+"""Phase 2 在线仪表盘：纯标准库 http.server，轮询磁盘上的 run 目录。
+
+与评测进程解耦：评测把 progress.json / metrics.json / per-episode log 写到 run 目录，
+本服务只读这些文件并渲染网页。端口默认 8010。
+
+端点：
+  GET /                         单页前端
+  GET /static/<file>            前端静态资源
+  GET /api/runs                 所有 run 及状态
+  GET /api/state?run=NAME       当前 run 的进度/指标/episode 列表
+  GET /api/traj?run=&id=        某 episode 的预测轨迹 + 目标 + 成功半径
+  GET /api/frame?run=&id=&cam=  某 episode 最新 front/down 缩略图 (png)
+"""
+from __future__ import annotations
+
+import glob
+import json
+import math
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
+
+from .dataset import load_episodes
+
+_WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
+# run.py 所在目录（evalcore 的上一级），spawn 评测子进程时作 cwd。
+_EVAL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 规划器「保存评测结果」写的记录目录（与 run 结果分开）。
+_SAVED_DIR = os.environ.get("AVLN_EVAL_SAVED", "/data/sakura/AVLN/Planner/eval/saved")
+_CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "application/javascript",
+                  ".css": "text/css", ".png": "image/png", ".json": "application/json"}
+
+# --- 发跑评测：一次只允许一个子进程 ------------------------------------------
+# 与只读看板分离：这些状态属于"当前发起的评测"，看板数据仍来自磁盘 run 目录。
+_ACTIVE_LOCK = threading.Lock()
+_ACTIVE = {"proc": None, "scene": None, "uuids": None, "mode": None, "log": None}
+_EPISODE_CACHE: list | None = None
+_EPISODE_LOCK = threading.Lock()
+
+
+def _all_episodes(cfg):
+    """读取全部 episode 并按场景分组缓存（dataset 图不大，读一次即可）。"""
+    global _EPISODE_CACHE
+    with _EPISODE_LOCK:
+        if _EPISODE_CACHE is None:
+            try:
+                _EPISODE_CACHE = load_episodes(cfg)
+            except Exception:
+                _EPISODE_CACHE = []
+        return _EPISODE_CACHE
+
+
+def _public_episode(ep) -> dict:
+    return {
+        "uuid": ep.uuid,
+        "scene": ep.scene,
+        "instruction": ep.instruction,
+        "object_position": ep.object_position,
+    }
+
+
+def _dataset_summary(cfg) -> dict:
+    episodes = _all_episodes(cfg)
+    counts: dict[str, int] = {}
+    for ep in episodes:
+        counts[ep.scene] = counts.get(ep.scene, 0) + 1
+    return {
+        "split": cfg.split,
+        "scenes": [
+            {"id": scene, "num_episodes": n}
+            for scene, n in sorted(counts.items())
+        ],
+        "total": len(episodes),
+    }
+
+
+def _scene_episodes(cfg, scene: str) -> list[dict]:
+    return [_public_episode(ep) for ep in _all_episodes(cfg) if ep.scene == scene]
+
+
+def _run_status() -> dict:
+    with _ACTIVE_LOCK:
+        proc = _ACTIVE["proc"]
+        active = proc is not None and proc.poll() is None
+        return {
+            "active": active,
+            "scene": _ACTIVE["scene"],
+            "uuids": _ACTIVE["uuids"],
+            "mode": _ACTIVE["mode"],
+            "returncode": None if proc is None else proc.poll(),
+            "log": _ACTIVE["log"],
+        }
+
+
+def _start_run(cfg, scene: str, uuids: list[str], mode: str) -> dict:
+    """在 eval 目录起 `run.py batch` 跑一个场景（或其中若干 episode）。"""
+    if not scene:
+        raise ValueError("必须指定 scene")
+    if mode not in ("real", "sanity"):
+        mode = "real"
+    with _ACTIVE_LOCK:
+        proc = _ACTIVE["proc"]
+        if proc is not None and proc.poll() is None:
+            raise RuntimeError(f"已有评测在跑（scene={_ACTIVE['scene']}），先等它结束或停止")
+        argv = [sys.executable, "-u", "run.py", "batch", "--scenes", scene,
+                "--planner-mode", mode]
+        if uuids:
+            argv += ["--uuids", ",".join(uuids)]
+        log_path = os.path.join(_EVAL_DIR, "served_run_last.log")
+        log = open(log_path, "ab")
+        proc = subprocess.Popen(
+            argv, cwd=_EVAL_DIR, stdout=log, stderr=subprocess.STDOUT,
+            env=os.environ.copy(), start_new_session=True,
+        )
+        _ACTIVE.update(proc=proc, scene=scene, uuids=uuids, mode=mode, log=log_path)
+        return {"started": True, "pid": proc.pid, "scene": scene,
+                "uuids": uuids, "mode": mode, "log": log_path}
+
+
+def _stop_run() -> dict:
+    with _ACTIVE_LOCK:
+        proc = _ACTIVE["proc"]
+        if proc is None or proc.poll() is not None:
+            return {"stopped": False, "reason": "没有正在跑的评测"}
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        except Exception:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+        return {"stopped": True}
+
+
+
+def _safe_run(cfg, run_name: str | None) -> str | None:
+    """返回 output_dir 下一个合法 run 目录绝对路径；非法/不存在则 None。"""
+    if not run_name:
+        runs = _list_runs(cfg)
+        return runs[0]["path"] if runs else None
+    candidate = os.path.join(cfg.output_dir, run_name)
+    real = os.path.realpath(candidate)
+    if not real.startswith(os.path.realpath(cfg.output_dir) + os.sep):
+        return None
+    return real if os.path.isdir(real) else None
+
+
+def _list_saved() -> list[dict]:
+    """已保存评测记录（规划器「保存评测结果」写入 eval/saved/）。"""
+    out = []
+    if not os.path.isdir(_SAVED_DIR):
+        return out
+    for path in glob.glob(os.path.join(_SAVED_DIR, "*", "record.json")):
+        record = _read_json(path, {}) or {}
+        out.append({
+            "dir": os.path.basename(os.path.dirname(path)),
+            "name": record.get("name") or os.path.basename(os.path.dirname(path)),
+            "sr": record.get("sr"),
+            "success": record.get("success"),
+            "final_distance_m": record.get("final_distance_m"),
+            "created": record.get("created"),
+            "kind": record.get("kind"),
+            "map": record.get("map"),
+        })
+    out.sort(key=lambda r: (r.get("created") or "", r.get("dir") or ""), reverse=True)
+    return out
+
+
+def _saved_record(name: str):
+    base = os.path.realpath(_SAVED_DIR)
+    real = os.path.realpath(os.path.join(_SAVED_DIR, name or ""))
+    if not real.startswith(base + os.sep):
+        return None
+    return _read_json(os.path.join(real, "record.json"), None)
+
+
+def _delete_saved(name: str) -> bool:
+    """删除一条已保存评测记录（_SAVED_DIR 下的子目录），带穿越防护。"""
+    name = (name or "").strip()
+    if not name:
+        return False
+    base = os.path.realpath(_SAVED_DIR)
+    real = os.path.realpath(os.path.join(_SAVED_DIR, name))
+    if real == base or not real.startswith(base + os.sep):
+        return False
+    if not os.path.isdir(real):
+        return False
+    shutil.rmtree(real, ignore_errors=True)
+    return not os.path.exists(real)
+
+
+def _delete_run(cfg, run_name: str) -> bool:
+    """删除一个 run 输出目录（output_dir/run_*），带穿越防护且不删正在跑的 run。"""
+    run_name = (run_name or "").strip()
+    if not run_name:
+        return False
+    run_path = _safe_run(cfg, run_name)  # 已校验在 output_dir 下且存在
+    if not run_path:
+        return False
+    prog = _read_json(os.path.join(run_path, "progress.json"), {}) or {}
+    if prog.get("state") == "running":
+        raise RuntimeError("该 run 正在评测中，不能删除")
+    shutil.rmtree(run_path, ignore_errors=True)
+    return not os.path.exists(run_path)
+
+
+def _read_json(path, default=None):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return default
+
+
+def _list_runs(cfg) -> list[dict]:
+    runs = []
+    for d in glob.glob(os.path.join(cfg.output_dir, "run_*")):
+        if not os.path.isdir(d):
+            continue
+        prog = _read_json(os.path.join(d, "progress.json"), {}) or {}
+        runs.append({
+            "name": os.path.basename(d),
+            "path": d,
+            "mtime": os.path.getmtime(d),
+            "state": prog.get("state", "unknown"),
+            "done": prog.get("done"), "total": prog.get("total"),
+        })
+    runs.sort(key=lambda r: r["mtime"], reverse=True)
+    return runs
+
+
+def _episode_dirs(run_path: str) -> dict:
+    """uuid -> 实际目录（含 success_ 前缀）。"""
+    m = {}
+    for d in glob.glob(os.path.join(run_path, "*")):
+        if not os.path.isdir(d):
+            continue
+        name = os.path.basename(d)
+        uuid = name[len("success_"):] if name.startswith("success_") else name
+        m[uuid] = d
+    return m
+
+
+def _recompute_metrics(eps: list[dict]) -> dict:
+    """删了 episode 后按剩余集重算汇总：SR/NE 可重算，OSR/SPL 缺数据置 None(—)。"""
+    n = len(eps)
+    ok = sum(1 for e in eps if e.get("success"))
+    sr = round(100.0 * ok / n, 2) if n else 0.0
+    nes = [
+        e.get("final_ne") for e in eps
+        if isinstance(e.get("final_ne"), (int, float)) and not math.isnan(e["final_ne"])
+    ]
+    ne = round(sum(nes) / len(nes), 2) if nes else None
+    return {"sr": sr, "osr": None, "ne_mean": ne, "spl": None, "num": n}
+
+
+def _delete_episode(cfg, run_name: str, uuid: str) -> bool:
+    """删除某个 run 下单个 episode 的结果目录，并把它从 metrics.json 剔除、重算汇总。"""
+    run_name = (run_name or "").strip()
+    uuid = (uuid or "").strip()
+    if not run_name or not uuid:
+        return False
+    run_path = _safe_run(cfg, run_name)
+    if not run_path:
+        return False
+    prog = _read_json(os.path.join(run_path, "progress.json"), {}) or {}
+    if prog.get("state") == "running":
+        raise RuntimeError("该 run 正在评测中，不能删除")
+    d = _episode_dirs(run_path).get(uuid)
+    if not d:
+        return False
+    shutil.rmtree(d, ignore_errors=True)
+    mpath = os.path.join(run_path, "metrics.json")
+    data = _read_json(mpath, None)
+    if isinstance(data, dict) and isinstance(data.get("episodes"), list):
+        eps = [e for e in data["episodes"] if e.get("uuid") != uuid]
+        data["episodes"] = eps
+        data["metrics"] = _recompute_metrics(eps)
+        try:
+            with open(mpath, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except OSError:
+            pass
+    return not os.path.exists(d)
+
+
+def _state(cfg, run_path):
+    prog = _read_json(os.path.join(run_path, "progress.json"), {}) or {}
+    metrics = _read_json(os.path.join(run_path, "metrics.json"), {}) or {}
+    eps = metrics.get("episodes")
+    if eps is None:
+        eps = []
+        for uuid, d in _episode_dirs(run_path).items():
+            r = _read_json(os.path.join(d, "result.json"), {}) or {}
+            eps.append({"uuid": uuid, "scene": r.get("scene"), "success": r.get("success"),
+                        "collided": r.get("collided"), "final_ne": r.get("final_ne"),
+                        "steps": r.get("steps")})
+    return {"run": os.path.basename(run_path), "progress": prog,
+            "metrics": metrics.get("metrics"), "episodes": eps}
+
+
+def _traj(run_path, uuid):
+    dirs = _episode_dirs(run_path)
+    d = dirs.get(uuid)
+    if not d:
+        return {"error": "episode not found"}
+    logs = sorted(glob.glob(os.path.join(d, "log", "*.json")))
+    positions = []
+    for fn in logs:
+        try:
+            with open(fn, "r", encoding="utf-8") as f:
+                positions.append(json.load(f)["sensors"]["state"]["position"])
+        except Exception:
+            pass
+    result = _read_json(os.path.join(d, "result.json"), {}) or {}
+    metrics = _read_json(os.path.join(run_path, "metrics.json"), {}) or {}
+    radius = (metrics.get("dataset") or {}).get("success_radius_m", 10.0)
+    return {"uuid": uuid, "positions": positions,
+            "target": result.get("target_position"),
+            "start": positions[0] if positions else None,
+            "radius": radius}
+
+
+class _Handler(BaseHTTPRequestHandler):
+    cfg = None  # 由 make_server 注入
+
+    def log_message(self, *a):  # 静默
+        pass
+
+    def _send(self, code, body, ctype="application/json"):
+        if isinstance(body, (dict, list)):
+            body = json.dumps(body, ensure_ascii=False).encode("utf-8")
+        elif isinstance(body, str):
+            body = body.encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        # 看板/前端改完刷新即生效：禁止任何缓存（含浏览器启发式缓存）。
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _file(self, path):
+        if not os.path.isfile(path):
+            self._send(404, {"error": "not found"})
+            return
+        ext = os.path.splitext(path)[1]
+        with open(path, "rb") as f:
+            data = f.read()
+        self._send(200, data, _CONTENT_TYPES.get(ext, "application/octet-stream"))
+
+    def do_GET(self):
+        u = urlparse(self.path)
+        q = parse_qs(u.query)
+        cfg = self.cfg
+        if u.path in ("/", "/index.html"):
+            self._file(os.path.join(_WEB_DIR, "index.html"))
+        elif u.path.startswith("/static/"):
+            name = os.path.basename(u.path)
+            self._file(os.path.join(_WEB_DIR, name))
+        elif u.path == "/api/runs":
+            runs = _list_runs(cfg)
+            for r in runs:
+                r.pop("path", None)
+            self._send(200, {"runs": runs})
+        elif u.path == "/api/state":
+            run_path = _safe_run(cfg, (q.get("run") or [None])[0])
+            if not run_path:
+                self._send(404, {"error": "run not found"}); return
+            self._send(200, _state(cfg, run_path))
+        elif u.path == "/api/traj":
+            run_path = _safe_run(cfg, (q.get("run") or [None])[0])
+            uuid = (q.get("id") or [""])[0]
+            if not run_path:
+                self._send(404, {"error": "run not found"}); return
+            self._send(200, _traj(run_path, uuid))
+        elif u.path == "/api/frame":
+            run_path = _safe_run(cfg, (q.get("run") or [None])[0])
+            uuid = (q.get("id") or [""])[0]
+            cam = (q.get("cam") or ["front"])[0]
+            d = _episode_dirs(run_path).get(uuid) if run_path else None
+            fname = "frame_front.png" if cam == "front" else "frame_down.png"
+            if not d:
+                self._send(404, {"error": "episode not found"}); return
+            self._file(os.path.join(d, fname))
+        elif u.path == "/api/dataset":
+            self._send(200, _dataset_summary(cfg))
+        elif u.path == "/api/episodes":
+            scene = (q.get("scene") or [""])[0]
+            self._send(200, {"scene": scene, "episodes": _scene_episodes(cfg, scene)})
+        elif u.path == "/api/runstatus":
+            self._send(200, _run_status())
+        elif u.path == "/api/saved":
+            self._send(200, {"records": _list_saved()})
+        elif u.path == "/api/saved/traj":
+            rec = _saved_record((q.get("dir") or [""])[0])
+            if rec is None:
+                self._send(404, {"error": "record not found"})
+            else:
+                self._send(200, rec)
+        else:
+            self._send(404, {"error": "not found"})
+
+    def do_POST(self):
+        u = urlparse(self.path)
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        raw = self.rfile.read(length) if length else b"{}"
+        try:
+            body = json.loads(raw or b"{}")
+        except ValueError:
+            body = {}
+        if u.path == "/api/start":
+            scene = str(body.get("scene") or "").strip()
+            uuids = body.get("uuids") or []
+            if isinstance(uuids, str):
+                uuids = [x.strip() for x in uuids.split(",") if x.strip()]
+            uuids = [str(x).strip() for x in uuids if str(x).strip()]
+            mode = str(body.get("mode") or "real")
+            try:
+                self._send(200, _start_run(self.cfg, scene, uuids, mode))
+            except RuntimeError as exc:
+                self._send(409, {"error": str(exc)})
+            except Exception as exc:
+                self._send(500, {"error": str(exc)})
+        elif u.path == "/api/stop":
+            self._send(200, _stop_run())
+        elif u.path == "/api/saved/delete":
+            ok = _delete_saved(str(body.get("dir") or ""))
+            self._send(200 if ok else 404, {"deleted": ok})
+        elif u.path == "/api/runs/delete":
+            try:
+                ok = _delete_run(self.cfg, str(body.get("run") or ""))
+            except RuntimeError as exc:
+                self._send(409, {"error": str(exc)})
+            else:
+                self._send(200 if ok else 404, {"deleted": ok})
+        elif u.path == "/api/episode/delete":
+            try:
+                ok = _delete_episode(
+                    self.cfg, str(body.get("run") or ""), str(body.get("id") or "")
+                )
+            except RuntimeError as exc:
+                self._send(409, {"error": str(exc)})
+            else:
+                self._send(200 if ok else 404, {"deleted": ok})
+        else:
+            self._send(404, {"error": "not found"})
+
+
+def serve(cfg, host="127.0.0.1", port=None):
+    port = port or cfg.dashboard_port
+    _Handler.cfg = cfg
+    httpd = ThreadingHTTPServer((host, port), _Handler)
+    print(f"[dashboard] http://{host}:{port}  (output_dir={cfg.output_dir})")
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        httpd.server_close()

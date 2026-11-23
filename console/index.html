@@ -16,6 +16,8 @@
     <div class="topbar-actions">
       <a class="ghost" id="world-model" href="#"
         title="前往 世界模型Studio">世界模型</a>
+      <a class="ghost" id="eval-dash" href="#" target="_blank"
+        rel="noopener noreferrer" title="在新标签打开 UAV-VLN 评测仪表盘">评测</a>
       <div class="state-chip" id="state-chip" data-state="unknown">
         <span class="dot"></span><span id="state-text">状态未确认</span>
       </div>
@@ -131,6 +133,7 @@
                 <button type="button" id="world-apply" class="primary" disabled>应用世界设置</button>
                 <button type="button" id="world-stop" class="danger" disabled>停止世界</button>
                 <button type="button" id="world-reload" class="ghost" disabled>刷新选项</button>
+                <button type="button" id="eval-save" class="ghost" disabled title="把最近一次带目标的子任务存进评测">保存评测结果</button>
               </div>
             </div>
             <p class="feedback" id="world-feedback" role="status"></p>

@@ -25,10 +25,23 @@ class TrajectoryHub:
         self._clock = clock
         self._lock = threading.Lock()
         self._snapshot = TrajectorySnapshot()
+        #: Accumulated vehicle poses for the current task, tagged with the stage
+        #: that produced them. The live snapshot above is only the *remaining*
+        #: path; this list is the condensed flight history the console's eval
+        #: save button reads. Reset when a new task is submitted.
+        self._history: list[dict] = []
 
     def read(self) -> TrajectorySnapshot:
         with self._lock:
             return self._snapshot
+
+    def reset_history(self) -> None:
+        with self._lock:
+            self._history = []
+
+    def history(self) -> list[dict]:
+        with self._lock:
+            return [dict(point) for point in self._history]
 
     def publish(self, snapshot: TrajectorySnapshot) -> TrajectorySnapshot:
         with self._lock:
@@ -36,6 +49,16 @@ class TrajectoryHub:
                 snapshot, revision=self._snapshot.revision + 1
             )
             self._snapshot = published
+            vehicle = published.vehicle
+            if vehicle is not None:
+                self._history.append({
+                    "stage_id": published.stage_id,
+                    "x": vehicle.x, "y": vehicle.y, "z": vehicle.z,
+                })
+                # A single task cannot legitimately fly hundreds of thousands of
+                # samples; cap so a runaway publisher cannot grow memory forever.
+                if len(self._history) > 50000:
+                    del self._history[: len(self._history) - 50000]
             return published
 
     def adopt(self, snapshot: TrajectorySnapshot) -> TrajectorySnapshot:

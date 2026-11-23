@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>UAV-VLN 评测仪表盘</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>UAV-VLN 在线评测</h1>
+  <div class="run-sel">
+    <label>Run</label>
+    <select id="runSelect"></select>
+    <span id="stateBadge" class="badge">—</span>
+    <button id="runDelete" class="run-del" title="删除当前 run 的全部评测数据">删除</button>
+  </div>
+</header>
+
+<section class="metrics" id="metrics">
+  <div class="metric"><span class="k">SR</span><span class="v" id="m-sr">—</span></div>
+  <div class="metric"><span class="k">OSR</span><span class="v" id="m-osr">—</span></div>
+  <div class="metric"><span class="k">NE</span><span class="v" id="m-ne">—</span></div>
+  <div class="metric"><span class="k">SPL</span><span class="v" id="m-spl">—</span></div>
+  <div class="metric"><span class="k">进度</span><span class="v" id="m-prog">—</span></div>
+</section>
+
+<main>
+  <section class="side">
+    <div class="block block-launch">
+      <div class="block-head">
+        <select id="sceneSelect" title="选择场景"></select>
+        <select id="modeSelect" title="规划器模式">
+          <option value="real">真规划器(real)</option>
+          <option value="sanity">sanity(冒烟)</option>
+        </select>
+        <button id="batchBtn">批量测试本场景</button>
+      </div>
+      <div class="runstate" id="runState">—</div>
+      <div class="ep-list" id="epList"></div>
+    </div>
+    <div class="block block-result">
+      <div class="block-head">
+        <button class="res-tab active" data-tab="runs">历史结果</button>
+        <button class="res-tab" data-tab="saved">已保存评测</button>
+        <span class="hint">点卡片看轨迹</span>
+      </div>
+      <aside class="cards" id="cards"></aside>
+      <aside class="cards" id="savedList" style="display:none"></aside>
+    </div>
+  </section>
+  <section class="viewer">
+    <div class="viewer-head">
+      <h2 id="epTitle">选择左侧某个 episode</h2>
+      <div class="cam-tabs">
+        <button data-cam="front" class="active">前视</button>
+        <button data-cam="down">下视</button>
+      </div>
+    </div>
+    <div class="panes">
+      <canvas id="traj3d" width="640" height="440"></canvas>
+      <div class="imgs">
+        <img id="camFront" class="thumb hidden" alt=""/>
+        <img id="camDown" class="thumb hidden" alt=""/>
+        <div class="cam-empty" id="camEmpty" hidden></div>
+        <div class="stats" id="epStats"></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
