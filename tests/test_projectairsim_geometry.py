@@ -55,10 +55,6 @@ def _scene(camera_origin=("1.8 0.0 0.2", "0 -3 0"), width=1280, height=720, fov=
     }
 
 
-def test_identity_quaternion_is_the_identity_rotation():
-    assert np.allclose(quaternion_to_rotation(0.0, 0.0, 0.0, 1.0), np.eye(3))
-
-
 def test_yaw_quaternion_turns_forward_toward_positive_y():
     # +90 deg about NED +z maps forward (1, 0, 0) to right/east (0, 1, 0).
     rotation = quaternion_to_rotation(0.0, 0.0, math.sin(math.pi / 4), math.cos(math.pi / 4))

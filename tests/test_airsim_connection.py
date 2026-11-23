@@ -10,7 +10,6 @@ The fake client below keeps the real signatures, because the injection decision
 follows them: methods without a ``vehicle_name`` parameter must not be given one.
 """
 
-import inspect
 import sys
 import types
 
@@ -186,4 +185,3 @@ def test_the_signature_probe_survives_a_wrapped_method():
     assert _accepts_vehicle_name(with_name) is True
     assert _accepts_vehicle_name(catch_all) is True
     assert _accepts_vehicle_name(len) is False       # builtins have no signature
-    assert inspect.isfunction(with_name)

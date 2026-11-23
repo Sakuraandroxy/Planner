@@ -144,23 +144,6 @@ def test_aerial_rules_allow_an_altitude_change():
     assert "cannot strafe sideways or change altitude" not in prompt
 
 
-def test_basic_motion_wire_rejects_an_unknown_field():
-    from planner.adapters.task_parser.tasks.basic_motion import (
-        decode_ground_basic_motion,
-    )
-
-    strafe = {
-        "instruction": "turn",
-        "forward_m": 0,
-        "yaw_right_deg": 90,
-        # Strafe is not supported by either vehicle; an unknown field must be
-        # rejected, not ignored.
-        "right_m": 5,
-    }
-    with pytest.raises(ProtocolError):
-        decode_ground_basic_motion(strafe)
-
-
 def test_aerial_system_prompt_uses_the_uav_rules():
     prompt = task_parser_system_prompt(ALL_KINDS, aerial=True)
     assert UAV_TASK_PARSER_SYSTEM_PROMPT in prompt

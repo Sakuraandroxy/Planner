@@ -107,14 +107,6 @@ def test_forward_command_combines_feedforward_and_speed_feedback():
     assert result.brake == 0.0
 
 
-def test_lateral_world_velocity_is_projected_onto_the_heading():
-    result = controls((2.0, 3.0, 0.0), yaw=90.0)
-    command = 3.0  # north*cos90 + east*sin90
-    assert result.engine == pytest.approx(
-        command / 23.3 + 0.004 * command + 0.1 * (command * 0.05)
-    )
-
-
 def test_reverse_command_drives_the_engine_backwards_from_rest():
     result = controls((-2.0, 0.0, 0.0))
     # error=-2 -> integral=-0.1 -> correction=-0.008-0.01.

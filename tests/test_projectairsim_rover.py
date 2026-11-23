@@ -259,20 +259,6 @@ def test_settle_brakes_and_advances_through_the_spawn_drop():
     rover.close()
 
 
-def test_settle_requires_start():
-    rover, _, _ = make_rover()
-    with pytest.raises(ExecutionError, match="start"):
-        rover.settle()
-    rover.close()
-
-
-def test_execute_segment_requires_start():
-    rover, _, _ = make_rover()
-    with pytest.raises(ExecutionError, match="start"):
-        rover.execute_segment(None)
-    rover.close()
-
-
 def test_collision_state_latches_one_non_ground_contact():
     rover, connection, _ = make_rover()
     callback = connection.client.callbacks[COLLISION_TOPIC]

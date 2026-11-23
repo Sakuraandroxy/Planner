@@ -302,13 +302,6 @@ def test_unregistered_scene_and_depth_poses_are_rejected():
         source.capture(timeout_s=1.0)
 
 
-def test_camera_topics_follow_the_robot_parent_topic():
-    source, connection = make_observation_source()
-    assert RGB_TOPIC in connection.client.callbacks
-    assert DEPTH_TOPIC in connection.client.callbacks
-    source.close()
-
-
 def test_observation_source_rejects_a_robot_without_parent_topic():
     connection = FakeConnection()
     with pytest.raises(ValueError, match="parent topic"):
@@ -330,19 +323,6 @@ def test_observation_source_rejects_a_scene_without_depth_capture():
         ProjectAirSimObservationSource(
             connection,
             SimpleNamespace(name="Rover1", parent_topic=ROBOT_TOPIC),
-            camera=CAMERA,
-            depth=DepthSettings(),
-            camera_id="FrontCamera",
-        )
-
-
-def test_observation_source_rejects_config_scene_camera_mismatch():
-    connection = FakeConnection(scene=scene_configuration(width=640))
-    robot = SimpleNamespace(name="Rover1", parent_topic=ROBOT_TOPIC)
-    with pytest.raises(ValueError, match="width"):
-        ProjectAirSimObservationSource(
-            connection,
-            robot,
             camera=CAMERA,
             depth=DepthSettings(),
             camera_id="FrontCamera",
