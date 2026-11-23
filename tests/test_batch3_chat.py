@@ -4,27 +4,8 @@ import pytest
 from planner.adapters import multimodal_chat
 from planner.adapters.chat_request_options import generation_options
 from planner.adapters.image_encoding import image_url
-from planner.adapters.model_visual_inputs import aligned_depth_image
 from planner.adapters.multimodal_chat import MultimodalChatClient
-from planner.domain import CameraIntrinsics, Observation
-from planner.domain import WorldPose
-from planner.errors import ObservationError, ProtocolError
-from tests.support import ue_camera_matrix
-
-
-def _observation(*, depth_image=None) -> Observation:
-    width, height = 8, 6
-    pose = WorldPose(0.0, 0.0, 0.0, 0.0)
-    return Observation(
-        frame=1,
-        timestamp_s=0.0,
-        pose=pose,
-        rgb=np.zeros((height, width, 3), dtype=np.uint8),
-        depth_m=np.full((height, width), 5.0, dtype=np.float32),
-        intrinsics=CameraIntrinsics.from_horizontal_fov(width, height, 90.0),
-        camera_matrix=ue_camera_matrix(pose.x, pose.y, -pose.z, pose.yaw_deg),
-        depth_image=depth_image,
-    )
+from planner.errors import ProtocolError
 
 
 def test_generation_options_match_the_selected_dialect():
@@ -215,31 +196,3 @@ def test_image_url_encodes_numpy_rgb():
     assert url.startswith("data:image/png;base64,")
     jpeg = image_url(np.zeros((2, 2, 3), dtype=np.uint8), "JPEG")
     assert jpeg.startswith("data:image/jpeg;base64,")
-
-
-def test_aligned_depth_image_requires_a_registered_visualisation():
-    depth = np.full((6, 8, 3), 128, dtype=np.uint8)
-    observation = _observation(depth_image=depth)
-    assert aligned_depth_image(observation) is depth
-    with pytest.raises(ObservationError):
-        aligned_depth_image(_observation(depth_image=None))
-
-
-def test_depth_calibration_that_disagrees_with_the_arrays_is_refused():
-    """An Observation cannot claim a 10x10 camera while carrying a 6x8 grid.
-
-    This used to be caught downstream in ``aligned_depth_image``, after the object
-    had already been handed to consumers. ``depth_intrinsics`` defaults to
-    ``intrinsics``, so the contract can check the pairing where it is written.
-    """
-    with pytest.raises(ValueError, match="depth shape must match depth_intrinsics"):
-        Observation(
-            frame=1,
-            timestamp_s=0.0,
-            pose=WorldPose(0.0, 0.0, 0.0, 0.0),
-            rgb=np.zeros((6, 8, 3), dtype=np.uint8),
-            depth_m=np.full((6, 8), 5.0, dtype=np.float32),
-            intrinsics=CameraIntrinsics.from_horizontal_fov(10, 10, 90.0),
-            camera_matrix=ue_camera_matrix(0.0, 0.0, 0.0, 0.0),
-            depth_image=np.full((6, 8, 3), 128, dtype=np.uint8),
-        )

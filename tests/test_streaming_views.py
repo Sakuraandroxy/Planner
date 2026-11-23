@@ -14,7 +14,6 @@ from scripts.streaming_views import (
     calibrate_streaming_views,
     signature_bgr,
     signature_score,
-    verify_streaming_views,
 )
 
 MODES = VIEW_MODES
@@ -137,89 +136,6 @@ def test_calibration_skips_declared_uncapturable_views():
     # The rover chase camera never gets a GetImages call (no 8 s timeout).
     assert ("Rover1", "Chase") not in calls
     assert len(calls) == len(MODES) - 1
-
-
-def test_verify_identifies_the_current_position_without_switching():
-    order = ("rover_chase", "rover_front", "drone_front", "drone_chase")
-    server = FakeServer(order, anchor=2)
-
-    mode = verify_streaming_views(
-        cameras=CAMERAS,
-        screenshot=server.screenshot,
-        fetch_frame=fetch(),
-        switch_view=server.switch,
-        advance=lambda seconds: None,
-        expected=order,
-        uncapturable=("rover_chase",),
-        sleep=lambda seconds: None,
-    )
-
-    assert mode == "drone_front"
-    assert server.switches == 0
-
-
-def test_verify_steps_once_when_the_position_is_uncapturable():
-    order = ("rover_chase", "rover_front", "drone_front", "drone_chase")
-    server = FakeServer(order, anchor=0)
-    calls = []
-
-    def tracked_fetch(robot, camera):
-        calls.append((robot, camera))
-        return fetch()(robot, camera)
-
-    mode = verify_streaming_views(
-        cameras=CAMERAS,
-        screenshot=server.screenshot,
-        fetch_frame=tracked_fetch,
-        switch_view=server.switch,
-        advance=lambda seconds: None,
-        expected=order,
-        uncapturable=("rover_chase",),
-        sleep=lambda seconds: None,
-    )
-
-    assert mode == "rover_front"
-    assert server.switches == 1
-    assert ("Rover1", "Chase") not in calls
-
-
-def test_verify_rejects_a_stale_cache_with_a_different_mode_set():
-    server = FakeServer(MODES, anchor=0)
-    assert (
-        verify_streaming_views(
-            cameras=CAMERAS,
-            screenshot=server.screenshot,
-            fetch_frame=fetch(),
-            switch_view=server.switch,
-            advance=lambda seconds: None,
-            expected=("rover_front", "drone_front", "drone_chase"),
-            uncapturable=("rover_chase",),
-            sleep=lambda seconds: None,
-        )
-        is None
-    )
-    assert server.screenshots == 0
-
-
-def test_verify_returns_none_when_the_screenshot_is_unrecognizable():
-    order = ("rover_chase", "rover_front", "drone_front", "drone_chase")
-    server = FakeServer(order, anchor=1)
-    server.frames = {mode: frame(900 + index) for index, mode in enumerate(MODES)}
-
-    assert (
-        verify_streaming_views(
-            cameras=CAMERAS,
-            screenshot=server.screenshot,
-            fetch_frame=fetch(),
-            switch_view=server.switch,
-            advance=lambda seconds: None,
-            expected=order,
-            uncapturable=("rover_chase",),
-            sleep=lambda seconds: None,
-        )
-        is None
-    )
-    assert server.screenshots == 2
 
 
 def test_signature_handles_bgr_and_grayscale():

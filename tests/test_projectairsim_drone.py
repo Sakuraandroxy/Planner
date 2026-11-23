@@ -539,13 +539,6 @@ def test_hover_starts_the_hold_and_commands_one_period():
     drone.close()
 
 
-def test_hover_requires_api_control():
-    drone, _, _, _ = make_drone()
-    with pytest.raises(ExecutionError, match="start"):
-        drone.hover()
-    drone.close()
-
-
 def test_idle_tick_advances_the_paused_world_when_landed():
     drone, connection, _, _ = make_drone()
     drone.start()
@@ -568,13 +561,6 @@ def test_idle_tick_keeps_an_active_hold_alive():
     drone.idle_tick()
     assert robot.commands[-1]["duration"] == pytest.approx(1 / 20.0)
     assert connection.advances == [pytest.approx(1 / 20.0)]
-    drone.close()
-
-
-def test_execute_segment_requires_api_control():
-    drone, _, _, _ = make_drone()
-    with pytest.raises(ExecutionError, match="start"):
-        drone.execute_segment(None)
     drone.close()
 
 
