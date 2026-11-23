@@ -64,6 +64,25 @@ class SimulatorPorts:
             for item in fields(self)
             if self.slot(item.name) is not None and item.name != "vehicles"
         )
+
+    def verify_slots(self, declared: tuple[str, ...], *, simulator: str) -> None:
+        """Reject a bundle that does not match what the package declares.
+
+        ``PORT_SLOTS`` is what the console is told before a simulator runs; this
+        bundle is what the mission actually gets. Both directions matter: a declared
+        slot with no object is a control nothing implements, and a filled slot that
+        was never declared is a capability the console cannot offer. Callers run this
+        at construction, so the drift fails the boot instead of one task later.
+        """
+        filled = set(self.implemented())
+        missing = [slot for slot in declared if slot not in filled]
+        undeclared = sorted(filled - set(declared))
+        if missing or undeclared:
+            raise ValueError(
+                f"{simulator} declares {list(declared)} but its session fills "
+                f"{sorted(filled)}; missing {missing}, undeclared {undeclared}"
+            )
+
     @classmethod
     def from_slots(
         cls,

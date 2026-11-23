@@ -288,5 +288,8 @@ def test_port_slots_match_the_shipped_yaml_drivers():
     assert raw["airsim"]["ports"]["rpc"] == 41451
     assert raw["projectairsim"]["ports"]["topics"] == 8991
     assert pas_runtime.PORT_SLOTS and airsim_runtime.PORT_SLOTS
-    assert "controlled_capture" in pas_runtime.PORT_SLOTS
+    # Neither engine may declare a slot without an object behind it: UE5 has no
+    # ``request_capture``, and no production path asks UE4's one for a capture, so
+    # the slot is out of both declarations (``build_ports`` enforces the match).
+    assert "controlled_capture" not in pas_runtime.PORT_SLOTS
     assert "controlled_capture" not in airsim_runtime.PORT_SLOTS

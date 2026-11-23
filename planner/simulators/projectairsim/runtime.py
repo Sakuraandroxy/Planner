@@ -1,6 +1,8 @@
 """ProjectAirSim (UE5) simulator: which ports it fills, and how to describe them.
 
-``PORT_SLOTS`` mirrors what ``session.py`` already wires together.
+``PORT_SLOTS`` is what the console is told before a simulator is running;
+``build_ports`` is the bundle the live session hands over, and ``verify_slots``
+refuses the boot when the two disagree.
 """
 
 from __future__ import annotations
@@ -13,7 +15,6 @@ PORT_SLOTS: tuple[str, ...] = (
     "vehicle",
     "observation",
     "streaming",
-    "controlled_capture",
     "moving_capture",
     "weather",
     "views",
@@ -28,6 +29,43 @@ VEHICLES: tuple[str, ...] = ("rover", "drone")
 def weather_fields() -> dict[str, str]:
     """Canonical to simulator spelling. UE5 names match the planner exactly."""
     return {name: name for name in WEATHER_FIELDS}
+
+
+def build_ports(
+    *,
+    vehicle,
+    observation,
+    streaming,
+    moving_capture,
+    weather,
+    views,
+    models,
+    frames,
+    home,
+) -> SimulatorPorts:
+    """Bundle the live UE5 objects into the ports the mission uses.
+
+    Each slot holds the object that already serves that feature here, not a wrapper
+    around it: the vehicle adapters carry capture, streaming and moving capture; the
+    session is the weather, view and home control; the appearance catalog is the
+    ``/api/models`` source; and ``frames`` is the frame sink the session was given.
+    ``controlled_capture`` is not declared because nothing on this engine implements
+    ``request_capture`` and no production path calls it.
+    """
+    ports = SimulatorPorts(
+        vehicle=vehicle,
+        observation=observation,
+        streaming=streaming,
+        moving_capture=moving_capture,
+        weather=weather,
+        views=views,
+        models=models,
+        frames=frames,
+        home=home,
+        vehicles=VEHICLES,
+    )
+    ports.verify_slots(PORT_SLOTS, simulator="projectairsim")
+    return ports
 
 
 def build_session(*, config, map_entry, family, resources, log):
