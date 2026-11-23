@@ -565,7 +565,7 @@ class FakeStreamingExecution:
             stream_command=lambda *args: None,
             motion_capability=lambda: HOLONOMIC,
             collision_state=lambda: CollisionState(False),
-            hover=lambda: None,
+            hold=lambda: None,
         )
         self.checkpoints = 0
         self.stops = 0

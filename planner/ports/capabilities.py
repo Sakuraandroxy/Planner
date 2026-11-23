@@ -16,11 +16,14 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from planner.domain import WorldPose
+
 
 class ReturnHome(Protocol):
     """Drive the selected vehicle back to its spawn pose while idle."""
 
-    def return_home(self, vehicle: str) -> None: ...
+    def return_home(self, vehicle: str | None = None) -> WorldPose:
+        """Return the spawn pose the vehicle was moved to; ``None`` means the active one."""
 
 
 class WeatherControl(Protocol):
@@ -44,8 +47,8 @@ class StreamingViews(Protocol):
 
     def view_modes(self) -> tuple[str, ...]: ...
 
-    def set_view_mode(self, mode: str) -> bool:
-        """Return True when applied now, False when deferred to task end."""
+    def set_view_mode(self, mode: str) -> str:
+        """Switch to ``mode`` and return it, so the caller logs what the engine shows."""
 
 
 class AppearanceModelControl(Protocol):

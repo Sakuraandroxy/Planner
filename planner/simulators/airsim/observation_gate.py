@@ -85,7 +85,7 @@ class ObservationGate:
                 if callable(begin_hold):
                     begin_hold()
                 else:
-                    self.vehicle.hover()
+                    self.vehicle.hold()
                 self.wait_for_observation(budget)
                 yield
             except BaseException:

@@ -70,12 +70,12 @@ def prepare(
                     "Native takeoff was not confirmed; measured climb "
                     "exists. Position hold must confirm readiness."
                 )
-        drone.hold(require_airborne=True)
+        drone.hold_steady(require_airborne=True)
         if landed:
             drone._holding.climb_by(drone._takeoff_climb_m)
     else:
         drone.cancel()
-        drone.hold(require_airborne=require_airborne)
+        drone.hold_steady(require_airborne=require_airborne)
 
 
 def takeoff(drone, *, timeout_s: float | None = None) -> None:

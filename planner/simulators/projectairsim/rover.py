@@ -175,7 +175,8 @@ class ProjectAirSimRover:
     def cancel(self) -> None:
         self._cancel.set()
 
-    def hover(self) -> None:
+    def hold(self) -> None:
+        """Hold the brake for one control period; for a car this is what hovering is."""
         self._apply_controls(0.0, 0.0, 1.0)
         self._connection.advance_for_sim_time(self._period)
         self._pid.reset()
@@ -303,10 +304,14 @@ class ProjectAirSimRover:
     # -- idle / reset ------------------------------------------------------
     def idle_tick(self) -> None:
         """Advance one control period with the brake held."""
-        self.hover()
+        self.hold()
 
-    def return_home(self) -> WorldPose:
-        """Teleport to the settled spawn pose (verified with SetPose)."""
+    def return_home(self, vehicle: str | None = None) -> WorldPose:
+        """Teleport to the settled spawn pose (verified with SetPose).
+
+        ``vehicle`` selects the vehicle in a multi-vehicle session; this object is one
+        vehicle, so it is ignored here and the pose it moved to is returned.
+        """
         pose = self._home_pose
         self.teleport(pose)
         return pose

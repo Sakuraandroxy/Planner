@@ -519,20 +519,20 @@ def test_stream_command_releases_the_position_hold():
     drone.start()
     robot.landed = int(LandedState.FLYING)
     robot.z = -3.0
-    drone.hover()
+    drone.hold()
     assert drone._holding.active is True
     drone.stream_command(HolonomicCommand(0.5, 0.0, 0.0, 0.0), 0.05)
     assert drone._holding.active is False
     drone.close()
 
 
-def test_hover_starts_the_hold_and_commands_one_period():
+def test_hold_starts_the_position_hold_and_commands_one_period():
     drone, connection, robot, _ = make_drone()
     drone.start()
     robot.landed = int(LandedState.FLYING)
     robot.z = -3.0
     connection.advances.clear()
-    drone.hover()
+    drone.hold()
     assert drone._holding.active is True
     assert robot.commands[-1]["duration"] == pytest.approx(1 / 20.0)
     assert connection.advances == [pytest.approx(1 / 20.0)]
@@ -553,7 +553,7 @@ def test_idle_tick_keeps_an_active_hold_alive():
     drone.start()
     robot.landed = int(LandedState.FLYING)
     robot.z = -3.0
-    drone.hover()
+    drone.hold()
     connection.advances.clear()
     robot.commands.clear()
     # The hold ticks at the control rate; idle polling must not run ahead.

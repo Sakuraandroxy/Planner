@@ -45,7 +45,7 @@ class StreamingPlant:
     def cancel(self):
         pass
 
-    def hover(self):
+    def hold(self):
         pass
 
 

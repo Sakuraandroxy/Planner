@@ -74,8 +74,8 @@ class VehicleRoster:
     def active_vehicle(self) -> str:
         return self._active_vehicle
 
-    def return_home(self, vehicle: str | None = None) -> str:
-        """Teleport the requested vehicle to its measured spawn pose."""
+    def return_home(self, vehicle: str | None = None) -> WorldPose:
+        """Teleport the requested vehicle to its measured spawn pose and return it."""
         if self._rover is None or self._drone is None:
             raise RuntimeError("the ProjectAirSim session is closed")
         vehicle_id = vehicle or self._active_vehicle
@@ -102,7 +102,7 @@ class VehicleRoster:
             # An explicit home request for the inactive vehicle must not
             # bring it back into view; only the active vehicle is shown.
             self._hide(vehicle_id)
-        return vehicle_id
+        return pose
 
     def activate_vehicle(self, vehicle: str | None = None) -> str:
         """Console switch: stop the other vehicle, home and show this one.
@@ -173,7 +173,7 @@ class VehicleRoster:
                 self._drone.park()
                 log("Drone parked: flight stopped.")
             elif self._rover is not None:
-                self._rover.hover()
+                self._rover.hold()
             return True
         except Exception as error:
             log(

@@ -378,7 +378,7 @@ class ProjectAirSimMissionSession(VehicleRoster):
             log("Drone airborne; position hold confirmed.")
         else:
             # start() already armed and braked the rover.
-            self._rover.hover()
+            self._rover.hold()
 
     def _apply_initial_view(self) -> None:
         """Park the streaming view on the active vehicle's chase (tail) camera.
@@ -400,9 +400,9 @@ class ProjectAirSimMissionSession(VehicleRoster):
         """Keep the reference post-task hold; land the drone if it fails."""
         try:
             if arm.is_drone:
-                self._drone.hold(require_airborne=False)
+                self._drone.hold_steady(require_airborne=False)
             else:
-                self._rover.hover()
+                self._rover.hold()
         except Exception as error:
             log(
                 f"post-task hold failed: {type(error).__name__}: {error}",

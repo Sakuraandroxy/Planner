@@ -148,9 +148,6 @@ class FakeVehicle:
         self.calls.append(("teleport", pose))
         self.pose = pose
 
-    def hover(self):
-        self.calls.append("hover")
-
     def prepare(self, **kwargs):
         self.calls.append(("prepare", kwargs))
 
@@ -159,6 +156,9 @@ class FakeVehicle:
 
     def hold(self, **kwargs):
         self.calls.append(("hold", kwargs))
+
+    def hold_steady(self, **kwargs):
+        self.calls.append(("hold_steady", kwargs))
 
     def idle_tick(self):
         self.calls.append("idle_tick")
@@ -331,7 +331,7 @@ def test_run_prepares_and_settles_the_rover():
     assert session._trajectory.started == ["drive ahead"]
     assert session._trajectory.cleared == 1
     # prepare() brakes, then finally settles with the same brake.
-    assert session._rover.calls == ["hover", "hover"]
+    assert session._rover.calls == [("hold", {}), ("hold", {})]
     assert session._drone.calls == []
     assert session._arms["rover"].execution.checkpoints == [None, None]
     assert any(
@@ -345,11 +345,11 @@ def test_run_takes_off_for_the_drone_and_parks_the_rover():
     result = session.run(TaskSubmission("task_1", "fly ahead", "drone"))
     assert result.success is True
     assert session._active_vehicle == "drone"
-    assert session._rover.calls[0] == "hover"
+    assert session._rover.calls[0] == ("hold", {})
     assert session._rover.calls[1][0] == "teleport"
     assert session._hidden_poses["rover"] == WorldPose(10.0, 20.0, 1.0, 0.0)
     assert ("prepare", {"takeoff_if_landed": True}) in session._drone.calls
-    assert ("hold", {"require_airborne": False}) in session._drone.calls
+    assert ("hold_steady", {"require_airborne": False}) in session._drone.calls
     assert application.prepared == ["fly ahead"]
     assert any(
         "drone mission plan: stage_1:basic_motion" in message
@@ -364,7 +364,7 @@ def test_run_stops_the_drone_before_switching_to_the_rover():
     assert "park" in session._drone.calls
     assert "land" not in session._drone.calls
     assert session._hidden_poses["drone"] == WorldPose(10.0, 20.0, 1.0, 0.0)
-    assert session._rover.calls == ["hover", "hover"]
+    assert session._rover.calls == [("hold", {}), ("hold", {})]
 
 def test_run_rejects_an_unknown_vehicle():
     session = make_session()
@@ -385,7 +385,7 @@ def test_run_maps_a_stop_to_a_cancelled_result():
     assert result.success is False
     assert result.error == "cancelled: task was cancelled"
     assert session._trajectory.cleared == 1
-    assert session._rover.calls[-1] == "hover"
+    assert session._rover.calls[-1] == ("hold", {})
 
 def test_run_binds_the_stop_event_to_the_hold_checkpoint():
     session = make_session()
@@ -417,7 +417,7 @@ def test_idle_tick_follows_the_active_vehicle():
 
 def test_return_home_routes_to_the_active_vehicle():
     session = make_session(active="rover")
-    assert session.return_home() == "rover"
+    assert session.return_home() == WorldPose(62.26, 0.0, 0.85, 12.5)
     assert session._rover.calls == ["return_home"]
     assert session._drone.calls == []
     assert any(
@@ -426,7 +426,7 @@ def test_return_home_routes_to_the_active_vehicle():
     )
 
     session = make_session(active="drone")
-    assert session.return_home() == "drone"
+    assert session.return_home() == WorldPose(0.0, 0.0, 5.0, 90.0)
     assert session._drone.calls == ["return_home"]
     assert session._rover.calls == []
     assert any(
@@ -435,7 +435,7 @@ def test_return_home_routes_to_the_active_vehicle():
     )
 
     session = make_session(active="rover")
-    assert session.return_home("drone") == "drone"
+    assert session.return_home("drone") == WorldPose(0.0, 0.0, 5.0, 90.0)
     assert session._drone.calls[0] == "return_home"
     # Homing the inactive vehicle must not bring it back into view.
     assert session._drone.calls[1][0] == "teleport"
@@ -451,7 +451,7 @@ def test_activate_vehicle_parks_the_rover_and_homes_the_drone():
 
     assert session.activate_vehicle("drone") == "drone"
     assert session.active_vehicle == "drone"
-    assert session._rover.calls[0] == "hover"
+    assert session._rover.calls[0] == ("hold", {})
     assert session._rover.calls[1][0] == "teleport"
     assert session._hidden_poses["rover"] == WorldPose(10.0, 20.0, 1.0, 0.0)
     assert session._drone.calls == ["return_home"]
@@ -509,7 +509,7 @@ def test_activate_vehicle_can_repeat_the_active_vehicle():
 
     assert session.activate_vehicle("drone") == "drone"
     assert session.active_vehicle == "drone"
-    assert session._rover.calls[0] == "hover"
+    assert session._rover.calls[0] == ("hold", {})
     assert session._rover.calls[1][0] == "teleport"
     assert session._hidden_poses["rover"] == WorldPose(10.0, 20.0, 1.0, 0.0)
     assert session._drone.calls == ["return_home"]

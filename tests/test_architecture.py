@@ -17,10 +17,13 @@ Checks run over files or in a subprocess, so test order cannot mask a failure.
 from __future__ import annotations
 
 import ast
+import inspect
 import json
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -156,3 +159,90 @@ def test_airsim_slots_are_backed_by_real_code():
                     assert hasattr(cls, name), f"{cls.__name__} lost {port.__name__}.{name}"
 
 
+
+
+#: 端口 -> 两种引擎上的实现体。UE4 不出 home、views、models、frames 四个端口，端口方法
+#: 在实现体上缺席是允许的；缺席的成员不比对，但每个实现体至少要命中一个成员，否则这条
+#: 用例对它等于空跑。
+def _port_implementations():
+    import planner.ports as ports
+    from planner.simulators.airsim.vehicle import AirSimVehicle
+    from planner.simulators.projectairsim.drone import ProjectAirSimDrone
+    from planner.simulators.projectairsim.rover import ProjectAirSimRover
+    from planner.simulators.projectairsim.session import ProjectAirSimMissionSession
+
+    vehicles = (AirSimVehicle, ProjectAirSimRover, ProjectAirSimDrone)
+    return {
+        ports.Vehicle: vehicles,
+        ports.StreamingVehicle: vehicles,
+        ports.ReturnHome: (ProjectAirSimMissionSession, ProjectAirSimRover, ProjectAirSimDrone),
+        ports.StreamingViews: (ProjectAirSimMissionSession,),
+    }
+
+
+def _parameter_shape(signature):
+    return [
+        (
+            parameter.name,
+            parameter.kind.name,
+            "" if parameter.default is inspect.Parameter.empty else repr(parameter.default),
+        )
+        for parameter in signature.parameters.values()
+    ]
+
+
+def _return_shape(signature):
+    annotation = signature.return_annotation
+    if annotation is inspect.Signature.empty:
+        return None
+    text = annotation if isinstance(annotation, str) else getattr(annotation, "__name__", str(annotation))
+    return text.strip("\"'")
+
+
+@pytest.mark.parametrize(
+    "port_name", ["Vehicle", "StreamingVehicle", "ReturnHome", "StreamingViews"]
+)
+def test_port_signatures_match_their_implementations(port_name):
+    """端口形状只许有一份：实现体的参数名、默认值与返回标注必须与端口声明一致。
+
+    ``hasattr`` 只能证明名字在，签名漂移它看不出来：``return_home`` 曾经三种形状、
+    ``set_view_mode`` 声明 bool 却返回 str。返回标注只在一侧缺失，不参与比对。
+    """
+    import planner.ports as ports
+
+    implementations = _port_implementations()
+    port = getattr(ports, port_name)
+    for cls in implementations[port]:
+        compared = 0
+        for name, member in vars(port).items():
+            if name.startswith("_") or name == "__subclasshook__":
+                continue
+            implementation = inspect.getattr_static(cls, name, None)
+            if isinstance(member, property):
+                assert isinstance(implementation, property), (
+                    f"{cls.__name__}.{name} 必须是 property：端口把它声明成属性"
+                )
+                port_signature = inspect.signature(member.fget)
+                implementation_signature = inspect.signature(implementation.fget)
+            elif callable(member):
+                if implementation is None:
+                    continue
+                port_signature = inspect.signature(member)
+                implementation_signature = inspect.signature(implementation)
+            else:
+                continue
+            compared += 1
+            expected_parameters = _parameter_shape(port_signature)
+            actual_parameters = _parameter_shape(implementation_signature)
+            assert actual_parameters == expected_parameters, (
+                f"{cls.__name__}.{name} 的参数与 {port.__name__} 不一致；"
+                f"端口是 {expected_parameters}，实现是 {actual_parameters}"
+            )
+            expected_return = _return_shape(port_signature)
+            actual_return = _return_shape(implementation_signature)
+            if expected_return is not None and actual_return is not None:
+                assert actual_return == expected_return, (
+                    f"{cls.__name__}.{name} 的返回标注与 {port.__name__} 不一致；"
+                    f"端口是 {expected_return}，实现是 {actual_return}"
+                )
+        assert compared, f"{cls.__name__} 一个 {port.__name__} 成员都没实现"

@@ -152,7 +152,7 @@ class ProjectAirSimDrone:
             require_airborne=require_airborne,
         )
 
-    def hold(self, *, require_airborne: bool = True) -> None:
+    def hold_steady(self, *, require_airborne: bool = True) -> None:
         """Hold the pose the aircraft is at now, and wait until it is steady.
 
         The target is always re-taken from the current state: a hold left over
@@ -175,8 +175,12 @@ class ProjectAirSimDrone:
         """Native land; returns the landed state measured after settling."""
         return flight.land(self, timeout_s=timeout_s)
 
-    def return_home(self) -> WorldPose:
-        """Teleport to the settled spawn pose and confirm touchdown."""
+    def return_home(self, vehicle: str | None = None) -> WorldPose:
+        """Teleport to the settled spawn pose and confirm touchdown.
+
+        ``vehicle`` selects the vehicle in a multi-vehicle session; this object is one
+        vehicle, so it is ignored here and the pose it moved to is returned.
+        """
         return flight.return_home(self)
 
     def teleport(self, pose: WorldPose) -> None:
@@ -230,7 +234,8 @@ class ProjectAirSimDrone:
         self._cancel.set()
         self._robot.cancel_last_task()
 
-    def hover(self) -> None:
+    def hold(self) -> None:
+        """Start the position hold and command one control period of it."""
         self._require_started()
         self._holding.start()
         self._holding.tick()
@@ -254,7 +259,7 @@ class ProjectAirSimDrone:
     def begin_observation_hold(self) -> None:
         """Keep the existing fixed reference across consecutive captures."""
         if not self._holding.active:
-            self.hover()
+            self.hold()
         else:
             self._holding.tick()
 

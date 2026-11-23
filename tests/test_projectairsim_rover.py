@@ -229,12 +229,12 @@ def test_stream_command_rejects_bad_requests():
     rover.close()
 
 
-def test_hover_brakes_and_advances_one_control_period():
+def test_hold_brakes_and_advances_one_control_period():
     rover, connection, _ = make_rover()
     rover.start()
     connection.requests.clear()
     connection.advances.clear()
-    rover.hover()
+    rover.hold()
     assert connection.control_requests()[-1] == {
         "engine": 0.0,
         "steering_angle": 0.0,
