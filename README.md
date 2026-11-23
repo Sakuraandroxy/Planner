@@ -92,6 +92,6 @@ python scripts/calibrate_streaming_views.py             # 相机机位标定
 
 ## 状态
 
-当前分支 `refactor/layered-architecture`：全量 1216 条用例通过，零 xfail；跨层深层 import 为零；层入口导出面与层文档逐名一致，由 `tests/test_public_surface.py` 守着。
+当前分支 `refactor/layered-architecture`：全量 1245 条用例通过，零 xfail；跨层深层 import 为零；层入口导出面与层文档逐名一致，由 `tests/test_public_surface.py` 守着。
 
 已知缺口见 [待办与缺口](docs/TODO.md)，各层内部问题见对应层文档的「已知缺口」小节。

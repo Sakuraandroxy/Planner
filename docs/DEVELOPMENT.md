@@ -16,6 +16,7 @@
 | 接一套新仿真器 | 第 6 节 |
 | 加一个 HTTP 端点 | 第 7 节 |
 | 改契约类型或端口 | 第 8 节 |
+| 改提示词 | [提示词写作规范](PROMPT_STYLE.md)，模板在 `planner/adapters/prompts/templates/` |
 
 ## 2 仓库布局
 

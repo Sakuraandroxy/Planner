@@ -142,11 +142,12 @@
 
 ### 5.4 提示词渲染
 
-1. 轨迹类模板在**模块导入期**读取：`base.py:17`、`base.py:23`、`free_navigation.py:16-25`、`visual_goal_navigation.py:19-33`、`visual_goal_navigation.py:67-68`。
-2. 检测类也在导入期读：`target_detection/prompts/system.py:4`、`visual_goal_target_detection.py:5`。
-3. 完成判定类在**调用期**渲染：`render_prompt("completion_system")` 与 `render_prompt("completion", **completion_values(request))`（`visual_goal_completion.py:27-32`、`prompts/values.py:95`）。
-4. 片段用 `load_fragment` 去掉文件末尾换行，分隔符由组合代码决定（`prompts/render.py:21-23`）。
-5. 模板是 Jinja2 文件，缺变量抛 `UndefinedError`（`planner/adapters/prompts/render.py:31`）；变量由 `values.py` 的纯函数产出。
+1. 一个 prompt 一个 Jinja2 模板，全部放在 `planner/adapters/prompts/templates/`，共 20 个文件（含 3 个 `include` 片段）。
+2. 渲染唯一入口 `render_prompt(name, **values)`（`planner/adapters/prompts/render.py:31`）：`trim_blocks`、`lstrip_blocks`、`keep_trailing_newline`、`StrictUndefined`，输出统一一个尾随换行。
+3. 变量由 `planner/adapters/prompts/values.py` 的纯函数产出，模板里不出现 Python 表达式。
+4. 轨迹与检测的系统提示在模块导入期渲染，完成判定在调用期渲染；两种时机都不影响失败含义，缺变量一律 `UndefinedError`。
+5. 句式按 `docs/PROMPT_STYLE.md` 写：一条指令一行，解释性否定不出现，否定只用于禁止具体输出。
+6. 守门测试 `tests/test_prompt_style.py`：无残余 md 片段、无孤儿模板、无禁用句式、输出契约（JSON 形状、归一化坐标、五个点、单位）仍在。
 
 ### 5.5 视频流
 

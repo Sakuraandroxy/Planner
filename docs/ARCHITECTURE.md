@@ -156,10 +156,10 @@
 | runtime | 33 | 3601 |
 | workflows | 23 | 2702 |
 | assembly | 20 | 2555 |
-| adapters | 44 | 2990 |
+| adapters | 43 | 3024 |
 | simulator | 13 | 2618 |
 | simulators | 31 | 5410 |
-| 合计 | 221 | 23409 |
+| 合计 | 220 | 23443 |
 
 ## 11 测试与守门
 
