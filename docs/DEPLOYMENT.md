@@ -153,6 +153,11 @@ python scripts/calibrate_streaming_views.py
 
 `uncapturable_views` 字段用于记录采不到帧的机位，标定靠排除法定位它们。
 
+阈值出处
+
+- 段拍 `motion.segment_period_s`（默认 0.03 s）与流拍 `1 / motion.control_hz`（默认 20 Hz）是两个独立配置项，不共用一个值：段执行每一拍要判停稳、算剩余距离并重锚，采样要细；流执行只是命令下发节拍。两项都在 `config/core/<档>/base.yaml` 的 `motion` 段，校验为正有限数。
+- 越点走廊 1.0 m、`FreeSpaceProfileSettings` 的九个阈值、三套停滞判据都是经验值、未标定：影响因素写在各自代码注释里，仓库里没有标定脚本与回归基线。改动前按 `tests/test_free_space.py`、`tests/test_algorithms_motion.py`、`tests/test_free_navigation.py` 的期望值一起改。
+
 ## 8 自检
 
 部署完成后按顺序跑：

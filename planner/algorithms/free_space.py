@@ -23,14 +23,39 @@ from planner.domain import Observation
 
 @dataclass(frozen=True)
 class FreeSpaceProfileSettings:
+    """自由空间剖面的九个门限。
+
+    每项都注了出处。标「未标定」的都是经验值：代码库里没有对应的实测记录，
+    改之前先按注释里的影响因素跑一次剖面回归（`tests/test_free_space.py` 只校参数）。
+    """
+
+    #: 扇面宽度。出处：经验值，未标定。影响因素：相机水平 FOV、深度图宽度（当前
+    #: 256 px）、每扇面落到 `min_points_per_bin` 所需的点数。
     sector_width_deg: float = 10.0
+    #: 剖面报告距离上限。出处：经验值，未标定；受深度有效量程与规划前瞻距离约束，
+    #: 超出后深度只剩天空饱和值（`INVALID_DEPTH_SENTINEL_M`）。影响因素：深度量程、
+    #: 前瞻距离、路面坡度造成的远处地面点稀疏。
     max_range_m: float = 40.0
+    #: 地面线分箱粒度。出处：经验值，未标定。影响因素：地面坡度变化的空间尺度、
+    #: 每个箱子里的点数与 `min_points_per_bin` 的关系。
     distance_bin_m: float = 1.0
+    #: 一个箱子算有效地面采样所需点数。出处：经验值，未标定。影响因素：深度分辨率、
+    #: 量程（越远越稀）、相机俯仰与地面遮挡。
     min_points_per_bin: int = 8
+    #: 地面高度取的分位数。出处：经验值，未标定。影响因素：地面点的高程噪声、
+    #: 坡面倾角、地面材质造成的丢点。
     ground_height_percentile: float = 90.0
+    #: 障碍高度带下沿。出处：经验值，未标定；受载具能压过或跨过的高度约束。
+    #: 影响因素：车高、离地间隙、路面噪点起伏。
     min_height_above_ground_m: float = 0.15
+    #: 障碍高度带上沿。出处：经验值，未标定；受载具能通过的高度约束。
+    #: 影响因素：车高与相机高度、可通行净空。
     max_height_above_ground_m: float = 2.5
+    #: 障碍距离取的分位数。出处：经验值，未标定。影响因素：障碍像素数、深度噪声
+    #: 造成的离群点。
     obstacle_distance_percentile: float = 5.0
+    #: 判定为障碍所需像素数。出处：经验值，未标定。影响因素：深度分辨率、障碍距离
+    #: （同一物体越远像素越少）、部分遮挡。
     min_obstacle_pixels: int = 3
 
     def __post_init__(self) -> None:

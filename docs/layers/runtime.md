@@ -86,14 +86,14 @@ grep -rn "planner.workflows\|planner.assembly\|planner.adapters\|planner.simulat
 
 ## 5 关键流程
 
-段执行：一段一条五次曲线，30 ms 一拍
+段执行：一段一条五次曲线，`motion.segment_period_s` 一拍（默认 0.03 s）
 1. 入口两种。`ControlLoop.execute` 只做 checkpoint、取起点、调 `run_segment`、封装 `ExecutionRecord`，不传 budget（planner/runtime/motion/loop.py:191-200）；带预算的调用方直接用 `run_segment`（planner/workflows/visual_goal_navigation/flight.py:76）。
 2. 前置断言。`execution.assert_owner()`、`_running` 防重入、空轨迹拒收（loop.py:203-208）。
 3. 每段前：`execution.checkpoint()`、预算剩余大于 0、用 `resolve_yaw_delta_deg` 取原始段的偏航分支作为量测起点（loop.py:222-230）。
 4. checkpoint 闭包：给 `pose_checkpoint` 时直接透传，否则每次调用先 `execution.check_safety()` 再问 `pause_when`（loop.py:232-251）。
 5. 单段执行 `_drive_segment`（loop.py:383-520），顺序如下：
    1. 段必须带 `target_speed_mps`（loop.py:385-388）。
-   2. `period = SEGMENT_PERIOD_S = 0.030`（loop.py:42,389），经验值、未标定，不读 `limits.control_hz`。
+   2. `period = limits.segment_period_s`（loop.py:386），来自配置 `motion.segment_period_s`（默认 0.03 s，`planner/config/loader.py:228`）。这是经验值、未标定：影响因素为引擎步长、停稳判据的采样密度、超时与预算的记账粒度。段拍与流拍是两件事，不共用一个值：流执行只是命令下发节拍，按 `1 / limits.control_hz`；段执行每一拍要判停稳、算剩余距离并重锚，采样要细。
    3. `goal_yaw = start.yaw + 带符号偏航目标`，`duration = max(段上已有时长, duration_for(实测起点, 段终点, 速度, limits))`（loop.py:390-401）。
    4. 预算预检要求至少 `duration + settle_time_s` 可用，且不短于 `timeout_s`，否则 `BudgetExceeded` / `ExecutionError`（loop.py:402-406）。
    5. 用实测位姿重锚 `active = replace(segment, start=..., duration_s=..., yaw_delta_deg=剩余偏航)`，重置合成器与 `steps`（loop.py:408-416）。
@@ -110,7 +110,7 @@ grep -rn "planner.workflows\|planner.assembly\|planner.adapters\|planner.simulat
 碰撞退避：被动技能，检查点触发
 1. `CollisionRecovery.poll` 每拍读一次 `CollisionState`，恢复进行中或事件已处理时返 `None`，避免倒车途中反复上报被计成多次恢复（planner/runtime/collision_recovery.py:43-57）。
 2. `begin` 累加次数，超过 `maximum_recoveries` 抛 `ExecutionError`，返回 `distance_m = backoff_m × attempts` 的计划（:59-73）。
-3. `ControlLoop._back_off` 按 `SEGMENT_PERIOD_S` 倒车，速度按 `max_acceleration_mps2` 爬升，靠位姿差累计行程；行程达标下发一条零速命令后返回（loop.py:144-182）。步数上限是 `ceil(预计时长/period)*3 + 10`，走满仍未达标抛 `ExecutionError("collision backoff made no measurable progress")`（:152-155,181）。
+3. `ControlLoop._back_off` 按 `limits.segment_period_s` 倒车，速度按 `max_acceleration_mps2` 爬升，靠位姿差累计行程；行程达标下发一条零速命令后返回（loop.py:144-182）。步数上限是 `ceil(预计时长/period)*3 + 10`，走满仍未达标抛 `ExecutionError("collision backoff made no measurable progress")`（:152-155,181）。
 4. `_recover` 收尾：`holding=True`、合成器与限幅器复位、流路径调 `window.interrupt()`、`recorder.reset(当前位姿)`（loop.py:124-142）。
 5. `note_progress` 用恢复后累计路程作基线，超过 `reset_after_progress_m` 才把次数归零（collision_recovery.py:79-93）。
 
@@ -167,7 +167,7 @@ grep -rn "planner.workflows\|planner.assembly\|planner.adapters\|planner.simulat
 
 ## 7 测试位置
 
-- `tests/test_control_loop_segment.py`（260 行）：段执行节拍、限幅、停稳、`SEGMENT_PERIOD_S`、`limit_vector`、暂停与异常路径的 receipt。
+- `tests/test_control_loop_segment.py`（260 行）：段执行节拍、限幅、停稳、`LIMITS.segment_period_s`、`limit_vector`、暂停与异常路径的 receipt。
 - `tests/test_control_loop_stream.py`：`run_stream` 一拍、目标源返 `None` 后的停车、预算耗尽。
 - `tests/test_collision_recovery.py`：恢复次数递增、预算耗尽、进度复位、接触去重、流路径清队、段路径返剩余轨迹。
 - `tests/test_queue_follower.py`：队列消费、停稳边界、航点超时、命令类型。
@@ -182,7 +182,7 @@ grep -rn "planner.workflows\|planner.assembly\|planner.adapters\|planner.simulat
 - `SlowPlannerWorker`、`BackgroundContinuationPlanner`、`WorldWaypointQueue`、`StreamTimeline` 无直接测试，覆盖来自 `PlanningWindow` 的间接路径。
 - `ModelCallService`（91 行，含单飞线程、超时隔离、`close` 语义）无功能测试，只有 `tests/test_public_surface.py` 的名字断言。
 - `ControlLoop._back_off` 的步数上限与"无可测进度"分支无测试。
-- 段执行 30 ms 周期与引擎实际步长的一致性无测试。
+- 段拍 `motion.segment_period_s`（默认 0.03 s）与引擎实际步长的一致性无测试。
 
 ## 8 与其他层的联动
 
@@ -229,7 +229,7 @@ Qb23 层：runtime 结论：`segment_sink` 与 `stream_sink` 方法体相同，`
 
 Qb24 层：runtime 结论：`run_segment` 只捕 `Exception` 与 `KeyboardInterrupt`，`SystemExit` 路径不会调用 `execution.stop()`，载具保持最后一条命令。依据：planner/runtime/motion/loop.py:339-380 影响：否
 
-Qb25 层：runtime 结论：段执行周期固定 30 ms，与 `MotionLimits.control_hz` 无关，引擎是否按这个时长兑现没有测试。依据：planner/runtime/motion/loop.py:42,389,515-519 影响：否
+Qb25 层：runtime 结论：段执行周期从配置 `motion.segment_period_s` 取（默认 0.03 s），与流拍的 `1/control_hz` 分开配置；引擎是否按这个时长兑现没有测试。依据：planner/runtime/motion/loop.py:386,389、planner/config/loader.py:228、config/core/default/base.yaml 影响：否
 
 
 Qb27 层：runtime 结论：`MovingObservations.begin` 里 discard 只在 job 空闲时执行，忙时直接进 `require_available` 并抛"unavailable or quarantined"，错误信息指向的能力状态与真实原因（上一次还在跑）不一致。依据：planner/runtime/moving_observations.py:18-22、planner/runtime/background_operation.py:26-30 影响：否
@@ -255,7 +255,7 @@ M6 恒假分支
 - 触发条件：任何指望 `check_safety` 拦碰撞的调用点都拿不到拦截。
 
 M7 经验值未标定
-- `SEGMENT_PERIOD_S = 0.030`（planner/runtime/motion/loop.py:42）固定，与 `MotionLimits.control_hz` 无关；流拍是 `1/control_hz`（loop.py:99）。风险：引擎步长不等于 30 ms 时，停稳判据与超时都按 30 ms 记账。触发条件：换仿真步长或引擎实时性不足。
+- 段拍 `motion.segment_period_s` 默认 0.03 s（`planner/domain/motion.py` 的 `MotionLimits`，`planner/config/loader.py:228` 从 `config/core/<档>/base.yaml` 读），与流拍的 `1/control_hz` 是两个配置项（loop.py:99,386）。这是经验值、未标定：影响因素为引擎步长、停稳判据的采样密度、超时与预算的记账粒度。风险：引擎步长不等于这个值时，停稳判据与超时都按它记账。触发条件：换仿真步长或引擎实时性不足。
 - `waypoint_timeout_s` 默认 60.0（continuous_execution.py:23、motion/follower.py:32），同为经验值。
 
 M10 线程关闭与挂死

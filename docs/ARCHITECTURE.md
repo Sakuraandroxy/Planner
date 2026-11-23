@@ -74,7 +74,7 @@
 | 6 | 视觉定位目标，得到一个世界坐标与置信依据 | `planner/adapters/target_detection/`、`planner/algorithms/targeting/` |
 | 7 | 规划器给出五个航点 | `planner/adapters/trajectory_planner/` |
 | 8 | 航点过校验后进队列 | `planner/algorithms/checks/`、`planner/runtime/queue_follower.py` |
-| 9 | 控制循环逐段执行，每 30 ms 采一拍 | `planner/runtime/motion/loop.py` |
+| 9 | 控制循环逐段执行，每 `motion.segment_period_s`（默认 0.03 s）采一拍 | `planner/runtime/motion/loop.py` |
 | 10 | 执行中后台线程请求后续航点，队列不断流 | `planner/runtime/window/` |
 | 11 | 碰撞时执行层停、退、清队列、继续 | `planner/runtime/collision_recovery.py` |
 | 12 | 到达后调完成判定，返回结果给控制器 | `planner/workflows/visual_goal_navigation/`、`planner/adapters/task_completion/` |
@@ -84,7 +84,7 @@
 
 | 路径 | 起点 | 走法 | 结束条件 |
 | --- | --- | --- | --- |
-| 数值动作 | 「向前五米再左转九十度」 | 解析成段序列，逐段执行，段内 30 ms 采样 | 全部段完成或某段失败 |
+| 数值动作 | 「向前五米再左转九十度」 | 解析成段序列，逐段执行，段内按 `motion.segment_period_s` 采样 | 全部段完成或某段失败 |
 | 视觉目标接近 | 「开到红车旁」 | 观测、定位、规划五点、逐段执行、边执行边重规划 | 到达阈值满足且完成判定为真 |
 | 无终点巡航 | 「沿路一直开」 | 20 Hz 速度流，滑窗续规划 | 用户叫停或本地失败 |
 
@@ -94,7 +94,7 @@
 
 | 通道 | 频率 | 谁用 | 契约 |
 | --- | --- | --- | --- |
-| 段执行 | 30 ms 采样 | 数值动作、目标接近 | `Vehicle.execute_segment`，内部走 `stream_command(command, duration_s)` |
+| 段执行 | `motion.segment_period_s` 采样（默认 30 ms） | 数值动作、目标接近 | `Vehicle.execute_segment`，内部走 `stream_command(command, duration_s)` |
 | 速度流 | 20 Hz | 巡航、滑窗补点 | `StreamingVehicle.stream_command` |
 
 两条通道共用同一个命令类型 `MotionCommand`，分型为 `HolonomicCommand`（全向）与 `CarCommand`（阿克曼）。引擎侧用 `require_supported(command, capability)` 校验，不支持的组合直接报错而不是悄悄降级。

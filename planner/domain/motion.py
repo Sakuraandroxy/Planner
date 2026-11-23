@@ -219,6 +219,11 @@ class MotionLimits:
     max_yaw_rate_deg_s: float = 30.0
     max_yaw_acceleration_deg_s2: float = 60.0
     control_hz: float = 20.0
+    #: 段执行的采样周期，秒。与 ``control_hz`` 不是同一件事：段执行每一拍都要判停稳、
+    #: 算剩余距离并重锚，节拍要细；流执行只是命令下发节拍，按 ``1 / control_hz`` 走。
+    #: 默认 0.03 s 与旧的固定 30 ms 段拍等价。出处：经验值、未标定；
+    #: 影响因素为引擎步长（仿真器 ``_period``）、停稳判据的采样密度、超时与预算记账粒度。
+    segment_period_s: float = 0.03
     position_gain: float = 1.0
     yaw_gain: float = 2.0
     position_tolerance_m: float = 0.3

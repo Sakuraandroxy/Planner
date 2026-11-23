@@ -31,6 +31,10 @@ motion:
   max_yaw_rate_dps: 30.0
   max_yaw_accel_dps2: 60.0
   control_hz: 20.0
+  # 段执行的采样周期，秒。流执行按 1/control_hz 下发命令，段执行每一拍要判停稳与剩余
+  # 距离，两个通道的节拍不同。默认 0.03 是经验值、未标定，与引擎步长、停稳判据密度
+  # 相关；换仿真步长时两边一起改。
+  segment_period_s: 0.03
   min_duration_s: 1.0
   # 航向伺服，两种载具共用一套，只有位置保持读它。
   # 实测 UE5 偏航执行链的等效增益约 0.3、纯延迟约 3 秒（docs/archive/measurements.md

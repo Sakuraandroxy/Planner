@@ -107,7 +107,7 @@ grep -rn "^from \.\|^from planner\." planner/algorithms/ | grep -v "planner.doma
 
 未覆盖的空白
 - `planner/algorithms/trajectory_validation.py` 的 `require_execution_anchor` 仍无直接单测；`TrajectoryValidator` 的执行层集成边界（锚点与队列抵叠）只在 `tests/test_batch3_services.py` 间接跑到。
-- `FreeSpaceProfileSettings` 的十个阈值只在 tests/test_free_space.py:189 处做参数校验测试，没有针对真实深度图的标定回归。
+- `FreeSpaceProfileSettings` 的九个阈值字段（代码注释里逐条写了出处）只在 tests/test_free_space.py:189 处做参数校验测试，没有针对真实深度图的标定回归。
 - `DepthForegroundFilter` 的断点判定只在构造样例上验证，没有针对不同内参组合（`intrinsics` ≠ `depth_intrinsics`）的固定样例。
 
 ## 8 与其他层的联动
@@ -133,7 +133,7 @@ Qb5 层：algorithms 结论：`reached` 的 `passed_lateral_tolerance=None` 分�
 
 Qb6 层：algorithms 结论：`DepthGeometry.estimate` 把标定错误和"没有有效像素"压成同一种返回值，调用方无法按原因分流。依据：planner/algorithms/targeting/depth_geometry.py:26-29,82-88 影响：否
 
-Qb7 层：algorithms 结论：`FreeSpaceProfileSettings` 十个阈值的合法性有校验，出处与标定过程没有记录。依据：planner/algorithms/free_space.py:25-34,36-74 影响：否
+Qb7 层：algorithms 结论：`FreeSpaceProfileSettings` 九个阈值字段的合法性有校验，出处逐条写在字段注释里，全部标「经验值，未标定」；仓库里没有标定脚本与实测记录。依据：planner/algorithms/free_space.py:25-61 影响：否
 
 ## 10 已知缺口
 
@@ -144,23 +144,25 @@ M5 同名变换两份
 
 M7 经验值未标定
 
-| 常量 | 取值 | 位置 | 影响 |
-| --- | --- | --- | --- |
-| `ACKERMANN_PASSED_LATERAL_TOLERANCE_M` | 1.0 m | planner/algorithms/motion/corridor.py:9 | 阿克曼越点走廊下限，配置只能抬高 |
-| `sector_width_deg` | 10.0 度 | planner/algorithms/free_space.py:26 | 扇面分辨率与剖面点数 |
-| `max_range_m` | 40.0 m | free_space.py:27 | 剖面报告距离上限 |
-| `distance_bin_m` | 1.0 m | free_space.py:28 | 地面线分箱粒度 |
-| `min_points_per_bin` | 8 | free_space.py:29 | 分箱有效所需点数 |
-| `ground_height_percentile` | 90.0 | free_space.py:30 | 地面高度取分位 |
-| `min_height_above_ground_m` | 0.15 m | free_space.py:31 | 障碍高度带下沿 |
-| `max_height_above_ground_m` | 2.5 m | free_space.py:32 | 障碍高度带上沿 |
-| `obstacle_distance_percentile` | 5.0 | free_space.py:33 | 障碍距离取分位 |
-| `min_obstacle_pixels` | 3 | free_space.py:34 | 判定为障碍所需像素数 |
-| `max_advance_m` / `max_vertical_m` / `max_yaw_step_deg` | 6.0 m / 2.0 m / 20.0 度 | planner/algorithms/planning/geometric_planner.py:27-29 | 几何规划器单批推进上限 |
-| `arrival_buffer_ratio` | 0.8 | geometric_planner.py:31 | 停在到达半径的 80% 处 |
-| `RefillScheduler.latency_s` | 5.5 s | planner/algorithms/sliding_window/scheduler.py:8 | 补点提前量，注释自述实验初值 |
+逐条标注了出处：代码注释里给每项写了「出处」与「影响因素」，本表与之对应。
 
-上表全部为经验值，未标定。改这些数只改本层计算结果，仓库里没有标定回归可对照。
+| 常量 | 取值 | 位置 | 出处 | 影响 |
+| --- | --- | --- | --- | --- |
+| `ACKERMANN_PASSED_LATERAL_TOLERANCE_M` | 1.0 m | planner/algorithms/motion/corridor.py:14 | 经验值，未标定（R17 从 0.6 抬到 1.0，无标定记录） | 阿克曼越点走廊下限，配置只能抬高 |
+| `sector_width_deg` | 10.0 度 | planner/algorithms/free_space.py:34 | 经验值，未标定 | 扇面分辨率与剖面点数 |
+| `max_range_m` | 40.0 m | free_space.py:38 | 经验值，未标定；受深度量程约束 | 剖面报告距离上限 |
+| `distance_bin_m` | 1.0 m | free_space.py:41 | 经验值，未标定 | 地面线分箱粒度 |
+| `min_points_per_bin` | 8 | free_space.py:44 | 经验值，未标定 | 分箱有效所需点数 |
+| `ground_height_percentile` | 90.0 | free_space.py:47 | 经验值，未标定 | 地面高度取分位 |
+| `min_height_above_ground_m` | 0.15 m | free_space.py:50 | 经验值，未标定；受载具离地间隙约束 | 障碍高度带下沿 |
+| `max_height_above_ground_m` | 2.5 m | free_space.py:53 | 经验值，未标定；受载具可通行高度约束 | 障碍高度带上沿 |
+| `obstacle_distance_percentile` | 5.0 | free_space.py:56 | 经验值，未标定 | 障碍距离取分位 |
+| `min_obstacle_pixels` | 3 | free_space.py:59 | 经验值，未标定 | 判定为障碍所需像素数 |
+| `max_advance_m` / `max_vertical_m` / `max_yaw_step_deg` | 6.0 m / 2.0 m / 20.0 度 | planner/algorithms/planning/geometric_planner.py:27-29 | 经验值，未标定 | 几何规划器单批推进上限 |
+| `arrival_buffer_ratio` | 0.8 | geometric_planner.py:31 | 经验值，未标定 | 停在到达半径的 80% 处 |
+| `RefillScheduler.latency_s` | 5.5 s | planner/algorithms/sliding_window/scheduler.py:8 | 实验初值（注释自述） | 补点提前量 |
+
+标「经验值，未标定」的项按注释里的影响因素改；仓库里没有标定脚本与回归基线。
 
 M13 剩余测试空白
 - `require_execution_anchor`（planner/algorithms/trajectory_validation.py:10）无直接单测。

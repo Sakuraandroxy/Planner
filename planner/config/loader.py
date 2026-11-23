@@ -226,6 +226,7 @@ def load_config(path: str | Path) -> AppConfig:
         max_yaw_rate_deg_s=float(motion_raw.get("max_yaw_rate_dps", 30.0)),
         max_yaw_acceleration_deg_s2=float(motion_raw.get("max_yaw_accel_dps2", 60.0)),
         control_hz=float(motion_raw.get("control_hz", 20.0)),
+        segment_period_s=float(motion_raw.get("segment_period_s", 0.03)),
         min_duration_s=float(motion_raw.get("min_duration_s", 1.0)),
         passed_lateral_tolerance_m=float(motion_raw.get("passed_lateral_tolerance_m", 0.3)),
         heading=HeadingHoldSettings(

@@ -60,11 +60,16 @@ class FreeNavigationWorkflow:
         *,
         loop: ControlLoop,
         model_request_timeout_s: float = 30.0,
+        # 停滞判据二：连续多少个阶段位移与偏航都低于 1e-6 就判停滞。出处：经验值、
+        # 未标定，默认 2 与判据一相同；影响因素为位姿测量精度、段时长下限与单段位移。
         max_consecutive_stalls: int = 2,
         sliding_window: SlidingWindowSettings | None = None,
         motion_limits: MotionLimits | None = None,
         moving_observation_source=None,
         stream_speed_mps: float = 2.0,
+        # 停滞判据三：连续路径在这么久没有增加路径长度就判停滞（同时用作单点超时）。
+        # 出处：经验值、未标定；影响因素为目标距离与速度（期望时长）、模型延迟、
+        # 取帧周期。当前值等于装配层写死的 60 s。
         stream_waypoint_timeout_s: float = 60.0,
         continuous_tracking: ContinuousTrackingSettings = ContinuousTrackingSettings(),
         telemetry=None,
