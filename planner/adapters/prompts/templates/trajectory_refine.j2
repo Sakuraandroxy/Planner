@@ -14,21 +14,21 @@ Guidance reference {{ vehicle }} pose [world x,y,z,yaw_deg]: {{ guidance_referen
 Account for the motion and the pending queue since that pose.
 {% endif %}
 {% else %}
-Not supplied.
+none
 {% endif %}
 
 Execution context:
 - Planning round: {{ round_index }}
 - Task state: {{ state }}
 {% if previous_points_json %}
-- Recent confirmed executed actions, not a complete previous planning batch (do not execute it again): {{ previous_points_json }}
+- Recent confirmed executed actions: {{ previous_points_json }}
 {% if previous_start_pose_json %}
   Execution-history reference start pose: {{ previous_start_pose_json }}
 {% endif %}
 {% elif round_index == 1 %}
-- No previous trajectory has been executed.
+- Execution history: empty.
 {% else %}
-- Execution history is not supplied. Treat earlier motion as unknown.
+- Execution history: unavailable.
 {% endif %}
 - Measured net pose change since the stage start, in that pose's horizontal body frame:
   - Forward: {{ "%.3f"|format(measured.dx) }} m
@@ -47,4 +47,3 @@ Continue from the final pending predicted pose, or from the current {{ vehicle }
 when pending is empty.
 
 Generate the next short trajectory.
-Return exactly 5 NEW incremental pose waypoints as a JSON list.

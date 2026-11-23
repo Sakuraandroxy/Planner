@@ -1,8 +1,9 @@
 - Each action is [dx, dy, dz, dyaw_deg]: translation in meters, yaw change in degrees.
 - [dx, dy] is in the horizontal body frame of the PRECEDING pose: +dx forward, +dy right.
 - Transform the translation with the preceding pose's yaw, then add dyaw_deg to get the
-  next pose's yaw. Do not transform an action with the yaw it produces.
-- Return relative increments, not absolute positions and not absolute yaw. Every value is
-  a finite number.
+  next pose's yaw.
+- Do not transform an action with the yaw it produces.
+- Return relative increments. Every value is a finite number.
+- Do not return absolute positions or absolute yaw.
 - Keep each dyaw_deg within [-180, 180] degrees. A 180 degree turn keeps the requested
   direction: +180 and -180 rotate opposite ways.

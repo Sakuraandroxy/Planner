@@ -58,7 +58,7 @@ from tests.support import ue_camera_matrix
 BASELINE_PATH = Path(__file__).with_name("prompt_render_baseline.json")
 
 #: SHA-256 of ``json.dumps(CASES, sort_keys=True, ensure_ascii=False)``.
-CASES_SHA256 = "98332bf5659e709da9f5abadbf476aea28cec5c39209ea080ea88a107f72d1ab"
+CASES_SHA256 = "08e8091a21cf4c4c2855aa80a826c63082b83b33f734083d650dda5d36a57843"
 
 OBSERVATION_POSE = WorldPose(1.5, -2.25, 0.0, 15.0)
 MISSION_START = WorldPose(0.25, -1.0, 0.0, 5.0)

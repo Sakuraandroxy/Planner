@@ -268,8 +268,7 @@ def test_history_and_measured_change_are_reported():
     assert "Planning round: 2" in prompt
     assert "Task state: continuing" in prompt
     assert (
-        "Recent confirmed executed actions, not a complete previous planning "
-        "batch (do not execute it again): [[0.5,0.0,0.0,5.0]]" in prompt
+        "Recent confirmed executed actions: [[0.5,0.0,0.0,5.0]]" in prompt
     )
     assert "Execution-history reference start pose: [0.0,0.0,0.0,0.0]" in prompt
     assert "Forward: 1.000 m" in prompt
@@ -280,7 +279,7 @@ def test_history_and_measured_change_are_reported():
 def test_first_round_without_history_is_explicit():
     prompt = _visual_prompt()
     assert "Task state: initial" in prompt
-    assert "No previous trajectory has been executed." in prompt
+    assert "Execution history: empty." in prompt
 
 
 def test_pending_longer_than_five_points_is_rejected():
