@@ -6,18 +6,18 @@ import pytest
 
 from planner.domain import WorldPose
 from planner.domain import QueuedWaypoint
-from planner.domain import (
+from planner.runtime import (
     MODE_CONTINUOUS,
     MODE_IDLE,
     MODE_NO_QUEUE,
     MODE_PENDING,
     MODE_STOPPED_BATCH,
     QueueSnapshot,
+    TrajectoryHub,
     TrajectorySnapshot,
     snapshot_from_payload,
     snapshot_to_payload,
 )
-from planner.runtime import TrajectoryHub
 
 
 def _items():
@@ -144,8 +144,8 @@ def test_adopt_stamps_the_parent_clock_and_bumps_revision():
 
 
 def test_snapshot_payload_round_trips_every_field():
-    """The wire form belongs to the domain type, not to the pipe that carries it."""
-    from planner.domain import (
+    """The wire form belongs to the runtime type, not to the pipe that carries it."""
+    from planner.runtime import (
         QueueSnapshot,
         TrajectoryPointSnapshot,
         VehicleSnapshot,
@@ -179,7 +179,7 @@ def test_snapshot_payload_round_trips_every_field():
 
 
 def test_an_unusable_snapshot_payload_is_refused():
-    from planner.domain import snapshot_from_payload
+    from planner.runtime import snapshot_from_payload
 
     with pytest.raises(ValueError, match="unusable trajectory snapshot"):
         snapshot_from_payload({"active": True})

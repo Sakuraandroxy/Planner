@@ -22,7 +22,7 @@ from planner.assembly import (
 )
 from planner.simulator import WorkerEvent, WorkerEventKind
 from planner.domain import QueuedWaypoint
-from planner.domain import MODE_CONTINUOUS
+from planner.runtime import MODE_CONTINUOUS
 from planner.domain import WEATHER_FIELDS
 from planner.errors import SimulatorNotOwned
 from planner.runtime import TrajectoryHub

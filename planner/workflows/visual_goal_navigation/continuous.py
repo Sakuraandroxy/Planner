@@ -7,7 +7,7 @@ from .targeting import VisualGoalRefresh
 from planner.domain import ContinuousTrackingSettings
 from planner.domain import QueueObservationAnchor
 from planner.domain import MotionSegment, MotionTrajectory
-from planner.domain import MODE_CONTINUOUS
+from planner.runtime import MODE_CONTINUOUS
 from planner.domain import (
     GoalVisibility,
     VisualGoalPlanningContext,

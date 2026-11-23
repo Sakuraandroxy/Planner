@@ -35,7 +35,7 @@ import time
 from collections.abc import Callable
 
 from .worker_protocol import TaskSubmission, WorkerEvent, WorkerEventKind
-from planner.domain import snapshot_from_payload
+from planner.runtime import snapshot_from_payload
 from planner.domain import weather_catalog_from_payload
 
 #: How long the child may take to exit after it is asked nicely.

@@ -19,7 +19,7 @@ from planner.domain import FreeNavigationParameters
 from planner.domain import ContinuousTrackingSettings
 from planner.domain import PlanningWindowInput
 from planner.domain import QueueObservationAnchor
-from planner.domain import MODE_CONTINUOUS
+from planner.runtime import MODE_CONTINUOUS
 from planner.errors import (
     ExecutionError,
     FreeNavigationStalled,

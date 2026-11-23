@@ -17,7 +17,7 @@ from planner.assembly import BackendUnavailable, ServerState
 from planner.assembly.controller.state import ServerStatus
 from planner.simulator import TaskSubmission
 from planner.domain import QueuedWaypoint
-from planner.domain import MODE_CONTINUOUS
+from planner.runtime import MODE_CONTINUOUS
 from planner.domain import WEATHER_CATALOG, WEATHER_FIELDS, merge_weather
 from planner.runtime import FrameHub
 from planner.runtime import LogBuffer

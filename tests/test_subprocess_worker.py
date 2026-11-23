@@ -155,7 +155,7 @@ def test_a_trajectory_snapshot_reaches_the_hub_and_not_the_event_queue():
     publish several times per control period -- that would starve READY and
     FINISHED out of the queue that carries them.
     """
-    from planner.domain import (
+    from planner.runtime import (
         QueueSnapshot,
         TrajectoryPointSnapshot,
         TrajectorySnapshot,

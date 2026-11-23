@@ -18,6 +18,7 @@
 - 位置保持：`PositionHold` 的到位窗口与可见性判定。
 - 后台调用：`ModelCallService`、`BackgroundOperation` 的单飞模型/数据调用与超时隔离。
 - 汇与日志：`FrameHub`、`TrajectoryHub`、`LogBuffer`、`StreamTimeline`、`ControlTelemetry`。
+- 剩余轨迹遥测：`telemetry.py` 的快照类型、`build_queue_snapshot` 与跨进程 payload 编解码。
 
 不管什么
 - 任务是否完成、何时暂停、补点授权与否：见 [workflows](./workflows.md)。
@@ -33,7 +34,7 @@ grep -rn "planner.workflows\|planner.assembly\|planner.adapters\|planner.simulat
 
 ## 3 输入与输出
 
-入口 `planner/runtime/__init__.py`，导出 24 个名字（`__all__` 在 planner/runtime/__init__.py:25-50）。
+入口 `planner/runtime/__init__.py`，导出 37 个名字（`__all__` 在 planner/runtime/__init__.py:40-77）。
 
 典型输入：`MotionTrajectory` / `MotionSegment`（段执行）、`StreamGoalSource`（流执行的目标源）、`WorldTrajectory`（授权批量）、`PlanningSnapshot`（模型请求快照）、`MovingObservationSource`（移动帧源）、`CollisionState`、`ExecutionBudget`。
 
@@ -52,16 +53,24 @@ grep -rn "planner.workflows\|planner.assembly\|planner.adapters\|planner.simulat
 | `FrameHub` | 类（锁） | 最新相机帧的线程安全发布与等待 | planner/adapters/http/video.py:41、planner/server_bootstrap.py:30 |
 | `GuidedVehicle` | 类 | `Vehicle` 端口包装：读侧转引擎，段执行转控制循环 | planner/assembly/mission_assembly.py:229 |
 | `LogBuffer` | 类（锁） | 有界诊断日志与游标读取 | planner/assembly/controller/__init__.py:63 |
+| `MODE_CONTINUOUS` | 常量 `str` | 连续执行写入的遥测模式串 | planner/workflows/free_navigation/continuous.py:22、planner/workflows/visual_goal_navigation/continuous.py:10 |
+| `MODE_IDLE` / `MODE_NO_QUEUE` / `MODE_PENDING` | 常量 `str` | 空闲、无队列与待执行三种遥测模式串 | 无层外调用点，仅 telemetry.py 与 trajectory_hub.py |
+| `MODE_STOPPED_BATCH` | 常量 `str` | 批次结束停稳后的遥测模式串 | planner/workflows/free_navigation/workflow.py:28、planner/workflows/visual_goal_navigation/workflow.py:23 |
 | `ModelCallService` | 类（线程） | 单飞模型调用，超时后隔离在途结果直到线程自然返回 | planner/workflows/visual_goal_navigation/workflow.py:89、planner/workflows/free_navigation/workflow.py:119 |
 | `MotionPlanner` | Protocol | 世界轨迹到运动轨迹的策略接口 | planner/workflows/visual_goal_navigation/workflow.py:69 |
 | `MovingObservations` | 类 | 移动帧的有界抓取泵与失败预算 | planner/workflows/visual_goal_navigation/continuous.py:41、planner/workflows/free_navigation/continuous.py:91 |
 | `PlanningWindow` | 类 | 滑窗：授权队列、补点、在途候选收集 | planner/workflows/visual_goal_navigation/workflow.py:94 |
 | `PositionHold` | 类 | owner 线程位置保持与到位窗口判定 | planner/simulators/projectairsim/drone.py:121 |
 | `QueueFollower` | 类 | 连续路径的队列跟随器，只消费航点并给一拍命令 | planner/workflows/free_navigation/continuous.py:83 |
+| `QueueSnapshot` | 冻结 dataclass | 快照里的队列长度与容量 | 仅 tests/test_trajectory_hub.py:150 |
 | `SMOOTH_PROFILE` | 常量 `str` | 五次同步曲线的 profile 标识 | planner/workflows/basic_motion/workflow.py:86、planner/simulators/projectairsim/drone.py:203 |
 | `SynchronizedMotionPlanner` | 类 | 世界航点转带时长的 `MotionTrajectory` | planner/assembly/mission_assembly.py:231 |
 | `TrajectoryHub` | 类（锁） | 剩余轨迹面板快照的发布与读取 | planner/simulator/telemetry_relay.py:40、planner/server_bootstrap.py:19 |
+| `TrajectoryPointSnapshot` | 冻结 dataclass | 快照里的一个航点：世界位姿、直线距离与段长 | 仅 tests/test_trajectory_hub.py:151 |
+| `TrajectorySnapshot` | 冻结 dataclass | 控制台读的剩余路径快照 | planner/adapters/http/server_api.py:20、planner/simulator/telemetry_relay.py:20、planner/simulator/mission_child.py:36 |
+| `VehicleSnapshot` | 冻结 dataclass | 快照里的车位姿 | 仅 tests/test_trajectory_hub.py:151 |
 | `braking_speed` | 函数 | jerk 感知的刹车曲线速度上限 | 无层外调用点 |
+| `build_queue_snapshot` | 函数 | 由队列、位姿与容量算出快照，直线距离与段长都算 | 同层 planner/runtime/trajectory_hub.py:106 |
 | `close_resources` | 函数 | 逐项关闭并聚合失败 | planner/workflows/visual_goal_navigation/workflow.py:368、planner/workflows/free_navigation/workflow.py:189 |
 | `duration_for` | 函数 | 按位移/偏航上限算最短时长（`segment_motion` 版） | 仅 planner/runtime/motion/__init__.py:2 转出的另一份同名实现被任务层使用 |
 | `freeze_observation` | 函数 | 拷贝并按只读冻结 rgb 与深度 | planner/workflows/visual_goal_navigation/continuous.py:77、planner/workflows/visual_goal_navigation/workflow.py:286 |
@@ -69,6 +78,9 @@ grep -rn "planner.workflows\|planner.assembly\|planner.adapters\|planner.simulat
 | `heading_rate_deg_s` | 函数 | 航向误差到角速度命令的唯一律 | 无层外调用点 |
 | `plan_segment` | 函数 | 按控制率采样一条五次段（`segment_motion` 版） | 仅 tests/test_motion.py:8 |
 | `quintic` | 函数 | 归一化五次曲线 | 仅 tests/test_motion.py:8 |
+| `snapshot_from_payload` | 函数 | 管道字典还原快照，缺键或类型不符抛 `ValueError` | planner/simulator/subprocess_worker.py:38 |
+| `snapshot_to_payload` | 函数 | 快照转 JSON 安全字典，带上修订号 | planner/simulator/mission_child.py:36 |
+| `vehicle_snapshot` | 函数 | `WorldPose` 转 `VehicleSnapshot` | 同层 planner/runtime/trajectory_hub.py |
 
 二级入口 `planner.runtime.motion`（planner/runtime/motion/__init__.py:4）另转出 `duration_for`（synchronized 版），任务层从这里拿：planner/workflows/basic_motion/workflow.py:25。`planner.runtime.window`（planner/runtime/window/__init__.py:13）转出 `PlanningWindow`、`WorldWaypointQueue`、`SlowPlannerWorker`、`BackgroundContinuationPlanner`。
 
@@ -145,6 +157,7 @@ grep -rn "planner.workflows\|planner.assembly\|planner.adapters\|planner.simulat
 | `BudgetExceeded` | `ExecutionBudget.remaining <= 0` 或阶段 deadline 到期（loop.py:112-113,187-189,223-224；execution.py:77-82；window.py:112-115） | 任务层决定收尾，执行层不重试 |
 | `CollisionInterrupt` | `_poll_contact` 读到未处理接触（loop.py:115-122） | 只在 `ControlLoop` 内部处理，不外抛；预算耗尽时 `begin` 抛 `ExecutionError` |
 | `MotionPaused` | `pose_checkpoint` 返回真（loop.py:509） | 内部信号，转成 `ExecutionReceipt(paused=True)` |
+| `ValueError("unusable trajectory snapshot: ...")` | 管道消息缺 `active`、`queue`、`points` 等键，或数值不能转 float（telemetry.py:182） | `subprocess_worker` 视为事件损坏，丢掉该事件 |
 | `ModelCallTimeout` | 模型调用超时或结果晚于 deadline（model_calls.py:76-81）；窗口/后台同语义（window.py:189-191,218、background_operation.py:71-77）；`_BoundPlanner` 记图超时（window.py:52-56） | 本阶段失败并隔离在途结果，不要等待 |
 | `ProtocolError` | 队列非空时授权新批量、点数不是 5、快照 token/修订不符、时间线倒退、连续失败超限（queue.py:60-62,88-90,119-126、stream_timeline.py:15-22、window.py:196-197,266-267） | 丢弃本轮授权与模型输出，重新取帧 |
 | `ObservationError` | 移动帧连续失败达上限（moving_observations.py:24-35） | 任务层结束连续阶段 |
@@ -173,7 +186,7 @@ grep -rn "planner.workflows\|planner.assembly\|planner.adapters\|planner.simulat
 
 ## 8 与其他层的联动
 
-- 上游 `domain`：`MotionLimits`、`MotionTrajectory`、`ExecutionReceipt`、`TimedVehicleState`、`PlanningSnapshot`、`QueueObservationAnchor`、`TrajectorySnapshot`、`ControlTelemetry`。
+- 上游 `domain`：`MotionLimits`、`MotionTrajectory`、`ExecutionReceipt`、`TimedVehicleState`、`PlanningSnapshot`、`QueueObservationAnchor`、`WorldPose`、`QueuedWaypoint`。
 - 上游 `ports`：`Vehicle`（`GuidedVehicle` 兑现）、`StreamingVehicle`（控制循环的 `streaming`）、`PositionHoldVehicle`、`StreamGoalSource`（`run_stream` 的目标源）、`MovingObservationSource`、`TrajectoryPlanner`（`_BoundPlanner` 包装）。
 - 上游 `algorithms`：`bounded`、`reached`、`world_to_relative`、`relative_to_world`、`require_execution_anchor`、`TrajectoryValidator`、`RefillScheduler`。
 - 下游 `workflows`：`ControlLoop.execute` / `run_segment` / `run_stream`、`PlanningWindow` 全套、`ModelCallService`、`MovingObservations`、`freeze_observation`、`close_resources`。任务层持有编排，执行层只提供原语。

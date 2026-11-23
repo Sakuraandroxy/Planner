@@ -21,14 +21,14 @@
 - 端口 Protocol → [ports](./ports.md)。
 - 异常类型层级 → `planner/errors.py`，契约层的第三个入口，单文件不成包。`planner/domain/` 不 import 它，全包只抛 `ValueError`。
 - 规划、跟踪、伺服、碰撞退避的实现 → [algorithms](./algorithms.md) 与 [runtime](./runtime.md)。
-- HTTP 响应体结构 → [adapters](./adapters.md)。domain 只提供 `to_payload` 级的中转数据（`snapshot_to_payload`、`WeatherCatalog.to_payload`）。
+- HTTP 响应体结构 → [adapters](./adapters.md)。domain 只提供 `to_payload` 级的中转数据（`WeatherCatalog.to_payload`）；剩余轨迹快照的构造与编解码在 [runtime](./runtime.md) 的 `telemetry.py`。
 - 配置文件的读取时机与路径拼接 → `planner/config/loader.py`（adapters 与 assembly 的边界）。
 
 ## 3 输入与输出
 
 - 入口：`planner/domain/__init__.py`，`__all__` 117 个名字。`MotionModel` 被入口 import 且被 `planner/algorithms/motion/corridor.py:5`、`planner/runtime/motion/tracking.py:17` 按入口路径取用，已补进 `__all__`。`tests/test_public_surface.py:149` 的 `HARDCODED["domain"]` 与入口逐名比对（`:273` 把它登记为 `CALIBRATED`，`:362` 执行比对），多一个或少一个都失败。
 - 契约类型形态：`@dataclass(frozen=True)` 与 `class X(str, Enum)`。可变字段一律在 `__post_init__` 里用 `object.__setattr__` 归一（`planner/domain/observation.py:110`、`:137`）。
-- 返回：纯值对象，无副作用，无 I/O。例外是 `parse_family_catalog` 接收已解析的 YAML 字典（`planner/domain/engine_family.py:242`），以及 `snapshot_from_payload` 接收 `dict`（`planner/domain/trajectory_telemetry.py:116`）。
+- 返回：纯值对象，无副作用，无 I/O。例外是 `parse_family_catalog` 接收已解析的 YAML 字典（`planner/domain/engine_family.py:242`）。
 - 异常：只有 `ValueError`。ctor 校验失败、`require_supported` 命令与能力不符（`planner/domain/motion.py:102`）、`validate_view_mode` 未知视图（`planner/domain/view.py:66`）都是 `ValueError`。
 - 层外引用面：`planner/` 内 113 个文件 import `planner.domain`，分布为 adapters 18、algorithms 12、assembly 8、ports 10、runtime 21、simulator 3、simulators 20、workflows 21。
 
@@ -154,22 +154,6 @@
 | `TimedVehicleState` | 冻结 dataclass | 实测位姿、时间戳、速度、姿态、偏航角速度 | 7 个文件，`runtime/position_hold.py`、`simulators/projectairsim/coordinates.py` 等 |
 | `QueueObservationAnchor` | 冻结 dataclass | 队列修订号与锚点快照，用于图像与队列对齐 | `runtime/stream_timeline.py`、两个连续任务 workflow |
 
-### 轨迹遥测（`trajectory_telemetry.py`）
-
-| 名字 | 类型 | 用途 | 层外调用点 |
-| --- | --- | --- | --- |
-| `MODE_IDLE` / `MODE_PENDING` / `MODE_NO_QUEUE` | 字符串常量 | 遥测模式串 | `runtime/trajectory_hub.py` |
-| `MODE_CONTINUOUS` | 字符串常量 | 连续执行模式串 | `workflows/free_navigation/continuous.py`、`workflows/visual_goal_navigation/continuous.py` |
-| `MODE_STOPPED_BATCH` | 字符串常量 | 批次结束后停稳的模式串 | `workflows/free_navigation/workflow.py`、`workflows/visual_goal_navigation/workflow.py` |
-| `TrajectorySnapshot` | 冻结 dataclass | 控制台读的剩余路径快照 | `runtime/trajectory_hub.py`、`adapters/http/server_api.py`、`simulator/telemetry_relay.py` |
-| `QueueSnapshot` | 冻结 dataclass | 队列长度与容量 | `runtime/trajectory_hub.py` |
-| `VehicleSnapshot` | 冻结 dataclass | 快照里的车位姿 | — |
-| `TrajectoryPointSnapshot` | 冻结 dataclass | 快照里的一个航点，含两点距离 | — |
-| `build_queue_snapshot` | 函数 | 由队列与位姿算出快照，直线距离与段长都算 | `runtime/trajectory_hub.py:106` |
-| `vehicle_snapshot` | 函数 | `WorldPose` 转 `VehicleSnapshot` | `runtime/trajectory_hub.py` |
-| `snapshot_to_payload` | 函数 | 快照转 JSON 安全字典，跨子进程管道 | `simulator/mission_child.py:245` |
-| `snapshot_from_payload` | 函数 | 字典还原快照，缺字段抛 `ValueError` | `simulator/subprocess_worker.py:106` |
-
 ### 引擎族与能力位（`engine_family.py`）
 
 | 名字 | 类型 | 用途 | 层外调用点 |
@@ -207,7 +191,7 @@
 2. 观测进入契约。引擎侧造 `Observation`，`planner/domain/observation.py:107` 起校验：`rgb` 必须 HxWx3、`depth_m` 必须匹配 `depth_intrinsics`、`camera_matrix` 必须 4x4、`depth_kind` 只能是两种取值；缺省字段在这里补齐（`depth_intrinsics`、`rotation_camera_to_world`、`camera_position_world`）。
 3. 规划输出落到 `RelativeTrajectory`。`planner/adapters/trajectory_planner/response_parser.py:40` 构造，构造期只校验是 tuple 且元素类型正确（`planner/domain/trajectory.py:16`）；数值合法性由 `planner/algorithms/trajectory_validation.py` 负责。
 4. 命令下发前过能力门。`planner/runtime/motion/tracking.py:60` 与 `:61` 按 `MotionCapability.model` 造 `CarCommand` 或 `HolonomicCommand`；引擎侧 `stream_command` 第一行调 `require_supported`（`planner/simulators/airsim/vehicle.py:223`、`planner/simulators/projectairsim/drone.py:292`、`rover.py:268`），实例类型与模型不符或倒车不被允许时抛 `ValueError`。
-5. 遥测跨进程。`planner/runtime/trajectory_hub.py:106` 调 `build_queue_snapshot` 造快照；`planner/simulator/mission_child.py:245` 调 `snapshot_to_payload` 塞进管道；`planner/simulator/subprocess_worker.py:106` 用 `snapshot_from_payload` 还原后交给 `adapters/http`。
+5. 遥测跨进程。`planner/runtime/trajectory_hub.py` 调 `build_queue_snapshot` 造快照；`planner/simulator/mission_child.py` 调 `snapshot_to_payload` 塞进管道；`planner/simulator/subprocess_worker.py` 用 `snapshot_from_payload` 还原后交给 `adapters/http`。三个函数都在 `planner/runtime/telemetry.py`。
 6. 结果上行。三个任务包各自造 `StageSummary` 与 `StageResult`（`planner/workflows/common/evidence.py`），`planner/assembly/mission_runner.py` 汇总成 `MissionResult`。
 
 ## 6 失败模式
@@ -219,7 +203,6 @@
 | `ValueError`（`require_supported`） | `HolonomicCommand` 发给阿克曼车，或 `allows_reverse` 为假时收到倒车命令（`planner/domain/motion.py:102`） | 引擎 `stream_command` 直接抛，往上到 `runtime` 的 `ExecutionError` 路径 |
 | `ValueError`（`Observation`） | 图像形状、内参、`depth_kind`、矩阵尺寸不符（`planner/domain/observation.py:107`） | 适配层捕获转 `ObservationError`；`domain` 自己不捕获 |
 | `ValueError`（`validate_depth_protocol`） | 映射名未知，或 `log1p_inverse_gray_v2` 的区间不是 0-200（`planner/domain/depth.py:10`） | 配置加载期抛；显示期由 `planner/algorithms/depth/render.py:24` 开头再校验一次 |
-| `ValueError`（`snapshot_from_payload`） | 管道消息缺 `active`、`queue`、`points` 等键，或数值不能转 float（`planner/domain/trajectory_telemetry.py:162`） | 包成 `ValueError("unusable trajectory snapshot: ...")`，`subprocess_worker` 视为事件损坏 |
 | `KeyError`（`weather_catalog_from_payload`） | 线格式里字段缺 `id` 或 `label`（`planner/domain/weather.py:93`） | 未包装成 `ValueError`，与快照解码不一致，见 Qdomain11 |
 | `ValueError`（`parse_family_catalog`） | `capabilities` 块出现、未知键、缺 `argv`、端口越界、`driver: script`（`planner/domain/engine_family.py:242` 起） | 启动期抛，报错文本带引擎 id 与期望键集合 |
 | `ValueError`（`VisualGoalLimits`） | 任一字段非有限数、`confirmation_count < 2`、`search_step > search_half_span`、扫描步数超过 12（`planner/domain/visual_goal_limits.py:53`） | 配置加载期抛 |
@@ -266,11 +249,9 @@
 
 ## 10 已知缺口
 
-契约层不是纯类型层：两个模块带着实现，另外绝大多数数值默认值是没有标定记录的经验值。两项都按现状写在下面，逐条给调用点与影响。
+契约层不是纯类型层：一个模块带着实现，另外绝大多数数值默认值是没有标定记录的经验值。两项都按现状写在下面，逐条给调用点与影响。
 
-### 10.1 带实现的两个模块（M1）
-
-`planner/domain/trajectory_telemetry.py`（213 行）：`snapshot_to_payload`（`:71`）、`snapshot_from_payload`（`:116`）、`build_queue_snapshot`（`:165`）是快照构造与线格式编解码。层外调用点：`planner/runtime/trajectory_hub.py:106`、`planner/simulator/mission_child.py:245`、`planner/simulator/subprocess_worker.py:106`、`planner/adapters/http/server_api.py`、`planner/simulator/telemetry_relay.py`。风险：改字段即改跨进程线格式，两个进程必须同批上线。
+### 10.1 带实现的一个模块（M1）
 
 `planner/domain/engine_family.py`（306 行）：`SimulatorFamily`（`:90`）、`FamilyCatalog`（`:189`）、`parse_family_catalog`（`:242`）是 `config/simulators.yaml` 的 schema 与解析器。层外调用点：`planner/config/loader.py:127`、`planner/config/vehicles.py`、`planner/adapters/http/schemas.py`。风险：改键名等于改配置文件格式，`parse_family_catalog` 对未知键直接报错，旧配置会启动失败。
 
