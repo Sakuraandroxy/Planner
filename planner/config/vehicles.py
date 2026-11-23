@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from ..domain.engine_family import FamilyCatalog
+from .engine_family import FamilyCatalog
 from .maps import MapCatalog
 
 

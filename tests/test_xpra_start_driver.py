@@ -20,7 +20,7 @@ import pytest
 import yaml
 
 from planner.config import MapCatalog, MapEntry, MapScene, SimulatorSettings
-from planner.domain import SimulatorFamily, parse_family_catalog
+from planner.config import SimulatorFamily, parse_family_catalog
 from planner.errors import SimulatorNotOwned, SimulatorRestartError
 from planner.simulator.processes import (
     UnattributedListener,

@@ -14,7 +14,6 @@
 - 值类型的定义与构造期不变量校验，全部放在 `__post_init__`，抛 `ValueError`。
 - 枚举与字符串常量：`TaskKind`、`MotionModel`、`VisualGoalStatus`、`MODE_*`、`WEATHER_*`、`VIEW_*`。
 - 纯函数换算与校验：角度绕回（`planner/domain/pose.py:23`）、坐标旋转（`pose.py:54`）、深度协议（`planner/domain/depth.py:10`）、天气值校验（`planner/domain/weather.py:116`）。
-- 一份配置 schema：`config/simulators.yaml` 的 `SimulatorFamily`、`FamilyCatalog`、`parse_family_catalog`（`planner/domain/engine_family.py:90`、`:189`、`:242`）。
 
 不管：
 
@@ -22,13 +21,13 @@
 - 异常类型层级 → `planner/errors.py`，契约层的第三个入口，单文件不成包。`planner/domain/` 不 import 它，全包只抛 `ValueError`。
 - 规划、跟踪、伺服、碰撞退避的实现 → [algorithms](./algorithms.md) 与 [runtime](./runtime.md)。
 - HTTP 响应体结构 → [adapters](./adapters.md)。domain 只提供 `to_payload` 级的中转数据（`WeatherCatalog.to_payload`）；剩余轨迹快照的构造与编解码在 [runtime](./runtime.md) 的 `telemetry.py`。
-- 配置文件的读取时机与路径拼接 → `planner/config/loader.py`（adapters 与 assembly 的边界）。
+- 配置文件的读取时机与路径拼接 → `planner/config/loader.py`（adapters 与 assembly 的边界）。`config/simulators.yaml` 的 schema 与解析器在 `planner/config/engine_family.py`，未知键、缺 `argv`、端口越界、`driver: script` 都在启动期抛 `ValueError`，报错文本带引擎 id 与期望键集合。
 
 ## 3 输入与输出
 
 - 入口：`planner/domain/__init__.py`，`__all__` 117 个名字。`MotionModel` 被入口 import 且被 `planner/algorithms/motion/corridor.py:5`、`planner/runtime/motion/tracking.py:17` 按入口路径取用，已补进 `__all__`。`tests/test_public_surface.py:149` 的 `HARDCODED["domain"]` 与入口逐名比对（`:273` 把它登记为 `CALIBRATED`，`:362` 执行比对），多一个或少一个都失败。
 - 契约类型形态：`@dataclass(frozen=True)` 与 `class X(str, Enum)`。可变字段一律在 `__post_init__` 里用 `object.__setattr__` 归一（`planner/domain/observation.py:110`、`:137`）。
-- 返回：纯值对象，无副作用，无 I/O。例外是 `parse_family_catalog` 接收已解析的 YAML 字典（`planner/domain/engine_family.py:242`）。
+- 返回：纯值对象，无副作用，无 I/O。
 - 异常：只有 `ValueError`。ctor 校验失败、`require_supported` 命令与能力不符（`planner/domain/motion.py:102`）、`validate_view_mode` 未知视图（`planner/domain/view.py:66`）都是 `ValueError`。
 - 层外引用面：`planner/` 内 113 个文件 import `planner.domain`，分布为 adapters 18、algorithms 12、assembly 8、ports 10、runtime 21、simulator 3、simulators 20、workflows 21。
 
@@ -154,14 +153,11 @@
 | `TimedVehicleState` | 冻结 dataclass | 实测位姿、时间戳、速度、姿态、偏航角速度 | 7 个文件，`runtime/position_hold.py`、`simulators/projectairsim/coordinates.py` 等 |
 | `QueueObservationAnchor` | 冻结 dataclass | 队列修订号与锚点快照，用于图像与队列对齐 | `runtime/stream_timeline.py`、两个连续任务 workflow |
 
-### 引擎族与能力位（`engine_family.py`）
+### 能力位（`capabilities.py`）
 
 | 名字 | 类型 | 用途 | 层外调用点 |
 | --- | --- | --- | --- |
 | `Capabilities` | 冻结 dataclass | 控制台可提供的载具、视图、动作、任务类型、天气字段 | `assembly/requirements.py:97`、`assembly/controller/__init__.py` |
-| `SimulatorFamily` | 冻结 dataclass | `simulators.yaml` 里一个引擎的启动参数、端口、相机、连接信息 | `adapters/http/schemas.py`、`config/loader.py` |
-| `FamilyCatalog` | 冻结 dataclass | 引擎条目集合，带 `entry` / `require` / `ids` / `labels` | `config/loader.py:127`、`config/vehicles.py` |
-| `parse_family_catalog` | 函数 | 校验并解析 `simulators.yaml`，未知键报错 | `config/loader.py:127` |
 
 ### 视图与天气（`view.py`、`weather.py`）
 
@@ -204,7 +200,6 @@
 | `ValueError`（`Observation`） | 图像形状、内参、`depth_kind`、矩阵尺寸不符（`planner/domain/observation.py:107`） | 适配层捕获转 `ObservationError`；`domain` 自己不捕获 |
 | `ValueError`（`validate_depth_protocol`） | 映射名未知，或 `log1p_inverse_gray_v2` 的区间不是 0-200（`planner/domain/depth.py:10`） | 配置加载期抛；显示期由 `planner/algorithms/depth/render.py:24` 开头再校验一次 |
 | `KeyError`（`weather_catalog_from_payload`） | 线格式里字段缺 `id` 或 `label`（`planner/domain/weather.py:93`） | 未包装成 `ValueError`，与快照解码不一致，见 Qdomain11 |
-| `ValueError`（`parse_family_catalog`） | `capabilities` 块出现、未知键、缺 `argv`、端口越界、`driver: script`（`planner/domain/engine_family.py:242` 起） | 启动期抛，报错文本带引擎 id 与期望键集合 |
 | `ValueError`（`VisualGoalLimits`） | 任一字段非有限数、`confirmation_count < 2`、`search_step > search_half_span`、扫描步数超过 12（`planner/domain/visual_goal_limits.py:53`） | 配置加载期抛 |
 
 配置层的转换失败没有异常包装：`planner/config/loader.py` 里 `float(...)` / `int(...)` 的 `TypeError`、`ValueError` 直接冒到启动路径，报错文本是 Python 原生格式，不带字段路径。
@@ -249,15 +244,9 @@
 
 ## 10 已知缺口
 
-契约层不是纯类型层：一个模块带着实现，另外绝大多数数值默认值是没有标定记录的经验值。两项都按现状写在下面，逐条给调用点与影响。
+契约层只剩类型定义与构造期校验，没有实现也没有 I/O。
 
-### 10.1 带实现的一个模块（M1）
-
-`planner/domain/engine_family.py`（306 行）：`SimulatorFamily`（`:90`）、`FamilyCatalog`（`:189`）、`parse_family_catalog`（`:242`）是 `config/simulators.yaml` 的 schema 与解析器。层外调用点：`planner/config/loader.py:127`、`planner/config/vehicles.py`、`planner/adapters/http/schemas.py`。风险：改键名等于改配置文件格式，`parse_family_catalog` 对未知键直接报错，旧配置会启动失败。
-
-搬迁待办已按裁决记入 `docs/TODO.md`（由指挥层写，本层不代办）。
-
-### 10.2 阈值是经验值（M7）
+### 10.1 阈值是经验值（M7）
 
 除航向环以外，本层所有数值默认值都没有标定记录，取值来自试飞观察，标注为「经验值，未标定」。
 

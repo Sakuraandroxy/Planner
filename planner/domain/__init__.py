@@ -1,6 +1,7 @@
 """Pure domain types: no simulator or network dependency."""
 
 from .basic_motion import BasicMotionParameters, BasicMotionResult, BasicMotionStatus
+from .capabilities import Capabilities
 from .depth import (
     FAR_VALID_PIXEL_VALUE,
     INVALID_DEPTH_SENTINEL_M,
@@ -13,12 +14,6 @@ from .depth_foreground import (
     DepthForegroundResult,
     DepthForegroundSettings,
     DepthPointLayer,
-)
-from .engine_family import (
-    Capabilities,
-    FamilyCatalog,
-    SimulatorFamily,
-    parse_family_catalog,
 )
 from .execution import (
     CollisionContact,
@@ -152,7 +147,6 @@ __all__ = [
     "ExecutionReceipt",
     "ExecutionRecord",
     "FAR_VALID_PIXEL_VALUE",
-    "FamilyCatalog",
     "FreeNavigationParameters",
     "FreeNavigationResult",
     "FreeNavigationStatus",
@@ -185,7 +179,6 @@ __all__ = [
     "RelativeTrajectory",
     "ResultMeasurement",
     "SHARED_DEPTH_MAPPING",
-    "SimulatorFamily",
     "SlidingWindowSettings",
     "StageResult",
     "StageSummary",
@@ -224,7 +217,6 @@ __all__ = [
     "depth_display_description",
     "front_view_for",
     "merge_weather",
-    "parse_family_catalog",
     "relative_to_world",
     "require_supported",
     "resolve_yaw_delta_deg",

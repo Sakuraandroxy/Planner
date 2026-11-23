@@ -7,6 +7,11 @@ keeps working across layers; the submodules hold the implementation.
 from __future__ import annotations
 
 from .camera import build_camera_settings
+from .engine_family import (
+    FamilyCatalog,
+    SimulatorFamily,
+    parse_family_catalog,
+)
 from .loader import (
     PROFILE_SECTIONS,
     AppConfig,
@@ -58,6 +63,7 @@ __all__ = [
     "CollisionSettings",
     "DepthSettings",
     "DroneSettings",
+    "FamilyCatalog",
     "FreeNavigationSettings",
     "MapCatalog",
     "MapEntry",
@@ -67,6 +73,7 @@ __all__ = [
     "ProfileInfo",
     "ProjectAirSimSettings",
     "ServerSettings",
+    "SimulatorFamily",
     "SimulatorSettings",
     "TargetDetectionSettings",
     "TaskCompletionSettings",
@@ -85,6 +92,7 @@ __all__ = [
     "load_config",
     "load_map_catalog",
     "load_vehicle_models",
+    "parse_family_catalog",
     "profile_catalog",
     "profile_config_path",
     "profile_drift",
