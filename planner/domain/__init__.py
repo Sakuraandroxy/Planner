@@ -4,6 +4,7 @@ from .basic_motion import BasicMotionParameters, BasicMotionResult, BasicMotionS
 from .depth import (
     FAR_VALID_PIXEL_VALUE,
     INVALID_DEPTH_SENTINEL_M,
+    LEGACY_DEPTH_MAPPING,
     SHARED_DEPTH_MAPPING,
     depth_display_description,
     validate_depth_protocol,
@@ -13,7 +14,6 @@ from .depth_foreground import (
     DepthForegroundSettings,
     DepthPointLayer,
 )
-from .depth_visualization import render_depth
 from .engine_family import (
     Capabilities,
     FamilyCatalog,
@@ -178,6 +178,7 @@ __all__ = [
     "HeadingHoldSettings",
     "HolonomicCommand",
     "INVALID_DEPTH_SENTINEL_M",
+    "LEGACY_DEPTH_MAPPING",
     "MODE_CONTINUOUS",
     "MODE_IDLE",
     "MODE_NO_QUEUE",
@@ -250,7 +251,6 @@ __all__ = [
     "merge_weather",
     "parse_family_catalog",
     "relative_to_world",
-    "render_depth",
     "require_supported",
     "resolve_yaw_delta_deg",
     "snapshot_from_payload",

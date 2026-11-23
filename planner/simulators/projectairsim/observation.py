@@ -21,7 +21,7 @@ import cv2
 import numpy as np
 
 from ...config import CameraSettings, DepthSettings
-from planner.domain import render_depth
+from planner.algorithms import render_depth
 from planner.domain import ExecutionBudget
 from planner.domain import Observation
 from ...errors import BudgetExceeded, ObservationError

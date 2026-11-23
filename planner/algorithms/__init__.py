@@ -4,6 +4,7 @@
 ``planner.algorithms.motion``，其余运动律与片段采样仍在 ``planner.runtime.motion``，尚未迁入。
 """
 
+from .depth.render import render_depth
 from .motion import bounded, corridor_default, passed_lateral_corridor, reached
 from .sliding_window.scheduler import RefillScheduler
 from .target_coordinates import horizontal_distance, point_in_horizontal_body
@@ -23,6 +24,7 @@ __all__ = [
     "passed_lateral_corridor",
     "point_in_horizontal_body",
     "reached",
+    "render_depth",
     "relative_to_world",
     "require_execution_anchor",
     "world_pose_delta_in_reference_frame",

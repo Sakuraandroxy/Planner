@@ -128,7 +128,7 @@
 | `DepthForegroundResult` | 冻结 dataclass | 滤波是否生效、拒绝点数、点的分层 | `algorithms/targeting/depth_foreground.py` |
 | `DepthPointLayer` | 冻结 dataclass | 单点的近层与远层深度区间 | `algorithms/targeting/depth_foreground.py` |
 
-### 观测与深度显示（`observation.py`、`depth.py`、`depth_visualization.py`）
+### 观测与深度显示（`observation.py`、`depth.py`）
 
 | 名字 | 类型 | 用途 | 层外调用点 |
 | --- | --- | --- | --- |
@@ -137,9 +137,9 @@
 | `SHARED_DEPTH_MAPPING` | 字符串常量 | 当前显示协议 `log1p_inverse_gray_v2` | — |
 | `INVALID_DEPTH_SENTINEL_M` | 浮点常量 | 65500.0，引擎侧无效深度哨兵 | `algorithms/free_space.py` |
 | `FAR_VALID_PIXEL_VALUE` | 整型常量 | 16，最远有效深度对应的灰度值 | — |
-| `validate_depth_protocol` | 函数 | 校验映射名与上下限是否匹配 | `config/sections.py`、`depth_visualization.py` |
+| `LEGACY_DEPTH_MAPPING` | 字符串常量 | 旧显示协议 `log_inverse_gray_v1`，`render_depth` 的默认值 | `algorithms/depth/render.py` |
+| `validate_depth_protocol` | 函数 | 校验映射名与上下限是否匹配 | `config/sections.py`、`algorithms/depth/render.py` |
 | `depth_display_description` | 函数 | 生成给模型提示词的深度说明文本 | `adapters/trajectory_planner/prompts/base.py`、`adapters/task_completion/prompts/visual_goal_completion.py` |
-| `render_depth` | 函数 | 把米制深度渲成三通道显示图，不改输入 | `simulators/airsim/observation_source.py`、`simulators/projectairsim/observation.py` |
 
 ### 滑窗与流式（`sliding_window.py`、`planning_window.py`、`streaming.py`）
 
@@ -218,7 +218,7 @@
 | `ValueError`（`CarCommand`） | `reverse` 与 `forward_speed_mps` 符号不一致（`planner/domain/motion.py:79`） | 命令构造函数抛出，属于编程错误 |
 | `ValueError`（`require_supported`） | `HolonomicCommand` 发给阿克曼车，或 `allows_reverse` 为假时收到倒车命令（`planner/domain/motion.py:102`） | 引擎 `stream_command` 直接抛，往上到 `runtime` 的 `ExecutionError` 路径 |
 | `ValueError`（`Observation`） | 图像形状、内参、`depth_kind`、矩阵尺寸不符（`planner/domain/observation.py:107`） | 适配层捕获转 `ObservationError`；`domain` 自己不捕获 |
-| `ValueError`（`validate_depth_protocol`） | 映射名未知，或 `log1p_inverse_gray_v2` 的区间不是 0-200（`planner/domain/depth.py:10`） | 配置加载期抛；显示期由 `render_depth` 开头再校验一次 |
+| `ValueError`（`validate_depth_protocol`） | 映射名未知，或 `log1p_inverse_gray_v2` 的区间不是 0-200（`planner/domain/depth.py:10`） | 配置加载期抛；显示期由 `planner/algorithms/depth/render.py:24` 开头再校验一次 |
 | `ValueError`（`snapshot_from_payload`） | 管道消息缺 `active`、`queue`、`points` 等键，或数值不能转 float（`planner/domain/trajectory_telemetry.py:162`） | 包成 `ValueError("unusable trajectory snapshot: ...")`，`subprocess_worker` 视为事件损坏 |
 | `KeyError`（`weather_catalog_from_payload`） | 线格式里字段缺 `id` 或 `label`（`planner/domain/weather.py:93`） | 未包装成 `ValueError`，与快照解码不一致，见 Qdomain11 |
 | `ValueError`（`parse_family_catalog`） | `capabilities` 块出现、未知键、缺 `argv`、端口越界、`driver: script`（`planner/domain/engine_family.py:242` 起） | 启动期抛，报错文本带引擎 id 与期望键集合 |
@@ -266,11 +266,9 @@
 
 ## 10 已知缺口
 
-契约层不是纯类型层：三个模块带着实现，另外绝大多数数值默认值是没有标定记录的经验值。两项都按现状写在下面，逐条给调用点与影响。
+契约层不是纯类型层：两个模块带着实现，另外绝大多数数值默认值是没有标定记录的经验值。两项都按现状写在下面，逐条给调用点与影响。
 
-### 10.1 带实现的三个模块（M1）
-
-`planner/domain/depth_visualization.py`（34 行）：`render_depth`（`:16`）用 numpy 把米制深度渲成三通道显示图。层外调用点：`planner/simulators/airsim/observation_source.py`、`planner/simulators/projectairsim/observation.py`、`scripts/smoke_projectairsim_drone.py`；测试 `tests/test_depth_visualization.py`。风险：渲染语义变化会同时改两个引擎发给模型的图像。
+### 10.1 带实现的两个模块（M1）
 
 `planner/domain/trajectory_telemetry.py`（213 行）：`snapshot_to_payload`（`:71`）、`snapshot_from_payload`（`:116`）、`build_queue_snapshot`（`:165`）是快照构造与线格式编解码。层外调用点：`planner/runtime/trajectory_hub.py:106`、`planner/simulator/mission_child.py:245`、`planner/simulator/subprocess_worker.py:106`、`planner/adapters/http/server_api.py`、`planner/simulator/telemetry_relay.py`。风险：改字段即改跨进程线格式，两个进程必须同批上线。
 
