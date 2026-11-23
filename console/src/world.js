@@ -69,7 +69,8 @@ async function loadWorldOptions() {
   try {
     const body = await request("/api/world/options");
     worldCatalog = body;
-    if (body.capabilities) caps = body.capabilities;
+    // 显式 null 表示没有能力报告，按不可用处理；不能用 `if (caps)` 判值。
+    if (body && "capabilities" in body) caps = body.capabilities;
     if (Array.isArray(body.maps) && body.selection && body.selection.map) {
       // The simulator follows the selected map, so switching scenes re-gates
       // the controls without waiting for the next status poll.

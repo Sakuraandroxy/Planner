@@ -4,8 +4,10 @@
 采样五次曲线、限幅后下发、停稳验证，任何一步失败都带着已完成段数与剩余轨迹上抛。
 ``run_stream`` 是连续路径的一拍：读一次状态、向目标源要期望命令、限幅后下发。
 它可以重复调用，返回即交给任务层；取帧、窗口轮询与暂停判定都在两次调用之间，
-调用方不调用它就是暂停。两个周期只住在这里：段拍的 ``SEGMENT_PERIOD_S`` 与
-流拍的 ``1 / MotionLimits.control_hz``。
+调用方不调用它就是暂停。两个通道的节拍不同，各自有单一出处：段拍读
+``MotionLimits.segment_period_s``（默认 0.03 s），流拍是 ``1 / control_hz``（默认
+20 Hz）。段执行每一拍要判停稳、算剩余距离并重锚，采样必须细；流执行只是命令下发
+节拍，要跟引擎让步稳定。两者不共用一个值。
 """
 
 from __future__ import annotations
@@ -37,9 +39,6 @@ from ..collision_recovery import CollisionRecovery
 from .synchronized import duration_for
 from .record import StreamRecorder
 from .tracking import SegmentSynthesizer, command_for, measured_action
-
-#: 段执行一拍。固定值，不进配置（裁决 R9）。
-SEGMENT_PERIOD_S = 0.030
 
 #: 段执行在停稳前允许花掉的最长时间，装配层按载具配置覆盖。
 DEFAULT_MOTION_TIMEOUT_S = 60.0
@@ -142,9 +141,9 @@ class ControlLoop:
         self.recorder.reset(self.streaming.current_pose())
 
     def _back_off(self, plan) -> None:
-        """沿当前航向倒车 ``plan.distance_m``，按 ``SEGMENT_PERIOD_S`` 每拍下发。"""
+        """沿当前航向倒车 ``plan.distance_m``，按 ``limits.segment_period_s`` 每拍下发。"""
         limits = self.limits
-        period = SEGMENT_PERIOD_S
+        period = limits.segment_period_s
         if limits.max_speed_mps <= 0:
             raise ExecutionError("collision backoff requires a positive speed limit")
         expected = (
@@ -381,12 +380,12 @@ class ControlLoop:
             self._running = False
 
     def _drive_segment(self, segment, sink, budget, pose_checkpoint) -> None:
-        """按 ``SEGMENT_PERIOD_S`` 一拍走完一段，并在停稳窗口内验证到位。"""
+        """按 ``limits.segment_period_s`` 一拍走完一段，并在停稳窗口内验证到位。"""
         limits = self.limits
         speed = segment.target_speed_mps
         if speed is None:
             raise ExecutionError("smooth motion requires a speed limit")
-        period = SEGMENT_PERIOD_S
+        period = limits.segment_period_s
         goal_yaw = segment.start.yaw_deg + resolve_yaw_delta_deg(
             segment.start.yaw_deg, segment.end.yaw_deg, segment.yaw_delta_deg
         )

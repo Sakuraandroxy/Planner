@@ -55,6 +55,40 @@ def missing_catalog(name: str) -> HTTPException:
     )
 
 
+def missing_hub(name: str) -> HTTPException:
+    """The service was built without the hub this route reads.
+
+    A route must never answer with an empty payload for a hub that was never
+    attached: the console would show an empty panel and no error.
+    """
+    return HTTPException(
+        503,
+        detail={
+            "reason": f"{name}_hub_missing",
+            "message": f"the {name} hub is not attached to this service",
+        },
+    )
+
+
+def unsupported(action: str, simulator: str, reason: str, message: str) -> HTTPException:
+    """501 for an action this deployment cannot serve, with a stated reason.
+
+    Two causes share this shape: the active simulator has no port for the
+    action (``capability_missing``), or the service was built without the
+    component that carries it (``*_hub_missing``). Clients branch on the
+    status code alone.
+    """
+    return HTTPException(
+        501,
+        detail={
+            "unsupported": action,
+            "simulator": simulator,
+            "reason": reason,
+            "message": message,
+        },
+    )
+
+
 def capabilities(controller):
     """Flags for the active map's simulator, as the controller reports them."""
     return controller.capabilities(), controller.active_simulator
@@ -66,16 +100,14 @@ def capability_gate(controller):
     def require(action):
         caps, simulator = capabilities(controller)
         if caps is not None and not caps.supports(action):
-            raise HTTPException(
-                501,
-                detail={
-                    "unsupported": action,
-                    "simulator": simulator,
-                    "message": (
-                        f"simulator '{simulator}' does not implement the port "
-                        f"behind {action}"
-                    ),
-                },
+            raise unsupported(
+                action,
+                simulator,
+                "capability_missing",
+                (
+                    f"simulator '{simulator}' does not implement the port "
+                    f"behind {action}"
+                ),
             )
 
     return require

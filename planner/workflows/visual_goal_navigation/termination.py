@@ -16,6 +16,14 @@ class VisualGoalFailure(Exception):
 
 @dataclass
 class VisualGoalExitPolicy:
+    """一轮目标接近的退出判据与计数。
+
+    停滞判据一：单次执行位移与偏航同时低于阈值算「没动」，连续两次判 ``STUCK``。
+    出处：经验值，未标定（阈值写在 ``record_motion`` 里）。影响因素：段周期与
+    ``min_duration_s``（执行越短位移越小）、位姿测量噪声、速度下限、目标距离。
+    标定方法：同一目标重复执行，统计实际位移的分布，取能被速度下限解释的下界。
+    """
+
     limits: VisualGoalLimits
     planning_calls: int = 0
     unreliable: int = 0
@@ -23,6 +31,8 @@ class VisualGoalExitPolicy:
     stalled_moves: int = 0
 
     def record_motion(self, previous, current) -> None:
+        # 停滞判据一：0.2 m / 2.0 度算「没动」，连续 2 次判 STUCK。出处与影响因素见
+        # 类注释；这三个数是经验值，没有实测记录。
         translated = math.dist((previous.x, previous.y, previous.z), (current.x, current.y, current.z))
         yaw = abs(wrap_yaw_deg(current.yaw_deg-previous.yaw_deg))
         self.stalled_moves = self.stalled_moves+1 if translated < 0.2 and yaw < 2.0 else 0

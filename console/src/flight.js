@@ -186,6 +186,26 @@ function scheduleVideoRetry() {
   videoRetry = setTimeout(startVideo, 3000);
 }
 
+// 帧源缺席与能力位缺失都是 501，原因写在 ``detail.reason``。探一次就够了：
+// 拿到了就停止重试，拿不到说明是普通中断，交给重试路径。
+async function videoUnavailableReason() {
+  const controller = new AbortController();
+  try {
+    const response = await fetch("/api/video", {
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    if (response.status !== 501) return "";
+    const body = await response.json().catch(() => ({}));
+    const detail = (body && body.detail) || {};
+    return detail.reason || detail.message || "unsupported";
+  } catch (_) {
+    return "";
+  } finally {
+    controller.abort();
+  }
+}
+
 function xpraUrl() {
   const override = new URLSearchParams(location.search).get("xpra");
   let url;

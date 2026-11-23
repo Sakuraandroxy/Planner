@@ -17,7 +17,6 @@ from planner.domain import (
 )
 from planner.errors import BudgetExceeded, ExecutionError
 from planner.runtime import ControlLoop, SMOOTH_PROFILE
-from planner.runtime.motion.loop import SEGMENT_PERIOD_S
 from planner.runtime.motion.tracking import limit_vector
 
 LIMITS = MotionLimits(
@@ -148,7 +147,7 @@ def test_loop_drives_a_straight_segment_to_the_goal():
     # First command is at rest on the reference start.
     assert plant.commands[0][0].vx == pytest.approx(0.0)
     # Settling runs at least the configured settle window after the profile.
-    assert len(plant.commands) >= math.ceil(0.9375 / SEGMENT_PERIOD_S)
+    assert len(plant.commands) >= math.ceil(0.9375 / LIMITS.segment_period_s)
 
 
 def test_loop_reanchors_yaw_to_the_measured_heading():
@@ -245,7 +244,7 @@ def test_loop_times_out_when_the_rover_never_moves():
             MotionTrajectory((segment(pose, WorldPose(1.0, 0.0, 0.0, 0.0)),)),
             loop.segment_sink(),
         )
-    assert len(frozen.commands) >= math.ceil(1.5 / SEGMENT_PERIOD_S)
+    assert len(frozen.commands) >= math.ceil(1.5 / LIMITS.segment_period_s)
 
 
 def test_loop_rejects_a_duration_beyond_the_available_timeout():

@@ -185,14 +185,16 @@ function renderControls() {
 }
 
 // ---- capability gating -------------------------------------------------
-// Every predicate tolerates a null ``caps``: an older backend or a deployment
-// without config/simulators.yaml keeps offering every control.
+// ``caps`` 为 null 表示服务端没有能力报告：`/api/status` 与 `/api/world/options`
+// 在这种情况下显式给 `"capabilities": null`，所有可选控件按不可用处理。
 function hasAction(action) {
-  return !caps || !Array.isArray(caps.actions) || caps.actions.includes(action);
+  return Boolean(caps && Array.isArray(caps.actions) && caps.actions.includes(action));
 }
 
 function allowsVehicle(name) {
-  return !caps || !Array.isArray(caps.vehicles) || caps.vehicles.includes(name);
+  return Boolean(
+    caps && Array.isArray(caps.vehicles) && caps.vehicles.includes(name)
+  );
 }
 
 function show(node, visible) {
@@ -212,7 +214,7 @@ function applyCapabilities() {
   // numeric basic-motion task simply reports no pending waypoints, which is
   // true on both families and not a missing feature.
   const views =
-    caps && Array.isArray(caps.view_modes) ? caps.view_modes.length > 0 : true;
+    caps && Array.isArray(caps.view_modes) ? caps.view_modes.length > 0 : false;
   show($("view-modes"), views);
   show($("view-toggle"), views);
   const vehicleGroup = $("vehicle-modes");

@@ -918,13 +918,25 @@ def test_view_switch_unavailable_while_connecting():
     assert response.status_code == 503
 
 
-def test_trajectory_is_empty_without_a_hub():
+def test_trajectory_without_a_hub_is_a_503_with_a_reason():
     with _client(FakeController()) as client:
-        body = client.get("/api/trajectory").json()
-    assert body["active"] is False
-    assert body["mode"] == "idle"
-    assert body["points"] == []
-    assert body["queue"] == {"count": 0, "capacity": 0}
+        response = client.get("/api/trajectory")
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert detail["reason"] == "trajectory_hub_missing"
+    assert "trajectory" in detail["message"]
+
+
+def test_status_sends_null_capabilities_when_the_map_has_no_report():
+    """能力位不可得时是显式 null，不是省略键；前端只靠 null 判定不可用。"""
+    controller = FakeController()
+    controller.map = "nowhere"
+    with _client(controller) as client:
+        status = client.get("/api/status").json()
+        options = client.get("/api/world/options").json()
+    assert status["capabilities"] is None
+    assert "simulator" not in status
+    assert options["capabilities"] is None
 
 
 def test_trajectory_returns_the_published_queue():
@@ -1036,13 +1048,21 @@ def test_console_files_are_served():
         assert styles.headers["cache-control"] == "no-cache"
 
 
-def test_video_route_exists_only_with_frames():
+def test_video_without_a_frame_hub_is_a_501_with_a_reason():
+    """路由总是存在：帧源缺席与能力位缺席用同一个状态码与同一个字段说明。"""
     controller = FakeController()
     settings = ServerSettings(log_buffer_size=10)
     without = create_api(controller, settings)
-    assert "/api/video" not in {
+    assert "/api/video" in {
         getattr(route, "path", "") for route in without.routes
     }
+    with TestClient(without) as client:
+        response = client.get("/api/video")
+    assert response.status_code == 501
+    detail = response.json()["detail"]
+    assert detail["unsupported"] == "video"
+    assert detail["reason"] == "frame_hub_missing"
+    assert detail["simulator"] == "projectairsim"
 
     hub = FrameHub(max_fps=10)
     with_video = create_api(controller, settings, frames=hub)

@@ -252,7 +252,7 @@
 
 | 类型 | 默认取值 | 影响 |
 | --- | --- | --- |
-| `MotionLimits`（`motion.py:209`） | 限速 3.0 m/s、加速度 1.5 m/s²、偏航角速度 30 °/s、偏航角加速度 60 °/s²、`control_hz` 20、位置增益 1.0、偏航增益 2.0、位置容差 0.3 m、偏航容差 2.0°、超车走廊 0.3 m、停稳速度 0.15 m/s、停稳角速度 2.0 °/s、稳定时间 0.3 s、最短段时长 1.0 s | 决定段时长下限、停稳判据与「已驶过端点」走廊；走廊过窄会让阿克曼车在端点反复倒车 |
+| `MotionLimits`（`motion.py:209`） | 限速 3.0 m/s、加速度 1.5 m/s²、偏航角速度 30 °/s、偏航角加速度 60 °/s²、`control_hz` 20、段拍 `segment_period_s` 0.03 s、位置增益 1.0、偏航增益 2.0、位置容差 0.3 m、偏航容差 2.0°、超车走廊 0.3 m、停稳速度 0.15 m/s、停稳角速度 2.0 °/s、稳定时间 0.3 s、最短段时长 1.0 s | 决定段时长下限、停稳判据与「已驶过端点」走廊；走廊过窄会让阿克曼车在端点反复倒车 |
 | `HeadingHoldSettings`（`motion.py:174`） | 增益 0.4、阻尼 0.0、死区 0.5°、角速度死区 1.5 °/s | 唯一有出处的组：`config/core/default/base.yaml` 注释指向 `docs/archive/measurements.md` 的「偏航执行链」 |
 | `CollisionRecoverySettings`（`motion.py:114`） | 退避 3.0 m、最多 3 次、累计前进 20.0 m 清零 | 退避距离按次数线性放大，超过 3 次转 `ExecutionError` |
 | `ContinuousTrackingSettings`（`motion.py:144`） | 前瞻 0.6 s、0.3-1.5 m、平移加加速度 3.0 m/s³、偏航加加速度 60 °/s³ | 前瞻决定跟线超前量，加加速度决定速度变化率上限 |

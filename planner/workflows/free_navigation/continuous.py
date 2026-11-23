@@ -205,6 +205,8 @@ class FreeNavigationContinuous:
         )
 
     def _progress(self, window) -> None:
+        # 停滞判据三：队列非空但路径长度不再增长，超过 ``stall_timeout_s`` 判停滞。
+        # 出处：经验值、未标定；影响因素为目标距离、速度、模型延迟与取帧周期。
         current = self.loop.recorder.path_length_m
         now = self.clock()
         if not window.queue.items:

@@ -64,13 +64,13 @@
 | 方法 路径 | 行 | 请求体 | 返回 | 错误码 |
 | --- | --- | --- | --- | --- |
 | `POST /api/tasks` | :55 | `TaskRequest{instruction, vehicle?}` | 202 `{task_id, state, vehicle}` | 400 空指令、409/503 状态不允许、422 体非法 |
-| `GET /api/status` | :64 | 无 | `controller.status` 全字段，有 caps 时加 `simulator`、`capabilities` | 无 |
-| `GET /api/trajectory` | :73 | 无 | `TrajectorySnapshot`；`trajectory_hub is None` 时返回空快照 | 无 |
+| `GET /api/status` | :64 | 无 | `controller.status` 全字段；有 caps 时加 `simulator`，`capabilities` 恒存在（不可得时为 `null`） | 无 |
+| `GET /api/trajectory` | :73 | 无 | `TrajectorySnapshot` | 503 `reason: trajectory_hub_missing` |
 | `GET /api/logs?cursor=0` | :84 | 查询参数 `cursor>=0` | `controller.logs.read(cursor)` 全字段 | 422 `cursor<0` |
 | `POST /api/stop` | :88 | 无 | 202 若 `STOPPING`，否则 200，体 `{state}` | 无 |
 | `POST /api/home` | :94 | `HomeRequest{vehicle?}` 可空 | 202 `{state: "idle", vehicle}` | 501 缺 `home` 端口、409/503、400 |
 | `POST /api/vehicle` | :101 | `VehicleRequest{vehicle}` | 202 `{state, vehicle, view_mode}` | 400 未知载具、409/503 |
-| `GET /api/world/options` | :112 | 无 | `{maps, map_labels, default_map, selection, simulator_owned, map_simulators?, simulator_labels?, simulator?, capabilities?}` | 503 无地图目录 |
+| `GET /api/world/options` | :112 | 无 | `{maps, map_labels, default_map, selection, simulator_owned, map_simulators?, simulator_labels?, simulator?, capabilities}`，`capabilities` 不可得时为 `null` | 503 无地图目录 |
 | `POST /api/world` | :139 | `WorldRequest{map}` | 202 若 `CONNECTING`，否则 200 | 400 未知地图、409/503 |
 | `POST /api/world/stop` | :149 | 无 | 202 `{state}` | 400/409/503 |
 | `GET /api/models` | :157 | 无 | `{models, options, switching}` | 501 缺 `models`、503 无车型目录 |
@@ -80,7 +80,7 @@
 | `GET /api/weather` | :217 | 无 | `{fields[], presets[]}` | 501 缺 `weather`、503 无目录 |
 | `POST /api/weather` | :238 | 任意 JSON 对象（无模型校验） | 202 `{state, weather}` | 501、400/409/503 |
 | `POST /api/view` | :247 | `ViewRequest{mode}`，`mode` 是 4 个字面量之一 | `{view_mode, deferred}` | 501 若控制器拒、422 `ValueError`、409/503 |
-| `GET /api/video` | :255 | 无 | `multipart/x-mixed-replace` 流 | 仅在 `frames is not None` 时注册；缺 `video` 端口 501；未注册时 404 |
+| `GET /api/video` | :255 | 无 | `multipart/x-mixed-replace` 流 | 501 缺 `video` 端口（`capability_missing`）或未接帧源（`frame_hub_missing`） |
 | `GET /` `/console/*` | `wiring.py:119` | 无 | `console/index.html` 与静态文件 | 目录不存在时整段不挂载 |
 
 `POST /api/weather` 是唯一没有 Pydantic 模型的写端点（`server_api.py:239`），字段合法性全在控制器与引擎侧，见第 6 节。
@@ -150,11 +150,10 @@
 
 ### 5.5 视频流
 
-1. 只有构造时给了 `frames` 才注册 `/api/video`（`server_api.py:253`）。
-2. `require("video")` 再按能力位拒一次（`server_api.py:258`）。
-3. `mjpeg_chunks` 每轮 `frames.wait_next(sequence, timeout_s=0.0)`，没有新帧就 `asyncio.sleep(poll_s)`（`video.py:36-52`）。
-4. 首帧一次性发出「分隔符 + 头 + JPEG + 尾分隔符 + 下一个头」，之后每帧发「JPEG + 尾分隔符 + 下一个头」（`video.py:57-70`）。
-5. JPEG 编码在线程池里跑（`video.py:54-56`）。
+1. 路由恒存在；`require("video")` 先按能力位拒一次（`server_api.py:258-260`），构造时没给 `frames` 再以 `frame_hub_missing` 拒一次（`:261-268`），两者都是 501。
+2. `mjpeg_chunks` 每轮 `frames.wait_next(sequence, timeout_s=0.0)`，没有新帧就 `asyncio.sleep(poll_s)`（`video.py:36-52`）。
+3. 首帧一次性发出「分隔符 + 头 + JPEG + 尾分隔符 + 下一个头」，之后每帧发「JPEG + 尾分隔符 + 下一个头」（`video.py:57-70`）。
+4. JPEG 编码在线程池里跑（`video.py:54-56`）。
 
 ## 6 失败模式
 
@@ -173,22 +172,23 @@
 | `FileNotFoundError` | 模板文件缺失（`prompts/render.py:18`） | 轨迹类与检测类在导入期就炸，服务起不来；完成判定类在首次请求时才炸 |
 | `HTTPException(503)` | 控制器拒绝且状态是 `CONNECTING`/`DISCONNECTED`（`wiring.py:26-33`） | 控制台提示「还没连上」 |
 | `HTTPException(409)` | 控制器拒绝且状态可运行（`wiring.py:29-31`） | 控制台提示「当前状态不允许」 |
-| `HTTPException(501)` | 活动仿真器 `Capabilities` 不含该 action（`wiring.py:69-79`） | 控制台按能力位隐藏按钮；直接调接口才看得到 |
+| `HTTPException(501)` | 活动仿真器 `Capabilities` 不含该 action（`wiring.py:97-116`），或该动作的帧源未接线（`server_api.py:258-270`） | 控制台按能力位隐藏按钮；帧源缺席时用 `detail.reason` 直接停掉重试 |
+| `HTTPException(503, reason="trajectory_hub_missing")` | 服务构造时没传 `trajectory_hub`（`wiring.py:58-71`、`server_api.py:80-85`） | 视为装配缺件；不允许当成空轨迹处理 |
 | `HTTPException(503, "… catalog is unavailable")` | 控制器没带对应目录（`wiring.py:51-56`、`server_api.py:116`、`:162`、`:222`） | 视为部署缺件 |
 
 `POST /api/weather` 没有请求体模型，非法字段名由 `planner.domain.validate_weather_values` 抛 `ValueError` → 400（`server_api.py:241`、`wiring.py:41-49`）。
 
 ### 6.1 已知缺口
 
-同一个"不支持视频"有两种状态码。`/api/video` 只在构造参数 `frames` 非 `None` 时注册（`planner/adapters/http/server_api.py:253`），因此"这台仿真器不发帧"在 hub 缺席时是 404，在 hub 存在但能力位缺 `video` 时是 501（`planner/adapters/http/wiring.py:69-79`）。客户端不能只用一套分支判断，得先看路由表再看 `capabilities`。
+`/api/video` 只有一种失败状态码：501。能力位缺 `video` 时 `detail.reason` 是 `capability_missing`，构造时没接帧源时是 `frame_hub_missing`（`planner/adapters/http/server_api.py:258-270`、`wiring.py:73-116`）。路由恒存在，客户端只看状态码分支，再看 `reason` 决定是「这台仿真器没有画面」还是「这个服务没接帧源」。
 
-能力位不可得时是**省略键**而不是 `null`：`/api/status` 只在 `caps is not None` 时写 `simulator` 与 `capabilities`（`server_api.py:66-71`），`/api/world/options` 同样（`:130-137`）。客户端必须区分"键不存在"与"值为空"，缺失只能解释为"当前地图还没有能力报告"。
+能力位不可得时是**显式 `null`**：`/api/status` 与 `/api/world/options` 恒写 `capabilities`，拿不到报告时值为 `null`（`server_api.py:69-77`、`:117-143`）。控制台按 `null` 判定不可用，并按「键是否存在」重置旧状态，不会留着上一台仿真器的标志位。
 
-`/api/trajectory` 在 `trajectory_hub is None` 时返回空 `TrajectorySnapshot` 而不是报错（`server_api.py:76-79`）。装配层漏传 hub 时控制台只剩空面板，没有任何错误，这个事故模式在子进程装配注释里有记录（`planner/simulator/mission_child.py:236-247`）。
+`/api/trajectory` 在 `trajectory_hub is None` 时返回 503 与 `reason: trajectory_hub_missing`（`server_api.py:80-85`）。装配层漏传 hub 是部署缺件，不能再降级成空快照；这个事故模式在子进程装配注释里有记录（`planner/simulator/mission_child.py:236-247`）。
 
 提示词模板的读取时机有两种：轨迹类与检测类在**模块导入期**读（`planner/adapters/trajectory_planner/prompts/base.py:17`、`planner/adapters/target_detection/prompts/system.py:4`），缺文件则服务起不来；完成判定类在**首次请求**时读（`planner/adapters/task_completion/prompts/visual_goal_completion.py:79-80`），缺文件表现为运行期 500。文件缺失这一种故障因此有两种出现时机。
 
-跨层依赖例外两条。本层 import 装配层的状态枚举与异常类（`planner/adapters/http/wiring.py:19`、`planner/adapters/http/server_api.py:19`），也 import 工作流层的校验函数（`planner/adapters/task_completion/prompts/visual_goal_completion.py:6`）。`tests/test_layering.py` 的检查器只把 `algorithms`（`:129-131`）与 `runtime`（`:140`）当来源层，`planner/adapters/` 从不在被检集合里，所以这条依赖目前没有任何测试拦得住。
+跨层依赖两处。本层 import 装配层的状态枚举与异常类（`planner/adapters/http/wiring.py:19`、`planner/adapters/http/server_api.py:19`），这是 `ALLOWED` 表允许的方向。import 工作流层只有完成判定提示词这一处（`planner/adapters/task_completion/prompts/visual_goal_completion.py:6`），它按（文件, 模块）登记在 `tests/test_layering.py` 的 `EXCEPTIONS` 里并带理由。九个层全部是检查来源，白名单之外新增跨层 import 立即失败。
 
 ## 7 测试位置
 
@@ -203,7 +203,7 @@
 
 没覆盖的空白：
 
-- `/api/trajectory` 在 `trajectory_hub is None` 时的空快照分支（`server_api.py:76-79`）没有独立断言。
+- `/api/trajectory` 的 `trajectory_hub_missing` 分支有断言（`tests/test_server_api.py`）；其余 503 目录缺失分支只测了一部分。
 - `describe_http_error` 的 `_HINTS` 只测了 401/404/503，403/422/429 靠常量表读代码。
 - `ManualTargetDetector` 在生产路径上的行为（`detectors.py:26-36`）只有单元测试，没有走 HTTP 的端到端断言。
 - 模板文件缺失时的失败路径（`prompts/render.py:18`）没有测试。
@@ -224,14 +224,14 @@
 ## 9 疑问与争议
 
 - Qad1 层：adapters 结论：34 个轨迹与检测提示词模板在模块导入期读取，模板缺失时服务起不来但错误栈指向 import 而不是配置；完成判定的模板却是调用期读，同一层出现两种失败时机。依据：`planner/adapters/trajectory_planner/prompts/base.py:17`、`planner/adapters/target_detection/prompts/system.py:4`、`planner/adapters/task_completion/prompts/visual_goal_completion.py:79`。影响：否。
-- Qad2 层：adapters 结论：本层 import 了上层 `planner.workflows`，`tests/test_layering.py` 的 D1-D5 没有约束 adapters 的向上依赖，所以这条依赖只靠人守。依据：`planner/adapters/task_completion/prompts/visual_goal_completion.py:6`。影响：是（workflows 文档需声明这是双向依赖）。
+- Qad2 层：adapters 结论：本层 import 了上层 `planner.workflows`，`ALLOWED` 表禁止这个方向，这条边以文件级白名单登记，新增同类依赖会失败。依据：`planner/adapters/task_completion/prompts/visual_goal_completion.py:6`、`tests/test_layering.py` 的 `EXCEPTIONS`。影响：是（workflows 文档需声明这是双向依赖）。
 - Qad3 层：adapters 结论：HTTP 状态码判定直接依赖装配层的状态枚举与异常类，`adapters` 不能脱离 `assembly` 单独存在。依据：`planner/adapters/http/wiring.py:19`、`planner/adapters/http/server_api.py:19`。影响：是（assembly 文档需写清这是对外契约）。
-- Qad4 层：adapters 结论：同一个「不支持视频」有两个状态码：`frames` 为 `None` 时路由不存在（404），能力位缺 `video` 时是 501，控制台无法用一套逻辑判断。依据：`planner/adapters/http/server_api.py:253`、`planner/adapters/http/wiring.py:69-79`。影响：是（assembly 的传参决定是 404 还是 501）。
+- Qad4 层：adapters 结论：视频不支持只有一个状态码 501，`frames` 缺席是 `detail.reason = frame_hub_missing`，能力位缺 `video` 是 `capability_missing`；控制台按 `reason` 停止重试。依据：`planner/adapters/http/server_api.py:258-270`、`planner/adapters/http/wiring.py:69-105`。影响：是（assembly 的传参只影响 `reason`，不影响状态码）。
 - Qad5 层：adapters 结论：`ManualTargetDetector.detect` 完全忽略 `request`，任何任务都返回构造时那个框，能力位里也没有任何标记说明这是人工模式。依据：`planner/adapters/target_detection/manual.py:43-46`、`planner/assembly/factories/detectors.py:26-36`。影响：是（assembly 的 detector mode 需要暴露给状态接口）。
 - Qad6 层：adapters 结论：`_chat_url` 与 `chat_completions_url` 重复实现，且空 URL 处理不一致：前者会拼出 `"/chat/completions"`，后者抛 `ValueError`。依据：`planner/adapters/task_parser/openai_task_parser.py:161-168`、`planner/adapters/multimodal_chat.py:19-25`。影响：否。
 - Qad7 层：adapters 结论：两处 `generation_options(...)` 调用只为触发校验，返回值丢弃；非法 `request_format` 在构造期报错，运行时不会再检查。依据：`planner/adapters/task_parser/openai_task_parser.py:62`、`planner/adapters/multimodal_chat.py:53`。影响：否。
 - Qad8 层：adapters 结论：地面与空中两套 base user prompt 是近 90 行逐行重复，唯一差异是模板名与 `vehicle="UAV"`。依据：`planner/adapters/trajectory_planner/prompts/base.py:37-124` 与 `:127-222`。影响：否。
 - Qad9 层：adapters 结论：404 的运维提示假设用户 `url` 里带对了 path prefix，但 `chat_completions_url` 会自动补 `/chat/completions`，用 `anthropic` 方言配过 `url` 再切回 `openai` 时会真的 404，提示却不指向这条路。依据：`planner/adapters/http_errors.py:22-23`、`planner/adapters/multimodal_chat.py:19-33`。影响：否。
 - Qad10 层：adapters 结论：四个模型端口全部单次请求、无重试、无退避、无超时重排；一次 429 或瞬时超时就是一次任务失败。依据：`planner/adapters/multimodal_chat.py:99-118`、`planner/adapters/task_completion/client.py:23-26`、`planner/adapters/trajectory_planner/qwen_vl_planner.py:92-98`。影响：否。
-- Qad11 层：adapters 结论：`/api/status` 与 `/api/world/options` 在能力位不可得时是**省略键**而不是写 `null`，客户端必须区分「键不存在」与「值为空」。依据：`planner/adapters/http/server_api.py:66-71`、`:130-137`。影响：否。
-- Qad12 层：adapters 结论：`/api/trajectory` 在装配层漏传 hub 时静默返回空快照，控制台只剩空面板且没有任何报错，这个事故模式在 `mission_child` 里已经发生过一次。依据：`planner/adapters/http/server_api.py:76-79`、`planner/simulator/mission_child.py:232-247`。影响：是（assembly 的 resources 构造）。
+- Qad11 层：adapters 结论：`/api/status` 与 `/api/world/options` 恒写 `capabilities`，能力位不可得时是显式 `null`，控制台按 `null` 判定不可用。依据：`planner/adapters/http/server_api.py:66-75`、`:130-140`。影响：否。
+- Qad12 层：adapters 结论：`/api/trajectory` 在装配层漏传 hub 时返回 503 与 `reason: trajectory_hub_missing`，不再静默返回空快照；控制台对 503 显示连接异常。依据：`planner/adapters/http/server_api.py:78-85`、`planner/simulator/mission_child.py:232-247`。影响：否。

@@ -123,8 +123,8 @@ xpra start --start-child <UE 二进制> --bind-tcp ...
 | POST | `/api/tasks` | 提交任务，体为 `{"instruction": "...", "vehicle": "rover"\|"drone"}` |
 | GET | `/api/status` | 服务、场景、载具、任务状态 |
 | GET | `/api/logs?cursor=N` | 增量日志 |
-| GET | `/api/trajectory` | 已授权航点与轨迹 |
-| GET | `/api/video` | MJPEG 画面流，运行中实时，空闲时冻结 |
+| GET | `/api/trajectory` | 已授权航点与轨迹；服务未接轨迹汇时返回 503（`detail.reason = trajectory_hub_missing`） |
+| GET | `/api/video` | MJPEG 画面流，运行中实时，空闲时冻结；缺帧源或缺 `video` 能力位时返回 501，原因写在 `detail.reason` |
 | POST | `/api/stop` | 停止当前任务 |
 | POST | `/api/home` | 回起点，仅空闲时可用 |
 | GET/POST | `/api/world` | 世界设置与选图 |
@@ -136,7 +136,9 @@ xpra start --start-child <UE 二进制> --bind-tcp ...
 | GET/POST | `/api/view` | 机位循环，UE5 独有 |
 | GET | `/api/vehicle` | 当前载具 |
 
-UE4 不支持 `/api/video` 的帧源，该端点返回 501，前端已有兜底。
+`/api/status` 与 `/api/world/options` 恒带 `capabilities` 字段，能力位不可得时为 `null`，控制台按 `null` 判定控件不可用。
+
+UE4 不支持 `/api/video` 的帧源，该端点返回 501（`detail.reason = capability_missing`）；服务构造时没接帧汇则是 501 与 `frame_hub_missing`。前端按 `reason` 停止重试并在状态行上给原因。
 
 ## 7 首次标定
 
@@ -150,6 +152,11 @@ python scripts/calibrate_streaming_views.py
 标定结果写回配置里的起图机位。运行时不做标定，这一步是人工的。
 
 `uncapturable_views` 字段用于记录采不到帧的机位，标定靠排除法定位它们。
+
+阈值出处
+
+- 段拍 `motion.segment_period_s`（默认 0.03 s）与流拍 `1 / motion.control_hz`（默认 20 Hz）是两个独立配置项，不共用一个值：段执行每一拍要判停稳、算剩余距离并重锚，采样要细；流执行只是命令下发节拍。两项都在 `config/core/<档>/base.yaml` 的 `motion` 段，校验为正有限数。
+- 越点走廊 1.0 m、`FreeSpaceProfileSettings` 的九个阈值、三套停滞判据都是经验值、未标定：影响因素写在各自代码注释里，仓库里没有标定脚本与回归基线。改动前按 `tests/test_free_space.py`、`tests/test_algorithms_motion.py`、`tests/test_free_navigation.py` 的期望值一起改。
 
 ## 8 自检
 
@@ -173,7 +180,8 @@ python scripts/probe_ue4_env.py            # 仅在部署 UE4 时
 | --- | --- | --- |
 | 服务起来但选图卡住 | 引擎没出窗口，`window` 探针一直失败 | 看 `output/logs/` 下该次启动的日志；确认 `maps.yaml` 的 `root` 与 `binary` 拼出的路径存在 |
 | 选图报端口占用 | 上一套栈没退干净 | 等 `process.port_release_timeout_s`；仍占用就手工确认残留进程归属 |
-| `/api/video` 返回 501 | 该引擎没有帧源 | UE4 属预期；UE5 检查帧汇是否建立 |
+| `/api/video` 返回 501 | 该引擎没有帧源，或服务没接帧汇 | 看 `detail.reason`：`capability_missing` 对 UE4 属预期；`frame_hub_missing` 检查 `create_api(frames=...)` 的传参 |
+| `/api/trajectory` 返回 503 | 服务构造时漏传轨迹汇 | 看 `detail.reason`；按 `docs/layers/assembly.md` 检查 resources 构造 |
 | 任务被拒绝，提示模型不可用 | 四段端点里有一段留空或不可达 | 检查 `config/core/<档>/base.yaml` 的 `url`、`model`、`VLN_API_KEY` |
 | 载具不动但轨迹在增长 | 执行层没拿到控制权或命令被校验拒绝 | 看日志里的命令拒绝原因；对照 `docs/layers/runtime.md` |
 | 换图后机型或相机名对不上 | 场景 JSONC 与 `simulators.yaml` 的 `scene_defaults` 不一致 | 按场景文件改 `rover_name`、`drone_name`、`cameras` |
