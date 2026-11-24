@@ -84,14 +84,16 @@ class AirSimVehicle:
         ``ForwardOnly`` drivetrain so the vehicle faces the path direction,
         absolute yaw mode, fixed lookahead 3 with adaptive lookahead 1. The
         baseline passes no ``timeout_sec`` (AirSim default 3e38) because it stops
-        the path itself after five waypoints; here the caller's deadline is the
-        engine-side timeout, so the server gives up on the path at that point.
+        the path itself after five waypoints; here the caller's deadline reaches
+        the server as ``timeout_sec`` and is enforced on this side as well, so a
+        server or transport that never answers cannot block the control thread.
 
         Completion is read from the ack: ``moveOnPathAsync().get()`` returns
         ``False`` when the server timed the path out. This build has returned
         false acks for takeoff and ``moveToPositionAsync`` while the vehicle was
         moving, and path following has no state criterion of its own (no target
-        to settle on), so a false ack is reported instead of being second-guessed.
+        to settle on), so a false ack is reported -- after the native task is
+        stopped, see ``_halt_path``.
         """
         import airsim
 
@@ -100,16 +102,37 @@ class AirSimVehicle:
         if self.holding is not None:
             self.holding.release()
         path = [airsim.Vector3r(point.x, point.y, point.z) for point in points]
-        ack = self.connection.call_async_and_wait(
-            "moveOnPathAsync", path, speed_mps,
-            timeout_sec=float(timeout_s),
-            drivetrain=airsim.DrivetrainType.ForwardOnly,
-            yaw_mode=airsim.YawMode(is_rate=False),
-            lookahead=3, adaptive_lookahead=1)
+        try:
+            ack = self.connection.call_async_and_wait(
+                "moveOnPathAsync", path, speed_mps,
+                timeout_s=float(timeout_s),
+                timeout_sec=float(timeout_s),
+                drivetrain=airsim.DrivetrainType.ForwardOnly,
+                yaw_mode=airsim.YawMode(is_rate=False),
+                lookahead=3, adaptive_lookahead=1)
+        except ExecutionError:
+            # The client-side deadline fired or the transport failed. The server
+            # may still be steering the vehicle, so stop it before reporting.
+            self._halt_path()
+            raise
         if ack is not True:
+            self._halt_path()
             raise ExecutionError(
                 f"AirSim path following answered {ack!r}; the vehicle did not "
                 f"complete the path inside {timeout_s:g}s")
+
+    def _halt_path(self) -> None:
+        """Cancel the native path and hold the vehicle where it is.
+
+        Both steps are needed after a path that did not demonstrably finish.
+        Nothing else cancels the native task, and this build answers false acks
+        for takeoff and ``moveToPositionAsync`` while the vehicle is doing exactly
+        what was asked, so a false ack cannot be trusted as "already stopped".
+        The hold keeps the vehicle from drifting once the task is cancelled.
+        """
+        self.cancel()
+        if self.holding is not None:
+            self.hover()
 
     def cancel(self) -> None:
         self.connection.call("cancelLastTask")

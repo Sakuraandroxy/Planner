@@ -12,6 +12,8 @@ follows them: methods without a ``vehicle_name`` parameter must not be given one
 
 import inspect
 import sys
+import threading
+import time
 import types
 
 import pytest
@@ -23,6 +25,24 @@ class _Future:
 
     def get(self):
         return self._value
+
+    def attach_callback(self, callback):
+        pass
+
+
+class _StuckFuture:
+    """A native call that never answers on its own.
+
+    The client has to stop waiting; ``get`` gives up after ten seconds so the
+    helper thread the connection leaves behind also ends before the suite does.
+    """
+
+    def __init__(self):
+        self.released = threading.Event()
+
+    def get(self):
+        self.released.wait(10.0)
+        return False
 
     def attach_callback(self, callback):
         pass
@@ -63,6 +83,9 @@ class _Client:
         # last value, which is how a vehicle that has settled behaves.
         self.z_values: list[float] = [0.67]
         self.takeoff_ack = True
+        # Path calls answer at once unless a test says the server went silent.
+        self.path_never_answers = False
+        self.path_future: _StuckFuture | None = None
         # configure_rpc_loop() walks these; keep them inert but present.
         self.client = types.SimpleNamespace(_loop=None, close=lambda: None)
 
@@ -85,6 +108,14 @@ class _Client:
     def listVehicles(self):
         self.seen["listVehicles"] = "no-parameter"
         return ["Drone_1"]
+
+    def moveOnPathAsync(self, path, velocity, timeout_sec=3e38, drivetrain=None,
+                        yaw_mode=None, lookahead=-1, adaptive_lookahead=1,
+                        vehicle_name=""):
+        self.seen["moveOnPathAsync"] = (velocity, timeout_sec, lookahead,
+                                        adaptive_lookahead, vehicle_name)
+        self.path_future = _StuckFuture() if self.path_never_answers else _Future(True)
+        return self.path_future
 
     def ping(self):
         return True
@@ -128,6 +159,32 @@ def test_the_async_channel_carries_it_too():
     connection, client = _connection(vehicle_name="Drone_1")
     assert connection.call_async_and_wait("moveToPositionAsync", 0.0, 0.0, -2.0, 2.0) is True
     assert client.seen["moveToPositionAsync"] == "Drone_1"
+
+
+def test_a_path_call_that_never_answers_is_cut_by_the_client_deadline():
+    """``Future.get()`` has no timeout: the limit has to be the connection's."""
+    from planner.errors import ExecutionError
+
+    connection, client = _connection(vehicle_name="Drone_1")
+    client.path_never_answers = True
+    started = time.monotonic()
+    with pytest.raises(ExecutionError, match=r"did not answer inside 0\.05s"):
+        connection.call_async_and_wait("moveOnPathAsync", [], 1.0, timeout_s=0.05)
+    assert time.monotonic() - started < 2.0, "the wait was not bounded by timeout_s"
+    client.path_future.released.set()
+
+
+def test_the_client_deadline_and_air_sims_timeout_are_separate_keywords():
+    """``timeout_s`` bounds the wait here; ``timeout_sec`` is sent to the server."""
+    connection, client = _connection(vehicle_name="Drone_1")
+    assert connection.call_async_and_wait(
+        "moveOnPathAsync", [], 1.0, timeout_s=5.0, timeout_sec=30.0
+    ) is True
+    velocity, timeout_sec, lookahead, adaptive, vehicle_name = client.seen[
+        "moveOnPathAsync"
+    ]
+    assert (velocity, timeout_sec, lookahead, adaptive) == (1.0, 30.0, -1, 1)
+    assert vehicle_name == "Drone_1", "the deadline must not drop the vehicle name"
 
 
 def test_methods_without_the_parameter_are_left_alone():

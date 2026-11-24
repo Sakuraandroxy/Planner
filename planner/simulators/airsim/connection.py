@@ -136,11 +136,26 @@ class AirSimConnection:
                         self._stream_errors.append(value.error)
                 future.attach_callback(completed)
 
-    def call_async_and_wait(self, name: str, *args, **kwargs):
-        with self._lock:
-            if self._closed:
-                raise RuntimeError("AirSim connection is closed")
-            with self._transport_call():
+    def call_async_and_wait(self, name: str, *args, timeout_s: float | None = None,
+                            **kwargs):
+        """Issue an async RPC and wait for its ack, optionally with a deadline.
+
+        ``timeout_s`` is the client-side limit, not AirSim's ``timeout_sec``: the
+        two are separate keywords and a caller that wants both passes both. The
+        SDK's ``Future.get()`` has no timeout argument -- msgpackrpc's ``join``
+        waits on an event and the RPC loop only replaces the loop owner
+        (``rpc_loop.py``) -- so the wait is bounded here instead.
+
+        The connection lock is released before waiting: a path call can take a
+        minute, and state reads on the owner thread must not queue behind it.
+        The wait runs on a helper thread so the caller can stop waiting; that
+        thread stays blocked until the server answers, which a follow-up
+        ``cancelLastTask`` makes it do.
+        """
+        with self._transport_call():
+            with self._lock:
+                if self._closed:
+                    raise RuntimeError("AirSim connection is closed")
                 client = self.client
                 if getattr(self, "_motion_kwargs", None) is not None:
                     if self._motion_client is None:
@@ -148,9 +163,31 @@ class AirSimConnection:
                         self._motion_client = airsim.MultirotorClient(**self._motion_kwargs)
                         configure_rpc_loop(self._motion_client)
                     client = self._motion_client
-                # msgpackrpc.Future.join() discards both the result and RPC error.
                 func = getattr(client, name)
-                return func(*args, **self._for_vehicle(func, kwargs)).get()
+                # msgpackrpc.Future.join() discards both the result and RPC error.
+                future = func(*args, **self._for_vehicle(func, kwargs))
+            if timeout_s is None:
+                return future.get()
+            outcome: dict[str, object] = {}
+
+            def wait():
+                try:
+                    outcome["value"] = future.get()
+                except BaseException as error:  # re-raised by the owner below
+                    outcome["error"] = error
+
+            waiter = threading.Thread(
+                target=wait, name=f"airsim-wait-{name}", daemon=True
+            )
+            waiter.start()
+            waiter.join(float(timeout_s))
+            if waiter.is_alive():
+                raise ExecutionError(
+                    f"AirSim {name} did not answer inside {timeout_s:g}s"
+                )
+            if "error" in outcome:
+                raise outcome["error"]
+            return outcome.get("value")
 
     def connect(self) -> None:
         self.call("confirmConnection")
