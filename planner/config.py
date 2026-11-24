@@ -1675,6 +1675,7 @@ def load_config(path: str | Path) -> AppConfig:
         "limits",
         "completion_rules_file",
         "depth_foreground_filter",
+        "execution",
     }
     unknown = set(visual_raw) - visual_names
     if unknown:
@@ -1724,6 +1725,7 @@ def load_config(path: str | Path) -> AppConfig:
             else VisualGoalTriggerRules()
         ),
         depth_foreground_filter=DepthForegroundSettings(**foreground_raw),
+        execution=str(visual_raw.get("execution", "staged")),
     )
 
     return AppConfig(
