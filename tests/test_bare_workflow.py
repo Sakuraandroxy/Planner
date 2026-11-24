@@ -39,7 +39,8 @@ class _Source:
     def capture(self, *, budget=None):
         pose = self.poses[min(self.captures, len(self.poses) - 1)]
         self.captures += 1
-        return _observation(pose, capture_id=f"capture-{self.captures}")
+        return _observation(pose, capture_id=f"capture-{self.captures}",
+                            timestamp_ns=self.captures * 1_000_000)
 
 
 class _Observer:
@@ -101,7 +102,8 @@ class _Telemetry:
         self.snapshots.append(fields)
 
 
-def _observation(pose: WorldPose, capture_id: str = "capture-0") -> Observation:
+def _observation(pose: WorldPose, capture_id: str = "capture-0",
+                 timestamp_ns: int = 1_000_000) -> Observation:
     intrinsics = CameraIntrinsics.from_horizontal_fov(640, 480, 90.0)
     return Observation(
         frame=1,
@@ -113,6 +115,7 @@ def _observation(pose: WorldPose, capture_id: str = "capture-0") -> Observation:
         intrinsics=intrinsics,
         camera_matrix=np.eye(4),
         camera_id="front",
+        timestamp_ns=timestamp_ns,
         capture_id=capture_id,
         captured_monotonic=1.0,
     )
