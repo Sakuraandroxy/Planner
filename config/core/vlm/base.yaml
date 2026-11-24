@@ -183,7 +183,7 @@ visual_goal_navigation:
     # 连续到达确认观测之间的最小时间间隔，单位秒。
     confirmation_interval_s: 1.0
     # 单个视觉任务阶段允许的最大规划轮数。
-    maximum_planning_rounds: 18
+    maximum_planning_rounds: 30
     # 单个视觉任务阶段总时长上限，单位秒。
     maximum_task_duration_s: 600.0
     # true 允许目标不可见时按本地策略分步转向搜索。

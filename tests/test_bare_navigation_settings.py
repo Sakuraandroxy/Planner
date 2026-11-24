@@ -65,6 +65,14 @@ def test_the_two_profiles_differ_only_in_execution_and_bare():
     assert default - vlm == set()
 
 
+def test_both_profiles_share_the_stage_budget():
+    """Decision 11: 600 seconds and 30 rounds, whichever profile flies."""
+    for profile in ("default", "vlm"):
+        limits = load_config(profile_config_path(profile)).visual_goal_navigation.limits
+        assert limits.maximum_task_duration_s == 600.0, profile
+        assert limits.maximum_planning_rounds == 30, profile
+
+
 def test_the_config_file_rejects_a_zero_speed(tmp_path):
     """The speed reaches the engine now, so a zero has to stop at load time."""
     path = write_config(
