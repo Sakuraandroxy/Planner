@@ -180,9 +180,11 @@ class ProjectAirSimRover:
         The tracking itself is the engine's, not one continuous carrot path: in
         this package ``Rover.move_on_path_async`` visits the waypoints in order
         through ``MoveToPosition`` (SimpleDrive), so ``timeout_sec`` bounds one
-        segment rather than the whole batch, and the rover has no yaw mode in
-        this call (``yaw_rate_max`` stays at the package default ``-1``, no
-        limit). The drone's ``ForwardOnly`` pair therefore has no counterpart
+        segment rather than the whole batch. The caller's deadline is for the
+        batch, so it is split across the points before it is handed over, while
+        the wall-clock limit on the whole call stays ``timeout_s``. The rover has
+        no yaw mode in this call (``yaw_rate_max`` stays at the package default
+        ``-1``, no limit), so the drone's ``ForwardOnly`` pair has no counterpart
         here, and the whole path is still handed over in one request.
         """
         self._require_started()
@@ -202,23 +204,39 @@ class ProjectAirSimRover:
             # ``MoveOnPath`` is the engine's own drive, so cancelling it is what
             # ends the path; the brake then keeps the car where it stopped
             # instead of letting it coast past the caller's deadline.
-            self._robot.cancel_last_task()
-            self.hover()
+            self._end_native_path()
             raise ExecutionError(
                 f"ProjectAirSim path following did not complete in {timeout_s:g}s"
             ) from exc
         except Exception as exc:
             raise ExecutionError("ProjectAirSim path following failed") from exc
         if result is False:
+            # A refusal is the engine's own verdict, but the task it refused may
+            # still be running; stop it the same way the deadline does.
+            self._end_native_path()
             raise ExecutionError("ProjectAirSim refused the path")
+
+    def _end_native_path(self) -> None:
+        """Cancel the native path and brake; never mask the caller's error."""
+        try:
+            self._robot.cancel_last_task()
+        except Exception as error:
+            logger.warning("[PathFollow] cancel_last_task failed: %r", error)
+        try:
+            self.hover()
+        except Exception as error:
+            logger.warning("[PathFollow] braking after the path failed: %r", error)
 
     async def _path_exchange(
         self, path: list[list[float]], speed_mps: float, timeout_s: float
     ):
+        # ``timeout_sec`` is per segment in this package, so the caller's
+        # deadline for the whole batch is divided across its points.
+        segment_timeout_s = timeout_s / max(1, len(path))
         task = await self._robot.move_on_path_async(
             path,
             velocity=speed_mps,
-            timeout_sec=timeout_s,
+            timeout_sec=segment_timeout_s,
             lookahead=3,
             adaptive_lookahead=1,
         )

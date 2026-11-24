@@ -307,8 +307,9 @@ def test_projectairsim_rover_follows_the_path_with_the_baseline_lookahead():
             "path": [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
             "velocity": 1.0,
             # Same lookahead pair as the drone; this package's rover walks the
-            # waypoints through MoveToPosition, so timeout_sec is per segment.
-            "timeout_sec": 45.0,
+            # waypoints through MoveToPosition, so timeout_sec is per segment and
+            # the caller's deadline for the batch is split across the points.
+            "timeout_sec": 22.5,
             "lookahead": 3,
             "adaptive_lookahead": 1,
             "yaw_rate_max": -1,
@@ -316,6 +317,52 @@ def test_projectairsim_rover_follows_the_path_with_the_baseline_lookahead():
         }
     ]
     rover.close()
+
+
+def test_projectairsim_drone_cancels_a_refused_path():
+    robot = PathRobot()
+    robot.path_result = False
+    drone = _drone(robot)
+    drone.start()
+    with pytest.raises(ExecutionError, match="refused the path"):
+        drone.follow_path(PATH, 1.0, timeout_s=45.0)
+    assert robot.cancels == 1, "a refusal may still leave the native task running"
+    drone.close()
+
+
+def test_projectairsim_rover_cancels_and_brakes_a_refused_path():
+    robot = PathRover()
+    robot.path_result = False
+    rover, connection = _rover(robot)
+    rover.start()
+    with pytest.raises(ExecutionError, match="refused the path"):
+        rover.follow_path(PATH, 1.0, timeout_s=45.0)
+    assert robot.cancels == 1
+    assert connection.control_requests()[-1]["brake"] == 1.0
+    rover.close()
+
+
+def test_the_ue5_fakes_keep_the_installed_signatures():
+    """The fakes stand in for package methods; a package upgrade must show up here.
+
+    They are hand-written, so this is the only automatic link between them and the
+    installed ``projectairsim``. Renaming or reordering a parameter there fails
+    here instead of being absorbed by a permissive fake.
+    """
+    import inspect
+
+    from projectairsim.drone import Drone
+    from projectairsim.rover import Rover
+
+    for mine, installed in (
+        (PathRobot.move_on_path_async, Drone.move_on_path_async),
+        (PathRover.move_on_path_async, Rover.move_on_path_async),
+    ):
+        ours = list(inspect.signature(mine).parameters.values())[1:]
+        theirs = list(inspect.signature(installed).parameters.values())[1:]
+        assert [(p.name, p.kind, p.default) for p in ours] == [
+            (p.name, p.kind, p.default) for p in theirs
+        ], installed
 
 
 def test_projectairsim_rover_cancels_and_brakes_a_path_that_never_finishes():

@@ -506,14 +506,24 @@ class ProjectAirSimDrone:
         except TimeoutError as exc:
             # Nothing else stops the native path, so the vehicle would keep
             # flying after the caller gave up.
-            self._robot.cancel_last_task()
+            self._end_native_path()
             raise ExecutionError(
                 f"ProjectAirSim path following did not complete in {timeout_s:g}s"
             ) from exc
         except Exception as exc:
             raise ExecutionError("ProjectAirSim path following failed") from exc
         if result is False:
+            # A refusal is the engine's own verdict, but the task it refused may
+            # still be running; stop it the same way the deadline does.
+            self._end_native_path()
             raise ExecutionError("ProjectAirSim refused the path")
+
+    def _end_native_path(self) -> None:
+        """Cancel whatever the engine still runs; never mask the caller's error."""
+        try:
+            self._robot.cancel_last_task()
+        except Exception as error:
+            logger.warning("[PathFollow] cancel_last_task failed: %r", error)
 
     async def _path_exchange(
         self, path: list[list[float]], speed_mps: float, timeout_s: float
