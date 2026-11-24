@@ -19,6 +19,7 @@ from projectairsim.drone import YawControlMode
 from planner.domain.pose import WorldPose
 from planner.errors import ExecutionError
 from planner.simulators.airsim.vehicle import AirSimVehicle
+from planner.simulators.projectairsim import drone as path_follow
 from planner.simulators.projectairsim.drone import ProjectAirSimDrone
 from planner.simulators.projectairsim.rover import ProjectAirSimRover
 from tests.test_projectairsim_drone import (
@@ -322,13 +323,16 @@ def test_projectairsim_drone_reports_a_point_it_never_reaches():
     drone.close()
 
 
-def test_projectairsim_drone_skips_a_point_it_cannot_close():
+def test_projectairsim_drone_skips_a_point_it_cannot_close(monkeypatch):
     """A point the engine will not close is left behind, not turned into a failure.
 
     The engine stops a position command about 0.5 m short of its target, so a
     point inside that band can never satisfy a distance check. The path carries
     on to the next point and the round replans from the measured pose.
     """
+    # The per-point cap is 20 s of wall clock in production; here it only has to
+    # be short enough that the point is given up.
+    monkeypatch.setattr(path_follow, "PATH_POINT_WAIT_S", 0.05)
     robot = PathRobot()
     robot.point_arrives = False
     drone = _drone(robot)
