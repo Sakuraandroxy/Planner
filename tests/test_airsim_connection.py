@@ -267,7 +267,7 @@ def test_only_one_deadline_bound_wait_runs_at_a_time():
     first.start()
     while client.path_future is None:
         time.sleep(0.001)
-    with pytest.raises(ExecutionError, match="already waiting"):
+    with pytest.raises(ExecutionError, match="still waiting"):
         connection.call_async_and_wait("moveOnPathAsync", [], 1.0, timeout_s=5.0)
     client.path_future.released.set()
     first.join(2.0)
