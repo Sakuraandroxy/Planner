@@ -16,7 +16,7 @@ from .domain.runtime import FamilyCatalog, parse_family_catalog
 from .domain.sliding_window import SlidingWindowSettings
 from .domain.view import VIEW_MODES
 from .domain.visual_goal_completion import VisualGoalTriggerRules
-from .domain.visual_goal_limits import VisualGoalLimits
+from .domain.visual_goal_limits import BareNavigationSettings, VisualGoalLimits
 from .services.segment_motion import MotionLimits
 
 
@@ -352,6 +352,8 @@ class VisualGoalNavigationSettings:
     depth_foreground_filter: DepthForegroundSettings = field(
         default_factory=DepthForegroundSettings
     )
+    execution: str = "staged"
+    bare: BareNavigationSettings = field(default_factory=BareNavigationSettings)
 
     def __post_init__(self) -> None:
         for name in ("enabled", "geometry_verified", "collision_check_enabled"):
@@ -364,6 +366,10 @@ class VisualGoalNavigationSettings:
             or not self.completion_rules_file.strip()
         ):
             raise ValueError("completion_rules_file must be non-empty text")
+        if self.execution not in ("staged", "bare"):
+            raise ValueError(
+                "visual_goal_navigation.execution must be 'staged' or 'bare'"
+            )
 
 
 @dataclass(frozen=True)
@@ -1670,6 +1676,8 @@ def load_config(path: str | Path) -> AppConfig:
         "limits",
         "completion_rules_file",
         "depth_foreground_filter",
+        "execution",
+        "bare",
     }
     unknown = set(visual_raw) - visual_names
     if unknown:
@@ -1708,6 +1716,12 @@ def load_config(path: str | Path) -> AppConfig:
         or not completion_rules_file.strip()
     ):
         raise ValueError("completion_rules_file must be non-empty text")
+    bare_raw = _section(visual_raw, "bare")
+    bare_names = {item.name for item in fields(BareNavigationSettings)}
+    unknown = set(bare_raw) - bare_names
+    if unknown:
+        raise ValueError(f"unknown bare settings: {sorted(unknown)}")
+    bare = BareNavigationSettings(**bare_raw)
     visual_goal_navigation = VisualGoalNavigationSettings(
         **flags,
         output_root=str(visual_raw.get("output_root", "output/visual_goal")),
@@ -1719,6 +1733,8 @@ def load_config(path: str | Path) -> AppConfig:
             else VisualGoalTriggerRules()
         ),
         depth_foreground_filter=DepthForegroundSettings(**foreground_raw),
+        execution=str(visual_raw.get("execution", "staged")),
+        bare=bare,
     )
 
     return AppConfig(

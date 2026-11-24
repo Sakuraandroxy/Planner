@@ -265,6 +265,9 @@ class FakeRobot:
 
 
 class FakeConnection:
+    #: The drone tests drive a stepped clock: no control period, no movement.
+    free_running = False
+
     def __init__(self, robot):
         self.client = FakeClient()
         self.robot = robot

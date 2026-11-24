@@ -155,6 +155,14 @@ visual_goal_navigation:
   geometry_verified: true
   # 本工作流是否读取仿真器碰撞事件并中断。
   collision_check_enabled: false
+  # 本档使用的执行管线：staged 分段停稳执行，bare 整条路径交给引擎跟随。
+  execution: bare
+  # bare 管线的执行参数，staged 档不读取。
+  bare:
+    # 路径跟随下发的速度，单位米每秒。
+    speed_mps: 1.0
+    # 单条路径从下发到走完的时间上限，单位秒。
+    path_timeout_s: 60.0
   # 视觉任务诊断日志和观测图像的输出根目录。
   output_root: output/visual_goal/vlm
   # 完成判定规则文件；相对路径以主配置所在目录为基准。
@@ -175,7 +183,7 @@ visual_goal_navigation:
     # 连续到达确认观测之间的最小时间间隔，单位秒。
     confirmation_interval_s: 1.0
     # 单个视觉任务阶段允许的最大规划轮数。
-    maximum_planning_rounds: 18
+    maximum_planning_rounds: 30
     # 单个视觉任务阶段总时长上限，单位秒。
     maximum_task_duration_s: 600.0
     # true 允许目标不可见时按本地策略分步转向搜索。

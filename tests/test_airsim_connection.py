@@ -12,6 +12,8 @@ follows them: methods without a ``vehicle_name`` parameter must not be given one
 
 import inspect
 import sys
+import threading
+import time
 import types
 
 import pytest
@@ -23,6 +25,49 @@ class _Future:
 
     def get(self):
         return self._value
+
+    def attach_callback(self, callback):
+        pass
+
+
+class _Loop:
+    """The part of the SDK's msgpack-rpc loop a waiting future touches.
+
+    ``configure_rpc_loop`` wraps this in ``OwnerRpcLoop``, so ``start`` is what a
+    pending ``Future.get()`` calls in a loop and ``stop``/``abandon`` are what the
+    connection uses to end that wait.
+    """
+
+    def __init__(self):
+        self._ioloop = types.SimpleNamespace(
+            dettach_periodic_callback=lambda: None, close=lambda: None
+        )
+        self.stops = 0
+
+    def start(self):
+        # The real loop pumps I/O here and returns on its periodic timeout tick.
+        threading.Event().wait(0.001)
+
+    def stop(self):
+        self.stops += 1
+
+
+class _StuckFuture:
+    """A native call that never answers until the test releases it.
+
+    ``get`` mimics msgpack-rpc: it pumps the client's loop until the answer lands,
+    which is exactly the loop ``OwnerRpcLoop.abandon`` has to break.
+    """
+
+    def __init__(self, client):
+        self._client = client
+        self.released = threading.Event()
+
+    def get(self):
+        loop = self._client.client._loop
+        while not self.released.is_set():
+            loop.start()
+        return False
 
     def attach_callback(self, callback):
         pass
@@ -63,8 +108,11 @@ class _Client:
         # last value, which is how a vehicle that has settled behaves.
         self.z_values: list[float] = [0.67]
         self.takeoff_ack = True
-        # configure_rpc_loop() walks these; keep them inert but present.
-        self.client = types.SimpleNamespace(_loop=None, close=lambda: None)
+        # Path calls answer at once unless a test says the server went silent.
+        self.path_never_answers = False
+        self.path_future: _StuckFuture | None = None
+        # configure_rpc_loop() wraps this; a pending future pumps it.
+        self.client = types.SimpleNamespace(_loop=_Loop(), close=lambda: None)
 
     def _z(self):
         return self.z_values.pop(0) if len(self.z_values) > 1 else self.z_values[0]
@@ -86,6 +134,15 @@ class _Client:
         self.seen["listVehicles"] = "no-parameter"
         return ["Drone_1"]
 
+    def moveOnPathAsync(self, path, velocity, timeout_sec=3e38, drivetrain=None,
+                        yaw_mode=None, lookahead=-1, adaptive_lookahead=1,
+                        vehicle_name=""):
+        self.seen["moveOnPathAsync"] = (velocity, timeout_sec, drivetrain,
+                                        yaw_mode, lookahead, adaptive_lookahead,
+                                        vehicle_name)
+        self.path_future = _StuckFuture(self) if self.path_never_answers else _Future(True)
+        return self.path_future
+
     def ping(self):
         return True
 
@@ -105,6 +162,11 @@ class _Client:
 def fake_airsim(monkeypatch):
     module = types.ModuleType("airsim")
     module.MultirotorClient = _Client
+    # The vehicle adapter builds these three; the connection tests that go
+    # through the real vehicle need them too.
+    module.DrivetrainType = types.SimpleNamespace(ForwardOnly=1, MaxDegreeOfFreedom=0)
+    module.YawMode = lambda **kwargs: kwargs
+    module.Vector3r = lambda x, y, z: (x, y, z)
     monkeypatch.setitem(sys.modules, "airsim", module)
 
 
@@ -128,6 +190,158 @@ def test_the_async_channel_carries_it_too():
     connection, client = _connection(vehicle_name="Drone_1")
     assert connection.call_async_and_wait("moveToPositionAsync", 0.0, 0.0, -2.0, 2.0) is True
     assert client.seen["moveToPositionAsync"] == "Drone_1"
+
+
+def test_a_path_call_that_never_answers_is_cut_by_the_client_deadline():
+    """``Future.get()`` has no timeout: the limit has to be the connection's."""
+    from planner.errors import ExecutionError
+
+    connection, client = _connection(vehicle_name="Drone_1")
+    client.path_never_answers = True
+    started = time.monotonic()
+    with pytest.raises(ExecutionError, match=r"did not answer inside 0\.05s"):
+        connection.call_async_and_wait("moveOnPathAsync", [], 1.0, timeout_s=0.05)
+    assert time.monotonic() - started < 2.0, "the wait was not bounded by timeout_s"
+    # The wait was unwound, not abandoned: no thread is left pumping the loop.
+    assert [t for t in threading.enumerate() if t.name.startswith("airsim-wait-")] == []
+    # And the connection is still usable afterwards.
+    connection.call("simGetVehiclePose")
+    assert client.seen["simGetVehiclePose"] == "Drone_1"
+    client.path_future.released.set()
+
+
+def test_a_wait_that_times_out_leaves_no_thread_behind():
+    """A second pump on the same loop would spin and race the transport close."""
+    from planner.errors import ExecutionError
+
+    connection, client = _connection()
+    client.path_never_answers = True
+    for _ in range(3):
+        with pytest.raises(ExecutionError):
+            connection.call_async_and_wait("moveOnPathAsync", [], 1.0, timeout_s=0.01)
+    assert [t for t in threading.enumerate() if t.name.startswith("airsim-wait-")] == []
+    client.path_future.released.set()
+
+
+def test_a_call_without_a_deadline_keeps_the_connection_lock_while_it_waits():
+    """This is the staged chain's contract: one socket, one request at a time.
+
+    A response that arrives while another request is in flight can be paired with
+    the wrong future, so a call without ``timeout_s`` must hold the lock it always
+    held until its ack lands.
+    """
+    connection, client = _connection(vehicle_name="Drone_1")
+    client.path_never_answers = True
+    waiting = threading.Thread(
+        target=connection.call_async_and_wait,
+        args=("moveOnPathAsync", [], 1.0),
+        daemon=True,
+    )
+    waiting.start()
+    while client.path_future is None:
+        time.sleep(0.001)
+    state_read = threading.Thread(
+        target=connection.call, args=("simGetVehiclePose",), daemon=True
+    )
+    state_read.start()
+    state_read.join(0.2)
+    assert state_read.is_alive(), "a state read has to queue behind the waiting call"
+    client.path_future.released.set()
+    state_read.join(2.0)
+    waiting.join(2.0)
+    assert "simGetVehiclePose" in client.seen
+
+
+def test_only_one_deadline_bound_wait_runs_at_a_time():
+    """Two waits on the shared loop could settle each other's future."""
+    from planner.errors import ExecutionError
+
+    connection, client = _connection(vehicle_name="Drone_1")
+    client.path_never_answers = True
+    first = threading.Thread(
+        target=connection.call_async_and_wait,
+        args=("moveOnPathAsync", [], 1.0),
+        kwargs={"timeout_s": 5.0},
+        daemon=True,
+    )
+    first.start()
+    while client.path_future is None:
+        time.sleep(0.001)
+    with pytest.raises(ExecutionError, match="still waiting"):
+        connection.call_async_and_wait("moveOnPathAsync", [], 1.0, timeout_s=5.0)
+    client.path_future.released.set()
+    first.join(2.0)
+    assert not first.is_alive()
+    # The slot is free again once that wait is over.
+    client.path_never_answers = False
+    assert connection.call_async_and_wait(
+        "moveOnPathAsync", [], 1.0, timeout_s=1.0
+    ) is True
+
+
+def test_a_timeout_that_is_not_a_positive_number_is_rejected():
+    connection, client = _connection()
+    for bad in (0, -1.0, float("inf"), float("nan")):
+        with pytest.raises(ValueError, match="finite positive"):
+            connection.call_async_and_wait("ping", timeout_s=bad)
+    assert "moveOnPathAsync" not in client.seen
+
+
+def test_the_vehicle_path_call_fits_the_sdk_keywords():
+    """The vehicle's keywords are checked against a signature-shaped client.
+
+    ``_Client.moveOnPathAsync`` declares AirSim's parameters explicitly, so a
+    misspelt keyword raises ``TypeError`` instead of being swallowed the way it
+    would be by a ``**kwargs`` fake.
+    """
+    from planner.domain.pose import WorldPose
+    from planner.simulators.airsim.vehicle import AirSimVehicle
+
+    class _Holding:
+        def __init__(self):
+            self.started = []
+            self.ticks = 0
+
+        def release(self):
+            pass
+
+        def start(self, target=None):
+            self.started.append(target)
+
+        def tick(self):
+            self.ticks += 1
+
+    connection, client = _connection(vehicle_name="Drone_1")
+    vehicle = AirSimVehicle(connection, speed_mps=2.0, timeout_s=5.0)
+    vehicle.holding = _Holding()
+    vehicle.follow_path(
+        [WorldPose(1.0, 2.0, 3.0, 0.0), WorldPose(4.0, 5.0, 6.0, 0.0)],
+        1.0,
+        timeout_s=30.0,
+    )
+    velocity, timeout_sec, drivetrain, yaw_mode, lookahead, adaptive, name = (
+        client.seen["moveOnPathAsync"]
+    )
+    assert (velocity, timeout_sec, lookahead, adaptive) == (1.0, 30.0, 3, 1)
+    # MaxDegreeOfFreedom with the heading it started at: the nose must not turn
+    # into the path direction, or the body frame the model answers in rotates.
+    assert drivetrain == 0
+    assert yaw_mode["is_rate"] is False
+    assert yaw_mode["yaw_or_rate"] == 0.0
+    assert name == "Drone_1"
+
+
+def test_the_client_deadline_and_air_sims_timeout_are_separate_keywords():
+    """``timeout_s`` bounds the wait here; ``timeout_sec`` is sent to the server."""
+    connection, client = _connection(vehicle_name="Drone_1")
+    assert connection.call_async_and_wait(
+        "moveOnPathAsync", [], 1.0, timeout_s=5.0, timeout_sec=30.0
+    ) is True
+    velocity, timeout_sec, _drivetrain, _yaw_mode, lookahead, adaptive, vehicle_name = (
+        client.seen["moveOnPathAsync"]
+    )
+    assert (velocity, timeout_sec, lookahead, adaptive) == (1.0, 30.0, -1, 1)
+    assert vehicle_name == "Drone_1", "the deadline must not drop the vehicle name"
 
 
 def test_methods_without_the_parameter_are_left_alone():

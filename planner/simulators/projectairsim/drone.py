@@ -18,6 +18,7 @@ import logging
 import math
 import threading
 import time
+from collections.abc import Sequence
 
 from projectairsim.drone import YawControlMode
 from projectairsim.types import LandedState
@@ -52,6 +53,26 @@ logger = logging.getLogger(__name__)
 # drone already is can skip the actor move instead of failing.
 TELEPORT_TOLERANCE_M = 0.01
 TELEPORT_TOLERANCE_DEG = 0.5
+
+#: How close to a path point counts as having reached it. ``MoveToPosition``
+#: answers with an ack, not with the arrival, so every point is measured here.
+#: It must stay above the engine's own ``distance accuracy`` (0.5 m): when the
+#: next temporary target falls inside that distance the engine commands zero
+#: velocity and the aircraft stops (ProjectAirSim issue 241), so a smaller
+#: tolerance can neither move the aircraft nor report the arrival.
+PATH_ARRIVAL_TOLERANCE_M = 1.0
+
+#: How long one point may take before the point is given up and the next one is
+#: tried. The engine stops a position command about 0.5 m short of its target
+#: (``GetDistanceAccuracy``), so a point the aircraft cannot close must not hold
+#: the whole path for the caller's full budget.
+PATH_POINT_WAIT_S = 20.0
+
+#: How often the pose is read while waiting for a point to be reached, for a
+#: clock the engine runs itself. The whole client shares one socket with the
+#: native command channel: polling per control period -- each read a request --
+#: starved the engine and the aircraft never moved at all.
+ARRIVAL_POLL_S = 0.2
 
 
 class ProjectAirSimDrone:
@@ -471,6 +492,186 @@ class ProjectAirSimDrone:
         )
         self._holding.start(segment.end)
         self._holding.wait(budget=budget)
+
+    def follow_path(
+        self, points: Sequence[WorldPose], speed_mps: float, *, timeout_s: float
+    ) -> None:
+        """Fly one world-frame path and wait until the aircraft has reached its end.
+
+        The port hands over the whole path; the adapter drives it point by point
+        through ``MoveToPosition``. This scene rejects ``MoveOnPath`` outright --
+        the server answers "Requested ServiceMethod .../MoveOnPath is not
+        supported by Request-Response Service" while the native call still returns
+        ``True``, which is why a path handed to it was accepted and never flown --
+        and ``eval/evalcore/sim.py`` records the same conclusion and flies
+        waypoints the same way.
+
+        Each point is one engine command, given the caller's remaining deadline as
+        its ``timeout_sec``. The engine answers when it takes a command, not when
+        the aircraft arrives, so arrival is measured here; the package's
+        ``move_to_position_async`` says so itself ("Control returns back to the
+        caller immediately"). Whichever way the path ends -- flown, timed out or
+        failed -- the hold starts again before this method returns or raises, so
+        the aircraft does not coast into the next round.
+        """
+        self._require_started()
+        if not points:
+            raise ExecutionError("path following needs at least one point")
+        self._holding.release()
+        self._cancel.clear()
+        issued = time.monotonic()
+        deadline = issued + float(timeout_s)
+        arrived = False
+        try:
+            # ``MoveOnPath`` is not a service this scene registers -- the server
+            # answers "not supported by Request-Response Service" -- and where it
+            # does register it, the aircraft does not move (ProjectAirSim issue
+            # 81). ``MoveToPosition`` does move it, and `eval/evalcore/sim.py:265`
+            # records the same conclusion for this build, so the path is driven
+            # point by point. The port still hands over the whole path: driving it
+            # to the last point is the adapter's job.
+            for index, target in enumerate(points, start=1):
+                if self._is_reached(target):
+                    logger.info(
+                        "[PathFollow] point %d already within %.1fm; skipping",
+                        index, PATH_ARRIVAL_TOLERANCE_M,
+                    )
+                    continue
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self.cancel()
+                    raise ExecutionError(
+                        "ProjectAirSim path following did not arrive: "
+                        f"point {index} was not reached in {timeout_s:g}s"
+                    )
+                point_deadline = min(deadline, time.monotonic() + PATH_POINT_WAIT_S)
+                self._bridge.run(
+                    self._move_exchange(target, float(speed_mps), remaining),
+                    timeout_s=remaining,
+                )
+                # A point the aircraft does not close is skipped rather than
+                # failing the path: the engine's own arrival check is looser than
+                # ours can be, and the next round replans from the measured pose.
+                self._await_arrival(target, point_deadline, index)
+            arrived = True
+        except ExecutionError:
+            raise
+        except TimeoutError as exc:
+            # Nothing else stops the native path, so the vehicle would keep
+            # flying after the caller gave up.
+            raise ExecutionError(
+                f"ProjectAirSim path following did not complete in {timeout_s:g}s"
+            ) from exc
+        except Exception as exc:
+            logger.warning(
+                "[PathFollow] request failed after %.2fs: %r",
+                time.monotonic() - issued, exc,
+            )
+            # The original reason has to survive: ``ProjectAirSim path following
+            # failed`` alone says nothing about a TypeError, a dropped socket or a
+            # package quirk.
+            raise ExecutionError(
+                f"ProjectAirSim path following failed: {type(exc).__name__}: {exc}"
+            ) from exc
+        finally:
+            # A flown path ends at its last point; a refused or abandoned one ends
+            # wherever the aircraft is, so the measured pose is the reference.
+            self._restore_hold(points[-1] if arrived else None)
+
+    def _is_reached(self, target: WorldPose) -> bool:
+        """Return whether the aircraft is already close enough to ``target``."""
+        pose = self.current_pose()
+        return math.dist(
+            (pose.x, pose.y, pose.z), (target.x, target.y, target.z)
+        ) <= PATH_ARRIVAL_TOLERANCE_M
+
+    def _await_arrival(
+        self, target: WorldPose, deadline: float, index: int
+    ) -> None:
+        """Wait for the pose to reach one path point, within its own deadline.
+
+        ``MoveToPosition`` answers when the engine takes the command, not when the
+        aircraft gets there, so the distance is measured here. The clock decides
+        the pace: a free-running engine needs no push and one pose read every
+        ``ARRIVAL_POLL_S`` leaves the socket to the native task, while a stepped
+        world only moves when a control period asks it to and keeps the owner
+        loop's step.
+
+        A point that is still out of reach at its deadline is reported and left
+        behind. The engine gives up on a position about 0.5 m short of its target,
+        so waiting longer cannot close it, and the caller replans from the
+        measured pose on the next round.
+        """
+        free_running = bool(self._connection.free_running)
+        steps = 0
+        while True:
+            steps += 1
+            pose = self.current_pose()
+            distance = math.dist(
+                (pose.x, pose.y, pose.z), (target.x, target.y, target.z)
+            )
+            if distance <= PATH_ARRIVAL_TOLERANCE_M:
+                logger.info(
+                    "[PathFollow] point %d reached: pose=(%.2f,%.2f,%.2f) "
+                    "distance=%.2fm pose_reads=%d",
+                    index, pose.x, pose.y, pose.z, distance, steps,
+                )
+                return
+            if time.monotonic() >= deadline:
+                logger.info(
+                    "[PathFollow] point %d given up at %.2fm: the engine stops "
+                    "about 0.5m short of a position, the next point continues",
+                    index, distance,
+                )
+                return
+            if free_running:
+                self._sleep(ARRIVAL_POLL_S)
+            else:
+                self._connection.advance_for_sim_time(self._period)
+
+    def _restore_hold(self, target: WorldPose | None = None) -> None:
+        """Return to a controlled hover after the path, by any route.
+
+        Without a ``target`` the hold takes the measured pose, which is what a
+        refused or abandoned path leaves behind. Starting the hold also cancels
+        the native task before it commands the first period, so this is what stops
+        a path the engine refused or one the caller gave up on. It never raises:
+        the caller is already reporting why the path ended, and stopping is exactly
+        what a broken transport makes fail.
+        """
+        try:
+            self._require_started()
+            self._holding.start(target)
+            self._holding.tick()
+        except Exception as error:
+            logger.warning("[PathFollow] restoring the hold failed: %r", error)
+
+    async def _move_exchange(self, target: WorldPose, speed_mps: float, timeout_s: float):
+        """Ask ``MoveToPosition`` for one path point and return the engine's ack."""
+        # ``ForwardOnly`` is the baseline's yaw intent, but on this build the
+        # motion services reject it (ProjectAirSim issue 81: the server raises a
+        # std::exception) and the aircraft does not move. ``MaxDegreeOfFreedom``
+        # with a zero yaw rate is the combination that flies here.
+        yaw_control_mode = YawControlMode.MaxDegreeOfFreedom
+        yaw_is_rate = True
+        yaw = 0.0
+        logger.info(
+            "[PathFollow] point target=(%.2f,%.2f,%.2f) velocity=%.2fm/s "
+            "timeout_sec=%.1fs yaw_control=%s yaw_is_rate=%s yaw=%.1f",
+            target.x, target.y, target.z, speed_mps, timeout_s,
+            getattr(yaw_control_mode, "name", yaw_control_mode), yaw_is_rate, yaw,
+        )
+        task = await self._robot.move_to_position_async(
+            float(target.x),
+            float(target.y),
+            float(target.z),
+            velocity=speed_mps,
+            timeout_sec=timeout_s,
+            yaw_control_mode=yaw_control_mode,
+            yaw_is_rate=yaw_is_rate,
+            yaw=yaw,
+        )
+        return await task
 
     def park(self) -> None:
         """Stop flying without waiting for a touchdown.

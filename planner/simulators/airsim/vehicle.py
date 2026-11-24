@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import math
 import time
+from collections.abc import Sequence
 
 from planner.domain.execution import ExecutionBudget, PoseCheckpoint
 from planner.domain.motion import MotionLimits
@@ -73,6 +74,88 @@ class AirSimVehicle:
         if self.holding is not None:
             self.holding.start(segment.end)
             self.holding.wait(budget=budget)
+
+    def follow_path(self, points: Sequence[WorldPose], speed_mps: float, *,
+                    timeout_s: float) -> None:
+        """Hand one world-frame path to AirSim and block until the vehicle flew it.
+
+        The parameters follow the 3DG-VLN baseline
+        (``3dg-vln-ref/airsim_plugin/AirVLNSimulatorClientTool.py:365-388``) for
+        lookahead and deadlines, but not for yaw. The baseline passes
+        ``ForwardOnly``, which turns the nose into the path direction. The bare
+        profile asks the model for body-frame points every round, so a nose that
+        follows the path rotates the frame the model answers in: a constant left
+        offset then compounds into a left spiral (flight of 2026-11-24 20:30,
+        heading 0 to -110 degrees over five rounds while the goal receded to 19 m).
+        Holding the heading at path start keeps the camera frame fixed, which is
+        what the same workflow does on ProjectAirSim. The
+        baseline passes no ``timeout_sec`` (AirSim default 3e38) because it stops
+        the path itself after five waypoints; here the caller's deadline reaches
+        the server as ``timeout_sec`` and is enforced on this side as well, so a
+        server or transport that never answers cannot block the control thread.
+
+        Completion is read from the ack: ``moveOnPathAsync().get()`` returns
+        ``False`` when the server timed the path out. This build has returned
+        false acks for takeoff and ``moveToPositionAsync`` while the vehicle was
+        moving, and path following has no state criterion of its own (no target
+        to settle on), so a false ack is reported -- after the native task is
+        stopped, see ``_halt_path``.
+        """
+        import airsim
+
+        if not points:
+            raise ExecutionError("path following needs at least one point")
+        if self.holding is not None:
+            self.holding.release()
+        path = [airsim.Vector3r(point.x, point.y, point.z) for point in points]
+        heading_deg = self.current_pose().yaw_deg
+        logger.info(
+            "[PathFollow] hold heading=%.1fdeg over %d points speed=%.2fm/s",
+            heading_deg, len(points), speed_mps,
+        )
+        try:
+            ack = self.connection.call_async_and_wait(
+                "moveOnPathAsync", path, speed_mps,
+                timeout_s=float(timeout_s),
+                timeout_sec=float(timeout_s),
+                drivetrain=airsim.DrivetrainType.MaxDegreeOfFreedom,
+                yaw_mode=airsim.YawMode(is_rate=False, yaw_or_rate=heading_deg),
+                lookahead=3, adaptive_lookahead=1)
+        except Exception:
+            # The client-side deadline fired, the transport failed, or the server
+            # dropped the RPC. In all three the server may still be steering the
+            # vehicle, so stop it before reporting. ``_halt_path`` never raises,
+            # otherwise the stop failure would replace this one.
+            self._halt_path()
+            raise
+        if ack is not True:
+            self._halt_path()
+            raise ExecutionError(
+                f"AirSim path following answered {ack!r}; the vehicle did not "
+                f"complete the path inside {timeout_s:g}s")
+
+    def _halt_path(self) -> None:
+        """Cancel the native path and hold the vehicle where it is.
+
+        Both steps are needed after a path that did not demonstrably finish.
+        Nothing else cancels the native task, and this build answers false acks
+        for takeoff and ``moveToPositionAsync`` while the vehicle is doing exactly
+        what was asked, so a false ack cannot be trusted as "already stopped".
+        The hold keeps the vehicle from drifting once the task is cancelled.
+
+        Neither step may raise: the caller is already reporting why the path
+        failed, and a transport that broke is exactly what makes these two fail.
+        Logging is all a second failure here can usefully do.
+        """
+        try:
+            self.cancel()
+        except Exception as error:
+            logger.warning("[PathFollow] cancelling the AirSim task failed: %r", error)
+        if self.holding is not None:
+            try:
+                self.hover()
+            except Exception as error:
+                logger.warning("[PathFollow] holding after the path failed: %r", error)
 
     def cancel(self) -> None:
         self.connection.call("cancelLastTask")

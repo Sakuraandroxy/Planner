@@ -193,6 +193,16 @@ class ProjectAirSimConnection:
             )
             return False
 
+    @property
+    def free_running(self) -> bool:
+        """Whether the engine advances its own clock (see ``resume_clock``).
+
+        A caller that polls the state while the vehicle flies needs this: a
+        free-running world is only paced by sleeping, a stepped one has to be
+        asked for every control period.
+        """
+        return self._free_running
+
     def close(self) -> None:
         with self._lock:
             client = self.client

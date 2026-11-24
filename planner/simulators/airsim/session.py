@@ -170,6 +170,11 @@ class AirSimMissionSession:
             # control connection, and the observation source owns a second one
             # for pixels.
             observation_source=self.observation,
+            # The bare pipeline hands whole paths to the engine. ``build_ports``
+            # was given this same object as ``vehicle``, so ``ports.path_follow``
+            # is the ``AirSimVehicle`` behind ``vehicles["drone"]`` -- reading it
+            # from the built bundle keeps the two from drifting apart.
+            path_follow=self.ports.path_follow,
             # Moving observations run on a worker thread. Handing them the
             # control connection put every frame request behind its lock, and
             # ``simGetImages`` on this build holds it for 0.4-0.5 s: measured in

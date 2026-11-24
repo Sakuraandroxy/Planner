@@ -29,7 +29,8 @@ pull it back down. Only the active vehicle is visible in the streaming view.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import logging
+from collections.abc import Callable, Sequence
 
 import numpy as np
 from projectairsim import Drone, Rover
@@ -82,6 +83,44 @@ HIDE_PIN_PERIOD_S = 2.0
 
 #: The shared assembly owns the arm type; this name stays for the session's internals.
 _VehicleArm = VehicleArm
+
+logger = logging.getLogger(__name__)
+
+
+class _ActivePathFollow:
+    """Path following for whichever vehicle the running task drives.
+
+    ``MissionInputs`` carries one ``path_follow`` for every arm it builds, but
+    this family has two vehicles. ``run`` switches ``_active_vehicle`` before
+    the workflow executes, so resolving the vehicle per call keeps each arm on
+    its own actor instead of handing the rover arm the drone's follower. UE4
+    needs no such dispatch: it has one vehicle and passes that object.
+    """
+
+    def __init__(self, session: ProjectAirSimMissionSession) -> None:
+        self._session = session
+
+    def follow_path(
+        self, points: Sequence[WorldPose], speed_mps: float, *, timeout_s: float
+    ) -> None:
+        session = self._session
+        vehicle = (
+            session._drone if session._active_vehicle == "drone" else session._rover
+        )
+        if vehicle is None:
+            raise ExecutionError(
+                f"ProjectAirSim has no {session._active_vehicle} to follow a path"
+            )
+        # Which actor this path went to, and how it was shaped: without it a path
+        # that silently drove the parked vehicle looks identical to one that never
+        # ran.
+        logger.info(
+            "[PathFollow] dispatch vehicle=%s points=%d first=%s last=%s",
+            session._active_vehicle, len(points),
+            (points[0].x, points[0].y, points[0].z) if points else None,
+            (points[-1].x, points[-1].y, points[-1].z) if points else None,
+        )
+        vehicle.follow_path(points, speed_mps, timeout_s=timeout_s)
 
 
 class ProjectAirSimMissionSession:
@@ -270,6 +309,9 @@ class ProjectAirSimMissionSession:
         """
         return MissionInputs(
             vehicles={"rover": self._rover, "drone": self._drone},
+            # One object for both arms: it resolves the vehicle when a path is
+            # handed over, because ``run`` decides which vehicle a task drives.
+            path_follow=_ActivePathFollow(self),
             moving_source_factory=BorrowedMovingSource,
         )
 

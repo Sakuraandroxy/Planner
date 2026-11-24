@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import math
 import threading
 import time
 from collections import deque
@@ -21,6 +22,9 @@ MIN_CLIMB_M = 0.5
 
 #: Cache of "does this client method take a vehicle_name?", keyed by __qualname__.
 _VEHICLE_ARG: dict[str, bool] = {}
+
+#: How long an abandoned wait gets to unwind before the caller moves on.
+_ABANDON_REAP_S = 0.5
 
 
 def _accepts_vehicle_name(func) -> bool:
@@ -67,6 +71,8 @@ class AirSimConnection:
         self._motion_client = None
         self._motion_kwargs = dict(kwargs, timeout_value=motion_timeout_s) if motion_timeout_s is not None else None
         self._lock = threading.RLock()
+        #: Admits one deadline-bound wait at a time; see ``call_async_and_wait``.
+        self._deadline_wait = threading.Lock()
         self._controls_vehicle = False
         self._closed = False
         self.connection_lost = False
@@ -136,21 +142,108 @@ class AirSimConnection:
                         self._stream_errors.append(value.error)
                 future.attach_callback(completed)
 
-    def call_async_and_wait(self, name: str, *args, **kwargs):
+    def call_async_and_wait(self, name: str, *args, timeout_s: float | None = None,
+                            **kwargs):
+        """Issue an async RPC and wait for its ack, optionally with a deadline.
+
+        ``timeout_s`` is the client-side limit, not AirSim's ``timeout_sec``: the
+        two are separate keywords and a caller that wants both passes both.
+
+        Without a deadline the wait stays inside the connection lock, as it
+        always has: the msgpackrpc session pairs responses with requests on one
+        socket, so a second request in flight can settle the wrong future. Only
+        path following passes a deadline -- its ack can arrive a minute later, and
+        the owner thread's state reads must not queue behind it -- and that wait
+        runs outside the lock under ``self._deadline_wait``, which admits one
+        caller at a time for the same pairing reason.
+
+        The SDK's ``Future.get()`` cannot be bounded -- msgpackrpc's ``join`` is
+        ``while not flag: loop.start()``, a pump loop with no deadline and no
+        cancel -- so the deadline waits on a helper thread that does the pumping
+        and the caller breaks that wait through the loop (``rpc_loop.py``) when
+        the deadline passes. Breaking it is what reclaims the thread: leaving it
+        pumping would put a second thread on the same IOLoop, where the loser
+        spins and shutdown races the loop it is inside.
+        """
+        if timeout_s is not None:
+            timeout_s = float(timeout_s)
+            if not math.isfinite(timeout_s) or timeout_s <= 0:
+                raise ValueError("timeout_s must be a finite positive number")
+            return self._wait_with_deadline(name, args, kwargs, timeout_s)
         with self._lock:
             if self._closed:
                 raise RuntimeError("AirSim connection is closed")
             with self._transport_call():
-                client = self.client
-                if getattr(self, "_motion_kwargs", None) is not None:
-                    if self._motion_client is None:
-                        import airsim
-                        self._motion_client = airsim.MultirotorClient(**self._motion_kwargs)
-                        configure_rpc_loop(self._motion_client)
-                    client = self._motion_client
+                _client, func = self._command(name)
                 # msgpackrpc.Future.join() discards both the result and RPC error.
-                func = getattr(client, name)
                 return func(*args, **self._for_vehicle(func, kwargs)).get()
+
+    def _command(self, name: str):
+        """Resolve an SDK method on the client this connection is configured for."""
+        client = self.client
+        if getattr(self, "_motion_kwargs", None) is not None:
+            if self._motion_client is None:
+                import airsim
+                self._motion_client = airsim.MultirotorClient(**self._motion_kwargs)
+                configure_rpc_loop(self._motion_client)
+            client = self._motion_client
+        return client, getattr(client, name)
+
+    def _wait_with_deadline(self, name: str, args: tuple, kwargs: dict,
+                            timeout_s: float):
+        """Wait for an ack outside the connection lock, one caller at a time."""
+        if not self._deadline_wait.acquire(blocking=False):
+            raise ExecutionError(
+                f"another deadline-bound AirSim call is still waiting; {name} "
+                f"was not sent"
+            )
+        stranded = False
+        try:
+            with self._lock:
+                if self._closed:
+                    raise RuntimeError("AirSim connection is closed")
+                with self._transport_call():
+                    client, func = self._command(name)
+                    future = func(*args, **self._for_vehicle(func, kwargs))
+                    # The loop that pumps this future; the SDK session owns it.
+                    loop = getattr(getattr(client, "client", None), "_loop", None)
+            outcome: dict[str, object] = {}
+
+            def wait():
+                try:
+                    outcome["value"] = future.get()
+                except BaseException as error:  # re-raised by the owner below
+                    outcome["error"] = error
+
+            waiter = threading.Thread(
+                target=wait, name=f"airsim-wait-{name}", daemon=True
+            )
+            waiter.start()
+            waiter.join(timeout_s)
+            if waiter.is_alive():
+                abandon = getattr(loop, "abandon", None)
+                if abandon is not None:
+                    abandon()
+                    waiter.join(_ABANDON_REAP_S)
+                if waiter.is_alive():
+                    # That thread is still pumping the shared loop; admitting
+                    # the next deadline call would give the loop two pumps and
+                    # let one settle the other's future, so the slot stays taken.
+                    stranded = True
+                    logger.warning(
+                        "the wait for %s could not be unwound; it ends on the "
+                        "client's own RPC timeout",
+                        name,
+                    )
+                raise ExecutionError(
+                    f"AirSim {name} did not answer inside {timeout_s:g}s"
+                )
+            if "error" in outcome:
+                raise outcome["error"]
+            return outcome.get("value")
+        finally:
+            if not stranded:
+                self._deadline_wait.release()
 
     def connect(self) -> None:
         self.call("confirmConnection")

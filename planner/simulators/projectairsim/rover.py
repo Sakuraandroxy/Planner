@@ -14,6 +14,7 @@ import math
 import threading
 import time
 from collections import deque
+from collections.abc import Sequence
 from dataclasses import replace
 
 from ...config import CameraSettings, DepthSettings
@@ -22,6 +23,7 @@ from ...domain.pose import WorldPose
 from ...domain.streaming import TimedVehicleState
 from ...errors import ExecutionError
 from ...services.segment_motion import MotionLimits
+from .async_bridge import AsyncBridge
 from .collision import CollisionEvent, CollisionMonitor
 from .connection import ProjectAirSimConnection
 from .coordinates import (
@@ -104,6 +106,7 @@ class ProjectAirSimRover:
         self._period = 1.0 / self._tracking.control_hz
         self._cancel = threading.Event()
         self._started = False
+        self._bridge = AsyncBridge()
         self._observations = ProjectAirSimObservationSource(
             connection,
             robot,
@@ -162,6 +165,82 @@ class ProjectAirSimRover:
         self._tracker.execute(
             segment, budget=budget, pose_checkpoint=pose_checkpoint
         )
+
+    def follow_path(
+        self, points: Sequence[WorldPose], speed_mps: float, *, timeout_s: float
+    ) -> None:
+        """Drive one world-frame path through ``MoveOnPath`` and wait for it.
+
+        The parameters are the installed package's
+        (``projectairsim/rover.py:199-222``, ``move_on_path_async``): ``path`` is a
+        list of NED points whose z the ground vehicle ignores, ``velocity`` the
+        desired speed in m/s, ``lookahead`` 3 and ``adaptive_lookahead`` 1 to
+        match the path parameters the 3DG-VLN baseline flies with.
+
+        The tracking itself is the engine's, not one continuous carrot path: in
+        this package ``Rover.move_on_path_async`` visits the waypoints in order
+        through ``MoveToPosition`` (SimpleDrive), so ``timeout_sec`` bounds one
+        segment rather than the whole batch. The caller's deadline is for the
+        batch, so it is split across the points before it is handed over, while
+        the wall-clock limit on the whole call stays ``timeout_s``. The rover has
+        no yaw mode in this call (``yaw_rate_max`` stays at the package default
+        ``-1``, no limit), so the drone's ``ForwardOnly`` pair has no counterpart
+        here, and the whole path is still handed over in one request.
+        """
+        self._require_started()
+        if not points:
+            raise ExecutionError("path following needs at least one point")
+        self._cancel.clear()
+        self._pid.reset()
+        path = [[float(point.x), float(point.y), float(point.z)] for point in points]
+        try:
+            result = self._bridge.run(
+                self._path_exchange(path, float(speed_mps), float(timeout_s)),
+                timeout_s=float(timeout_s),
+            )
+        except ExecutionError:
+            raise
+        except TimeoutError as exc:
+            # ``MoveOnPath`` is the engine's own drive, so cancelling it is what
+            # ends the path; the brake then keeps the car where it stopped
+            # instead of letting it coast past the caller's deadline.
+            self._end_native_path()
+            raise ExecutionError(
+                f"ProjectAirSim path following did not complete in {timeout_s:g}s"
+            ) from exc
+        except Exception as exc:
+            raise ExecutionError("ProjectAirSim path following failed") from exc
+        if result is False:
+            # A refusal is the engine's own verdict, but the task it refused may
+            # still be running; stop it the same way the deadline does.
+            self._end_native_path()
+            raise ExecutionError("ProjectAirSim refused the path")
+
+    def _end_native_path(self) -> None:
+        """Cancel the native path and brake; never mask the caller's error."""
+        try:
+            self._robot.cancel_last_task()
+        except Exception as error:
+            logger.warning("[PathFollow] cancel_last_task failed: %r", error)
+        try:
+            self.hover()
+        except Exception as error:
+            logger.warning("[PathFollow] braking after the path failed: %r", error)
+
+    async def _path_exchange(
+        self, path: list[list[float]], speed_mps: float, timeout_s: float
+    ):
+        # ``timeout_sec`` is per segment in this package, so the caller's
+        # deadline for the whole batch is divided across its points.
+        segment_timeout_s = timeout_s / max(1, len(path))
+        task = await self._robot.move_on_path_async(
+            path,
+            velocity=speed_mps,
+            timeout_sec=segment_timeout_s,
+            lookahead=3,
+            adaptive_lookahead=1,
+        )
+        return await task
 
     def cancel(self) -> None:
         self._cancel.set()
@@ -361,8 +440,11 @@ class ProjectAirSimRover:
         self._collisions.clear()
 
     def close(self) -> None:
-        self._collisions.close()
-        self._observations.close()
+        try:
+            self._collisions.close()
+            self._observations.close()
+        finally:
+            self._bridge.close()
 
     # -- internals ---------------------------------------------------------
     def _require_started(self) -> None:

@@ -26,8 +26,10 @@ from .termination import SearchPolicy, VisualGoalExitPolicy, VisualGoalFailure
 class VisualGoalSession:
     budget: ExecutionBudget
     policy: VisualGoalExitPolicy
-    search: SearchPolicy
-    started: float
+    #: Search episodes are a staged feature. The bare pipeline has no search move
+    #: and passes nothing here, so the field stays optional.
+    search: SearchPolicy | None = None
+    started: float = 0.0
     initial: WorldPose | None = None
     reference: GoalReference | None = None
     geometry: GoalGeometry | None = None

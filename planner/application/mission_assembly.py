@@ -27,10 +27,12 @@ from ..capabilities.task_validation.visual_goal_navigation import (
 )
 from ..domain.mission import TaskKind
 from ..errors import ProtocolError
+from ..ports.path_vehicle import PathVehicle
 from ..services.execution import ExecutionService
 from ..services.model_calls import ModelCallService
 from ..services.motion import SynchronizedMotionPlanner
 from ..services.trajectory_validation import TrajectoryValidator
+from ..simulator.ports import PIPELINE_REQUIREMENTS, SimulatorPorts
 from ..workflows.basic_motion import BasicMotionWorkflow
 from ..workflows.free_navigation import FreeNavigationWorkflow
 from ..workflows.visual_goal_navigation import VisualGoalNavigationWorkflow
@@ -41,6 +43,7 @@ from .factories import (
     build_planner,
     build_task_parser,
     build_trace_factory,
+    build_visual_goal_planner,
 )
 from .mission_runner import MissionRunner
 from .mission_validator import MissionValidator
@@ -81,6 +84,10 @@ class MissionInputs:
     observation_source: object | None = None
     moving_source_factory: Callable | None = None
     enabled_tasks: tuple[str, ...] | None = None
+    #: The engine path-following port, when the session implements one. ``None``
+    #: means this simulator cannot fly the bare pipeline, and the assembly says so
+    #: instead of falling back to stopped segments.
+    path_follow: PathVehicle | None = None
 
 
 def assemble_missions(
@@ -118,6 +125,7 @@ def assemble_missions(
             enabled_tasks=inputs.enabled_tasks,
             execution=inputs.execution,
             observation_source=inputs.observation_source,
+            path_follow=inputs.path_follow,
             log=log,
         )
         for vehicle_id, vehicle in inputs.vehicles.items()
@@ -179,6 +187,141 @@ def build_mission_common(config, *, planner, detector, log) -> MissionCommon:
     )
 
 
+@dataclass(frozen=True)
+class VisualPipelineContext:
+    """What one vehicle arm can hand a visual-goal pipeline.
+
+    The two pipelines read different subsets: staged flies stopped segments and
+    needs the validator, the motion planner and the moving source; bare hands the
+    batch to the engine and needs ``path_follow``. One record keeps every builder
+    in the table callable by the same expression.
+    """
+
+    config: object
+    settings: object
+    common: MissionCommon
+    vehicle: object
+    source: object
+    goal_observer: object
+    planner: object
+    geometry: object
+    execution: ExecutionService
+    validator: TrajectoryValidator
+    motion: SynchronizedMotionPlanner
+    moving_observation_source: object | None
+    path_follow: PathVehicle | None
+    telemetry: object | None
+    is_drone: bool
+
+
+def _staged_visual_workflow(context: VisualPipelineContext) -> object:
+    """The world-model pipeline: stopped segments, smoothed and validated."""
+    config = context.config
+    settings = context.settings
+    limits = settings.limits
+    return VisualGoalNavigationWorkflow(
+        context.source,
+        context.goal_observer,
+        context.planner,
+        context.validator,
+        context.motion,
+        context.execution,
+        context.geometry,
+        VisualGoalCompletion(limits, TargetApproach()),
+        limits,
+        trace_factory=context.common.trace_factory,
+        completion_checker=context.common.completion_checker,
+        trigger_rules=settings.completion_rules,
+        sliding_window=config.sliding_window,
+        motion_limits=context.vehicle.tracking_limits,
+        collision_check=(
+            context.vehicle.collision_state
+            if settings.collision_check_enabled
+            else None
+        ),
+        moving_observation_source=context.moving_observation_source,
+        stream_speed_mps=config.motion.max_speed_mps,
+        stream_waypoint_timeout_s=60.0,
+        continuous_tracking=config.continuous,
+        telemetry=context.telemetry,
+        vertical_motion=context.is_drone,
+    )
+
+
+def _bare_visual_workflow(context: VisualPipelineContext) -> object:
+    """The bare pipeline: one instruction, one batch, the engine follows it."""
+    # Imported where it is built so that a staged arm does not depend on the bare
+    # workflow's own imports.
+    from ..workflows.visual_goal_navigation.bare import BareVisualGoalNavigation
+
+    settings = context.settings
+    return BareVisualGoalNavigation(
+        context.source,
+        context.goal_observer,
+        build_visual_goal_planner(context.config, aerial=context.is_drone),
+        context.path_follow,
+        context.geometry,
+        context.execution,
+        trigger_rules=settings.completion_rules,
+        limits=settings.limits,
+        bare=settings.bare,
+        telemetry=context.telemetry,
+        vertical_motion=context.is_drone,
+    )
+
+
+#: Visual-goal pipeline name -> builder. ``execution`` indexes this table, and an
+#: unknown name is a construction error rather than a quiet fall back to staged.
+#: A new pipeline needs one row here and one in
+#: ``planner.simulator.ports.PIPELINE_REQUIREMENTS``.
+VISUAL_PIPELINES: dict[str, Callable[[VisualPipelineContext], object]] = {
+    "staged": _staged_visual_workflow,
+    "bare": _bare_visual_workflow,
+}
+
+
+def visual_pipeline(execution: str) -> Callable[[VisualPipelineContext], object]:
+    builder = VISUAL_PIPELINES.get(execution)
+    if builder is None:
+        raise ProtocolError(
+            f"unknown visual-goal execution {execution!r}; expected "
+            f"{sorted(VISUAL_PIPELINES)}"
+        )
+    return builder
+
+
+#: Slot -> the callable a pipeline makes on it. A slot filled with the wrong
+#: object passes ``missing`` but cannot fly, which is a wiring mistake and is
+#: reported with the slot it came from.
+SLOT_METHODS: dict[str, str] = {"path_follow": "follow_path"}
+
+
+def require_pipeline_ports(ports: SimulatorPorts, execution: str) -> None:
+    """Refuse to build a pipeline this simulator cannot fly."""
+    required = PIPELINE_REQUIREMENTS.get(execution)
+    if required is None:
+        raise ProtocolError(
+            f"unknown visual-goal pipeline {execution!r}; expected "
+            f"{sorted(PIPELINE_REQUIREMENTS)}"
+        )
+    missing = ports.missing(required)
+    if missing:
+        raise ProtocolError(
+            f"visual-goal pipeline {execution!r} needs port slots this simulator "
+            f"does not implement: {list(missing)}"
+        )
+    for slot in required:
+        method = SLOT_METHODS.get(slot)
+        if method is None:
+            continue
+        held = ports.slot(slot)
+        if not callable(getattr(held, method, None)):
+            raise ProtocolError(
+                f"visual-goal pipeline {execution!r} needs port slot {slot!r} to "
+                f"provide {method}(); got {type(held).__name__}"
+            )
+
+
 def build_vehicle_arm(
     config,
     *,
@@ -192,6 +335,7 @@ def build_vehicle_arm(
     enabled_tasks: tuple[str, ...] | None = None,
     execution: ExecutionService | None = None,
     observation_source=None,
+    path_follow: PathVehicle | None = None,
     log: Callable[[str, str], None],
 ) -> VehicleArm:
     """Wire the task pipeline against one vehicle port.
@@ -229,35 +373,41 @@ def build_vehicle_arm(
         config.trajectory_planner.max_step_m,
         config.trajectory_planner.max_yaw_step_deg,
     )
+    # Only the staged pipeline reads the moving source; the bare one has no such
+    # argument, so a bare arm must not pay for a capture source nothing reads.
     moving_source = (
         moving_source_factory(vehicle)
-        if moving_source_factory is not None and config.sliding_window.enabled
+        if settings.execution == "staged"
+        and moving_source_factory is not None
+        and config.sliding_window.enabled
         else None
     )
-    visual = VisualGoalNavigationWorkflow(
-        source,
-        goal_observer,
-        planner,
-        validator,
-        motion,
-        execution,
-        geometry,
-        VisualGoalCompletion(limits, TargetApproach()),
-        limits,
-        trace_factory=common.trace_factory,
-        completion_checker=common.completion_checker,
-        trigger_rules=settings.completion_rules,
-        sliding_window=config.sliding_window,
-        motion_limits=vehicle.tracking_limits,
-        collision_check=(
-            vehicle.collision_state if settings.collision_check_enabled else None
-        ),
-        moving_observation_source=moving_source,
-        stream_speed_mps=config.motion.max_speed_mps,
-        stream_waypoint_timeout_s=60.0,
-        continuous_tracking=config.continuous,
-        telemetry=telemetry,
-        vertical_motion=is_drone,
+    pipeline = visual_pipeline(settings.execution)
+    # The bundle the slots are read from, built from the objects this arm already has:
+    # a pipeline that needs a port this simulator leaves empty must fail here, not
+    # mid-flight. Staged needs the vehicle and the image, bare also needs the path.
+    require_pipeline_ports(
+        SimulatorPorts(vehicle=vehicle, observation=source, path_follow=path_follow),
+        settings.execution,
+    )
+    visual = pipeline(
+        VisualPipelineContext(
+            config=config,
+            settings=settings,
+            common=common,
+            vehicle=vehicle,
+            source=source,
+            goal_observer=goal_observer,
+            planner=planner,
+            geometry=geometry,
+            execution=execution,
+            validator=validator,
+            motion=motion,
+            moving_observation_source=moving_source,
+            path_follow=path_follow,
+            telemetry=telemetry,
+            is_drone=is_drone,
+        )
     )
     basic = BasicMotionWorkflow(
         vehicle,
