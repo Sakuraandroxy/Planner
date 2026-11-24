@@ -223,6 +223,62 @@ def test_a_wait_that_times_out_leaves_no_thread_behind():
     client.path_future.released.set()
 
 
+def test_a_call_without_a_deadline_keeps_the_connection_lock_while_it_waits():
+    """This is the staged chain's contract: one socket, one request at a time.
+
+    A response that arrives while another request is in flight can be paired with
+    the wrong future, so a call without ``timeout_s`` must hold the lock it always
+    held until its ack lands.
+    """
+    connection, client = _connection(vehicle_name="Drone_1")
+    client.path_never_answers = True
+    waiting = threading.Thread(
+        target=connection.call_async_and_wait,
+        args=("moveOnPathAsync", [], 1.0),
+        daemon=True,
+    )
+    waiting.start()
+    while client.path_future is None:
+        time.sleep(0.001)
+    state_read = threading.Thread(
+        target=connection.call, args=("simGetVehiclePose",), daemon=True
+    )
+    state_read.start()
+    state_read.join(0.2)
+    assert state_read.is_alive(), "a state read has to queue behind the waiting call"
+    client.path_future.released.set()
+    state_read.join(2.0)
+    waiting.join(2.0)
+    assert "simGetVehiclePose" in client.seen
+
+
+def test_only_one_deadline_bound_wait_runs_at_a_time():
+    """Two waits on the shared loop could settle each other's future."""
+    from planner.errors import ExecutionError
+
+    connection, client = _connection(vehicle_name="Drone_1")
+    client.path_never_answers = True
+    first = threading.Thread(
+        target=connection.call_async_and_wait,
+        args=("moveOnPathAsync", [], 1.0),
+        kwargs={"timeout_s": 5.0},
+        daemon=True,
+    )
+    first.start()
+    while client.path_future is None:
+        time.sleep(0.001)
+    with pytest.raises(ExecutionError, match="already waiting"):
+        connection.call_async_and_wait("moveOnPathAsync", [], 1.0, timeout_s=5.0)
+    client.path_future.released.set()
+    first.join(2.0)
+    assert not first.is_alive()
+    # The slot is free again once that wait is over.
+    client.path_never_answers = False
+    assert connection.call_async_and_wait(
+        "moveOnPathAsync", [], 1.0, timeout_s=1.0
+    ) is True
+
+
 def test_a_timeout_that_is_not_a_positive_number_is_rejected():
     connection, client = _connection()
     for bad in (0, -1.0, float("inf"), float("nan")):
