@@ -488,7 +488,10 @@ class ProjectAirSimDrone:
 
         The coroutine resolves when the server answers the ``MoveOnPath``
         request, which it does at the end of the path; ``bridge.run`` is what
-        turns the caller's deadline into a wall-clock limit.
+        turns the caller's deadline into a wall-clock limit. Whichever way the
+        path ends -- flown, refused or past the deadline -- the hold starts
+        again before this method returns or raises, so the aircraft does not
+        coast into the next round.
         """
         self._require_started()
         if not points:
@@ -496,47 +499,81 @@ class ProjectAirSimDrone:
         self._holding.release()
         self._cancel.clear()
         path = [[float(point.x), float(point.y), float(point.z)] for point in points]
+        issued = time.monotonic()
         try:
             result = self._bridge.run(
                 self._path_exchange(path, float(speed_mps), float(timeout_s)),
                 timeout_s=float(timeout_s),
             )
+            # The engine's own answer, printed whole: a refusal carries the only
+            # clue to why this path was rejected, and the installed package
+            # unwraps it to ``False`` instead of saying anything.
+            logger.info(
+                "[PathFollow] response after %.2fs: type=%s value=%r",
+                time.monotonic() - issued, type(result).__name__, result,
+            )
+            if result is False:
+                # A refusal is the engine's own verdict, but nothing says the
+                # task it refused stopped; the hold started below cancels it.
+                raise ExecutionError("ProjectAirSim refused the path")
         except ExecutionError:
             raise
         except TimeoutError as exc:
             # Nothing else stops the native path, so the vehicle would keep
             # flying after the caller gave up.
-            self._end_native_path()
             raise ExecutionError(
                 f"ProjectAirSim path following did not complete in {timeout_s:g}s"
             ) from exc
         except Exception as exc:
+            logger.warning(
+                "[PathFollow] request failed after %.2fs: %r",
+                time.monotonic() - issued, exc,
+            )
             raise ExecutionError("ProjectAirSim path following failed") from exc
-        if result is False:
-            # A refusal is the engine's own verdict, but the task it refused may
-            # still be running; stop it the same way the deadline does.
-            self._end_native_path()
-            raise ExecutionError("ProjectAirSim refused the path")
+        finally:
+            self._restore_hold()
 
-    def _end_native_path(self) -> None:
-        """Cancel whatever the engine still runs; never mask the caller's error."""
+    def _restore_hold(self) -> None:
+        """Return to a controlled hover after the path, by any route.
+
+        ``hover`` cancels the native task before it commands the first hold
+        period, so this is also what stops a path the engine refused or one the
+        caller abandoned at its deadline. It never raises: the caller is already
+        reporting why the path ended, and stopping is exactly what a broken
+        transport makes fail.
+        """
         try:
-            self._robot.cancel_last_task()
+            self.hover()
         except Exception as error:
-            logger.warning("[PathFollow] cancel_last_task failed: %r", error)
+            logger.warning("[PathFollow] restoring the hold failed: %r", error)
 
     async def _path_exchange(
         self, path: list[list[float]], speed_mps: float, timeout_s: float
     ):
+        yaw_control_mode = YawControlMode.ForwardOnly
+        yaw_is_rate = False
+        yaw = 0.0
+        lookahead = 3
+        adaptive_lookahead = 1
+        # One line per path: the request as the engine sees it. Both the log and
+        # the call read the same locals, so the printed values cannot drift from
+        # the ones that are actually sent.
+        logger.info(
+            "[PathFollow] request points=%s velocity=%.2fm/s timeout_sec=%.1fs "
+            "yaw_control=%s yaw_is_rate=%s yaw=%.1f lookahead=%d "
+            "adaptive_lookahead=%d",
+            path, speed_mps, timeout_s, yaw_control_mode.name, yaw_is_rate, yaw,
+            lookahead, adaptive_lookahead,
+        )
         task = await self._robot.move_on_path_async(
             path,
             velocity=speed_mps,
             timeout_sec=timeout_s,
-            yaw_control_mode=YawControlMode.ForwardOnly,
-            yaw_is_rate=False,
-            yaw=0.0,
-            lookahead=3,
-            adaptive_lookahead=1,
+            yaw_control_mode=yaw_control_mode,
+            yaw_is_rate=yaw_is_rate,
+            yaw=yaw,
+            lookahead=lookahead,
+            adaptive_lookahead=adaptive_lookahead,
         )
         return await task
 

@@ -272,7 +272,8 @@ def test_projectairsim_drone_follows_the_path_with_the_baseline_parameters():
     assert call["lookahead"] == 3
     assert call["adaptive_lookahead"] == 1
     assert call["callback"] is None
-    assert robot.commands == [], "no per-period velocity command during follow_path"
+    assert len(robot.commands) == 1, "only the trailing hold command moves the aircraft"
+    assert drone._holding.active is True, "the path ends in a controlled hover"
     drone.close()
 
 
@@ -283,6 +284,7 @@ def test_projectairsim_drone_reports_a_refused_path():
     drone.start()
     with pytest.raises(ExecutionError, match="refused the path"):
         drone.follow_path(PATH, 1.0, timeout_s=45.0)
+    assert drone._holding.active is True, "a refusal still ends in a controlled hover"
     drone.close()
 
 
@@ -294,6 +296,7 @@ def test_projectairsim_drone_reports_a_path_that_never_finishes():
     with pytest.raises(ExecutionError, match=r"did not complete in 0\.05s"):
         drone.follow_path(PATH, 1.0, timeout_s=0.05)
     assert robot.cancels == 1, "the native path has to be stopped"
+    assert drone._holding.active is True, "the deadline still ends in a controlled hover"
     drone.close()
 
 
