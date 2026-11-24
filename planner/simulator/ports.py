@@ -37,6 +37,7 @@ from ..ports.observation_source import (
     MovingObservationSource,
     ObservationSource,
 )
+from ..ports.path_vehicle import PathVehicle
 from ..ports.streaming_vehicle import StreamingVehicle
 from ..ports.vehicle import Vehicle
 
@@ -47,6 +48,16 @@ TASK_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "visual_goal_navigation": ("vehicle", "observation"),
     "free_navigation": ("vehicle", "observation", "streaming"),
     "visual_goal_above": ("vehicle", "observation", "camera_view"),
+}
+
+#: Pipeline kind -> port slots it cannot run without. Same shape and same
+#: ``missing`` check as ``TASK_REQUIREMENTS``: adding a pipeline means adding one
+#: row. Both pipelines read an image and drive a vehicle; the bare one hands the
+#: whole path to the engine instead of flying stopped segments itself, so it is
+#: the only one that cannot start without the path slot.
+PIPELINE_REQUIREMENTS: dict[str, tuple[str, ...]] = {
+    "staged": ("vehicle", "observation"),
+    "bare": ("vehicle", "observation", "path_follow"),
 }
 
 #: Port slot -> the ``actions`` flag it unlocks. Only engine-dependent controls
@@ -74,6 +85,7 @@ class SimulatorPorts:
     models: AppearanceModelControl | None = None
     frames: FramePublisher | None = None
     home: ReturnHome | None = None
+    path_follow: PathVehicle | None = None
     vehicles: tuple[str, ...] = ("drone",)
     #: Task kinds the shared layer may offer even when every port is present.
     #: A simulator that has not been flown with a task lists it out of here.
@@ -157,6 +169,7 @@ class SimulatorPorts:
             models=_Slot("models") if "models" in present else None,
             frames=_Slot("frames") if "frames" in present else None,
             home=_Slot("home") if "home" in present else None,
+            path_follow=_Slot("path_follow") if "path_follow" in present else None,
             vehicles=vehicles,
             enabled_tasks=enabled_tasks,
         )
