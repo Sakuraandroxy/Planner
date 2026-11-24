@@ -1,10 +1,12 @@
-"""Path following hands the whole path to the engine, with the baseline's parameters.
+"""Path following: one path in, the engine's own commands out, arrival measured.
 
-Both adapters pass one world-frame path down to the engine's own path command and
-wait for it, so these tests pin the parameters item by item, check that no per-point
-``moveToPosition`` call happens instead, and check that a path which does not
-demonstrably finish is cancelled and held. The parameter values are the 3DG-VLN
-baseline's (``airsim_plugin/AirVLNSimulatorClientTool.py:365-388``).
+The UE4 adapter hands the whole path to ``moveOnPath`` in one call and these tests
+pin its parameters item by item, including that no per-point ``moveToPosition``
+call happens instead. The UE5 adapter drives the same path point by point through
+``MoveToPosition``, because that scene does not register ``MoveOnPath`` at all, and
+these tests pin that too: one command per point, arrival read from the pose, and
+cancel-and-hold whenever a path does not demonstrably finish. The parameter values
+are the 3DG-VLN baseline's (``airsim_plugin/AirVLNSimulatorClientTool.py:365-388``).
 """
 
 import asyncio
@@ -198,30 +200,44 @@ class _PathState:
         return future
 
     async def move_to_position_async(self, *args):
-        raise AssertionError("path following must not use point commands")
+        raise AssertionError("the rover must not use point commands")
 
 
 class PathRobot(_PathState, DroneRobot):
-    """``Drone.move_on_path_async`` with the installed package's signature."""
+    """``Drone.move_to_position_async`` with the installed package's signature."""
 
     def __init__(self):
         super().__init__()
-        # The engine answers as soon as it takes the path, so the fake has to say
-        # whether the aircraft got there: it moves to the last point unless a test
-        # wants a path that is accepted and never flown.
-        self.path_arrives = True
+        self.point_calls: list[dict] = []
+        # The engine answers when it takes the command, so the fake has to say
+        # whether the aircraft got there: it moves to the point unless a test wants
+        # a command that is accepted and never flown.
+        self.point_arrives = True
+        self.ack = True
+        self.never_answers = False
 
-    async def move_on_path_async(self, path, velocity, timeout_sec=3e38,
-                                 yaw_control_mode=YawControlMode.MaxDegreeOfFreedom,
-                                 yaw_is_rate=True, yaw=0.0, lookahead=-1,
-                                 adaptive_lookahead=1, callback=None):
-        future = self._record(path=path, velocity=velocity, timeout_sec=timeout_sec,
-                              yaw_control_mode=yaw_control_mode,
-                              yaw_is_rate=yaw_is_rate, yaw=yaw, lookahead=lookahead,
-                              adaptive_lookahead=adaptive_lookahead, callback=callback)
-        if self.path_arrives and not self.path_never_completes and self.path_result:
-            self.x, self.y, self.z = (float(value) for value in path[-1])
+    async def move_to_position_async(self, north, east, down, velocity,
+                                     timeout_sec=3e38,
+                                     yaw_control_mode=YawControlMode.MaxDegreeOfFreedom,
+                                     yaw_is_rate=True, yaw=0.0, lookahead=-1.0,
+                                     adaptive_lookahead=1.0, callback=None):
+        self.point_calls.append(
+            {"north": north, "east": east, "down": down, "velocity": velocity,
+             "timeout_sec": timeout_sec, "yaw_control_mode": yaw_control_mode,
+             "yaw_is_rate": yaw_is_rate, "yaw": yaw,
+             "lookahead": lookahead, "adaptive_lookahead": adaptive_lookahead,
+             "callback": callback}
+        )
+        future = asyncio.get_running_loop().create_future()
+        if not self.never_answers:
+            future.set_result(self.ack)
+            if self.point_arrives:
+                self.x, self.y, self.z = float(north), float(east), float(down)
         return future
+
+    async def move_on_path_async(self, *args, **kwargs):
+        raise AssertionError("the drone must not use MoveOnPath: this scene "
+                             "rejects it and answers True anyway")
 
     def cancel_last_task(self):
         self.cancels += 1
@@ -264,43 +280,56 @@ def _rover(robot):
     return ProjectAirSimRover(connection, robot, camera=ROVER_CAMERA), connection
 
 
-def test_projectairsim_drone_follows_the_path_with_the_baseline_parameters():
+def test_projectairsim_drone_drives_the_path_point_by_point():
+    """This scene rejects ``MoveOnPath``, so each point is its own command."""
     robot = PathRobot()
     drone = _drone(robot)
     drone.start()
     drone.follow_path(PATH, 1.0, timeout_s=45.0)
-    assert len(robot.path_calls) == 1
-    call = robot.path_calls[0]
-    assert call["path"] == [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]
-    assert call["velocity"] == 1.0
-    assert call["timeout_sec"] == 45.0
-    # ForwardOnly / absolute yaw with the baseline's lookahead, which is what
-    # makes the drone face the direction of travel instead of a fixed heading.
-    assert call["yaw_control_mode"] == YawControlMode.ForwardOnly
-    assert call["yaw_is_rate"] is False
-    assert call["yaw"] == 0.0
-    assert call["lookahead"] == 3
-    assert call["adaptive_lookahead"] == 1
-    assert call["callback"] is None
+    assert robot.path_calls == [], "a path command here is accepted and never flown"
+    assert [(c["north"], c["east"], c["down"]) for c in robot.point_calls] == [
+        (1.0, 2.0, 3.0), (4.0, 5.0, 6.0)
+    ]
+    first = robot.point_calls[0]
+    assert first["velocity"] == 1.0
+    # The caller's remaining deadline is what the engine may spend on this point.
+    assert first["timeout_sec"] == pytest.approx(45.0, abs=0.5)
+    # ForwardOnly / absolute yaw, the baseline's way of facing the direction of
+    # travel instead of holding a heading.
+    assert first["yaw_control_mode"] == YawControlMode.ForwardOnly
+    assert first["yaw_is_rate"] is False
+    assert first["yaw"] == 0.0
+    assert first["callback"] is None
     assert len(robot.commands) == 1, "only the trailing hold command moves the aircraft"
     assert drone._holding.active is True, "the path ends in a controlled hover"
     drone.close()
 
 
-def test_projectairsim_drone_reports_a_path_it_never_reaches():
-    """An accepted path is not a flown path: the ack can arrive at once.
+def test_projectairsim_drone_reports_a_point_it_never_reaches():
+    """An accepted command is not a flown one: the ack arrives at once.
 
     Measured on the 4090 machine: a 1.5 m path answered ``True`` after 0.00 s with
     the aircraft still at its start, so the arrival has to be read from the pose.
     """
     robot = PathRobot()
-    robot.path_arrives = False
+    robot.point_arrives = False
     drone = _drone(robot)
     drone.start()
     with pytest.raises(ExecutionError, match="did not arrive"):
         drone.follow_path(PATH, 1.0, timeout_s=0.05)
     assert robot.cancels >= 1, "the native task has to be cancelled"
     assert drone._holding.active is True, "the hold still has to take the aircraft"
+    drone.close()
+
+
+def test_projectairsim_drone_keeps_a_point_the_engine_answered_false():
+    """This build answers ``False`` for commands it carries out, so arrival decides."""
+    robot = PathRobot()
+    robot.ack = False
+    drone = _drone(robot)
+    drone.start()
+    drone.follow_path(PATH, 1.0, timeout_s=45.0)
+    assert len(robot.point_calls) == 2
     drone.close()
 
 
@@ -315,25 +344,13 @@ def test_projectairsim_drone_holds_the_flown_path_end():
     drone.close()
 
 
-def test_projectairsim_drone_reports_a_refused_path():
+def test_projectairsim_drone_reports_a_point_that_never_answers():
     robot = PathRobot()
-    robot.path_result = False
-    drone = _drone(robot)
-    drone.start()
-    with pytest.raises(ExecutionError, match="refused the path"):
-        drone.follow_path(PATH, 1.0, timeout_s=45.0)
-    assert drone._holding.active is True, "a refusal still ends in a controlled hover"
-    drone.close()
-
-
-def test_projectairsim_drone_reports_a_path_that_never_finishes():
-    robot = PathRobot()
-    robot.path_never_completes = True
+    robot.never_answers = True
     drone = _drone(robot)
     drone.start()
     with pytest.raises(ExecutionError, match=r"did not complete in 0\.05s"):
         drone.follow_path(PATH, 1.0, timeout_s=0.05)
-    assert robot.cancels == 1, "the native path has to be stopped"
     assert drone._holding.active is True, "the deadline still ends in a controlled hover"
     drone.close()
 
@@ -360,14 +377,16 @@ def test_projectairsim_rover_follows_the_path_with_the_baseline_lookahead():
     rover.close()
 
 
-def test_projectairsim_drone_cancels_a_refused_path():
+def test_projectairsim_drone_cancels_a_point_it_never_reached():
+    """A false ack is not the error by itself; a point never reached is."""
     robot = PathRobot()
-    robot.path_result = False
+    robot.ack = False
+    robot.point_arrives = False
     drone = _drone(robot)
     drone.start()
-    with pytest.raises(ExecutionError, match="refused the path"):
-        drone.follow_path(PATH, 1.0, timeout_s=45.0)
-    assert robot.cancels == 1, "a refusal may still leave the native task running"
+    with pytest.raises(ExecutionError, match="did not arrive"):
+        drone.follow_path(PATH, 1.0, timeout_s=0.05)
+    assert robot.cancels >= 1, "the native task has to be cancelled"
     drone.close()
 
 
@@ -396,7 +415,7 @@ def test_the_ue5_fakes_keep_the_installed_signatures():
     from projectairsim.rover import Rover
 
     for mine, installed in (
-        (PathRobot.move_on_path_async, Drone.move_on_path_async),
+        (PathRobot.move_to_position_async, Drone.move_to_position_async),
         (PathRover.move_on_path_async, Rover.move_on_path_async),
     ):
         ours = list(inspect.signature(mine).parameters.values())[1:]
@@ -433,5 +452,5 @@ def test_an_empty_path_is_rejected_before_any_command():
     drone.start()
     with pytest.raises(ExecutionError, match="at least one point"):
         drone.follow_path([], 1.0, timeout_s=1.0)
-    assert robot.path_calls == []
+    assert robot.point_calls == []
     drone.close()

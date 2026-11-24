@@ -29,6 +29,7 @@ pull it back down. Only the active vehicle is visible in the streaming view.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Sequence
 
 import numpy as np
@@ -83,6 +84,8 @@ HIDE_PIN_PERIOD_S = 2.0
 #: The shared assembly owns the arm type; this name stays for the session's internals.
 _VehicleArm = VehicleArm
 
+logger = logging.getLogger(__name__)
+
 
 class _ActivePathFollow:
     """Path following for whichever vehicle the running task drives.
@@ -108,6 +111,15 @@ class _ActivePathFollow:
             raise ExecutionError(
                 f"ProjectAirSim has no {session._active_vehicle} to follow a path"
             )
+        # Which actor this path went to, and how it was shaped: without it a path
+        # that silently drove the parked vehicle looks identical to one that never
+        # ran.
+        logger.info(
+            "[PathFollow] dispatch vehicle=%s points=%d first=%s last=%s",
+            session._active_vehicle, len(points),
+            (points[0].x, points[0].y, points[0].z) if points else None,
+            (points[-1].x, points[-1].y, points[-1].z) if points else None,
+        )
         vehicle.follow_path(points, speed_mps, timeout_s=timeout_s)
 
 

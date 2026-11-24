@@ -75,6 +75,9 @@ class FakeClient:
 
 
 class FakeConnection:
+    #: The rover tests drive a stepped clock: no control period, no movement.
+    free_running = False
+
     def __init__(self):
         self.client = FakeClient()
         self.pose = (50.0, 0.0, 0.94, 0.0)
