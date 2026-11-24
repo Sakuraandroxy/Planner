@@ -204,14 +204,24 @@ class _PathState:
 class PathRobot(_PathState, DroneRobot):
     """``Drone.move_on_path_async`` with the installed package's signature."""
 
+    def __init__(self):
+        super().__init__()
+        # The engine answers as soon as it takes the path, so the fake has to say
+        # whether the aircraft got there: it moves to the last point unless a test
+        # wants a path that is accepted and never flown.
+        self.path_arrives = True
+
     async def move_on_path_async(self, path, velocity, timeout_sec=3e38,
                                  yaw_control_mode=YawControlMode.MaxDegreeOfFreedom,
                                  yaw_is_rate=True, yaw=0.0, lookahead=-1,
                                  adaptive_lookahead=1, callback=None):
-        return self._record(path=path, velocity=velocity, timeout_sec=timeout_sec,
-                            yaw_control_mode=yaw_control_mode,
-                            yaw_is_rate=yaw_is_rate, yaw=yaw, lookahead=lookahead,
-                            adaptive_lookahead=adaptive_lookahead, callback=callback)
+        future = self._record(path=path, velocity=velocity, timeout_sec=timeout_sec,
+                              yaw_control_mode=yaw_control_mode,
+                              yaw_is_rate=yaw_is_rate, yaw=yaw, lookahead=lookahead,
+                              adaptive_lookahead=adaptive_lookahead, callback=callback)
+        if self.path_arrives and not self.path_never_completes and self.path_result:
+            self.x, self.y, self.z = (float(value) for value in path[-1])
+        return future
 
     def cancel_last_task(self):
         self.cancels += 1
@@ -274,6 +284,34 @@ def test_projectairsim_drone_follows_the_path_with_the_baseline_parameters():
     assert call["callback"] is None
     assert len(robot.commands) == 1, "only the trailing hold command moves the aircraft"
     assert drone._holding.active is True, "the path ends in a controlled hover"
+    drone.close()
+
+
+def test_projectairsim_drone_reports_a_path_it_never_reaches():
+    """An accepted path is not a flown path: the ack can arrive at once.
+
+    Measured on the 4090 machine: a 1.5 m path answered ``True`` after 0.00 s with
+    the aircraft still at its start, so the arrival has to be read from the pose.
+    """
+    robot = PathRobot()
+    robot.path_arrives = False
+    drone = _drone(robot)
+    drone.start()
+    with pytest.raises(ExecutionError, match="did not arrive"):
+        drone.follow_path(PATH, 1.0, timeout_s=0.05)
+    assert robot.cancels >= 1, "the native task has to be cancelled"
+    assert drone._holding.active is True, "the hold still has to take the aircraft"
+    drone.close()
+
+
+def test_projectairsim_drone_holds_the_flown_path_end():
+    """The hold after a flown path takes the last point, not an older reference."""
+    robot = PathRobot()
+    drone = _drone(robot)
+    drone.start()
+    drone.follow_path(PATH, 1.0, timeout_s=45.0)
+    target = drone._holding.target
+    assert (target.x, target.y, target.z) == (4.0, 5.0, 6.0)
     drone.close()
 
 

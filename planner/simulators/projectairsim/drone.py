@@ -54,6 +54,12 @@ logger = logging.getLogger(__name__)
 TELEPORT_TOLERANCE_M = 0.01
 TELEPORT_TOLERANCE_DEG = 0.5
 
+#: How close to the last point counts as having flown the path. The engine answers
+#: ``MoveOnPath`` when it takes the request, not when the path is done -- a measured
+#: 1.5 m path answered ``True`` after 0.00 s with the aircraft still at its start --
+#: so arrival is measured here, inside the hold's own position tolerance.
+PATH_ARRIVAL_TOLERANCE_M = 0.4
+
 
 class ProjectAirSimDrone:
     def __init__(
@@ -487,11 +493,11 @@ class ProjectAirSimDrone:
         yaw, lookahead 3 with adaptive lookahead 1.
 
         The coroutine resolves when the server answers the ``MoveOnPath``
-        request, which it does at the end of the path; ``bridge.run`` is what
-        turns the caller's deadline into a wall-clock limit. Whichever way the
-        path ends -- flown, refused or past the deadline -- the hold starts
-        again before this method returns or raises, so the aircraft does not
-        coast into the next round.
+        request, which it does as soon as it takes the path -- not when the
+        aircraft arrives, so arrival is measured here. Whichever way the path
+        ends -- flown, refused or past the deadline -- the hold starts again
+        before this method returns or raises, so the aircraft does not coast into
+        the next round.
         """
         self._require_started()
         if not points:
@@ -500,6 +506,7 @@ class ProjectAirSimDrone:
         self._cancel.clear()
         path = [[float(point.x), float(point.y), float(point.z)] for point in points]
         issued = time.monotonic()
+        arrived = False
         try:
             result = self._bridge.run(
                 self._path_exchange(path, float(speed_mps), float(timeout_s)),
@@ -516,6 +523,10 @@ class ProjectAirSimDrone:
                 # A refusal is the engine's own verdict, but nothing says the
                 # task it refused stopped; the hold started below cancels it.
                 raise ExecutionError("ProjectAirSim refused the path")
+            self._await_arrival(
+                points[-1], issued + float(timeout_s), float(timeout_s)
+            )
+            arrived = True
         except ExecutionError:
             raise
         except TimeoutError as exc:
@@ -536,19 +547,52 @@ class ProjectAirSimDrone:
                 f"ProjectAirSim path following failed: {type(exc).__name__}: {exc}"
             ) from exc
         finally:
-            self._restore_hold()
+            # A flown path ends at its last point; a refused or abandoned one ends
+            # wherever the aircraft is, so the measured pose is the reference.
+            self._restore_hold(points[-1] if arrived else None)
 
-    def _restore_hold(self) -> None:
+    def _await_arrival(self, target: WorldPose, deadline: float, timeout_s: float) -> None:
+        """Wait until the aircraft has actually flown to the end of the path.
+
+        The engine answers ``MoveOnPath`` when it accepts the request, so the ack
+        proves nothing about the aircraft: a measured 1.5 m path answered ``True``
+        after 0.00 s with the vehicle still at its start, and the hold that ran next
+        pinned it there. One control period per step: ``advance_for_sim_time`` is
+        what moves a stepped world and what paces a free-running one, so this loop
+        asks neither which mode it is nor for the clock's ownership.
+
+        The deadline is wall-clock, like the client-side limit on the ack itself:
+        a ``current_pose`` that stops answering must not extend it.
+        """
+        while True:
+            pose = self.current_pose()
+            distance = math.dist(
+                (pose.x, pose.y, pose.z), (target.x, target.y, target.z)
+            )
+            if distance <= PATH_ARRIVAL_TOLERANCE_M:
+                return
+            if time.monotonic() >= deadline:
+                self.cancel()
+                raise ExecutionError(
+                    "ProjectAirSim path following did not arrive: "
+                    f"{distance:.2f} m from the last point inside {timeout_s:g}s"
+                )
+            self._connection.advance_for_sim_time(self._period)
+
+    def _restore_hold(self, target: WorldPose | None = None) -> None:
         """Return to a controlled hover after the path, by any route.
 
-        ``hover`` cancels the native task before it commands the first hold
-        period, so this is also what stops a path the engine refused or one the
-        caller abandoned at its deadline. It never raises: the caller is already
-        reporting why the path ended, and stopping is exactly what a broken
-        transport makes fail.
+        Without a ``target`` the hold takes the measured pose, which is what a
+        refused or abandoned path leaves behind. Starting the hold also cancels
+        the native task before it commands the first period, so this is what stops
+        a path the engine refused or one the caller gave up on. It never raises:
+        the caller is already reporting why the path ended, and stopping is exactly
+        what a broken transport makes fail.
         """
         try:
-            self.hover()
+            self._require_started()
+            self._holding.start(target)
+            self._holding.tick()
         except Exception as error:
             logger.warning("[PathFollow] restoring the hold failed: %r", error)
 
