@@ -1,9 +1,9 @@
 """Bare visual-goal navigation: instruction-only prompt, engine path following.
 
 One round captures a frame, binds the target once, asks the model once, converts
-the returned relative waypoints to world points without any waypoint validation,
-hands the whole batch to the engine, publishes it, and stops when the measured
-distance to the bound target enters the task radius.
+the returned offsets to world points without any waypoint validation, hands the
+whole batch to the engine, publishes it, and stops when the measured distance to
+the bound target enters the task radius.
 
 Deliberately absent: pending-queue planning, window smoothing, collision checks,
 waypoint validation and semantic completion confirmation.
@@ -11,6 +11,7 @@ waypoint validation and semantic completion confirmation.
 import logging
 import math
 import time
+from functools import partial
 
 from planner.capabilities.targeting.association import (
     accept_position,
@@ -47,9 +48,11 @@ from planner.ports.goal_observer import GoalObserver
 from planner.ports.observation_source import ObservationSource
 from planner.ports.path_vehicle import PathVehicle
 from planner.ports.trajectory_planner import TrajectoryPlanner
-from planner.services.trajectory_transform import relative_to_world
+from planner.services.execution import ExecutionService
+from planner.services.model_calls import ModelCallService
+from planner.services.trajectory_transform import offsets_to_world
 
-from .session import VisualGoalSession
+from .session import VisualGoalSession, model_call
 from .termination import SearchPolicy, VisualGoalExitPolicy, VisualGoalFailure
 
 logger = logging.getLogger(__name__)
@@ -64,7 +67,8 @@ class BareVisualGoalNavigation:
                  goal_observer: GoalObserver,
                  trajectory_planner: TrajectoryPlanner,
                  path_vehicle: PathVehicle,
-                 geometry: DepthGeometry, *,
+                 geometry: DepthGeometry,
+                 execution: ExecutionService, *,
                  trigger_rules: VisualGoalTriggerRules = VisualGoalTriggerRules(),
                  limits: VisualGoalLimits = VisualGoalLimits(),
                  bare: BareNavigationSettings = BareNavigationSettings(),
@@ -74,12 +78,14 @@ class BareVisualGoalNavigation:
         self.planner = trajectory_planner
         self.path_vehicle = path_vehicle
         self.geometry = geometry
+        self.execution = execution
         self.trigger_rules = trigger_rules
         self.limits = limits
         self.bare = bare
         self.clock = clock
         self.telemetry = telemetry
         self.vertical_motion = bool(vertical_motion)
+        self.model_calls = ModelCallService(clock)
         self._closed = False
         self._last_pose: WorldPose | None = None
 
@@ -95,6 +101,11 @@ class BareVisualGoalNavigation:
             ExecutionBudget(started + self.limits.maximum_task_duration_s),
             VisualGoalExitPolicy(self.limits), SearchPolicy(self.limits), started)
         session.stage_id = stage.stage_id
+        # A stop request reaches this profile through the same two checkpoints the
+        # staged pipeline binds: vehicle hold/observation, plus every explicit
+        # ``checkpoint()`` call below and inside each model call.
+        session.checkpoint = self.execution.checkpoint
+        session.model_calls = self.model_calls
         self._last_pose = None
         try:
             self.prepare()
@@ -106,8 +117,8 @@ class BareVisualGoalNavigation:
         except (Exception, KeyboardInterrupt) as exc:
             status = _failure_status(exc)
             reason = str(exc) or status.value
-            if status is VisualGoalStatus.TIMEOUT and session.target_state is None:
-                reason = f"no target was ever bound; {reason}"
+            if session.target_state is None:
+                reason = f"{reason}; no target was ever bound"
         distance = None
         if session.target_state is not None and self._last_pose is not None:
             distance = bound_target_geometry(session.target_state, self._last_pose).distance_m
@@ -140,11 +151,18 @@ class BareVisualGoalNavigation:
 
     def close(self) -> None:
         self._closed = True
+        self.model_calls.close()
 
     def _navigate(self, parameters, session):
+        # The last batch the engine accepted, kept as body-frame offsets. It is the
+        # carrier for "target lost keeps the previous direction": when nothing is
+        # bound this round, the same offsets are sent again from the current pose
+        # and the model is not asked. Rounds without an earlier batch still fall
+        # through to the model, and the round/time budgets end the run otherwise.
+        previous: RelativeTrajectory | None = None
         while True:
+            self.execution.checkpoint()
             session.require_time(self.clock)
-            session.policy.planning_call()
             observation = self.source.capture(budget=session.budget)
             session.require_time(self.clock)
             self._last_pose = observation.pose
@@ -152,25 +170,31 @@ class BareVisualGoalNavigation:
                 session.initial = observation.pose
             if session.target_state is None:
                 self._bind_target(observation, parameters, session)
-            else:
+            if session.target_state is not None:
                 distance = bound_target_geometry(session.target_state, observation.pose).distance_m
                 if distance <= self.trigger_rules.radius_m:
                     self._publish(parameters, session, observation.pose, ())
                     return (VisualGoalStatus.REACHED,
                             f"measured distance {distance:.2f} m within radius "
                             f"{self.trigger_rules.radius_m:.2f} m")
-            trajectory = self._plan(observation, parameters, session)
+            if session.target_state is None and previous is not None:
+                trajectory = previous
+            else:
+                trajectory = self._plan(observation, parameters, session)
+            self.execution.checkpoint()
             batch = self._world_batch(trajectory, observation.pose)
             session.path_length_m += _leg_length_m(observation.pose, batch)
+            self._follow(batch, session)
+            previous = trajectory
             self._publish(parameters, session, observation.pose, batch)
-            self._follow(batch)
 
     def _bind_target(self, observation, parameters, session) -> None:
         """Bind the first accepted detection; a bound target is never replaced."""
-        goal = self.goal_observer.observe(
-            observation, parameters.target_description, None,
+        operation = partial(
+            self.goal_observer.observe, observation, parameters.target_description, None,
             budget=session.budget, initial_pose=session.initial,
             instruction=parameters.instruction)
+        goal = model_call(operation, session, self.limits, clock=self.clock)
         geometry = self.geometry.estimate(observation, goal)
         target_state, reason = accept_position(
             session.target_state, session.stage_id, observation, goal, geometry,
@@ -182,29 +206,33 @@ class BareVisualGoalNavigation:
         session.target_state = target_state
 
     def _plan(self, observation, parameters, session):
-        try:
-            return self.planner.plan(
-                observation, parameters.instruction,
-                round_index=session.policy.planning_calls,
-                initial_pose=session.initial, budget=session.budget)
-        except ProtocolError as exc:
-            raise VisualGoalFailure(VisualGoalStatus.MODEL_ERROR,
-                                    f"trajectory parse failed: {exc}") from exc
+        # One planning round per model request, retries included: the round index
+        # tells the model how many requests the stage has already spent.
+        session.policy.planning_call()
+        operation = partial(
+            self.planner.plan, observation, parameters.instruction,
+            round_index=session.policy.planning_calls,
+            initial_pose=session.initial, budget=session.budget)
+        return model_call(operation, session, self.limits, clock=self.clock)
 
     def _world_batch(self, trajectory, pose):
         points = tuple(trajectory.points[:_BATCH_POINTS])
         if not points:
             raise VisualGoalFailure(VisualGoalStatus.MODEL_ERROR,
                                     "trajectory parse returned no waypoints")
-        return tuple(relative_to_world(RelativeTrajectory(points), pose).poses)
+        return tuple(offsets_to_world(RelativeTrajectory(points), pose).poses)
 
-    def _follow(self, batch) -> None:
+    def _follow(self, batch, session) -> None:
+        self.execution.checkpoint()
+        session.require_time(self.clock)
         try:
             self.path_vehicle.follow_path(
                 batch, self.bare.speed_mps, timeout_s=self.bare.path_timeout_s)
         except Exception as exc:
             raise ExecutionError(
                 f"engine rejected or timed out on path following: {exc}") from exc
+        session.require_time(self.clock)
+        self.execution.checkpoint()
 
     def _publish(self, parameters, session, pose, batch) -> None:
         if self.telemetry is None:
@@ -233,7 +261,8 @@ def _leg_length_m(start: WorldPose, batch) -> float:
     length = 0.0
     previous = start
     for pose in batch:
-        length += math.hypot(pose.x - previous.x, pose.y - previous.y)
+        length += math.dist((previous.x, previous.y, previous.z),
+                            (pose.x, pose.y, pose.z))
         previous = pose
     return length
 

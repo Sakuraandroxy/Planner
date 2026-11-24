@@ -261,6 +261,7 @@ def _bare_visual_workflow(context: VisualPipelineContext) -> object:
         build_visual_goal_planner(context.config, aerial=context.is_drone),
         context.path_follow,
         context.geometry,
+        context.execution,
         trigger_rules=settings.completion_rules,
         limits=settings.limits,
         bare=settings.bare,

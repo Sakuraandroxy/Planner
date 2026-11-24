@@ -1,7 +1,14 @@
 """The bare workflow: one detection, one model call, five waypoints, local radius."""
 
+import time
+
 import numpy as np
 
+from planner.adapters.trajectory_planner import QwenVLPlanner
+from planner.adapters.trajectory_planner.prompts import BareTrajectoryPrompt
+from planner.adapters.trajectory_planner.response_parser import (
+    parse_translation_trajectory,
+)
 from planner.domain.mission import MissionStage, TaskKind
 from planner.domain.observation import CameraIntrinsics, Observation
 from planner.domain.pose import RelativePoseDelta, WorldPose
@@ -13,22 +20,30 @@ from planner.domain.visual_goal import (
     VisualGoalNavigationParameters,
 )
 from planner.domain.visual_goal_limits import VisualGoalLimits
-from planner.errors import ProtocolError
+from planner.errors import ExecutionError, ProtocolError
 from planner.workflows.visual_goal_navigation.bare import BareVisualGoalNavigation
 
 INSTRUCTION = "Drive forward and stop beside the red car."
 
 
 class _Clock:
-    """A deterministic clock; a zero step keeps the deadline out of reach."""
+    """A deterministic clock that keeps wall-clock deadlines reachable.
+
+    ``QwenVLPlanner`` compares the injected budget with ``time.monotonic()``, so
+    the base value has to sit near real time; ``step`` only drives timeouts.
+    """
 
     def __init__(self, step=0.0):
-        self.now = 0.0
+        self.now = time.monotonic()
         self.step = step
 
     def __call__(self):
         self.now += self.step
         return self.now
+
+    def expire(self):
+        """Push the clock past any budget, as if the engine call took too long."""
+        self.now += 10_000.0
 
 
 class _Source:
@@ -44,13 +59,16 @@ class _Source:
 
 
 class _Observer:
-    def __init__(self, status=GoalVisibility.VISIBLE):
+    def __init__(self, status=GoalVisibility.VISIBLE, failures=0):
         self.status = status
+        self.failures = failures
         self.calls = 0
 
     def observe(self, observation, target_description, reference=None, *,
                 budget=None, initial_pose=None, instruction=None):
         self.calls += 1
+        if self.calls <= self.failures:
+            raise ProtocolError("detector request failed")
         if self.status is not GoalVisibility.VISIBLE:
             return GoalObservation(self.status, None, None, target_description, "missing")
         return GoalObservation(self.status, (0.4, 0.4, 0.6, 0.6), None,
@@ -71,35 +89,98 @@ class _Geometry:
 
 
 class _Planner:
-    def __init__(self, points):
+    def __init__(self, points, failures=0):
         self.points = points
+        self.failures = failures
         self.calls = 0
+        self.round_indices = []
         self.error = None
 
     def plan(self, observation, instruction, **kwargs):
         self.calls += 1
+        self.round_indices.append(kwargs.get("round_index"))
+        if self.calls <= self.failures:
+            raise ProtocolError("planner request failed")
         if self.error is not None:
             raise self.error
         return RelativeTrajectory(self.points)
 
 
 class _PathVehicle:
-    def __init__(self):
+    def __init__(self, events=None):
         self.calls = []
         self.error = None
+        self.events = events
 
     def follow_path(self, points, speed_mps, *, timeout_s=None):
+        if self.events is not None:
+            self.events.append("follow")
         self.calls.append((tuple(points), speed_mps, timeout_s))
         if self.error is not None:
             raise self.error
 
 
+class _FollowThenExpire(_PathVehicle):
+    """Returns from the engine call after the stage time budget has blown."""
+
+    def __init__(self, clock):
+        super().__init__()
+        self.clock = clock
+
+    def follow_path(self, points, speed_mps, *, timeout_s=None):
+        super().follow_path(points, speed_mps, timeout_s=timeout_s)
+        self.clock.expire()
+
+
 class _Telemetry:
-    def __init__(self):
+    def __init__(self, events=None):
         self.snapshots = []
+        self.events = events
 
     def publish_queue(self, **fields):
+        if self.events is not None:
+            self.events.append("publish")
         self.snapshots.append(fields)
+
+
+class _Execution:
+    """Stands in for ``ExecutionService``: only the checkpoint is read."""
+
+    def __init__(self):
+        self.checkpoints = 0
+
+    def checkpoint(self):
+        self.checkpoints += 1
+
+
+class _StopAfter(_Execution):
+    """Raises the flight-stop error once the source has captured enough frames.
+
+    Model calls also run a checkpoint per poll, so the counter is the capture
+    count, not the checkpoint count.
+    """
+
+    def __init__(self, source, captures):
+        super().__init__()
+        self.source = source
+        self.captures = captures
+
+    def checkpoint(self):
+        super().checkpoint()
+        if self.source.captures >= self.captures:
+            raise ExecutionError("flight stop requested")
+
+
+class _Transport:
+    """Records the prompts the planner sends and replays one reply."""
+
+    def __init__(self, reply):
+        self.reply = reply
+        self.calls = []
+
+    def request(self, system, text, images, *, timeout_s, operation):
+        self.calls.append((system, text))
+        return self.reply
 
 
 def _observation(pose: WorldPose, capture_id: str = "capture-0",
@@ -133,13 +214,14 @@ def _seven_points() -> tuple[RelativePoseDelta, ...]:
 
 
 def _workflow(*, poses, planner, observer=None, geometry=None, vehicle=None,
-              limits=None, clock=None, telemetry=None):
+              limits=None, clock=None, telemetry=None, execution=None):
     return BareVisualGoalNavigation(
         _Source(poses),
         observer or _Observer(),
         planner,
         vehicle or _PathVehicle(),
         geometry or _Geometry(),
+        execution or _Execution(),
         limits=limits or VisualGoalLimits(),
         clock=clock or _Clock(),
         telemetry=telemetry,
@@ -174,8 +256,19 @@ def test_more_than_five_waypoints_are_executed_as_the_first_five():
     assert len(points) == 5
     assert speed_mps == 1.0
     assert timeout_s == 60.0
-    assert abs(points[0].x - 0.8) < 1e-9
-    assert abs(points[4].x - 4.0) < 1e-9
+
+
+def test_every_waypoint_is_offset_from_the_same_observation_pose():
+    """Baseline geometry: five 0.8 m offsets are five points 0.8 m away, not a chain."""
+    planner, vehicle = _Planner(_seven_points()), _PathVehicle()
+    workflow = _workflow(
+        poses=(WorldPose(0.0, 0.0, 0.0, 0.0), WorldPose(9.0, 0.0, 0.0, 0.0)),
+        planner=planner, vehicle=vehicle,
+    )
+    workflow.run(_stage())
+    points, _, _ = vehicle.calls[0]
+    assert [round(point.x, 6) for point in points] == [0.8] * 5
+    assert [round(point.yaw_deg, 6) for point in points] == [0.0] * 5
 
 
 def test_fewer_than_five_waypoints_are_all_executed():
@@ -187,6 +280,28 @@ def test_fewer_than_five_waypoints_are_all_executed():
     )
     workflow.run(_stage())
     assert len(vehicle.calls[0][0]) == 3
+
+
+def test_a_target_bound_on_the_first_frame_is_judged_before_any_planning():
+    planner, vehicle = _Planner(_seven_points()), _PathVehicle()
+    workflow = _workflow(
+        poses=(WorldPose(9.0, 0.0, 0.0, 0.0),), planner=planner, vehicle=vehicle,
+    )
+    result = workflow.run(_stage())
+    assert result.success is True
+    assert planner.calls == 0
+    assert vehicle.calls == []
+
+
+def test_the_batch_is_published_after_the_engine_takes_it():
+    events = []
+    workflow = _workflow(
+        poses=(WorldPose(0.0, 0.0, 0.0, 0.0), WorldPose(9.0, 0.0, 0.0, 0.0)),
+        planner=_Planner(_seven_points()),
+        vehicle=_PathVehicle(events), telemetry=_Telemetry(events),
+    )
+    workflow.run(_stage())
+    assert events[:2] == ["follow", "publish"]
 
 
 def test_arrival_check_uses_the_bound_surface_distance():
@@ -201,21 +316,38 @@ def test_arrival_check_uses_the_bound_surface_distance():
     assert telemetry.snapshots[-1]["items"] == ()
 
 
-def test_a_target_that_is_never_bound_fails_with_that_reason():
-    # The plan accepts blind motion until a limit fires, and the failure reason
-    # must say that no target was ever bound.
+def test_a_target_that_is_never_bound_reflys_the_previous_batch():
     planner, vehicle = _Planner(_seven_points()), _PathVehicle()
+    source = _Source((WorldPose(0.0, 0.0, 0.0, 0.0),))
+    workflow = BareVisualGoalNavigation(
+        source, _Observer(GoalVisibility.NOT_VISIBLE), planner, vehicle,
+        _Geometry(), _StopAfter(source, captures=3),
+        clock=_Clock(),
+    )
+    result = workflow.run(_stage())
+    assert result.success is False
+    assert planner.calls == 1
+    assert len(vehicle.calls) == 2
+    first, second = vehicle.calls[0][0], vehicle.calls[1][0]
+    assert [round(p.x, 6) for p in first] == [round(p.x, 6) for p in second]
+    assert "no target was ever bound" in result.summary.reason
+
+
+def test_the_time_budget_is_checked_after_the_engine_call_returns():
+    clock = _Clock()
+    vehicle = _FollowThenExpire(clock)
     workflow = _workflow(
         poses=(WorldPose(0.0, 0.0, 0.0, 0.0),),
-        planner=planner, observer=_Observer(GoalVisibility.NOT_VISIBLE),
-        vehicle=vehicle, clock=_Clock(step=100.0),
+        planner=_Planner(_seven_points()),
+        observer=_Observer(GoalVisibility.NOT_VISIBLE),
+        vehicle=vehicle, clock=clock,
     )
     result = workflow.run(_stage())
     assert result.success is False
     assert result.summary.status == "timeout"
     assert "no target was ever bound" in result.summary.reason
+    assert len(vehicle.calls) == 1
     assert result.value.final_distance_m is None
-    assert len(vehicle.calls) >= 1
 
 
 def test_a_parse_failure_ends_the_run_with_that_reason():
@@ -225,21 +357,64 @@ def test_a_parse_failure_ends_the_run_with_that_reason():
     result = workflow.run(_stage())
     assert result.success is False
     assert result.summary.status == "model_error"
-    assert "trajectory parse failed" in result.summary.reason
+    assert "no JSON array" in result.summary.reason
 
 
-def test_the_round_budget_ends_the_run():
+def test_a_failure_after_binding_does_not_claim_a_missing_target():
+    planner = _Planner(())
+    planner.error = ProtocolError("trajectory planner returned no JSON array")
+    workflow = _workflow(
+        poses=(WorldPose(0.0, 0.0, 0.0, 0.0),), planner=planner,
+        observer=_Observer(),
+    )
+    result = workflow.run(_stage())
+    assert "no target was ever bound" not in result.summary.reason
+
+
+def test_a_never_bound_parse_failure_still_says_no_target_was_bound():
+    planner = _Planner(())
+    planner.error = ProtocolError("trajectory planner returned no JSON array")
+    workflow = _workflow(
+        poses=(WorldPose(0.0, 0.0, 0.0, 0.0),), planner=planner,
+        observer=_Observer(GoalVisibility.NOT_VISIBLE),
+    )
+    result = workflow.run(_stage())
+    assert result.summary.status == "model_error"
+    assert "no target was ever bound" in result.summary.reason
+
+
+def test_a_transient_detection_and_planning_failure_is_retried():
+    workflow = _workflow(
+        poses=(WorldPose(0.0, 0.0, 0.0, 0.0), WorldPose(9.0, 0.0, 0.0, 0.0)),
+        planner=_Planner(_seven_points(), failures=1),
+        observer=_Observer(failures=1),
+    )
+    result = workflow.run(_stage())
+    assert result.success is True
+
+
+def test_the_round_budget_counts_model_requests_only():
+    planner = _Planner(_seven_points())
+    workflow = _workflow(
+        poses=(WorldPose(0.0, 0.0, 0.0, 0.0),), planner=planner,
+        geometry=_Geometry(world_point=(100.0, 0.0, 0.0)),
+        limits=VisualGoalLimits(maximum_planning_rounds=2),
+    )
+    result = workflow.run(_stage())
+    assert result.success is False
+    assert result.summary.status == "timeout"
+    assert planner.round_indices == [1, 2]
+
+
+def test_the_round_index_follows_the_actual_request_count():
     planner = _Planner(_seven_points())
     workflow = _workflow(
         poses=(WorldPose(0.0, 0.0, 0.0, 0.0),), planner=planner,
         geometry=_Geometry(world_point=(100.0, 0.0, 0.0)),
         limits=VisualGoalLimits(maximum_planning_rounds=1),
     )
-    result = workflow.run(_stage())
-    assert result.success is False
-    assert result.summary.status == "timeout"
-    assert planner.calls == 1
-    assert "no target was ever bound" not in result.summary.reason
+    workflow.run(_stage())
+    assert planner.round_indices == [1]
 
 
 def test_an_engine_refusal_ends_the_run_with_that_reason():
@@ -253,6 +428,50 @@ def test_an_engine_refusal_ends_the_run_with_that_reason():
     assert result.success is False
     assert result.summary.status == "execution_error"
     assert "engine rejected or timed out" in result.summary.reason
+
+
+def test_the_path_length_counts_vertical_chords():
+    planner = _Planner((RelativePoseDelta(0.0, 0.0, 1.0, 0.0),
+                        RelativePoseDelta(0.0, 0.0, 2.0, 0.0),
+                        RelativePoseDelta(0.0, 0.0, 3.0, 0.0)))
+    workflow = _workflow(
+        poses=(WorldPose(0.0, 0.0, 0.0, 0.0),), planner=planner,
+        geometry=_Geometry(world_point=(100.0, 0.0, 0.0)),
+        limits=VisualGoalLimits(maximum_planning_rounds=1),
+    )
+    result = workflow.run(_stage())
+    assert result.value.path_length_m == 3.0
+
+
+def test_the_workflow_checks_the_stop_signal_around_every_step():
+    execution = _Execution()
+    workflow = _workflow(
+        poses=(WorldPose(0.0, 0.0, 0.0, 0.0), WorldPose(9.0, 0.0, 0.0, 0.0)),
+        planner=_Planner(_seven_points()), execution=execution,
+    )
+    workflow.run(_stage())
+    assert execution.checkpoints >= 4
+
+
+def test_the_bare_chain_asks_for_no_heading_and_flies_zero_yaw_points():
+    transport = _Transport("[[2.0,0.0,0.0],[2.0,0.0,0.0]]")
+    planner = QwenVLPlanner(
+        transport,
+        prompt_builder=BareTrajectoryPrompt(),
+        parser=parse_translation_trajectory,
+    )
+    vehicle = _PathVehicle()
+    workflow = _workflow(
+        poses=(WorldPose(0.0, 0.0, 0.0, 37.0), WorldPose(9.0, 0.0, 0.0, 37.0)),
+        planner=planner, vehicle=vehicle,
+    )
+    result = workflow.run(_stage())
+    assert result.success is True
+    points, _, _ = vehicle.calls[0]
+    assert len(points) == 2
+    assert [round(point.yaw_deg, 6) for point in points] == [37.0, 37.0]
+    assert "dyaw" not in transport.calls[0][0].lower()
+    assert "dyaw" not in transport.calls[0][1].lower()
 
 
 def test_a_vehicle_without_path_following_is_rejected_before_the_run():

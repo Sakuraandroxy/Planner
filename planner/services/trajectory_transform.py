@@ -40,6 +40,28 @@ def relative_to_world(trajectory: RelativeTrajectory, start: WorldPose) -> World
                            yaw_deltas_deg=tuple(point.dyaw_deg for point in trajectory.points))
 
 
+def offsets_to_world(trajectory: RelativeTrajectory, start: WorldPose) -> WorldTrajectory:
+    """Apply every offset to the SAME start pose; this is the 3DG-VLN geometry.
+
+    The baseline converts each predicted offset with the observation-time pose
+    ``P_t`` and rotation ``R_t`` (``3dg-vln-ref/src/vlnce_src/eval_qwenvl_direction.py``
+    computes ``p_k = P_t + R_t @ dp_k``), so a batch of five offsets is five
+    points around the current pose, not a five-step chain. ``relative_to_world``
+    keeps the preceding-pose accumulation the staged pipeline is built on.
+    """
+    angle = math.radians(start.yaw_deg)
+    poses: list[WorldPose] = []
+    for point in trajectory.points:
+        poses.append(WorldPose(
+            x=start.x + math.cos(angle) * point.dx - math.sin(angle) * point.dy,
+            y=start.y + math.sin(angle) * point.dx + math.cos(angle) * point.dy,
+            z=start.z + point.dz,
+            yaw_deg=start.yaw_deg + point.dyaw_deg,
+        ))
+    return WorldTrajectory(start=start, poses=tuple(poses),
+                           yaw_deltas_deg=tuple(point.dyaw_deg for point in trajectory.points))
+
+
 def world_to_relative(trajectory: WorldTrajectory) -> RelativeTrajectory:
     """Invert the preceding-heading transform, retaining signed yaw metadata."""
     previous = trajectory.start
