@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import math
 import threading
 import time
 from collections import deque
@@ -21,6 +22,9 @@ MIN_CLIMB_M = 0.5
 
 #: Cache of "does this client method take a vehicle_name?", keyed by __qualname__.
 _VEHICLE_ARG: dict[str, bool] = {}
+
+#: How long an abandoned wait gets to unwind before the caller moves on.
+_ABANDON_REAP_S = 0.5
 
 
 def _accepts_vehicle_name(func) -> bool:
@@ -142,16 +146,21 @@ class AirSimConnection:
 
         ``timeout_s`` is the client-side limit, not AirSim's ``timeout_sec``: the
         two are separate keywords and a caller that wants both passes both. The
-        SDK's ``Future.get()`` has no timeout argument -- msgpackrpc's ``join``
-        waits on an event and the RPC loop only replaces the loop owner
-        (``rpc_loop.py``) -- so the wait is bounded here instead.
+        SDK's ``Future.get()`` cannot be bounded -- msgpackrpc's ``join`` is
+        ``while not flag: loop.start()``, a pump loop with no deadline and no
+        cancel -- so the deadline waits on a helper thread that does the pumping
+        and the caller breaks that wait through the loop (``rpc_loop.py``) when
+        the deadline passes. Breaking it is what reclaims the thread: leaving it
+        pumping would put a second thread on the same IOLoop, where the loser
+        spins and shutdown races the loop it is inside.
 
         The connection lock is released before waiting: a path call can take a
         minute, and state reads on the owner thread must not queue behind it.
-        The wait runs on a helper thread so the caller can stop waiting; that
-        thread stays blocked until the server answers, which a follow-up
-        ``cancelLastTask`` makes it do.
         """
+        if timeout_s is not None:
+            timeout_s = float(timeout_s)
+            if not math.isfinite(timeout_s) or timeout_s <= 0:
+                raise ValueError("timeout_s must be a finite positive number")
         with self._transport_call():
             with self._lock:
                 if self._closed:
@@ -166,6 +175,8 @@ class AirSimConnection:
                 func = getattr(client, name)
                 # msgpackrpc.Future.join() discards both the result and RPC error.
                 future = func(*args, **self._for_vehicle(func, kwargs))
+                # The loop that pumps this future; the SDK session owns it.
+                loop = getattr(getattr(client, "client", None), "_loop", None)
             if timeout_s is None:
                 return future.get()
             outcome: dict[str, object] = {}
@@ -180,8 +191,18 @@ class AirSimConnection:
                 target=wait, name=f"airsim-wait-{name}", daemon=True
             )
             waiter.start()
-            waiter.join(float(timeout_s))
+            waiter.join(timeout_s)
             if waiter.is_alive():
+                abandon = getattr(loop, "abandon", None)
+                if abandon is not None:
+                    abandon()
+                    waiter.join(_ABANDON_REAP_S)
+                if waiter.is_alive():
+                    logger.warning(
+                        "the wait for %s could not be unwound; it ends on the "
+                        "client's own RPC timeout",
+                        name,
+                    )
                 raise ExecutionError(
                     f"AirSim {name} did not answer inside {timeout_s:g}s"
                 )

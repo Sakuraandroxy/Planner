@@ -110,9 +110,11 @@ class AirSimVehicle:
                 drivetrain=airsim.DrivetrainType.ForwardOnly,
                 yaw_mode=airsim.YawMode(is_rate=False),
                 lookahead=3, adaptive_lookahead=1)
-        except ExecutionError:
-            # The client-side deadline fired or the transport failed. The server
-            # may still be steering the vehicle, so stop it before reporting.
+        except Exception:
+            # The client-side deadline fired, the transport failed, or the server
+            # dropped the RPC. In all three the server may still be steering the
+            # vehicle, so stop it before reporting. ``_halt_path`` never raises,
+            # otherwise the stop failure would replace this one.
             self._halt_path()
             raise
         if ack is not True:
@@ -129,10 +131,20 @@ class AirSimVehicle:
         for takeoff and ``moveToPositionAsync`` while the vehicle is doing exactly
         what was asked, so a false ack cannot be trusted as "already stopped".
         The hold keeps the vehicle from drifting once the task is cancelled.
+
+        Neither step may raise: the caller is already reporting why the path
+        failed, and a transport that broke is exactly what makes these two fail.
+        Logging is all a second failure here can usefully do.
         """
-        self.cancel()
+        try:
+            self.cancel()
+        except Exception as error:
+            logger.warning("[PathFollow] cancelling the AirSim task failed: %r", error)
         if self.holding is not None:
-            self.hover()
+            try:
+                self.hover()
+            except Exception as error:
+                logger.warning("[PathFollow] holding after the path failed: %r", error)
 
     def cancel(self) -> None:
         self.connection.call("cancelLastTask")

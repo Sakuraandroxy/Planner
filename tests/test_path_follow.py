@@ -148,6 +148,34 @@ def test_airsim_cancels_and_holds_when_the_client_deadline_fires():
     assert vehicle.holding.ticks == 1
 
 
+def test_airsim_stops_the_vehicle_when_the_transport_fails():
+    """A broken transport is not an ``ExecutionError``; it must still brake."""
+    from planner.errors import SimulatorConnectionError
+
+    vehicle, connection = _airsim_vehicle(
+        error=SimulatorConnectionError("AirSim transport failed")
+    )
+    with pytest.raises(SimulatorConnectionError):
+        vehicle.follow_path(PATH, 1.0, timeout_s=30.0)
+    assert connection.names == ["moveOnPathAsync", "cancelLastTask"]
+    assert vehicle.holding.started == [None]
+
+
+def test_a_failure_while_stopping_does_not_replace_the_original_error():
+    """Stopping is best effort: the caller's reason is the one worth keeping."""
+
+    class _Broken(_Connection):
+        def call(self, name, *args, **kwargs):
+            raise RuntimeError("the transport is gone")
+
+    connection = _Broken(ack=False)
+    vehicle = AirSimVehicle(connection, speed_mps=2.0, timeout_s=1.0)
+    holding = _Holding()
+    vehicle.holding = holding
+    with pytest.raises(ExecutionError, match=r"answered False"):
+        vehicle.follow_path(PATH, 1.0, timeout_s=30.0)
+
+
 # -- ProjectAirSim (UE5) --------------------------------------------------
 class _PathState:
     """State both native fakes keep: what was asked for, and how it ended."""
@@ -278,9 +306,9 @@ def test_projectairsim_rover_follows_the_path_with_the_baseline_lookahead():
         {
             "path": [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
             "velocity": 1.0,
-            "timeout_sec": 45.0,
             # Same lookahead pair as the drone; this package's rover walks the
             # waypoints through MoveToPosition, so timeout_sec is per segment.
+            "timeout_sec": 45.0,
             "lookahead": 3,
             "adaptive_lookahead": 1,
             "yaw_rate_max": -1,
