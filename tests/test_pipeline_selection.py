@@ -34,6 +34,13 @@ class _Vehicle:
         return False
 
 
+class _PathVehicle(_Vehicle):
+    """The same vehicle plus the engine path slot the bare pipeline needs."""
+
+    def follow_path(self, points, speed_mps, *, timeout_s):
+        raise AssertionError("assembly must not fly the path")
+
+
 def _quiet(message, level="INFO"):
     return None
 
@@ -59,6 +66,12 @@ def test_the_staged_pipeline_runs_without_the_path_slot():
     require_pipeline_ports(ports, "staged")
 
 
+def test_an_unknown_name_is_rejected_by_the_port_check_too():
+    ports = SimulatorPorts(vehicle=object(), observation=object())
+    with pytest.raises(ProtocolError, match="unknown visual-goal pipeline"):
+        require_pipeline_ports(ports, "segmented")
+
+
 def test_the_default_profile_still_requests_the_staged_pipeline():
     settings = load_config(default_config_path()).visual_goal_navigation
     assert settings.execution == "staged"
@@ -82,6 +95,40 @@ def test_a_bare_arm_without_a_path_port_fails_at_assembly():
             telemetry=object(),
             log=_quiet,
         )
+
+
+def test_a_bare_arm_with_a_path_port_builds_the_bare_workflow():
+    config = load_config(default_config_path())
+    object.__setattr__(config.visual_goal_navigation, "execution", "bare")
+    common = build_mission_common(
+        config, planner=object(), detector=object(), log=_quiet
+    )
+    vehicle = _PathVehicle()
+    built = []
+
+    def factory(moved):
+        built.append(moved)
+        return object()
+
+    arm = build_vehicle_arm(
+        config,
+        common=common,
+        vehicle=vehicle,
+        vehicle_id="drone",
+        detector=object(),
+        geometry=object(),
+        telemetry=object(),
+        moving_source_factory=factory,
+        path_follow=vehicle,
+        log=_quiet,
+    )
+    kinds = {type(workflow).__name__ for workflow in arm.workflows}
+    assert "BareVisualGoalNavigation" in kinds
+    assert "VisualGoalNavigationWorkflow" not in kinds
+    assert built == [], (
+        "the bare arm passes moving_observation_source=None, so its factory must "
+        "not run"
+    )
 
 
 def test_a_staged_arm_is_assembled_without_a_path_port():

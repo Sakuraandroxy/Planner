@@ -289,7 +289,13 @@ def visual_pipeline(execution: str) -> Callable[[VisualPipelineContext], object]
 
 def require_pipeline_ports(ports: SimulatorPorts, execution: str) -> None:
     """Refuse to build a pipeline this simulator cannot fly."""
-    missing = ports.missing(PIPELINE_REQUIREMENTS[execution])
+    required = PIPELINE_REQUIREMENTS.get(execution)
+    if required is None:
+        raise ProtocolError(
+            f"unknown visual-goal pipeline {execution!r}; expected "
+            f"{sorted(PIPELINE_REQUIREMENTS)}"
+        )
+    missing = ports.missing(required)
     if missing:
         raise ProtocolError(
             f"visual-goal pipeline {execution!r} needs port slots this simulator "
@@ -348,9 +354,13 @@ def build_vehicle_arm(
         config.trajectory_planner.max_step_m,
         config.trajectory_planner.max_yaw_step_deg,
     )
+    # Only the staged pipeline reads the moving source; the bare one has no such
+    # argument, so a bare arm must not pay for a capture source nothing reads.
     moving_source = (
         moving_source_factory(vehicle)
-        if moving_source_factory is not None and config.sliding_window.enabled
+        if settings.execution == "staged"
+        and moving_source_factory is not None
+        and config.sliding_window.enabled
         else None
     )
     pipeline = visual_pipeline(settings.execution)
