@@ -19,6 +19,7 @@ PORT_SLOTS: tuple[str, ...] = (
     "streaming",
     "controlled_capture",
     "moving_capture",
+    "path_follow",
     "weather",
     "views",
     "models",

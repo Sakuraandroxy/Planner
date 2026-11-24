@@ -19,6 +19,7 @@ PORT_SLOTS: tuple[str, ...] = (
     "observation",
     "streaming",
     "moving_capture",
+    "path_follow",
     "camera_view",
     "weather",
 )
@@ -53,13 +54,16 @@ def build_ports(
     ``views``, ``models``, ``frames`` and ``home`` stay empty because UE4 does not
     implement them, and the console hides those controls from that fact. The
     trajectory read is not a port: ``/api/trajectory`` serves the service's own
-    hub for every family.
+    hub for every family. ``path_follow`` is the vehicle's own ``follow_path``:
+    whole paths go to ``moveOnPathAsync`` instead of the per-segment velocity
+    stream.
     """
     return SimulatorPorts(
         vehicle=vehicle,
         observation=observation,
         streaming=vehicle,                 # AirSimVehicle implements stream_velocity
         moving_capture=moving_capture if moving_capture is not None else observation,
+        path_follow=vehicle,               # AirSimVehicle implements follow_path
         camera_view=camera_view,
         weather=weather,
         vehicles=VEHICLES,
