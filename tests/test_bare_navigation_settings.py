@@ -38,3 +38,12 @@ def test_the_vlm_profile_selects_the_bare_pipeline():
     assert settings.execution == "bare"
     assert settings.bare.speed_mps == 1.0
     assert settings.bare.path_timeout_s == 60.0
+
+
+def test_the_config_file_rejects_a_zero_speed(tmp_path):
+    """The speed reaches the engine now, so a zero has to stop at load time."""
+    path = write_config(
+        tmp_path, {"visual_goal_navigation": {"bare": {"speed_mps": 0}}}
+    )
+    with pytest.raises(ValueError, match="speed_mps"):
+        load_config(path)

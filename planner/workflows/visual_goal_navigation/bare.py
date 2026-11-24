@@ -54,9 +54,8 @@ from .termination import SearchPolicy, VisualGoalExitPolicy, VisualGoalFailure
 logger = logging.getLogger(__name__)
 
 # Baseline semantics: the engine receives the whole batch but only the first
-# five waypoints are executed, and it drives at one metre per second.
+# five waypoints are executed. The speed is the bare profile's own value.
 _BATCH_POINTS = 5
-_SPEED_MPS = 1.0
 
 
 class BareVisualGoalNavigation:
@@ -200,7 +199,8 @@ class BareVisualGoalNavigation:
 
     def _follow(self, batch) -> None:
         try:
-            self.path_vehicle.follow_path(batch, _SPEED_MPS, timeout_s=self.bare.path_timeout_s)
+            self.path_vehicle.follow_path(
+                batch, self.bare.speed_mps, timeout_s=self.bare.path_timeout_s)
         except Exception as exc:
             raise ExecutionError(
                 f"engine rejected or timed out on path following: {exc}") from exc

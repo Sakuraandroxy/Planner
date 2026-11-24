@@ -16,7 +16,7 @@ from .domain.runtime import FamilyCatalog, parse_family_catalog
 from .domain.sliding_window import SlidingWindowSettings
 from .domain.view import VIEW_MODES
 from .domain.visual_goal_completion import VisualGoalTriggerRules
-from .domain.visual_goal_limits import VisualGoalLimits
+from .domain.visual_goal_limits import BareNavigationSettings, VisualGoalLimits
 from .services.segment_motion import MotionLimits
 
 
@@ -336,27 +336,6 @@ class TaskParserSettings:
             raise ValueError(
                 "task_parser.anthropic requires reasoning_effort 'none'"
             )
-
-
-@dataclass(frozen=True)
-class BareNavigationSettings:
-    """``bare`` section: speed for the path, and how long one path may take."""
-
-    speed_mps: float = 1.0
-    path_timeout_s: float = 60.0
-
-    def __post_init__(self) -> None:
-        for name in ("speed_mps", "path_timeout_s"):
-            value = getattr(self, name)
-            if (
-                isinstance(value, bool)
-                or not isinstance(value, (int, float))
-                or not math.isfinite(value)
-                or value <= 0
-            ):
-                raise ValueError(
-                    f"bare navigation {name} must be finite and positive"
-                )
 
 
 @dataclass(frozen=True)
