@@ -352,6 +352,7 @@ class VisualGoalNavigationSettings:
     depth_foreground_filter: DepthForegroundSettings = field(
         default_factory=DepthForegroundSettings
     )
+    execution: str = "staged"
 
     def __post_init__(self) -> None:
         for name in ("enabled", "geometry_verified", "collision_check_enabled"):
@@ -364,6 +365,10 @@ class VisualGoalNavigationSettings:
             or not self.completion_rules_file.strip()
         ):
             raise ValueError("completion_rules_file must be non-empty text")
+        if self.execution not in ("staged", "bare"):
+            raise ValueError(
+                "visual_goal_navigation.execution must be 'staged' or 'bare'"
+            )
 
 
 @dataclass(frozen=True)
