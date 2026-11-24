@@ -99,6 +99,16 @@ def test_the_live_bundle_agrees_with_the_advertised_capabilities():
     assert session.ports.capabilities() == airsim_runtime.describe().capabilities()
 
 
+def test_mission_inputs_hands_over_the_vehicle_that_follows_paths():
+    """The bare pipeline reads ``MissionInputs.path_follow``; a missing handoff
+    leaves a working engine slot in the bundle and no pipeline to use it."""
+    session = _session()
+    inputs = session.mission_inputs()
+    assert inputs.path_follow is session.ports.path_follow
+    assert inputs.path_follow is inputs.vehicles["drone"]
+    assert callable(getattr(inputs.path_follow, "follow_path", None))
+
+
 def test_free_navigation_is_not_built_for_ue4():
     """``ENABLED_TASKS`` decides what the family may be offered, not the config."""
     session = _session()

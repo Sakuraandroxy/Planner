@@ -163,6 +163,9 @@ class FakeVehicle:
     def idle_tick(self):
         self.calls.append("idle_tick")
 
+    def follow_path(self, points, speed_mps, *, timeout_s):
+        self.calls.append(("follow_path", tuple(points), speed_mps, timeout_s))
+
     def close(self):
         self.calls.append("close")
         if self._order is not None:
@@ -414,6 +417,28 @@ def test_idle_tick_follows_the_active_vehicle():
     session._rover = None
     session.idle_tick()
     assert session._connection.advances == [DEFAULT_CONTROL_PERIOD_S]
+
+def test_mission_inputs_hands_over_a_path_follower_for_the_active_vehicle():
+    """One ``path_follow`` serves both arms, so it has to resolve the vehicle.
+
+    ``assemble_missions`` gives every arm the same object. Handing over either
+    vehicle's own follower would fly the wrong actor when a task runs on the
+    other one.
+    """
+    session = make_session(active="drone")
+    inputs = session.mission_inputs()
+    assert inputs.path_follow is not None
+    assert callable(getattr(inputs.path_follow, "follow_path", None))
+    points = (WorldPose(1.0, 2.0, 3.0, 0.0), WorldPose(4.0, 5.0, 6.0, 0.0))
+
+    inputs.path_follow.follow_path(points, 1.0, timeout_s=30.0)
+    assert session._drone.calls == [("follow_path", points, 1.0, 30.0)]
+    assert session._rover.calls == []
+
+    session._active_vehicle = "rover"
+    inputs.path_follow.follow_path(points, 1.0, timeout_s=30.0)
+    assert session._rover.calls == [("follow_path", points, 1.0, 30.0)]
+
 
 def test_return_home_routes_to_the_active_vehicle():
     session = make_session(active="rover")
