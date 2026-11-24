@@ -529,7 +529,12 @@ class ProjectAirSimDrone:
                 "[PathFollow] request failed after %.2fs: %r",
                 time.monotonic() - issued, exc,
             )
-            raise ExecutionError("ProjectAirSim path following failed") from exc
+            # The original reason has to survive: ``ProjectAirSim path following
+            # failed`` alone says nothing about a TypeError, a dropped socket or a
+            # package quirk.
+            raise ExecutionError(
+                f"ProjectAirSim path following failed: {type(exc).__name__}: {exc}"
+            ) from exc
         finally:
             self._restore_hold()
 
@@ -558,11 +563,14 @@ class ProjectAirSimDrone:
         # One line per path: the request as the engine sees it. Both the log and
         # the call read the same locals, so the printed values cannot drift from
         # the ones that are actually sent.
+        # ``YawControlMode`` members are plain ints in the installed package, not
+        # an enum: ``.name`` would raise while formatting this line.
         logger.info(
             "[PathFollow] request points=%s velocity=%.2fm/s timeout_sec=%.1fs "
             "yaw_control=%s yaw_is_rate=%s yaw=%.1f lookahead=%d "
             "adaptive_lookahead=%d",
-            path, speed_mps, timeout_s, yaw_control_mode.name, yaw_is_rate, yaw,
+            path, speed_mps, timeout_s,
+            getattr(yaw_control_mode, "name", yaw_control_mode), yaw_is_rate, yaw,
             lookahead, adaptive_lookahead,
         )
         task = await self._robot.move_on_path_async(
