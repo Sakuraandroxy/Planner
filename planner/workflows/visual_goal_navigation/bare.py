@@ -45,6 +45,7 @@ from planner.errors import (
 )
 from planner.ports.goal_observer import GoalObserver
 from planner.ports.observation_source import ObservationSource
+from planner.ports.path_vehicle import PathVehicle
 from planner.ports.trajectory_planner import TrajectoryPlanner
 from planner.services.trajectory_transform import relative_to_world
 
@@ -62,7 +63,7 @@ class BareVisualGoalNavigation:
     def __init__(self, observation_source: ObservationSource,
                  goal_observer: GoalObserver,
                  trajectory_planner: TrajectoryPlanner,
-                 path_vehicle,
+                 path_vehicle: PathVehicle,
                  geometry: DepthGeometry, *,
                  trigger_rules: VisualGoalTriggerRules = VisualGoalTriggerRules(),
                  limits: VisualGoalLimits = VisualGoalLimits(),

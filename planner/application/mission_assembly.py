@@ -27,6 +27,7 @@ from ..capabilities.task_validation.visual_goal_navigation import (
 )
 from ..domain.mission import TaskKind
 from ..errors import ProtocolError
+from ..ports.path_vehicle import PathVehicle
 from ..services.execution import ExecutionService
 from ..services.model_calls import ModelCallService
 from ..services.motion import SynchronizedMotionPlanner
@@ -85,7 +86,7 @@ class MissionInputs:
     #: The engine path-following port, when the session implements one. ``None``
     #: means this simulator cannot fly the bare pipeline, and the assembly says so
     #: instead of falling back to stopped segments.
-    path_follow: object | None = None
+    path_follow: PathVehicle | None = None
 
 
 def assemble_missions(
@@ -207,7 +208,7 @@ class VisualPipelineContext:
     validator: TrajectoryValidator
     motion: SynchronizedMotionPlanner
     moving_observation_source: object | None
-    path_follow: object | None
+    path_follow: PathVehicle | None
     telemetry: object | None
     is_drone: bool
 
@@ -287,6 +288,12 @@ def visual_pipeline(execution: str) -> Callable[[VisualPipelineContext], object]
     return builder
 
 
+#: Slot -> the callable a pipeline makes on it. A slot filled with the wrong
+#: object passes ``missing`` but cannot fly, which is a wiring mistake and is
+#: reported with the slot it came from.
+SLOT_METHODS: dict[str, str] = {"path_follow": "follow_path"}
+
+
 def require_pipeline_ports(ports: SimulatorPorts, execution: str) -> None:
     """Refuse to build a pipeline this simulator cannot fly."""
     required = PIPELINE_REQUIREMENTS.get(execution)
@@ -301,6 +308,16 @@ def require_pipeline_ports(ports: SimulatorPorts, execution: str) -> None:
             f"visual-goal pipeline {execution!r} needs port slots this simulator "
             f"does not implement: {list(missing)}"
         )
+    for slot in required:
+        method = SLOT_METHODS.get(slot)
+        if method is None:
+            continue
+        held = ports.slot(slot)
+        if not callable(getattr(held, method, None)):
+            raise ProtocolError(
+                f"visual-goal pipeline {execution!r} needs port slot {slot!r} to "
+                f"provide {method}(); got {type(held).__name__}"
+            )
 
 
 def build_vehicle_arm(
@@ -316,7 +333,7 @@ def build_vehicle_arm(
     enabled_tasks: tuple[str, ...] | None = None,
     execution: ExecutionService | None = None,
     observation_source=None,
-    path_follow=None,
+    path_follow: PathVehicle | None = None,
     log: Callable[[str, str], None],
 ) -> VehicleArm:
     """Wire the task pipeline against one vehicle port.

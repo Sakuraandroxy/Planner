@@ -131,6 +131,27 @@ def test_a_bare_arm_with_a_path_port_builds_the_bare_workflow():
     )
 
 
+def test_a_path_slot_holding_the_wrong_object_fails_at_assembly():
+    """A filled slot is not a working port; the message has to name the slot."""
+    config = load_config(default_config_path())
+    object.__setattr__(config.visual_goal_navigation, "execution", "bare")
+    common = build_mission_common(
+        config, planner=object(), detector=object(), log=_quiet
+    )
+    with pytest.raises(ProtocolError, match="path_follow.*follow_path"):
+        build_vehicle_arm(
+            config,
+            common=common,
+            vehicle=_Vehicle(),
+            vehicle_id="drone",
+            detector=object(),
+            geometry=object(),
+            telemetry=object(),
+            path_follow=object(),
+            log=_quiet,
+        )
+
+
 def test_a_staged_arm_is_assembled_without_a_path_port():
     """The world-model arm keeps the workflow it flew before this switch existed."""
     config = load_config(default_config_path())
