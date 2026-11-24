@@ -4,11 +4,11 @@ import pytest
 import yaml
 
 from planner.config import (
-    BareNavigationSettings,
     VisualGoalNavigationSettings,
     load_config,
     profile_config_path,
 )
+from planner.domain.visual_goal_limits import BareNavigationSettings
 from tests.support import write_config
 
 

@@ -14,11 +14,7 @@ from planner.application.mission_assembly import (
     require_pipeline_ports,
     visual_pipeline,
 )
-from planner.config import (
-    BareNavigationSettings,
-    default_config_path,
-    load_config,
-)
+from planner.config import default_config_path, load_config
 from planner.domain.motion import MotionLimits
 from planner.errors import ProtocolError
 from planner.simulator.ports import PIPELINE_REQUIREMENTS, SimulatorPorts
@@ -72,10 +68,24 @@ def test_an_unknown_name_is_rejected_by_the_port_check_too():
         require_pipeline_ports(ports, "segmented")
 
 
-def test_the_default_profile_still_requests_the_staged_pipeline():
-    settings = load_config(default_config_path()).visual_goal_navigation
-    assert settings.execution == "staged"
-    assert settings.bare == BareNavigationSettings()
+def test_an_unknown_execution_is_rejected_on_the_assembly_path():
+    """The assembly reports the name through ``visual_pipeline``, before any slot."""
+    config = load_config(default_config_path())
+    object.__setattr__(config.visual_goal_navigation, "execution", "segmented")
+    common = build_mission_common(
+        config, planner=object(), detector=object(), log=_quiet
+    )
+    with pytest.raises(ProtocolError, match="unknown visual-goal execution"):
+        build_vehicle_arm(
+            config,
+            common=common,
+            vehicle=_Vehicle(),
+            vehicle_id="drone",
+            detector=object(),
+            geometry=object(),
+            telemetry=object(),
+            log=_quiet,
+        )
 
 
 def test_a_bare_arm_without_a_path_port_fails_at_assembly():

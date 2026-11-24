@@ -19,7 +19,7 @@ from planner.domain.visual_goal import (
     GoalVisibility,
     VisualGoalNavigationParameters,
 )
-from planner.domain.visual_goal_limits import VisualGoalLimits
+from planner.domain.visual_goal_limits import BareNavigationSettings, VisualGoalLimits
 from planner.errors import ExecutionError, ProtocolError
 from planner.workflows.visual_goal_navigation.bare import BareVisualGoalNavigation
 
@@ -214,7 +214,7 @@ def _seven_points() -> tuple[RelativePoseDelta, ...]:
 
 
 def _workflow(*, poses, planner, observer=None, geometry=None, vehicle=None,
-              limits=None, clock=None, telemetry=None, execution=None):
+              limits=None, clock=None, telemetry=None, execution=None, bare=None):
     return BareVisualGoalNavigation(
         _Source(poses),
         observer or _Observer(),
@@ -223,6 +223,7 @@ def _workflow(*, poses, planner, observer=None, geometry=None, vehicle=None,
         geometry or _Geometry(),
         execution or _Execution(),
         limits=limits or VisualGoalLimits(),
+        bare=bare or BareNavigationSettings(),
         clock=clock or _Clock(),
         telemetry=telemetry,
     )
@@ -256,6 +257,19 @@ def test_more_than_five_waypoints_are_executed_as_the_first_five():
     assert len(points) == 5
     assert speed_mps == 1.0
     assert timeout_s == 60.0
+
+
+def test_the_configured_speed_and_deadline_reach_the_engine():
+    """A non-default profile value has to arrive at ``follow_path`` unchanged."""
+    planner, vehicle = _Planner(_seven_points()), _PathVehicle()
+    workflow = _workflow(
+        poses=(WorldPose(0.0, 0.0, 0.0, 0.0), WorldPose(9.0, 0.0, 0.0, 0.0)),
+        planner=planner, vehicle=vehicle,
+        bare=BareNavigationSettings(speed_mps=2.5, path_timeout_s=12.0),
+    )
+    workflow.run(_stage())
+    _, speed_mps, timeout_s = vehicle.calls[0]
+    assert (speed_mps, timeout_s) == (2.5, 12.0)
 
 
 def test_every_waypoint_is_offset_from_the_same_observation_pose():
