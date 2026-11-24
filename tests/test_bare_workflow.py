@@ -3,6 +3,7 @@
 import time
 
 import numpy as np
+import pytest
 
 from planner.adapters.trajectory_planner import QwenVLPlanner
 from planner.adapters.trajectory_planner.prompts import BareTrajectoryPrompt
@@ -59,9 +60,12 @@ class _Source:
 
 
 class _Observer:
-    def __init__(self, status=GoalVisibility.VISIBLE, failures=0):
+    """Detector fake; ``statuses`` gives a different answer per round."""
+
+    def __init__(self, status=GoalVisibility.VISIBLE, failures=0, statuses=None):
         self.status = status
         self.failures = failures
+        self.statuses = tuple(statuses) if statuses is not None else None
         self.calls = 0
 
     def observe(self, observation, target_description, reference=None, *,
@@ -69,9 +73,12 @@ class _Observer:
         self.calls += 1
         if self.calls <= self.failures:
             raise ProtocolError("detector request failed")
-        if self.status is not GoalVisibility.VISIBLE:
-            return GoalObservation(self.status, None, None, target_description, "missing")
-        return GoalObservation(self.status, (0.4, 0.4, 0.6, 0.6), None,
+        status = self.status
+        if self.statuses:
+            status = self.statuses[min(self.calls - 1, len(self.statuses) - 1)]
+        if status is not GoalVisibility.VISIBLE:
+            return GoalObservation(status, None, None, target_description, "missing")
+        return GoalObservation(status, (0.4, 0.4, 0.6, 0.6), None,
                                target_description, "visible")
 
 
@@ -345,6 +352,66 @@ def test_a_target_that_is_never_bound_reflys_the_previous_batch():
     first, second = vehicle.calls[0][0], vehicle.calls[1][0]
     assert [round(p.x, 6) for p in first] == [round(p.x, 6) for p in second]
     assert "no target was ever bound" in result.summary.reason
+
+
+def test_a_bound_target_that_is_no_longer_visible_keeps_the_previous_batch():
+    """The lost-target trigger is "bound but not seen this round", not "never bound"."""
+    planner, vehicle = _Planner(_seven_points()), _PathVehicle()
+    source = _Source((WorldPose(0.0, 0.0, 0.0, 0.0),))
+    observer = _Observer(statuses=(GoalVisibility.VISIBLE, GoalVisibility.NOT_VISIBLE))
+    workflow = BareVisualGoalNavigation(
+        source, observer, planner, vehicle,
+        _Geometry(), _StopAfter(source, captures=3),
+        clock=_Clock(),
+    )
+    result = workflow.run(_stage())
+    assert result.success is False
+    assert observer.calls == 2, "detection runs every round, so visibility is observable"
+    assert planner.calls == 1, "a round without a visible target must not ask the model"
+    assert len(vehicle.calls) == 2
+    first, second = vehicle.calls[0][0], vehicle.calls[1][0]
+    assert [round(p.x, 6) for p in first] == [round(p.x, 6) for p in second]
+    assert "no target was ever bound" not in result.summary.reason
+
+
+def test_a_visible_bound_target_asks_the_model_every_round():
+    observer, planner = _Observer(), _Planner(_seven_points())
+    workflow = _workflow(
+        poses=(WorldPose(0.0, 0.0, 0.0, 0.0),), planner=planner, observer=observer,
+        geometry=_Geometry(world_point=(100.0, 0.0, 0.0)),
+        limits=VisualGoalLimits(maximum_planning_rounds=2),
+    )
+    workflow.run(_stage())
+    assert planner.calls == 2
+    assert observer.calls == 3
+
+
+def test_a_repeated_frame_is_rejected_before_any_model_call():
+    class _StuckSource(_Source):
+        def capture(self, *, budget=None):
+            self.captures += 1
+            return _observation(WorldPose(0.0, 0.0, 0.0, 0.0), capture_id="same",
+                                timestamp_ns=1_000_000)
+
+    planner = _Planner(_seven_points())
+    workflow = BareVisualGoalNavigation(
+        _StuckSource((WorldPose(0.0, 0.0, 0.0, 0.0),)), _Observer(), planner,
+        _PathVehicle(), _Geometry(), _Execution(), clock=_Clock(),
+    )
+    result = workflow.run(_stage())
+    assert result.success is False
+    assert result.summary.status == "perception_unreliable"
+    # The first frame is fresh by definition; every repeat of it is rejected
+    # before another model request, and two rejections end the run.
+    assert planner.calls == 1
+
+
+def test_prepare_refuses_a_closed_model_caller():
+    workflow = _workflow(poses=(WorldPose(0.0, 0.0, 0.0, 0.0),),
+                         planner=_Planner(_seven_points()))
+    workflow.model_calls.close()
+    with pytest.raises(ExecutionError, match="closed or a previous request"):
+        workflow.prepare()
 
 
 def test_the_time_budget_is_checked_after_the_engine_call_returns():

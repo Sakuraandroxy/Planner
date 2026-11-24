@@ -31,6 +31,7 @@ from planner.domain.sliding_window import QueuedWaypoint
 from planner.domain.trajectory import RelativeTrajectory
 from planner.domain.trajectory_telemetry import MODE_STOPPED_BATCH
 from planner.domain.visual_goal import (
+    GoalVisibility,
     VisualGoalNavigationParameters,
     VisualGoalNavigationResult,
     VisualGoalStatus,
@@ -53,7 +54,7 @@ from planner.services.model_calls import ModelCallService
 from planner.services.trajectory_transform import offsets_to_world
 
 from .session import VisualGoalSession, model_call
-from .termination import SearchPolicy, VisualGoalExitPolicy, VisualGoalFailure
+from .termination import VisualGoalExitPolicy, VisualGoalFailure
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +93,9 @@ class BareVisualGoalNavigation:
     def prepare(self) -> None:
         if self._closed:
             raise ExecutionError("bare visual goal workflow is closed")
+        # A request the previous stage left quarantined has to fail here, not on
+        # the first round: the model caller is single-flight.
+        self.model_calls.require_available()
         if not callable(getattr(self.path_vehicle, "follow_path", None)):
             raise ExecutionError("bare navigation requires a path-following vehicle")
 
@@ -99,7 +103,7 @@ class BareVisualGoalNavigation:
         started = self.clock()
         session = VisualGoalSession(
             ExecutionBudget(started + self.limits.maximum_task_duration_s),
-            VisualGoalExitPolicy(self.limits), SearchPolicy(self.limits), started)
+            VisualGoalExitPolicy(self.limits), started=started)
         session.stage_id = stage.stage_id
         # A stop request reaches this profile through the same two checkpoints the
         # staged pipeline binds: vehicle hold/observation, plus every explicit
@@ -154,30 +158,38 @@ class BareVisualGoalNavigation:
         self.model_calls.close()
 
     def _navigate(self, parameters, session):
-        # The last batch the engine accepted, kept as body-frame offsets. It is the
-        # carrier for "target lost keeps the previous direction": when nothing is
-        # bound this round, the same offsets are sent again from the current pose
-        # and the model is not asked. Rounds without an earlier batch still fall
-        # through to the model, and the round/time budgets end the run otherwise.
+        # ``previous`` is the last batch the engine accepted, kept as body-frame
+        # offsets. It carries "target lost keeps the previous direction": a round
+        # whose detection does not see the target re-sends that batch from the
+        # current pose and does not ask the model. Detection runs every round for
+        # exactly this reason -- visibility is only observable from the detector's
+        # answer, not from the bound position. Rounds without an earlier batch
+        # still ask the model, and the time budget ends a run whose target never
+        # comes back.
         previous: RelativeTrajectory | None = None
         while True:
             self.execution.checkpoint()
             session.require_time(self.clock)
             observation = self.source.capture(budget=session.budget)
             session.require_time(self.clock)
+            if not session.fresh(observation):
+                session.policy.unreliable_observation()
+                continue
             self._last_pose = observation.pose
             if session.initial is None:
                 session.initial = observation.pose
+            finished = self._finish_if_close(parameters, session, observation.pose)
+            if finished is not None:
+                return finished
+            goal = self._observe(observation, parameters, session)
             if session.target_state is None:
-                self._bind_target(observation, parameters, session)
-            if session.target_state is not None:
-                distance = bound_target_geometry(session.target_state, observation.pose).distance_m
-                if distance <= self.trigger_rules.radius_m:
-                    self._publish(parameters, session, observation.pose, ())
-                    return (VisualGoalStatus.REACHED,
-                            f"measured distance {distance:.2f} m within radius "
-                            f"{self.trigger_rules.radius_m:.2f} m")
-            if session.target_state is None and previous is not None:
+                self._bind_target(observation, goal, session)
+                finished = self._finish_if_close(parameters, session, observation.pose)
+                if finished is not None:
+                    return finished
+            visible = (goal is not None and goal.status is GoalVisibility.VISIBLE
+                       and goal.same_target)
+            if not visible and previous is not None:
                 trajectory = previous
             else:
                 trajectory = self._plan(observation, parameters, session)
@@ -188,13 +200,39 @@ class BareVisualGoalNavigation:
             previous = trajectory
             self._publish(parameters, session, observation.pose, batch)
 
-    def _bind_target(self, observation, parameters, session) -> None:
-        """Bind the first accepted detection; a bound target is never replaced."""
+    def _finish_if_close(self, parameters, session, pose):
+        """Return the success pair once the bound target is inside the radius."""
+        if session.target_state is None:
+            return None
+        distance = bound_target_geometry(session.target_state, pose).distance_m
+        if distance > self.trigger_rules.radius_m:
+            return None
+        self._publish(parameters, session, pose, ())
+        return (VisualGoalStatus.REACHED,
+                f"measured distance {distance:.2f} m within radius "
+                f"{self.trigger_rules.radius_m:.2f} m")
+
+    def _observe(self, observation, parameters, session):
+        """Run this round's detection; the loop reads visibility from its answer."""
         operation = partial(
             self.goal_observer.observe, observation, parameters.target_description, None,
             budget=session.budget, initial_pose=session.initial,
             instruction=parameters.instruction)
-        goal = model_call(operation, session, self.limits, clock=self.clock)
+        try:
+            return model_call(operation, session, self.limits, clock=self.clock)
+        except (VisualGoalFailure, ModelCallTimeout):
+            if session.target_state is None:
+                raise
+            # A detector outage after binding is a lost target for this round:
+            # keep flying the previous batch instead of ending the run.
+            logger.info("[BareVisualGoal %s] detection failed; reusing the previous batch",
+                        session.stage_id)
+            return None
+
+    def _bind_target(self, observation, goal, session) -> None:
+        """Bind the first accepted detection; a bound position is never replaced."""
+        if goal is None:
+            return
         geometry = self.geometry.estimate(observation, goal)
         target_state, reason = accept_position(
             session.target_state, session.stage_id, observation, goal, geometry,
