@@ -1,5 +1,7 @@
 """The bare prompt keeps the instruction and the output format, nothing else."""
 
+import re
+
 import numpy as np
 
 from planner.adapters.trajectory_planner.prompts.bare import (
@@ -61,10 +63,18 @@ def test_prompt_drops_pose_target_camera_queue_and_history():
 
 def test_prompt_keeps_the_output_format_description_and_one_example():
     rendered = _rendered_prompt()
-    assert "[dx, dy, dz, dyaw_deg]" in rendered
+    assert "[dx, dy, dz]" in rendered
     assert "Mandatory trajectory output format" in rendered
+    assert "must contain exactly 3 finite JSON numbers" in rendered
     assert "Correct output example" in rendered
-    assert "[[0.8,0.0,0.0,0.0]" in rendered
+    assert "[[0.8,0.0,0.0]" in rendered
+
+
+def test_prompt_never_asks_the_model_for_a_heading():
+    for aerial in (False, True):
+        rendered = _rendered_prompt(aerial=aerial).lower()
+        assert "dyaw" not in rendered
+        assert not re.search(r"\byaw|\bturns?\b|\bheading\b|\brotate", rendered)
 
 
 def test_prompt_does_not_fix_the_waypoint_count():
@@ -79,3 +89,10 @@ def test_aerial_variant_keeps_vertical_motion():
     aerial = bare_system_prompt(aerial=True)
     assert "output dz = 0" in ground and "output dz = 0" not in aerial
     assert "-dz is UP" in aerial and "-dz is UP" not in ground
+
+
+def test_prompt_measures_every_waypoint_from_the_current_position():
+    """Baseline geometry: the batch is not a chain of relative steps."""
+    rendered = _rendered_prompt()
+    assert "displacement from the current vehicle position" in rendered
+    assert "Do not chain one waypoint onto the previous one" in rendered

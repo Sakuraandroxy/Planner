@@ -22,8 +22,12 @@ from ..adapters.task_parser import OpenAITaskParser
 from ..adapters.task_parser.tasks import builtin_task_codecs
 from ..adapters.trajectory_planner import QwenVLPlanner
 from ..adapters.trajectory_planner.prompts import (
+    BareTrajectoryPrompt,
     FreeNavigationTrajectoryPrompt,
     VisualGoalTrajectoryPrompt,
+)
+from ..adapters.trajectory_planner.response_parser import (
+    parse_translation_trajectory,
 )
 from ..capabilities.planning import GeometricTargetPlanner
 from ..capabilities.targeting import DepthGeometry
@@ -99,7 +103,7 @@ def build_detector(
     raise ValueError(f"unknown detector mode '{mode}'")
 
 
-def _build_trajectory_planner(config: AppConfig, prompt_builder) -> QwenVLPlanner:
+def _build_trajectory_planner(config: AppConfig, prompt_builder, *, parser=None) -> QwenVLPlanner:
     settings = config.trajectory_planner
     if not settings.url or not settings.model:
         raise ValueError(
@@ -120,6 +124,7 @@ def _build_trajectory_planner(config: AppConfig, prompt_builder) -> QwenVLPlanne
         expected_points=settings.point_count,
         timeout_s=settings.timeout_s,
         prompt_builder=prompt_builder,
+        parser=parser,
     )
 
 
@@ -144,6 +149,29 @@ def build_free_navigation_planner(
     return _build_trajectory_planner(
         config,
         FreeNavigationTrajectoryPrompt(aerial=aerial),
+    )
+
+
+def build_visual_goal_planner(config: AppConfig, *, aerial: bool = False) -> QwenVLPlanner:
+    """Select the visual-goal prompt and output parser from ``execution``.
+
+    ``bare`` asks for ``[dx, dy, dz]`` only, because the engine turns to follow
+    the path; every other name keeps the staged prompt and its four-number
+    waypoints. This is the only place the prompt is chosen.
+    """
+    if config.visual_goal_navigation.execution == "bare":
+        if config.server.planner != "vlm":
+            raise ValueError(
+                "bare visual navigation requires server.planner: vlm"
+            )
+        return _build_trajectory_planner(
+            config,
+            BareTrajectoryPrompt(aerial=aerial),
+            parser=parse_translation_trajectory,
+        )
+    return _build_trajectory_planner(
+        config,
+        VisualGoalTrajectoryPrompt(aerial=aerial),
     )
 
 

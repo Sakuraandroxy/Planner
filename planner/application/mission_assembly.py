@@ -43,6 +43,7 @@ from .factories import (
     build_planner,
     build_task_parser,
     build_trace_factory,
+    build_visual_goal_planner,
 )
 from .mission_runner import MissionRunner
 from .mission_validator import MissionValidator
@@ -257,7 +258,7 @@ def _bare_visual_workflow(context: VisualPipelineContext) -> object:
     return BareVisualGoalNavigation(
         context.source,
         context.goal_observer,
-        context.planner,
+        build_visual_goal_planner(context.config, aerial=context.is_drone),
         context.path_follow,
         context.geometry,
         trigger_rules=settings.completion_rules,

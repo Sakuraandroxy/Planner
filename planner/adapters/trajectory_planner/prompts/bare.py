@@ -18,16 +18,17 @@ Preserve the intent and action order of the instruction.
 Do not invent landmarks, objects, metric distances, or free space that the images do not show.
 {motion_rule}
 
-Return relative increments, not absolute positions or absolute headings.
-Each waypoint is [dx, dy, dz, dyaw_deg]: translation in metres and yaw change in
-degrees, both relative to the preceding waypoint.
-+dx is forward and +dy is right. Positive dyaw_deg turns right, negative turns left.
-Use finite numbers and keep each dyaw_deg within [-180, 180].
+Return relative increments in metres, not absolute positions.
+Each waypoint is [dx, dy, dz]: a displacement from the current vehicle position.
+Do not chain one waypoint onto the previous one; every waypoint is measured
+from where the vehicle is now.
++dx is forward and +dy is right.
+Use finite numbers.
 
 Mandatory trajectory output format:
 Return exactly one JSON array of waypoint arrays.
-Each waypoint array must contain exactly 4 finite JSON numbers:
-[dx, dy, dz, dyaw_deg].
+Each waypoint array must contain exactly 3 finite JSON numbers:
+[dx, dy, dz].
 Return as many waypoints as this part of the instruction needs; the count is not fixed.
 Enclose every waypoint array in ONE outer array.
 Return the entire result on one line, starting with [[ and ending with ]].
@@ -47,8 +48,8 @@ Do not plan climbing or descending."""
 _AERIAL_MOTION_RULE = """AirSim uses world NED coordinates for the translation:
 +dz is DOWN and -dz is UP. Upward and downward motion are available."""
 
-_GROUND_OUTPUT_EXAMPLE = "[[0.8,0.0,0.0,0.0],[0.9,0.1,0.0,4.0],[0.7,0.0,0.0,0.0]]"
-_AERIAL_OUTPUT_EXAMPLE = "[[0.8,0.0,-0.2,0.0],[0.9,0.1,0.0,4.0],[0.7,0.0,0.1,0.0]]"
+_GROUND_OUTPUT_EXAMPLE = "[[0.8,0.0,0.0],[0.9,0.1,0.0],[0.7,0.0,0.0]]"
+_AERIAL_OUTPUT_EXAMPLE = "[[0.8,0.0,-0.2],[0.9,0.1,0.0],[0.7,0.0,0.1]]"
 
 
 def bare_system_prompt(*, aerial: bool = False) -> str:
@@ -73,7 +74,7 @@ def build_bare_user_prompt(instruction: str) -> str:
         "Original navigation instruction:",
         text,
         "",
-        "Return the next trajectory as one JSON array of [dx, dy, dz, dyaw_deg] waypoints.",
+        "Return the next trajectory as one JSON array of [dx, dy, dz] waypoints.",
     ])
 
 

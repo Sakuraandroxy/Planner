@@ -1,6 +1,9 @@
 import pytest
 
 from planner.adapters.trajectory_planner import parse_trajectory
+from planner.adapters.trajectory_planner.response_parser import (
+    parse_translation_trajectory,
+)
 from planner.errors import ProtocolError
 
 
@@ -54,3 +57,30 @@ def test_parse_rejects_non_finite_numbers():
 def test_parse_rejects_missing_array():
     with pytest.raises(ProtocolError):
         parse_trajectory("no trajectory here")
+
+
+def test_translation_parse_leaves_yaw_to_the_engine():
+    trajectory = parse_translation_trajectory(
+        "[[0.5,0.1,-0.2],[0.6,0.1,-0.1],[0.5,0.0,0.0]]"
+    )
+    assert len(trajectory.points) == 3
+    assert trajectory.points[0].dx == pytest.approx(0.5)
+    assert trajectory.points[0].dz == pytest.approx(-0.2)
+    assert all(point.dyaw_deg == 0.0 for point in trajectory.points)
+
+
+def test_translation_parse_has_no_point_count_limit():
+    text = "[" + ",".join(["[1,0,0]"] * 9) + "]"
+    assert len(parse_translation_trajectory(text).points) == 9
+
+
+def test_translation_parse_rejects_four_number_waypoints():
+    with pytest.raises(ProtocolError, match=r"\[dx, dy, dz\]"):
+        parse_translation_trajectory("[[1,0,0,5]]")
+
+
+def test_translation_parse_rejects_an_empty_array_and_numbers():
+    with pytest.raises(ProtocolError):
+        parse_translation_trajectory("[]")
+    with pytest.raises(ProtocolError):
+        parse_translation_trajectory('[[1,"0",0]]')

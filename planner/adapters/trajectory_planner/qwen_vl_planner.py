@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import math
 import time
+from collections.abc import Callable
 from typing import Generic, TypeVar
 
 from planner.domain.execution import ExecutionBudget
@@ -25,13 +26,18 @@ ContextT = TypeVar("ContextT")
 
 class QwenVLPlanner(Generic[ContextT]):
     def __init__(self, transport, *, expected_points: int = 5, timeout_s: float = 30.0,
-                 prompt_builder: TrajectoryPromptBuilder[ContextT] | None = None):
+                 prompt_builder: TrajectoryPromptBuilder[ContextT] | None = None,
+                 parser: Callable[[str], RelativeTrajectory] | None = None):
         if expected_points != 5:
             raise ValueError("trajectory model protocol requires exactly 5 new points")
         self.transport = transport
         self.expected_points = expected_points
         self.timeout_s = float(timeout_s)
         self.prompt_builder = prompt_builder or BaseTrajectoryPrompt()
+        # An injected parser owns the output contract of its own prompt, including
+        # how many waypoints the answer may carry. The default parser keeps the
+        # staged five-point protocol.
+        self.parser = parser
 
     def plan(
         self,
@@ -103,6 +109,8 @@ class QwenVLPlanner(Generic[ContextT]):
             time.perf_counter() - started,
             raw,
         )
+        if self.parser is not None:
+            return self.parser(raw)
         trajectory = parse_trajectory(raw, self.expected_points)
         if len(trajectory.points) != 5:
             raise ProtocolError(
