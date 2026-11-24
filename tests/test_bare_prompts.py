@@ -1,14 +1,10 @@
 """The bare prompt keeps the instruction and the output format, nothing else."""
 
-import json
-import math
 import re
 
 import numpy as np
 
 from planner.adapters.trajectory_planner.prompts.bare import (
-    _AERIAL_OUTPUT_EXAMPLE,
-    _GROUND_OUTPUT_EXAMPLE,
     BareTrajectoryPrompt,
     bare_system_prompt,
     build_bare_user_prompt,
@@ -71,19 +67,7 @@ def test_prompt_keeps_the_output_format_description_and_one_example():
     assert "Mandatory trajectory output format" in rendered
     assert "must contain exactly 3 finite JSON numbers" in rendered
     assert "Correct output example" in rendered
-    assert "[[1.0,0.0,0.0]" in rendered
-    assert "Space successive waypoints of one array 0.5 to 2 metres apart." in rendered
-    assert "Make the last waypoint of each batch 3 to 6 metres ahead" in rendered
-
-
-def test_the_example_obeys_the_spacing_and_reach_rules():
-    """The example is the anchor the model copies, so it has to fit both numbers."""
-    for aerial in (False, True):
-        example = _AERIAL_OUTPUT_EXAMPLE if aerial else _GROUND_OUTPUT_EXAMPLE
-        points = json.loads(example)
-        gaps = [math.dist(points[index][:2], points[index + 1][:2]) for index in range(len(points) - 1)]
-        assert all(0.5 <= gap <= 2.0 for gap in gaps), gaps
-        assert 3.0 <= points[-1][0] <= 6.0
+    assert "[[0.8,0.0,0.0]" in rendered
 
 
 def test_prompt_never_asks_the_model_for_a_heading():

@@ -30,8 +30,6 @@ Return exactly one JSON array of waypoint arrays.
 Each waypoint array must contain exactly 3 finite JSON numbers:
 [dx, dy, dz].
 Return as many waypoints as this part of the instruction needs; the count is not fixed.
-Space successive waypoints of one array 0.5 to 2 metres apart.
-Make the last waypoint of each batch 3 to 6 metres ahead of the current position.
 Enclose every waypoint array in ONE outer array.
 Return the entire result on one line, starting with [[ and ending with ]].
 
@@ -50,8 +48,8 @@ Do not plan climbing or descending."""
 _AERIAL_MOTION_RULE = """AirSim uses world NED coordinates for the translation:
 +dz is DOWN and -dz is UP. Upward and downward motion are available."""
 
-_GROUND_OUTPUT_EXAMPLE = "[[1.0,0.0,0.0],[2.0,0.1,0.0],[3.5,0.0,0.0]]"
-_AERIAL_OUTPUT_EXAMPLE = "[[1.0,0.0,-0.2],[2.0,0.1,0.1],[3.5,0.0,0.0]]"
+_GROUND_OUTPUT_EXAMPLE = "[[0.8,0.0,0.0],[0.9,0.1,0.0],[0.7,0.0,0.0]]"
+_AERIAL_OUTPUT_EXAMPLE = "[[0.8,0.0,-0.2],[0.9,0.1,0.0],[0.7,0.0,0.1]]"
 
 
 def bare_system_prompt(*, aerial: bool = False) -> str:
