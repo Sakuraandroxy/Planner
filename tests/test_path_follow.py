@@ -200,14 +200,19 @@ def test_projectairsim_drone_reports_a_path_that_never_finishes():
     drone.close()
 
 
-def test_projectairsim_rover_follows_the_path_without_yaw_parameters():
+def test_projectairsim_rover_follows_the_path_with_the_baseline_lookahead():
     robot = PathRover()
     rover, _ = _rover(robot)
     rover.start()
     rover.follow_path(PATH, 1.0, timeout_s=45.0)
-    assert robot.path_calls == [
-        {"path": [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], "velocity": 1.0, "timeout_sec": 45.0}
-    ]
+    call = robot.path_calls[0]
+    assert call["path"] == [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]
+    assert call["velocity"] == 1.0
+    assert call["timeout_sec"] == 45.0
+    # Same lookahead pair as the drone; this package's rover walks the waypoints
+    # through MoveToPosition, so timeout_sec is per segment rather than per path.
+    assert call["lookahead"] == 3
+    assert call["adaptive_lookahead"] == 1
     rover.close()
 
 

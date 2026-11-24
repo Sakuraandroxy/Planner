@@ -172,11 +172,18 @@ class ProjectAirSimRover:
         """Drive one world-frame path through ``MoveOnPath`` and wait for it.
 
         The parameters are the installed package's
-        (``projectairsim/rover.py``, ``move_on_path_async``): ``path`` is a list
-        of NED points whose z the ground vehicle ignores, ``velocity`` the
-        desired speed in m/s, ``timeout_sec`` the engine-side abandon deadline
-        per waypoint. The rover has no yaw control in this call, so the drone's
-        ``ForwardOnly`` pair has no counterpart here.
+        (``projectairsim/rover.py:199-222``, ``move_on_path_async``): ``path`` is a
+        list of NED points whose z the ground vehicle ignores, ``velocity`` the
+        desired speed in m/s, ``lookahead`` 3 and ``adaptive_lookahead`` 1 to
+        match the path parameters the 3DG-VLN baseline flies with.
+
+        The tracking itself is the engine's, not one continuous carrot path: in
+        this package ``Rover.move_on_path_async`` visits the waypoints in order
+        through ``MoveToPosition`` (SimpleDrive), so ``timeout_sec`` bounds one
+        segment rather than the whole batch, and the rover has no yaw mode in
+        this call (``yaw_rate_max`` stays at the package default ``-1``, no
+        limit). The drone's ``ForwardOnly`` pair therefore has no counterpart
+        here, and the whole path is still handed over in one request.
         """
         self._require_started()
         if not points:
@@ -209,7 +216,11 @@ class ProjectAirSimRover:
         self, path: list[list[float]], speed_mps: float, timeout_s: float
     ):
         task = await self._robot.move_on_path_async(
-            path, velocity=speed_mps, timeout_sec=timeout_s
+            path,
+            velocity=speed_mps,
+            timeout_sec=timeout_s,
+            lookahead=3,
+            adaptive_lookahead=1,
         )
         return await task
 
