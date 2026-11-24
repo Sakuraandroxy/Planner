@@ -294,10 +294,10 @@ def test_projectairsim_drone_drives_the_path_point_by_point():
     assert first["velocity"] == 1.0
     # The caller's remaining deadline is what the engine may spend on this point.
     assert first["timeout_sec"] == pytest.approx(45.0, abs=0.5)
-    # ForwardOnly / absolute yaw, the baseline's way of facing the direction of
-    # travel instead of holding a heading.
-    assert first["yaw_control_mode"] == YawControlMode.ForwardOnly
-    assert first["yaw_is_rate"] is False
+    # ``ForwardOnly`` is rejected on this build (ProjectAirSim issue 81), so the
+    # command holds its heading through the maximum-degree-of-freedom mode.
+    assert first["yaw_control_mode"] == YawControlMode.MaxDegreeOfFreedom
+    assert first["yaw_is_rate"] is True
     assert first["yaw"] == 0.0
     assert first["callback"] is None
     assert len(robot.commands) == 1, "only the trailing hold command moves the aircraft"
@@ -319,6 +319,23 @@ def test_projectairsim_drone_reports_a_point_it_never_reaches():
         drone.follow_path(PATH, 1.0, timeout_s=0.05)
     assert robot.cancels >= 1, "the native task has to be cancelled"
     assert drone._holding.active is True, "the hold still has to take the aircraft"
+    drone.close()
+
+
+def test_projectairsim_drone_skips_a_point_it_cannot_close():
+    """A point the engine will not close is left behind, not turned into a failure.
+
+    The engine stops a position command about 0.5 m short of its target, so a
+    point inside that band can never satisfy a distance check. The path carries
+    on to the next point and the round replans from the measured pose.
+    """
+    robot = PathRobot()
+    robot.point_arrives = False
+    drone = _drone(robot)
+    drone.start()
+    drone.follow_path(PATH, 1.0, timeout_s=45.0)
+    assert len(robot.point_calls) == 2, "the second point is still issued"
+    assert drone._holding.active is True
     drone.close()
 
 

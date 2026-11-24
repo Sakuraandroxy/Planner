@@ -56,7 +56,17 @@ TELEPORT_TOLERANCE_DEG = 0.5
 
 #: How close to a path point counts as having reached it. ``MoveToPosition``
 #: answers with an ack, not with the arrival, so every point is measured here.
-PATH_ARRIVAL_TOLERANCE_M = 0.4
+#: It must stay above the engine's own ``distance accuracy`` (0.5 m): when the
+#: next temporary target falls inside that distance the engine commands zero
+#: velocity and the aircraft stops (ProjectAirSim issue 241), so a smaller
+#: tolerance can neither move the aircraft nor report the arrival.
+PATH_ARRIVAL_TOLERANCE_M = 1.0
+
+#: How long one point may take before the point is given up and the next one is
+#: tried. The engine stops a position command about 0.5 m short of its target
+#: (``GetDistanceAccuracy``), so a point the aircraft cannot close must not hold
+#: the whole path for the caller's full budget.
+PATH_POINT_WAIT_S = 20.0
 
 #: How often the pose is read while waiting for a point to be reached, for a
 #: clock the engine runs itself. The whole client shares one socket with the
@@ -521,17 +531,28 @@ class ProjectAirSimDrone:
             # point by point. The port still hands over the whole path: driving it
             # to the last point is the adapter's job.
             for index, target in enumerate(points, start=1):
+                if self._is_reached(target):
+                    logger.info(
+                        "[PathFollow] point %d already within %.1fm; skipping",
+                        index, PATH_ARRIVAL_TOLERANCE_M,
+                    )
+                    continue
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
+                    self.cancel()
                     raise ExecutionError(
-                        f"ProjectAirSim path following did not complete in "
-                        f"{timeout_s:g}s"
+                        "ProjectAirSim path following did not arrive: "
+                        f"point {index} was not reached in {timeout_s:g}s"
                     )
+                point_deadline = min(deadline, time.monotonic() + PATH_POINT_WAIT_S)
                 self._bridge.run(
                     self._move_exchange(target, float(speed_mps), remaining),
                     timeout_s=remaining,
                 )
-                self._await_arrival(target, deadline, float(timeout_s), index)
+                # A point the aircraft does not close is skipped rather than
+                # failing the path: the engine's own arrival check is looser than
+                # ours can be, and the next round replans from the measured pose.
+                self._await_arrival(target, point_deadline, index)
             arrived = True
         except ExecutionError:
             raise
@@ -557,10 +578,17 @@ class ProjectAirSimDrone:
             # wherever the aircraft is, so the measured pose is the reference.
             self._restore_hold(points[-1] if arrived else None)
 
+    def _is_reached(self, target: WorldPose) -> bool:
+        """Return whether the aircraft is already close enough to ``target``."""
+        pose = self.current_pose()
+        return math.dist(
+            (pose.x, pose.y, pose.z), (target.x, target.y, target.z)
+        ) <= PATH_ARRIVAL_TOLERANCE_M
+
     def _await_arrival(
-        self, target: WorldPose, deadline: float, timeout_s: float, index: int
+        self, target: WorldPose, deadline: float, index: int
     ) -> None:
-        """Wait until the aircraft has actually reached one path point.
+        """Wait for the pose to reach one path point, within its own deadline.
 
         ``MoveToPosition`` answers when the engine takes the command, not when the
         aircraft gets there, so the distance is measured here. The clock decides
@@ -568,6 +596,11 @@ class ProjectAirSimDrone:
         ``ARRIVAL_POLL_S`` leaves the socket to the native task, while a stepped
         world only moves when a control period asks it to and keeps the owner
         loop's step.
+
+        A point that is still out of reach at its deadline is reported and left
+        behind. The engine gives up on a position about 0.5 m short of its target,
+        so waiting longer cannot close it, and the caller replans from the
+        measured pose on the next round.
         """
         free_running = bool(self._connection.free_running)
         steps = 0
@@ -585,11 +618,12 @@ class ProjectAirSimDrone:
                 )
                 return
             if time.monotonic() >= deadline:
-                self.cancel()
-                raise ExecutionError(
-                    "ProjectAirSim path following did not arrive: "
-                    f"point {index} is {distance:.2f} m away after {timeout_s:g}s"
+                logger.info(
+                    "[PathFollow] point %d given up at %.2fm: the engine stops "
+                    "about 0.5m short of a position, the next point continues",
+                    index, distance,
                 )
+                return
             if free_running:
                 self._sleep(ARRIVAL_POLL_S)
             else:
@@ -614,10 +648,12 @@ class ProjectAirSimDrone:
 
     async def _move_exchange(self, target: WorldPose, speed_mps: float, timeout_s: float):
         """Ask ``MoveToPosition`` for one path point and return the engine's ack."""
-        # Same yaw intent as the baseline path call: face the direction of travel
-        # instead of holding a heading, with an absolute rather than rate yaw.
-        yaw_control_mode = YawControlMode.ForwardOnly
-        yaw_is_rate = False
+        # ``ForwardOnly`` is the baseline's yaw intent, but on this build the
+        # motion services reject it (ProjectAirSim issue 81: the server raises a
+        # std::exception) and the aircraft does not move. ``MaxDegreeOfFreedom``
+        # with a zero yaw rate is the combination that flies here.
+        yaw_control_mode = YawControlMode.MaxDegreeOfFreedom
+        yaw_is_rate = True
         yaw = 0.0
         logger.info(
             "[PathFollow] point target=(%.2f,%.2f,%.2f) velocity=%.2fm/s "
