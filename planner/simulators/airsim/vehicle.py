@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import math
 import time
+from collections.abc import Sequence
 
 from planner.domain.execution import ExecutionBudget, PoseCheckpoint
 from planner.domain.motion import MotionLimits
@@ -73,6 +74,42 @@ class AirSimVehicle:
         if self.holding is not None:
             self.holding.start(segment.end)
             self.holding.wait(budget=budget)
+
+    def follow_path(self, points: Sequence[WorldPose], speed_mps: float, *,
+                    timeout_s: float) -> None:
+        """Hand one world-frame path to AirSim and block until the vehicle flew it.
+
+        The parameters are the 3DG-VLN baseline's, item by item
+        (``3dg-vln-ref/airsim_plugin/AirVLNSimulatorClientTool.py:365-388``):
+        ``ForwardOnly`` drivetrain so the vehicle faces the path direction,
+        absolute yaw mode, fixed lookahead 3 with adaptive lookahead 1. The
+        baseline passes no ``timeout_sec`` (AirSim default 3e38) because it stops
+        the path itself after five waypoints; here the caller's deadline is the
+        engine-side timeout, so the server gives up on the path at that point.
+
+        Completion is read from the ack: ``moveOnPathAsync().get()`` returns
+        ``False`` when the server timed the path out. This build has returned
+        false acks for takeoff and ``moveToPositionAsync`` while the vehicle was
+        moving, and path following has no state criterion of its own (no target
+        to settle on), so a false ack is reported instead of being second-guessed.
+        """
+        import airsim
+
+        if not points:
+            raise ExecutionError("path following needs at least one point")
+        if self.holding is not None:
+            self.holding.release()
+        path = [airsim.Vector3r(point.x, point.y, point.z) for point in points]
+        ack = self.connection.call_async_and_wait(
+            "moveOnPathAsync", path, speed_mps,
+            timeout_sec=float(timeout_s),
+            drivetrain=airsim.DrivetrainType.ForwardOnly,
+            yaw_mode=airsim.YawMode(is_rate=False),
+            lookahead=3, adaptive_lookahead=1)
+        if ack is not True:
+            raise ExecutionError(
+                f"AirSim path following answered {ack!r}; the vehicle did not "
+                f"complete the path inside {timeout_s:g}s")
 
     def cancel(self) -> None:
         self.connection.call("cancelLastTask")

@@ -18,6 +18,7 @@ import logging
 import math
 import threading
 import time
+from collections.abc import Sequence
 
 from projectairsim.drone import YawControlMode
 from projectairsim.types import LandedState
@@ -471,6 +472,63 @@ class ProjectAirSimDrone:
         )
         self._holding.start(segment.end)
         self._holding.wait(budget=budget)
+
+    def follow_path(
+        self, points: Sequence[WorldPose], speed_mps: float, *, timeout_s: float
+    ) -> None:
+        """Fly one world-frame path through ``MoveOnPath`` and wait for it to end.
+
+        The parameter names and meanings are the installed package's
+        (``projectairsim/drone.py``, ``move_on_path_async``): ``path`` is a list
+        of NED points, ``velocity`` the desired speed in m/s, ``timeout_sec``
+        the engine-side abandon deadline. The values mirror the 3DG-VLN AirSim
+        baseline so the two engines follow a path the same way: ``ForwardOnly``
+        yaw control (face the direction of travel), absolute rather than rate
+        yaw, lookahead 3 with adaptive lookahead 1.
+
+        The coroutine resolves when the server answers the ``MoveOnPath``
+        request, which it does at the end of the path; ``bridge.run`` is what
+        turns the caller's deadline into a wall-clock limit.
+        """
+        self._require_started()
+        if not points:
+            raise ExecutionError("path following needs at least one point")
+        self._holding.release()
+        self._cancel.clear()
+        path = [[float(point.x), float(point.y), float(point.z)] for point in points]
+        try:
+            result = self._bridge.run(
+                self._path_exchange(path, float(speed_mps), float(timeout_s)),
+                timeout_s=float(timeout_s),
+            )
+        except ExecutionError:
+            raise
+        except TimeoutError as exc:
+            # Nothing else stops the native path, so the vehicle would keep
+            # flying after the caller gave up.
+            self._robot.cancel_last_task()
+            raise ExecutionError(
+                f"ProjectAirSim path following did not complete in {timeout_s:g}s"
+            ) from exc
+        except Exception as exc:
+            raise ExecutionError("ProjectAirSim path following failed") from exc
+        if result is False:
+            raise ExecutionError("ProjectAirSim refused the path")
+
+    async def _path_exchange(
+        self, path: list[list[float]], speed_mps: float, timeout_s: float
+    ):
+        task = await self._robot.move_on_path_async(
+            path,
+            velocity=speed_mps,
+            timeout_sec=timeout_s,
+            yaw_control_mode=YawControlMode.ForwardOnly,
+            yaw_is_rate=False,
+            yaw=0.0,
+            lookahead=3,
+            adaptive_lookahead=1,
+        )
+        return await task
 
     def park(self) -> None:
         """Stop flying without waiting for a touchdown.

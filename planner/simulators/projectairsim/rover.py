@@ -14,6 +14,7 @@ import math
 import threading
 import time
 from collections import deque
+from collections.abc import Sequence
 from dataclasses import replace
 
 from ...config import CameraSettings, DepthSettings
@@ -22,6 +23,7 @@ from ...domain.pose import WorldPose
 from ...domain.streaming import TimedVehicleState
 from ...errors import ExecutionError
 from ...services.segment_motion import MotionLimits
+from .async_bridge import AsyncBridge
 from .collision import CollisionEvent, CollisionMonitor
 from .connection import ProjectAirSimConnection
 from .coordinates import (
@@ -104,6 +106,7 @@ class ProjectAirSimRover:
         self._period = 1.0 / self._tracking.control_hz
         self._cancel = threading.Event()
         self._started = False
+        self._bridge = AsyncBridge()
         self._observations = ProjectAirSimObservationSource(
             connection,
             robot,
@@ -162,6 +165,50 @@ class ProjectAirSimRover:
         self._tracker.execute(
             segment, budget=budget, pose_checkpoint=pose_checkpoint
         )
+
+    def follow_path(
+        self, points: Sequence[WorldPose], speed_mps: float, *, timeout_s: float
+    ) -> None:
+        """Drive one world-frame path through ``MoveOnPath`` and wait for it.
+
+        The parameters are the installed package's
+        (``projectairsim/rover.py``, ``move_on_path_async``): ``path`` is a list
+        of NED points whose z the ground vehicle ignores, ``velocity`` the
+        desired speed in m/s, ``timeout_sec`` the engine-side abandon deadline
+        per waypoint. The rover has no yaw control in this call, so the drone's
+        ``ForwardOnly`` pair has no counterpart here.
+        """
+        self._require_started()
+        if not points:
+            raise ExecutionError("path following needs at least one point")
+        self._cancel.clear()
+        self._pid.reset()
+        path = [[float(point.x), float(point.y), float(point.z)] for point in points]
+        try:
+            result = self._bridge.run(
+                self._path_exchange(path, float(speed_mps), float(timeout_s)),
+                timeout_s=float(timeout_s),
+            )
+        except ExecutionError:
+            raise
+        except TimeoutError as exc:
+            # The car keeps driving the native path otherwise.
+            self._robot.cancel_last_task()
+            raise ExecutionError(
+                f"ProjectAirSim path following did not complete in {timeout_s:g}s"
+            ) from exc
+        except Exception as exc:
+            raise ExecutionError("ProjectAirSim path following failed") from exc
+        if result is False:
+            raise ExecutionError("ProjectAirSim refused the path")
+
+    async def _path_exchange(
+        self, path: list[list[float]], speed_mps: float, timeout_s: float
+    ):
+        task = await self._robot.move_on_path_async(
+            path, velocity=speed_mps, timeout_sec=timeout_s
+        )
+        return await task
 
     def cancel(self) -> None:
         self._cancel.set()
@@ -361,8 +408,11 @@ class ProjectAirSimRover:
         self._collisions.clear()
 
     def close(self) -> None:
-        self._collisions.close()
-        self._observations.close()
+        try:
+            self._collisions.close()
+            self._observations.close()
+        finally:
+            self._bridge.close()
 
     # -- internals ---------------------------------------------------------
     def _require_started(self) -> None:
