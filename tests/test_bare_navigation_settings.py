@@ -1,6 +1,7 @@
 """The bare pipeline's own knobs: one speed, one deadline, both positive."""
 
 import pytest
+import yaml
 
 from planner.config import (
     BareNavigationSettings,
@@ -9,6 +10,12 @@ from planner.config import (
     profile_config_path,
 )
 from tests.support import write_config
+
+
+def _visual_section(profile: str) -> dict:
+    """The profile's own ``visual_goal_navigation`` keys, as written on disk."""
+    raw = yaml.safe_load(profile_config_path(profile).read_text(encoding="utf-8"))
+    return raw["visual_goal_navigation"]
 
 
 def test_defaults_are_one_metre_per_second_and_one_minute():
@@ -38,6 +45,24 @@ def test_the_vlm_profile_selects_the_bare_pipeline():
     assert settings.execution == "bare"
     assert settings.bare.speed_mps == 1.0
     assert settings.bare.path_timeout_s == 60.0
+
+
+def test_the_default_profile_has_no_bare_section_and_stays_staged():
+    """Absent keys must mean the staged defaults, not an accidental bare read."""
+    section = _visual_section("default")
+    assert "execution" not in section
+    assert "bare" not in section
+    settings = load_config(profile_config_path("default")).visual_goal_navigation
+    assert settings.execution == "staged"
+    assert settings.bare == BareNavigationSettings(speed_mps=1.0, path_timeout_s=60.0)
+
+
+def test_the_two_profiles_differ_only_in_execution_and_bare():
+    """A new switch on the bare profile would show up here, not in a flight."""
+    default = set(_visual_section("default"))
+    vlm = set(_visual_section("vlm"))
+    assert vlm - default == {"execution", "bare"}
+    assert default - vlm == set()
 
 
 def test_the_config_file_rejects_a_zero_speed(tmp_path):
