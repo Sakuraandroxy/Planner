@@ -6,6 +6,23 @@ from .approach import ApproachSettings
 
 
 @dataclass(frozen=True)
+class BareNavigationSettings:
+    """Bare-profile execution values; the engine owns the speed and yaw."""
+
+    path_timeout_s: float = 60.0
+
+    def __post_init__(self):
+        value = self.path_timeout_s
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value <= 0
+        ):
+            raise ValueError("path_timeout_s must be finite and positive")
+
+
+@dataclass(frozen=True)
 class VisualGoalLimits:
     distance_uncertainty_margin_m: float = 0.3
     confirmation_count: int = 2
