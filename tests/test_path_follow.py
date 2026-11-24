@@ -10,6 +10,7 @@ are the 3DG-VLN baseline's (``airsim_plugin/AirVLNSimulatorClientTool.py:365-388
 """
 
 import asyncio
+import math
 import sys
 import types
 
@@ -58,11 +59,21 @@ class _Connection:
 
     def call(self, name, *args, **kwargs):
         self.issued.append((name, args, kwargs))
+        if name == "simGetVehiclePose":
+            # A 45 degree heading in quaternion form, which is what the path
+            # command has to hold.
+            half = math.radians(45.0) / 2.0
+            return types.SimpleNamespace(
+                position=types.SimpleNamespace(x_val=0.0, y_val=0.0, z_val=0.0),
+                orientation=types.SimpleNamespace(
+                    w_val=math.cos(half), x_val=0.0, y_val=0.0, z_val=math.sin(half),
+                ),
+            )
         return True
 
     @property
     def names(self):
-        return [name for name, _, _ in self.issued]
+        return [name for name, _, _ in self.issued if name != "simGetVehiclePose"]
 
 
 class _Holding:
@@ -103,17 +114,19 @@ def test_airsim_hands_the_whole_path_to_move_on_path():
     vehicle, connection = _airsim_vehicle()
     vehicle.follow_path(PATH, 1.0, timeout_s=30.0)
     assert connection.names == ["moveOnPathAsync"]
-    _, args, kwargs = connection.issued[0]
+    _, args, kwargs = [entry for entry in connection.issued if entry[0] == "moveOnPathAsync"][0]
     assert args[0] == [(1.0, 2.0, 3.0), (4.0, 5.0, 6.0)]
     assert args[1] == 1.0
     # Every value the baseline passes, plus the caller's deadline twice: once as
     # the engine-side timeout and once as the client-side limit that keeps a
     # silent server from blocking the control thread.
+    # The nose holds the heading it started the path with. ``ForwardOnly`` would
+    # turn the frame the model answers in and compound a left offset into a spiral.
     assert kwargs == {
         "timeout_s": 30.0,
         "timeout_sec": 30.0,
-        "drivetrain": 1,
-        "yaw_mode": {"is_rate": False},
+        "drivetrain": 0,
+        "yaw_mode": {"is_rate": False, "yaw_or_rate": pytest.approx(45.0)},
         "lookahead": 3,
         "adaptive_lookahead": 1,
     }
@@ -143,7 +156,8 @@ def test_airsim_cancels_and_holds_when_the_client_deadline_fires():
     vehicle, connection = _airsim_vehicle(error=deadline)
     with pytest.raises(ExecutionError, match=r"inside 30s"):
         vehicle.follow_path(PATH, 1.0, timeout_s=30.0)
-    assert connection.issued[0][2]["timeout_s"] == 30.0, (
+    path_call = [entry for entry in connection.issued if entry[0] == "moveOnPathAsync"][0]
+    assert path_call[2]["timeout_s"] == 30.0, (
         "the caller's deadline has to reach the client, not only the server"
     )
     assert connection.names == ["moveOnPathAsync", "cancelLastTask"]
@@ -168,7 +182,11 @@ def test_a_failure_while_stopping_does_not_replace_the_original_error():
     """Stopping is best effort: the caller's reason is the one worth keeping."""
 
     class _Broken(_Connection):
+        """The transport dies on the stopping call, not on the heading read."""
+
         def call(self, name, *args, **kwargs):
+            if name == "simGetVehiclePose":
+                return super().call(name, *args, **kwargs)
             raise RuntimeError("the transport is gone")
 
     connection = _Broken(ack=False)

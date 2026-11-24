@@ -323,7 +323,11 @@ def test_the_vehicle_path_call_fits_the_sdk_keywords():
         client.seen["moveOnPathAsync"]
     )
     assert (velocity, timeout_sec, lookahead, adaptive) == (1.0, 30.0, 3, 1)
-    assert drivetrain == 1 and yaw_mode == {"is_rate": False}
+    # MaxDegreeOfFreedom with the heading it started at: the nose must not turn
+    # into the path direction, or the body frame the model answers in rotates.
+    assert drivetrain == 0
+    assert yaw_mode["is_rate"] is False
+    assert yaw_mode["yaw_or_rate"] == 0.0
     assert name == "Drone_1"
 
 

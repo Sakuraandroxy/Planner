@@ -79,10 +79,16 @@ class AirSimVehicle:
                     timeout_s: float) -> None:
         """Hand one world-frame path to AirSim and block until the vehicle flew it.
 
-        The parameters are the 3DG-VLN baseline's, item by item
-        (``3dg-vln-ref/airsim_plugin/AirVLNSimulatorClientTool.py:365-388``):
-        ``ForwardOnly`` drivetrain so the vehicle faces the path direction,
-        absolute yaw mode, fixed lookahead 3 with adaptive lookahead 1. The
+        The parameters follow the 3DG-VLN baseline
+        (``3dg-vln-ref/airsim_plugin/AirVLNSimulatorClientTool.py:365-388``) for
+        lookahead and deadlines, but not for yaw. The baseline passes
+        ``ForwardOnly``, which turns the nose into the path direction. The bare
+        profile asks the model for body-frame points every round, so a nose that
+        follows the path rotates the frame the model answers in: a constant left
+        offset then compounds into a left spiral (flight of 2026-11-24 20:30,
+        heading 0 to -110 degrees over five rounds while the goal receded to 19 m).
+        Holding the heading at path start keeps the camera frame fixed, which is
+        what the same workflow does on ProjectAirSim. The
         baseline passes no ``timeout_sec`` (AirSim default 3e38) because it stops
         the path itself after five waypoints; here the caller's deadline reaches
         the server as ``timeout_sec`` and is enforced on this side as well, so a
@@ -102,13 +108,18 @@ class AirSimVehicle:
         if self.holding is not None:
             self.holding.release()
         path = [airsim.Vector3r(point.x, point.y, point.z) for point in points]
+        heading_deg = self.current_pose().yaw_deg
+        logger.info(
+            "[PathFollow] hold heading=%.1fdeg over %d points speed=%.2fm/s",
+            heading_deg, len(points), speed_mps,
+        )
         try:
             ack = self.connection.call_async_and_wait(
                 "moveOnPathAsync", path, speed_mps,
                 timeout_s=float(timeout_s),
                 timeout_sec=float(timeout_s),
-                drivetrain=airsim.DrivetrainType.ForwardOnly,
-                yaw_mode=airsim.YawMode(is_rate=False),
+                drivetrain=airsim.DrivetrainType.MaxDegreeOfFreedom,
+                yaw_mode=airsim.YawMode(is_rate=False, yaw_or_rate=heading_deg),
                 lookahead=3, adaptive_lookahead=1)
         except Exception:
             # The client-side deadline fired, the transport failed, or the server
