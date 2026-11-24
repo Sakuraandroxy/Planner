@@ -132,7 +132,13 @@ class PathRobot(_PathRobotMixin, DroneRobot):
 
 
 class PathRover(_PathRobotMixin, RoverRobot):
-    pass
+    def __init__(self):
+        super().__init__()
+        self.cancels = 0
+
+    def cancel_last_task(self):
+        self.cancels += 1
+        return True
 
 
 def _drone(robot):
@@ -148,7 +154,8 @@ def _drone(robot):
 
 
 def _rover(robot):
-    return ProjectAirSimRover(RoverConnection(), robot, camera=ROVER_CAMERA)
+    connection = RoverConnection()
+    return ProjectAirSimRover(connection, robot, camera=ROVER_CAMERA), connection
 
 
 def test_projectairsim_drone_follows_the_path_with_the_baseline_parameters():
@@ -195,7 +202,7 @@ def test_projectairsim_drone_reports_a_path_that_never_finishes():
 
 def test_projectairsim_rover_follows_the_path_without_yaw_parameters():
     robot = PathRover()
-    rover = _rover(robot)
+    rover, _ = _rover(robot)
     rover.start()
     rover.follow_path(PATH, 1.0, timeout_s=45.0)
     assert robot.path_calls == [
@@ -204,13 +211,19 @@ def test_projectairsim_rover_follows_the_path_without_yaw_parameters():
     rover.close()
 
 
-def test_projectairsim_rover_reports_a_path_that_never_finishes():
+def test_projectairsim_rover_cancels_and_brakes_a_path_that_never_finishes():
     robot = PathRover()
     robot.path_never_completes = True
-    rover = _rover(robot)
+    rover, connection = _rover(robot)
     rover.start()
     with pytest.raises(ExecutionError, match=r"did not complete in 0\.05s"):
         rover.follow_path(PATH, 1.0, timeout_s=0.05)
+    assert robot.cancels == 1, "the native path has to be cancelled"
+    assert connection.control_requests()[-1] == {
+        "engine": 0.0,
+        "steering_angle": 0.0,
+        "brake": 1.0,
+    }, "the car has to be braked after the cancel"
     rover.close()
 
 

@@ -192,8 +192,11 @@ class ProjectAirSimRover:
         except ExecutionError:
             raise
         except TimeoutError as exc:
-            # The car keeps driving the native path otherwise.
+            # ``MoveOnPath`` is the engine's own drive, so cancelling it is what
+            # ends the path; the brake then keeps the car where it stopped
+            # instead of letting it coast past the caller's deadline.
             self._robot.cancel_last_task()
+            self.hover()
             raise ExecutionError(
                 f"ProjectAirSim path following did not complete in {timeout_s:g}s"
             ) from exc
