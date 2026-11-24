@@ -68,6 +68,7 @@ def test_prompt_keeps_the_output_format_description_and_one_example():
     assert "must contain exactly 3 finite JSON numbers" in rendered
     assert "Correct output example" in rendered
     assert "[[0.8,0.0,0.0]" in rendered
+    assert "Space successive waypoints of one array 0.5 to 2 metres apart." in rendered
 
 
 def test_prompt_never_asks_the_model_for_a_heading():

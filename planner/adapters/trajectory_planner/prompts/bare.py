@@ -30,6 +30,7 @@ Return exactly one JSON array of waypoint arrays.
 Each waypoint array must contain exactly 3 finite JSON numbers:
 [dx, dy, dz].
 Return as many waypoints as this part of the instruction needs; the count is not fixed.
+Space successive waypoints of one array 0.5 to 2 metres apart.
 Enclose every waypoint array in ONE outer array.
 Return the entire result on one line, starting with [[ and ending with ]].
 
