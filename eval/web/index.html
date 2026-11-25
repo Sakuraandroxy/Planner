@@ -17,10 +17,10 @@
 </header>
 
 <section class="metrics" id="metrics" aria-label="评测指标">
-  <div class="metric"><span class="k">SR</span><span class="v" id="m-sr">—</span></div>
-  <div class="metric"><span class="k">OSR</span><span class="v" id="m-osr">—</span></div>
-  <div class="metric"><span class="k">NE</span><span class="v" id="m-ne">—</span></div>
-  <div class="metric"><span class="k">SPL</span><span class="v" id="m-spl">—</span></div>
+  <div class="metric"><span class="k" title="成功率：成功回合 / 全部回合">SR · 成功率</span><span class="v" id="m-sr">—</span></div>
+  <div class="metric"><span class="k" title="可达率：轨迹任一点进入成功半径的回合占比">OSR · 可达率</span><span class="v" id="m-osr">—</span></div>
+  <div class="metric"><span class="k" title="末端距离：终点到目标距离的均值（米）">NE · 末端距离</span><span class="v" id="m-ne">—</span></div>
+  <div class="metric"><span class="k" title="路径效率：按实际路径长度加权的成功率">SPL · 路径效率</span><span class="v" id="m-spl">—</span></div>
   <div class="metric"><span class="k">进度</span><span class="v" id="m-prog">—</span></div>
 </section>
 
@@ -40,8 +40,8 @@
     <div class="block block-result">
       <div class="block-head">
         <div class="segmented result-tabs" role="group" aria-label="结果来源">
-          <button class="res-tab active" data-tab="runs" aria-pressed="true">历史结果</button>
-          <button class="res-tab" data-tab="saved" aria-pressed="false">已保存评测</button>
+          <button class="res-tab active" data-tab="runs" aria-pressed="true">批量测试结果</button>
+          <button class="res-tab" data-tab="saved" aria-pressed="false">实飞结果</button>
         </div>
       </div>
       <div class="cards" id="cards"></div>
@@ -60,6 +60,7 @@
       <div class="trajectory">
         <canvas id="traj3d" aria-label="评测轨迹"></canvas>
         <div class="trajectory-legend" id="trajLegend" hidden>
+          <span class="legend-expert" id="trajExpert" hidden>专家</span>
           <span class="legend-start">起点</span>
           <span class="legend-current">末点</span>
           <span class="legend-target" id="trajTarget">目标</span>

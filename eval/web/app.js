@@ -4,6 +4,8 @@ const state = {
   run: null,           // 当前所选 episode 所属的 run（看轨迹/画面用）
   latestRun: null,     // 最新一批 run 名（顶部指标来源）
   history: [],         // 平铺时间线：所有 run 的每集结果
+  runSummaries: {},    // run 名 -> 批次汇总（/api/runs，历史列表的批次卡片用）
+  summaryRun: null,    // 当前选中的批次（点了批次汇总卡片时；与 episode 选择互斥）
   selectedUuid: null,
   traj: null,          // {positions, target, start, radius}
   cam: "front",
@@ -60,13 +62,19 @@ function runTimeLabel(run) {
 }
 
 async function poll() {
-  let hist = null, s = null;
+  let hist = null, s = null, runs = null;
   try { hist = await getJSON("/api/history"); } catch (e) {}
   try { s = await getJSON("/api/state"); } catch (e) {}   // 不带 run = 最新一批
+  try { runs = await getJSON("/api/runs"); } catch (e) {} // 批次汇总（SR 后端现算）
+  if (runs && Array.isArray(runs.runs)) {
+    state.runSummaries = {};
+    for (const r of runs.runs) state.runSummaries[r.name] = r;
+  }
   if (hist) {
     state.history = hist.episodes || [];
     renderCards(state.history);
   }
+  if (state.summaryRun) renderRunSummaryStats(state.summaryRun);  // 批次卡片指标保持最新
   if (!s) return;
   const m = s.metrics || {};
   const prog = s.progress || {};
@@ -79,8 +87,8 @@ async function poll() {
     $("m-spl").textContent = m.spl != null ? m.spl.toFixed(1) + "%" : "—";
     $("m-prog").textContent = `${prog.done ?? 0}/${prog.total ?? "?"}`;
   }
-  // 若当前有运行中 episode 且没手选，自动跟到时间线上（看已保存记录时不抢焦点）
-  if (!state.savedTabVisible && !state.selectedUuid && prog.current) {
+  // 若当前有运行中 episode 且没手选，自动跟到时间线上（看批次汇总/已保存记录时不抢焦点）
+  if (!state.savedTabVisible && !state.summaryRun && !state.selectedUuid && prog.current) {
     const hit = state.history.find(e => e.uuid === prog.current && e.run === s.run);
     if (hit) selectEpisode(hit.uuid, hit.run);
   }
@@ -94,39 +102,87 @@ function revealViewer() {
 
 let historySig = null;
 function renderCards(entries) {
-  const sig = JSON.stringify([entries, state.selectedUuid, state.run, profileLabels]);
+  const sig = JSON.stringify([entries, state.selectedUuid, state.run,
+    state.summaryRun, state.runSummaries, profileLabels]);
   if (sig === historySig) return;
   historySig = sig;
   const box = $("cards");
   const scrollTop = box.scrollTop;
   box.innerHTML = "";
   if (!entries.length) {
-    box.innerHTML = '<div class="stats">暂无历史结果。</div>';
+    box.innerHTML = '<div class="stats">暂无批量测试结果。</div>';
     return;
   }
+  let lastRun = null;
   for (const e of entries) {
-    const div = document.createElement("div");
-    const active = e.uuid === state.selectedUuid && e.run === state.run;
-    div.className = "card" + (active ? " active" : "");
-    const badge = e.success
-      ? `<span class="pill ok">成功</span>`
-      : (e.collided ? `<span class="pill coll">碰撞</span>` : `<span class="pill fail">未成</span>`);
-    const ptxt = profileText(e.planner);
-    const ptag = ptxt ? `<span class="pill model">${escapeHTML(ptxt)}</span>` : "";
-    const tlabel = runTimeLabel(e.run);
-    div.innerHTML =
-      `<div class="row1"><span class="uuid">${escapeHTML((e.uuid || "").slice(0, 13))}</span>
-         <span class="row1-right">${ptag}${badge}<button class="card-del" aria-label="删除该集结果" title="删除该集结果">×</button></span></div>
-       <div class="scene">${escapeHTML([e.scene, tlabel].filter(Boolean).join(" · "))}</div>
-       <div class="meta"><span>NE ${fmt(e.final_ne, "m")}</span><span>步 ${e.steps ?? "—"}</span></div>`;
-    div.querySelector(".card-del").onclick = (ev) => deleteEpisode(e.run, e.uuid, div, ev);
-    div.onclick = () => {
-      selectEpisode(e.uuid, e.run);
-      revealViewer();
-    };
-    box.appendChild(div);
+    if (e.run !== lastRun) {           // 每批 run 先放一张批次汇总卡片
+      lastRun = e.run;
+      box.appendChild(buildRunSummaryCard(e.run));
+    }
+    box.appendChild(buildEpisodeCard(e));
   }
   box.scrollTop = scrollTop;
+}
+
+function runStatePill(sum) {
+  if (!sum) return "";
+  if (sum.state === "running") {
+    const prog = `${sum.done ?? 0}/${sum.total ?? "?"}`;
+    return `<span class="pill run">运行中 ${prog}</span>`;
+  }
+  if (sum.state === "done") return `<span class="pill done">已完成</span>`;
+  return "";
+}
+
+function buildRunSummaryCard(run) {
+  const sum = (state.runSummaries || {})[run] || null;
+  const div = document.createElement("div");
+  const active = state.summaryRun === run;
+  div.className = "card card-run" + (active ? " active" : "");
+  const ptxt = profileText(sum && sum.planner);
+  const ptag = ptxt ? `<span class="pill model">${escapeHTML(ptxt)}</span>` : "";
+  const scene = sum && sum.scenes && sum.scenes.length
+    ? sum.scenes.join(", ") : (runTimeLabel(run) ? "" : run);
+  const sr = sum && sum.sr != null ? sum.sr.toFixed(1) + "%" : "—";
+  const osr = sum && sum.osr != null ? sum.osr.toFixed(1) + "%" : "—";
+  const ne = sum && sum.ne_mean != null ? sum.ne_mean.toFixed(1) + "m" : "—";
+  const spl = sum && sum.spl != null ? sum.spl.toFixed(1) + "%" : "—";
+  const counts = sum
+    ? `成功 ${sum.num_success}/${sum.num_episodes} · 碰撞 ${sum.num_collided} · 失败 ${sum.num_failed}`
+    : "汇总加载中…";
+  div.innerHTML =
+    `<div class="row1"><span class="uuid run-title">▶ 批次 ${escapeHTML(runTimeLabel(run))}</span>
+       <span class="row1-right">${ptag}${runStatePill(sum)}<button class="card-del" aria-label="删除该批次" title="删除该批次">×</button></span></div>
+     <div class="scene">${escapeHTML(scene)}</div>
+     <div class="meta run-metrics"><span>SR <b>${sr}</b></span><span>OSR ${osr}</span>
+       <span>NE ${ne}</span><span>SPL ${spl}</span></div>
+     <div class="meta run-counts">${counts}</div>`;
+  div.querySelector(".card-del").onclick = (ev) => deleteRun(run, div, ev);
+  div.onclick = () => { selectRunSummary(run); revealViewer(); };
+  return div;
+}
+
+function buildEpisodeCard(e) {
+  const div = document.createElement("div");
+  const active = e.uuid === state.selectedUuid && e.run === state.run;
+  div.className = "card" + (active ? " active" : "");
+  const badge = e.success
+    ? `<span class="pill ok">成功</span>`
+    : (e.collided ? `<span class="pill coll">碰撞</span>` : `<span class="pill fail">未成</span>`);
+  const ptxt = profileText(e.planner);
+  const ptag = ptxt ? `<span class="pill model">${escapeHTML(ptxt)}</span>` : "";
+  const tlabel = runTimeLabel(e.run);
+  div.innerHTML =
+    `<div class="row1"><span class="uuid">${escapeHTML((e.uuid || "").slice(0, 13))}</span>
+       <span class="row1-right">${ptag}${badge}<button class="card-del" aria-label="删除该集结果" title="删除该集结果">×</button></span></div>
+     <div class="scene">${escapeHTML([e.scene, tlabel].filter(Boolean).join(" · "))}</div>
+     <div class="meta"><span>NE ${fmt(e.final_ne, "m")}</span><span>步 ${e.steps ?? "—"}</span></div>`;
+  div.querySelector(".card-del").onclick = (ev) => deleteEpisode(e.run, e.uuid, div, ev);
+  div.onclick = () => {
+    selectEpisode(e.uuid, e.run);
+    revealViewer();
+  };
+  return div;
 }
 
 function setViewerTitle(title) {
@@ -141,10 +197,27 @@ function clearSelection() {
   state.run = null;
   state.viewSaved = false;
   state.viewDir = null;
+  state.summaryRun = null;
   state.traj = null;
   setViewerTitle("轨迹与相机画面");
   renderStats();
   refreshCamView();
+  draw();
+}
+
+// 点批次汇总卡片：右侧统计面板显示该批次的指标 + 逐集明细（不选具体 episode）。
+function selectRunSummary(run) {
+  selectionRequest++;                  // 取消可能在途的轨迹请求
+  state.selectedUuid = null;
+  state.run = null;
+  state.viewSaved = false;
+  state.viewDir = null;
+  state.traj = null;
+  state.summaryRun = run;
+  setViewerTitle("批次汇总 · " + runTimeLabel(run));
+  refreshCamView();
+  renderCards(state.history);          // 更新卡片高亮
+  renderRunSummaryStats(run);
   draw();
 }
 
@@ -159,10 +232,22 @@ async function deleteEpisode(run, uuid, card, ev) {
   await poll();                                   // 拉最新列表与重算后的指标
 }
 
+async function deleteRun(run, card, ev) {
+  ev.stopPropagation();
+  if (!confirm(`删除整批结果？\n${run}\n该批次下所有集都会被删除。`)) return;
+  card.remove();
+  historySig = null;
+  if (state.summaryRun === run) clearSelection();
+  try { await postJSON("/api/runs/delete", { run }); }
+  catch (e) { alert("删除失败：" + e.message); }
+  await poll();
+}
+
 async function selectEpisode(uuid, run) {
   const requestId = ++selectionRequest;
   state.viewSaved = false;
   state.viewDir = null;
+  state.summaryRun = null;            // 选具体 episode 时退出批次汇总视图
   state.selectedUuid = uuid;
   state.run = run || state.run;
   state.traj = null;
@@ -223,6 +308,7 @@ function updateFrame() {
 }
 
 function renderStats() {
+  if (state.summaryRun && !state.selectedUuid) { renderRunSummaryStats(state.summaryRun); return; }
   const t = state.traj;
   const box = $("epStats");
   if (!t || !t.positions || !t.positions.length) { box.innerHTML = ""; return; }
@@ -234,6 +320,42 @@ function renderStats() {
      <div>成功半径: <b>${t.radius} m</b></div>
      <div>末点 NE: <b>${ne != null ? ne.toFixed(2) + " m" : "—"}</b></div>
      <div>轨迹点: <b>${t.positions.length}</b></div>`;
+}
+
+// 批次汇总面板：该 run 的指标 + 逐集结果明细表。
+function renderRunSummaryStats(run) {
+  const box = $("epStats");
+  const sum = (state.runSummaries || {})[run];
+  if (!sum) {
+    box.innerHTML = `<div>批次 <b>${escapeHTML(runTimeLabel(run))}</b>：汇总加载中…</div>`;
+    return;
+  }
+  const eps = state.history.filter(e => e.run === run);
+  const rows = eps.map(e => {
+    const st = e.success ? '<span class="pill ok">成功</span>'
+      : (e.collided ? '<span class="pill coll">碰撞</span>' : '<span class="pill fail">未成</span>');
+    return `<tr class="sum-row" data-uuid="${escapeHTML(e.uuid || "")}">
+      <td class="mono">${escapeHTML((e.uuid || "").slice(0, 8))}</td>
+      <td>${st}</td><td>${fmt(e.final_ne, "")}</td></tr>`;
+  }).join("");
+  const pct = (v) => v != null ? v.toFixed(1) + "%" : "—";
+  const mt = (v) => v != null ? v.toFixed(1) + "m" : "—";
+  const scenes = (sum.scenes || []).join(", ") || "—";
+  box.innerHTML =
+    `<div class="sum-head">批次 <b>${escapeHTML(runTimeLabel(run))}</b></div>
+     <div class="sum-scene">${escapeHTML(scenes)}${sum.planner ? " · " + escapeHTML(profileText(sum.planner) || sum.planner) : ""}${sum.state ? " · " + escapeHTML(sum.state) : ""}</div>
+     <div class="sum-metrics">
+       <span>SR <b>${pct(sum.sr)}</b></span>
+       <span>OSR <b>${pct(sum.osr)}</b></span>
+       <span>NE <b>${mt(sum.ne_mean)}</b></span>
+       <span>SPL <b>${pct(sum.spl)}</b></span>
+     </div>
+     <div class="sum-counts">共 ${sum.num_episodes} 集 · 成功 ${sum.num_success} · 碰撞 ${sum.num_collided} · 失败 ${sum.num_failed}</div>
+     <table class="sum-table"><thead><tr><th>Episode</th><th>结果</th><th>NE(m)</th></tr></thead>
+       <tbody>${rows || '<tr><td colspan="3">暂无逐集数据</td></tr>'}</tbody></table>`;
+  box.querySelectorAll(".sum-row").forEach((tr) => {
+    tr.onclick = () => { selectEpisode(tr.dataset.uuid, run); revealViewer(); };
+  });
 }
 
 function dist(a, b) {
@@ -272,8 +394,10 @@ function draw() {
 
   const t = state.traj;
   const hasTrail = Boolean(t?.positions?.length);
+  const expert = Array.isArray(t?.expert) ? t.expert : [];
   $("trajLegend").hidden = !hasTrail;
   $("trajTarget").hidden = !t?.target;
+  $("trajExpert").hidden = !expert.length;
   if (!hasTrail) {
     ctx.fillStyle = chartColors.text;
     ctx.font = "13px sans-serif";
@@ -284,33 +408,24 @@ function draw() {
   }
   const pts = t.positions;
   const all = pts.slice();
+  for (const p of expert) all.push(p);
   if (t.target) all.push(t.target);
   const mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity];
   for (const p of all) for (let i = 0; i < 3; i++) {
     mn[i] = Math.min(mn[i], p[i]); mx[i] = Math.max(mx[i], p[i]);
   }
   const center = [(mn[0] + mx[0]) / 2, (mn[1] + mx[1]) / 2, (mn[2] + mx[2]) / 2];
-  const unitProjection = (p) => project(p, center, 1, 0, 0, state.az, state.el);
+  // 固定取景，与 main 一致：缩放按模型三维跨度一次算定，转轴是包围盒中心。
+  // 拖动只改视角，不重算缩放/中心，避免旋转时画面呼吸、转轴漂移。
+  const span = Math.max(mx[0] - mn[0], mx[1] - mn[1], mx[2] - mn[2], 1);
+  const scale = Math.min(W, H) * 0.72 / span;
+  const proj = (p) => project(p, center, scale, W, H, state.az, state.el);
   const targetRing = t.target && t.radius != null
     ? Array.from({ length: 64 }, (_, i) => {
       const angle = i / 64 * Math.PI * 2;
       return [t.target[0] + t.radius * Math.cos(angle), t.target[1] + t.radius * Math.sin(angle), t.target[2]];
     })
     : [];
-  let left = Infinity, right = -Infinity, top = Infinity, bottom = -Infinity;
-  for (const p of all.concat(targetRing)) {
-    const [x, y] = unitProjection(p);
-    left = Math.min(left, x); right = Math.max(right, x);
-    top = Math.min(top, y); bottom = Math.max(bottom, y);
-  }
-  const scale = Math.min(
-    Math.max(1, W - 84) / Math.max(1, right - left),
-    Math.max(1, H - 96) / Math.max(1, bottom - top),
-  );
-  const proj = (p) => {
-    const [x, y] = unitProjection(p);
-    return [W / 2 + (x - (left + right) / 2) * scale, H / 2 + 8 + (y - (top + bottom) / 2) * scale];
-  };
 
   // 地面参考面：取轨迹最低处 z（NED 里 z 越大越靠下）
   const zG = mx[2];
@@ -362,6 +477,18 @@ function draw() {
     });
     ctx.closePath();
     ctx.stroke();
+  }
+
+  // 专家轨迹：对比色虚线，画在智能体轨迹下方
+  if (expert.length > 1) {
+    ctx.save();
+    ctx.strokeStyle = "rgba(110,168,255,0.85)";
+    ctx.lineWidth = 2; ctx.setLineDash([6, 5]); ctx.lineJoin = "round"; ctx.lineCap = "round";
+    ctx.beginPath();
+    const e0 = proj(expert[0]); ctx.moveTo(e0[0], e0[1]);
+    for (let i = 1; i < expert.length; i++) { const e = proj(expert[i]); ctx.lineTo(e[0], e[1]); }
+    ctx.stroke();
+    ctx.restore();
   }
 
   // 轨迹：先一道发光底线，再按进度叠彩色细线

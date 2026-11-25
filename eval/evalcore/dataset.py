@@ -56,6 +56,18 @@ def _sorted_logs(log_dir: str) -> list[str]:
     return files
 
 
+def _read_positions(log_dir: str, logs: list[str]) -> list[list[float]]:
+    """按帧序读专家轨迹的每帧位置（NED 世界系），即数据集录制时的真实飞行轨迹。"""
+    positions: list[list[float]] = []
+    for name in logs:
+        try:
+            with open(os.path.join(log_dir, name), "r", encoding="utf-8") as f:
+                positions.append(list(json.load(f)["sensors"]["state"]["position"]))
+        except Exception:
+            continue
+    return positions
+
+
 def _read_instruction(ep_dir: str, uuid: str, meta_instructions: dict) -> str:
     obj_des = os.path.join(ep_dir, "obj_des.json")
     if os.path.isfile(obj_des):
@@ -129,6 +141,7 @@ def load_episodes(cfg) -> list[Episode]:
                 object_scale=float(area[17]),
                 asset_name=str(area[16]),
                 ori_traj_dir=os.path.abspath(ep_dir),
+                gt_positions=_read_positions(log_dir, logs),
             )
             episodes.append(ep)
 

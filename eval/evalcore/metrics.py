@@ -40,10 +40,10 @@ _NUM = r"([-+]?\d+(?:\.\d+)?)"
 
 def parse_metric_stdout(text: str) -> dict:
     def grab(key):
-        m = re.search(rf"{key}:\s*{_NUM}", text)
+        m = re.search(rf"^{key}:\s*{_NUM}", text, re.MULTILINE)
         return float(m.group(1)) if m else None
 
-    num = re.search(rf"num_trajectories:\s*(\d+)", text)
+    num = re.search(r"^num_trajectories:\s*(\d+)", text, re.MULTILINE)
     return {
         "num": int(num.group(1)) if num else None,
         "ne_mean": grab("ne_mean"),

@@ -265,6 +265,63 @@ def _list_runs(cfg) -> list[dict]:
     return runs
 
 
+def _run_summary(run_path: str, run: dict | None = None) -> dict:
+    """一个 run 的批次汇总（历史列表顶部的「批次卡片」用）。
+
+    SR / 碰撞数 / 成功数 / NE 一律由 episodes[] 的 success/collided/final_ne 现算：
+    旧 metrics.json 的 metrics.sr 有解析 bug（写成了 OSR），不可信。
+    OSR / SPL 仍取 metrics.metrics 里现成的值（可能为 None）。
+    run 还没写 metrics.json（运行中）时，回退扫各集 result.json。
+    """
+    run = run or {}
+    metrics = _read_json(os.path.join(run_path, "metrics.json"), {}) or {}
+    eps = metrics.get("episodes")
+    planner = metrics.get("planner")
+    if eps is None:                          # 运行中：尚无 metrics.json
+        eps = []
+        for uuid, d in _episode_dirs(run_path).items():
+            res = _read_json(os.path.join(d, "result.json"), {}) or {}
+            eps.append({"uuid": uuid, "scene": res.get("scene"),
+                        "success": res.get("success"), "collided": res.get("collided"),
+                        "final_ne": res.get("final_ne"), "steps": res.get("steps"),
+                        "planner_profile": res.get("planner_profile")})
+        if planner is None:
+            planner = next((e.get("planner_profile") for e in eps
+                            if e.get("planner_profile")), None)
+
+    n = len(eps)
+    num_success = sum(1 for e in eps if e.get("success"))
+    num_collided = sum(1 for e in eps if e.get("collided"))
+    sr = round(100.0 * num_success / n, 2) if n else 0.0   # 权威：由 success 现算
+    nes = []
+    for e in eps:
+        v = e.get("final_ne")
+        if isinstance(v, bool):
+            continue
+        if isinstance(v, (int, float)) and not math.isnan(v):
+            nes.append(float(v))
+    ne_mean = round(sum(nes) / len(nes), 2) if nes else None
+    mm = metrics.get("metrics") or {}
+    scenes = sorted({e.get("scene") for e in eps if e.get("scene")})
+    return {
+        "name": os.path.basename(run_path),
+        "state": run.get("state"),
+        "mtime": run.get("mtime") or os.path.getmtime(run_path),
+        "done": run.get("done"),
+        "total": run.get("total"),
+        "scenes": scenes,
+        "planner": planner,
+        "num_episodes": n,
+        "num_success": num_success,
+        "num_collided": num_collided,
+        "num_failed": n - num_success,
+        "sr": sr,
+        "osr": mm.get("osr"),
+        "ne_mean": ne_mean,
+        "spl": mm.get("spl"),
+    }
+
+
 def _episode_dirs(run_path: str) -> dict:
     """uuid -> 实际目录（含 success_ 前缀）。"""
     m = {}
@@ -372,6 +429,18 @@ def _history(cfg, limit: int = 800) -> list[dict]:
     return out[:limit]
 
 
+def _expert_positions(log_dir):
+    """按帧序读专家轨迹位置（数据集录制轨迹）。"""
+    out = []
+    for fn in sorted(glob.glob(os.path.join(log_dir, "*.json"))):
+        try:
+            with open(fn, "r", encoding="utf-8") as f:
+                out.append(json.load(f)["sensors"]["state"]["position"])
+        except Exception:
+            pass
+    return out
+
+
 def _traj(run_path, uuid):
     dirs = _episode_dirs(run_path)
     d = dirs.get(uuid)
@@ -388,7 +457,15 @@ def _traj(run_path, uuid):
     result = _read_json(os.path.join(d, "result.json"), {}) or {}
     metrics = _read_json(os.path.join(run_path, "metrics.json"), {}) or {}
     radius = (metrics.get("dataset") or {}).get("success_radius_m", 10.0)
+    # 专家轨迹：新数据在 result.json；老数据回退读 ori_info.json 指向的原始 log/。
+    expert = result.get("expert_positions") or []
+    if not expert:
+        ori = _read_json(os.path.join(d, "ori_info.json"), {}) or {}
+        ori_dir = ori.get("ori_traj_dir")
+        if ori_dir and os.path.isdir(os.path.join(ori_dir, "log")):
+            expert = _expert_positions(os.path.join(ori_dir, "log"))
     return {"uuid": uuid, "positions": positions,
+            "expert": expert,
             "target": result.get("target_position"),
             "start": positions[0] if positions else None,
             "radius": radius}
@@ -434,10 +511,8 @@ class _Handler(BaseHTTPRequestHandler):
             name = os.path.basename(u.path)
             self._file(os.path.join(_WEB_DIR, name))
         elif u.path == "/api/runs":
-            runs = _list_runs(cfg)
-            for r in runs:
-                r.pop("path", None)
-            self._send(200, {"runs": runs})
+            # 每个 run 附带批次汇总（SR 按 episodes[] 现算，见 _run_summary）。
+            self._send(200, {"runs": [_run_summary(r["path"], r) for r in _list_runs(cfg)]})
         elif u.path == "/api/state":
             run_path = _safe_run(cfg, (q.get("run") or [None])[0])
             if not run_path:
