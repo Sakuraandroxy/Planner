@@ -71,7 +71,8 @@ def main(argv=None) -> int:
 
     if mode == "serve":
         from evalcore.dashboard import serve
-        serve(cfg, host=cfg.dashboard_host)
+        serve(cfg, host=cfg.dashboard_host,
+              parent_pipe=sys.stdin.buffer if os.environ.get("AVLN_EVAL_PARENT_PIPE") == "1" else None)
         return 0
 
     episodes = load_episodes(cfg)

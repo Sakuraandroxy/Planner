@@ -12,9 +12,9 @@ state.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
-import signal
 import socket
 import subprocess
 import time
@@ -22,6 +22,7 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
+from threading import Lock
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query
@@ -43,7 +44,8 @@ CONSOLE_DIR = Path(__file__).resolve().parents[3] / "console"
 
 # 控制台点「评测」时，在 UE4 的 Python 环境中启动仪表盘。
 _EVAL_DIR = REPO_ROOT / Path(os.environ.get("AVLN_EVAL_DIR") or "eval").expanduser()
-_EVAL_PROC: subprocess.Popen | None = None
+_EVAL_LOCK = Lock()
+_EVAL_PROC: tuple[subprocess.Popen, str, int] | None = None
 
 
 def _slug(text: str) -> str:
@@ -62,69 +64,6 @@ def _port_open(port: int, host: str = "127.0.0.1", timeout: float = 0.3) -> bool
             return False
 
 
-def _pids_on_port(port: int) -> list[int]:
-    """找出监听指定 TCP 端口的进程 PID（优先 ss，回退 lsof）。"""
-    pids: set[int] = set()
-    for cmd in (
-        ["ss", "-ltnpH", f"sport = :{port}"],
-        ["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"],
-    ):
-        try:
-            out = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=3
-            ).stdout
-        except (OSError, subprocess.SubprocessError):
-            continue
-        # ss 行形如 `... users:(("python",pid=776704,fd=3))`，只认 pid=;
-        # lsof 每行就是一个裸 PID。
-        found = {int(m.group(1)) for m in re.finditer(r"pid=(\d+)", out)}
-        if not found:
-            found = {int(s) for s in out.split() if s.isdigit()}
-        if found:
-            pids |= found
-            break
-    return list(pids)
-
-
-def _kill_eval_service(port: int) -> None:
-    """关掉当前占用评测端口的服务（本进程拉起的、或手动/旧实例拉起的都算）。"""
-    global _EVAL_PROC
-    proc = _EVAL_PROC
-    tracked = proc.pid if (proc is not None and proc.poll() is None) else None
-    _EVAL_PROC = None
-    pids: set[int] = set(_pids_on_port(port))
-    if tracked is not None:
-        pids.add(tracked)
-    if not pids:
-        return
-
-    def _term(pid: int, sig: int) -> None:
-        # 追踪的进程自成一个会话（start_new_session），可整组杀；
-        # 端口反查到的其它进程只杀单进程，避免误伤同会话的 shell。
-        if tracked is not None and pid == tracked:
-            try:
-                os.killpg(os.getpgid(pid), sig)
-                return
-            except OSError:
-                pass
-        try:
-            os.kill(pid, sig)
-        except OSError:
-            pass
-
-    for pid in pids:
-        _term(pid, signal.SIGTERM)
-    deadline = time.time() + 5.0
-    while time.time() < deadline and _port_open(port):
-        time.sleep(0.15)
-    if _port_open(port):
-        for pid in _pids_on_port(port) or pids:
-            _term(pid, signal.SIGKILL)
-        deadline = time.time() + 3.0
-        while time.time() < deadline and _port_open(port):
-            time.sleep(0.15)
-
-
 def _eval_config():
     try:
         return load_eval_config()
@@ -133,52 +72,70 @@ def _eval_config():
 
 
 def _start_eval_service(planner_api_base: str, runtime_python: str) -> dict:
-    """关掉旧的评测仪表盘再拉起一个新的，返回 {"started": bool, "port": int}。
-
-    每次点「评测」都重启：避免旧代码/旧进程残留（改完代码刷新即可生效）。
-    ``planner_api_base`` 经环境变量传给 dashboard，让它起评测前读本服务当前 profile，
-    评测因此始终复用主界面选择的规划器（世界模型/普通 VLM），没有独立的一套。
-    """
+    """按需启动评测仪表盘，复用本进程已启动的子进程。"""
     global _EVAL_PROC
-    cfg = _eval_config()
-    port = cfg.dashboard_port
-    if not _EVAL_DIR.is_dir():
-        raise HTTPException(
-            503, detail={"message": f"评测目录不存在: {_EVAL_DIR}"}
-        )
-    interpreter = os.environ.get("AVLN_EVAL_PYTHON") or runtime_python
-    if not interpreter:
-        raise HTTPException(503, detail={"message": "请配置 simulators.yaml 的 airsim.runtime_python"})
-    python = REPO_ROOT / Path(interpreter).expanduser()
-    if not python.is_file():
-        raise HTTPException(
-            503, detail={"message": f"评测解释器不存在: {python}"}
-        )
-    _kill_eval_service(port)
     log_path = _EVAL_DIR / "eval_serve.log"
-    with log_path.open("ab") as log:
-        _EVAL_PROC = subprocess.Popen(
-            [str(python), "-u", "run.py", "serve", "--config", str(cfg.config_path),
-             "--dashboard-port", str(port)],
-            cwd=_EVAL_DIR,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            env={**os.environ, "AVLN_PLANNER_API": planner_api_base},
-            start_new_session=True,
+    with _EVAL_LOCK:
+        started = _EVAL_PROC is None or _EVAL_PROC[0].poll() is not None
+        if started:
+            _EVAL_PROC = None
+            cfg = _eval_config()
+            port = cfg.dashboard_port
+            host = cfg.dashboard_host or "127.0.0.1"
+            if host == "0.0.0.0":
+                host = "127.0.0.1"
+            if _port_open(port, host):
+                raise HTTPException(409, detail={"message": f"评测端口 {port} 已被占用"})
+            if not _EVAL_DIR.is_dir():
+                raise HTTPException(503, detail={"message": f"评测目录不存在: {_EVAL_DIR}"})
+            interpreter = os.environ.get("AVLN_EVAL_PYTHON") or runtime_python
+            if not interpreter:
+                raise HTTPException(503, detail={"message": "请配置 simulators.yaml 的 airsim.runtime_python"})
+            python = REPO_ROOT / Path(interpreter).expanduser()
+            if not python.is_file():
+                raise HTTPException(503, detail={"message": f"评测解释器不存在: {python}"})
+            with log_path.open("ab") as log:
+                proc = subprocess.Popen(
+                    [str(python), "-u", "run.py", "serve", "--config", str(cfg.config_path),
+                     "--dashboard-port", str(port)],
+                    cwd=_EVAL_DIR,
+                    stdin=subprocess.PIPE,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    env={**os.environ, "AVLN_PLANNER_API": planner_api_base,
+                         "AVLN_EVAL_PARENT_PIPE": "1"},
+                    start_new_session=True,
+                )
+            _EVAL_PROC = (proc, host, port)
+
+        proc, host, port = _EVAL_PROC
+        deadline = time.monotonic() + 30.0
+        while time.monotonic() < deadline:
+            if proc.poll() is not None:
+                raise HTTPException(
+                    500,
+                    detail={"message": f"评测服务已退出，见 {log_path}"},
+                )
+            if _port_open(port, host) and proc.poll() is None:
+                return {"started": started, "port": port}
+            time.sleep(0.3)
+        raise HTTPException(
+            504, detail={"message": f"评测服务未在 30s 内打开端口 {port}"}
         )
-    deadline = time.time() + 30.0
-    while time.time() < deadline:
-        if _port_open(port):
-            return {"started": True, "port": port}
-        if _EVAL_PROC.poll() is not None:
-            raise HTTPException(
-                500,
-                detail={"message": f"评测服务启动即退出，见 {log_path}"},
-            )
-        time.sleep(0.3)
-    raise HTTPException(
-        504, detail={"message": f"评测服务未在 30s 内打开端口 {port}"}
-    )
+
+
+def _close_eval_service() -> None:
+    global _EVAL_PROC
+    with _EVAL_LOCK:
+        if _EVAL_PROC is None:
+            return
+        proc, _, _ = _EVAL_PROC
+        _EVAL_PROC = None
+        proc.stdin.close()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            logging.getLogger(__name__).warning("评测仪表盘未在 5 秒内退出")
 
 
 #: One process driver for every family: planner/simulator/xpra_start.py renders the
@@ -335,7 +292,10 @@ def create_api(controller, settings, frames=None, trajectory_hub=None, *, eval_r
         try:
             yield
         finally:
-            await run_in_threadpool(controller.close)
+            try:
+                await run_in_threadpool(_close_eval_service)
+            finally:
+                await run_in_threadpool(controller.close)
 
     app = FastAPI(title="ProjectAirSim VLN Planner API", lifespan=lifespan)
     app.state.frames = frames

@@ -603,14 +603,18 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(404, {"error": "not found"})
 
 
-def serve(cfg, host="127.0.0.1", port=None):
+def serve(cfg, host="127.0.0.1", port=None, *, parent_pipe=None):
     port = port or cfg.dashboard_port
     _Handler.cfg = cfg
-    httpd = ThreadingHTTPServer((host, port), _Handler)
-    print(f"[dashboard] http://{host}:{port}  (output_dir={cfg.output_dir})")
-    try:
-        httpd.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        httpd.server_close()
+    with ThreadingHTTPServer((host, port), _Handler) as httpd:
+        if parent_pipe is not None:
+            def wait_for_parent_exit():
+                parent_pipe.read(1)
+                httpd.shutdown()
+
+            threading.Thread(target=wait_for_parent_exit, daemon=True).start()
+        print(f"[dashboard] http://{host}:{port}  (output_dir={cfg.output_dir})")
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            pass

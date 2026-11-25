@@ -125,7 +125,8 @@ python run.py batch --scenes TropicalIsland --planner-profile vlm
 
 ## 7 仪表盘
 
-- 入口：主控台「评测」按钮 → `POST /api/eval/start` 拉起并跳转；也可直接 `python run.py serve`。改 Python 后端需重启，改 `eval/web` 静态文件刷新即可（`Cache-Control: no-store`）。
+- 主控台「评测」按钮通过 `POST /api/eval/start` 按需启动并打开仪表盘。后续点击复用当前主服务启动的实例，子进程退出后可再次启动。端口被其他进程占用时，接口返回 `409`。也可直接运行 `python run.py serve`。改 Python 后端需重启，改 `eval/web` 静态文件刷新即可（`Cache-Control: no-store`）。
+- 主服务退出时，由它启动的仪表盘也会关闭。手动启动的仪表盘不受影响。
 - 「批量测试结果」：每次 run 一张批次汇总卡（SR/OSR/NE/SPL、成功/碰撞计数、逐集表），点击行切换样例；支持整批删除。轨迹图绘制实测轨迹与**专家轨迹（蓝色虚线）**，相机页签切换前视/下视。
 - 「实飞结果」：主控台保存的单阶段记录，含指令、成功率、轨迹、地图与 profile。
 - HTTP 接口：
