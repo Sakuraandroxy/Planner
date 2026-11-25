@@ -712,7 +712,7 @@ async function pollRunStatus() {
   setTimeout(pollRunStatus, 2000);
 }
 
-// ---------- 已保存评测记录（规划器「保存评测结果」写入） ----------
+// ---------- 已保存执行记录（规划器「保存执行记录」写入） ----------
 let savedSig = null;   // 记录目录集合签名；null=尚未渲染，避免每 2s 重建闪烁
 async function loadSaved() {
   let data;
@@ -727,7 +727,7 @@ async function loadSaved() {
   if (!records.length) {
     const empty = document.createElement("div");
     empty.className = "stats";
-    empty.textContent = "还没有保存的评测记录（在规划器里点「保存评测结果」）。";
+    empty.textContent = "还没有执行记录（在导航系统里点「保存执行记录」）。";
     box.appendChild(empty);
     return;
   }
@@ -758,7 +758,7 @@ async function loadSaved() {
 
 async function deleteSaved(dir, card, ev) {
   ev.stopPropagation();
-  if (!confirm(`删除该评测记录？\n${dir}`)) return;
+  if (!confirm(`删除该执行记录？\n${dir}`)) return;
   card.remove();          // 先从界面移除，立刻见效（不等网络、不刷新）
   savedSig = null;        // 允许随后用服务器实际结果对齐重建
   if (state.viewSaved && state.viewDir === dir) {
@@ -843,7 +843,7 @@ async function main() {
   setInterval(poll, 2000);
   // 每 3s 同步一次主界面 profile（只读镜像），主界面切了这里跟着变。
   setInterval(loadPlannerProfile, 3000);
-  // 「已保存评测」标签可见时，每 2s 拉一次，新增/删除都自动反映（无增删则跳过多余重建）。
+  // 「执行记录」标签可见时，每 2s 拉一次，新增/删除都自动反映（无增删则跳过多余重建）。
   setInterval(() => { if (state.savedTabVisible) loadSaved(); }, 2000);
   pollRunStatus();
 }

@@ -985,7 +985,7 @@ def test_console_files_are_served():
     with _client(controller) as client:
         index = client.get("/")
         assert index.status_code == 200
-        assert "视觉语言导航在线控制台" in index.text
+        assert "导航任务在线控制台" in index.text
         assert 'id="xpra-frame"' in index.text
         assert 'id="vehicle-modes"' in index.text
         assert 'data-vehicle="rover"' in index.text

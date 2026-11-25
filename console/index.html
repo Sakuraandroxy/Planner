@@ -12,12 +12,13 @@
 <body>
   <header class="topbar">
     <div>
-      <h1>视觉语言导航在线控制台</h1>
+      <h1>导航任务在线控制台</h1>
     </div>
     <div class="topbar-actions">
       <a class="ghost" id="world-model" href="#"
-        title="前往 世界模型Studio">世界模型</a>
-      <a class="ghost" id="eval-dash" href="#" title="前往 UAV-VLN 评测仪表盘">评测</a>
+        title="前往世界模型工作台">世界模型工作台</a>
+      <a class="ghost" id="eval-dash" href="#" title="前往 UAV-VLN 评测系统">评测系统</a>
+      <a class="ghost" id="video-demo" href="#" title="前往视频演示">视频演示</a>
       <div class="state-chip" id="state-chip" data-state="unknown">
         <span class="dot"></span><span id="state-text">状态未确认</span>
       </div>
@@ -96,7 +97,7 @@
             <button type="button" id="home" class="ghost" disabled
               title="仅空闲时可用，当前选中载具会瞬时传送回出生点">回到起点</button>
             <button type="button" id="clear-instruction" class="ghost">清空指令</button>
-            <button type="button" id="eval-save" class="ghost" disabled title="把最近一次带目标的子任务存进评测">保存评测结果</button>
+            <button type="button" id="eval-save" class="ghost" disabled title="把最近一次任务中带目标的子任务保存为执行记录">保存执行记录</button>
           </div>
         </form>
         <p class="feedback" id="feedback" role="status"></p>

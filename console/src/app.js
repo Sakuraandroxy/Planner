@@ -274,20 +274,20 @@ async function returnHome() {
 
 async function saveEvalResult() {
   if ($("eval-save").disabled || submitPending) return;
-  setFeedback("正在保存评测结果…");
+  setFeedback("正在保存执行记录…");
   try {
     const body = await request("/api/eval/save", { method: "POST" });
     const names = (body.saved || []).map((item) => item.name).join("、");
     setFeedback(
-      `已保存 ${body.count || 0} 条评测记录：${names || "—"}（点「评测」查看）`,
+      `已保存 ${body.count || 0} 条执行记录：${names || "—"}（点「评测系统」查看）`,
       "ok"
     );
   } catch (error) {
-    setFeedback("保存评测结果失败：" + error.message, "error");
+    setFeedback("保存执行记录失败：" + error.message, "error");
   }
 }
 
-// 只有「最近一次任务已结束且含带目标子任务」时，「保存评测结果」才可点。
+// 只有「最近一次任务已结束且含带目标子任务」时，「保存执行记录」才可点。
 async function pollEvalPending() {
   const button = $("eval-save");
   if (!button) return;
@@ -352,6 +352,8 @@ function init() {
   // address bar.
   $("world-model").href =
     `${location.protocol}//${location.hostname}:${WORLD_MODEL_PORT}/`;
+  $("video-demo").href =
+    `${location.protocol}//${location.hostname}:${VIDEO_DEMO_PORT}/comparisons`;
   const evalLink = $("eval-dash");
   evalLink.href = `${location.protocol}//${location.hostname}:${EVAL_PORT}/`;
   // 评测仪表盘按需启动，使用启动接口返回的端口在当前标签页打开。

@@ -602,7 +602,7 @@ def create_api(controller, settings, frames=None, trajectory_hub=None, *, eval_r
 
     @app.get("/api/eval/pending")
     def eval_pending():
-        # 控制台「保存评测结果」按钮据此启用：最近一次任务已结束、且含带目标子任务。
+        # 控制台「保存执行记录」按钮据此启用：最近一次任务已结束、且含带目标子任务。
         summary = controller.last_task_summary
         stages = (summary or {}).get("stages") or []
         goal = [s for s in stages if s.get("goal")]

@@ -67,7 +67,7 @@ eval/output/run_YYYYMMDD_HHMMSS/
 
 staged 管线还会在 `eval/output/visual_goal/<profile>/<时间戳>_<id>/` 写诊断 trace：`events.jsonl`（模型、运动参数、执行模式等运行时快照）、逐轮 RGB/深度/目标图、规划请求图。bare 管线不写 trace。
 
-主服务控制台「保存评测结果」写入 `eval/saved/<时间戳>_<slug>/record.json`，即仪表盘「实飞结果」页签的数据源。
+主服务控制台「保存执行记录」将任务记录写入 `eval/saved/<时间戳>_<slug>/record.json`，作为仪表盘「执行记录」页签的数据源。
 
 ## 4 配置与启动
 
@@ -78,7 +78,7 @@ staged 管线还会在 `eval/output/visual_goal/<profile>/<时间戳>_<id>/` 写
 | `root` / `root_path` | 仓库根与 TravelUAV 环境根（场景启动脚本相对它） |
 | `dataset_root` | `UAV-VLN-FOV`，含 `test/`、`unscene/`、`unobject/`、`meta/` |
 | `metric_py` | 官方打分脚本 |
-| `output_dir` / `saved_dir` | 批量结果与保存记录目录 |
+| `output_dir` / `saved_dir` | 批量结果与执行记录目录 |
 | `dashboard_port` | 仪表盘端口（默认 8010，可被 `AVLN_EVAL_PORT` 覆盖） |
 
 运行环境：`vln-ue4`（带 `airsim`、`numpy`、`httpx`、`PIL`、`opencv`），并与规划器共用 `VLN_API_KEY`。主服务拉起仪表盘时会继承自己的环境，所以密钥跟着主服务走；从 CLI 直接跑则需自行导出。
@@ -125,10 +125,10 @@ python run.py batch --scenes TropicalIsland --planner-profile vlm
 
 ## 7 仪表盘
 
-- 主控台「评测」按钮通过 `POST /api/eval/start` 按需启动并打开仪表盘。后续点击复用当前主服务启动的实例，子进程退出后可再次启动。端口被其他进程占用时，接口返回 `409`。也可直接运行 `python run.py serve`。改 Python 后端需重启，改 `eval/web` 静态文件刷新即可（`Cache-Control: no-store`）。
+- 主控台「评测系统」按钮通过 `POST /api/eval/start` 按需启动并打开仪表盘。后续点击复用当前主服务启动的实例，子进程退出后可再次启动。端口被其他进程占用时，接口返回 `409`。也可直接运行 `python run.py serve`。改 Python 后端需重启，改 `eval/web` 静态文件刷新即可（`Cache-Control: no-store`）。
 - 主服务退出时，由它启动的仪表盘也会关闭。手动启动的仪表盘不受影响。
 - 「批量测试结果」：每次 run 一张批次汇总卡（SR/OSR/NE/SPL、成功/碰撞计数、逐集表），点击行切换样例；支持整批删除。轨迹图绘制实测轨迹与**专家轨迹（蓝色虚线）**，相机页签切换前视/下视。
-- 「实飞结果」：主控台保存的单阶段记录，含指令、成功率、轨迹、地图与 profile。
+- 「执行记录」：主控台保存的单次任务记录，含指令、成功率、轨迹、地图与 profile。
 - HTTP 接口：
 
 | 方法 | 路径 | 作用 |

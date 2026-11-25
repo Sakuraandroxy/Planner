@@ -18,6 +18,7 @@ const POLL_MS = 1000;
 const XPRA_PORT = 10010;
 const WORLD_MODEL_PORT = 8765;
 const EVAL_PORT = 8010;
+const VIDEO_DEMO_PORT = 8001;
 const VEHICLE_LABELS = {
   rover: "无人车",
   drone: "无人机",
