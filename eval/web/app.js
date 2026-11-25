@@ -18,6 +18,29 @@ const state = {
 };
 
 const $ = (id) => document.getElementById(id);
+const plannerPort = new URLSearchParams(location.search).get("planner-port");
+const theme = getComputedStyle(document.documentElement);
+const chartColors = {
+  panel: theme.getPropertyValue("--panel").trim(),
+  background: theme.getPropertyValue("--bg").trim(),
+  text: theme.getPropertyValue("--muted").trim(),
+  start: theme.getPropertyValue("--accent").trim(),
+  current: theme.getPropertyValue("--warning").trim(),
+  target: theme.getPropertyValue("--danger").trim(),
+};
+let selectionRequest = 0;
+
+function setPlannerLink(configuredPort = 8000) {
+  const port = plannerPort ?? String(configuredPort);
+  const url = new URL("/", location.href);
+  url.port = port === "" || (/^[0-9]{1,5}$/.test(port) && Number(port) > 0 && Number(port) <= 65535)
+    ? port : String(configuredPort);
+  $("plannerLink").href = url.href;
+}
+
+function escapeHTML(value) {
+  return String(value).replace(/[&<>]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[char]));
+}
 
 function fmt(v, suffix = "") {
   if (v === null || v === undefined || Number.isNaN(v)) return "—";
@@ -49,7 +72,7 @@ async function poll() {
   const prog = s.progress || {};
   state.latestRun = s.run || null;
   // 看已保存记录时，顶部指标保留该记录自身的值，不被 run 覆盖。
-  if (!state.viewSaved) {
+  if (!state.savedTabVisible) {
     $("m-sr").textContent = m.sr != null ? m.sr.toFixed(1) + "%" : "—";
     $("m-osr").textContent = m.osr != null ? m.osr.toFixed(1) + "%" : "—";
     $("m-ne").textContent = m.ne_mean != null ? m.ne_mean.toFixed(1) + "m" : "—";
@@ -57,15 +80,30 @@ async function poll() {
     $("m-prog").textContent = `${prog.done ?? 0}/${prog.total ?? "?"}`;
   }
   // 若当前有运行中 episode 且没手选，自动跟到时间线上（看已保存记录时不抢焦点）
-  if (!state.viewSaved && !state.selectedUuid && prog.current) {
+  if (!state.savedTabVisible && !state.selectedUuid && prog.current) {
     const hit = state.history.find(e => e.uuid === prog.current && e.run === s.run);
     if (hit) selectEpisode(hit.uuid, hit.run);
   }
 }
 
+function revealViewer() {
+  if (matchMedia("(max-width: 760px)").matches) {
+    document.querySelector(".viewer").scrollIntoView({ block: "start" });
+  }
+}
+
+let historySig = null;
 function renderCards(entries) {
+  const sig = JSON.stringify([entries, state.selectedUuid, state.run, profileLabels]);
+  if (sig === historySig) return;
+  historySig = sig;
   const box = $("cards");
+  const scrollTop = box.scrollTop;
   box.innerHTML = "";
+  if (!entries.length) {
+    box.innerHTML = '<div class="stats">暂无历史结果。</div>';
+    return;
+  }
   for (const e of entries) {
     const div = document.createElement("div");
     const active = e.uuid === state.selectedUuid && e.run === state.run;
@@ -74,44 +112,71 @@ function renderCards(entries) {
       ? `<span class="pill ok">成功</span>`
       : (e.collided ? `<span class="pill coll">碰撞</span>` : `<span class="pill fail">未成</span>`);
     const ptxt = profileText(e.planner);
-    const ptag = ptxt ? `<span class="pill model">${ptxt}</span>` : "";
+    const ptag = ptxt ? `<span class="pill model">${escapeHTML(ptxt)}</span>` : "";
     const tlabel = runTimeLabel(e.run);
     div.innerHTML =
-      `<div class="row1"><span class="uuid">${(e.uuid || "").slice(0, 13)}</span>
-         <span class="row1-right">${ptag}${badge}<button class="card-del" title="删除该集结果">×</button></span></div>
-       <div class="scene">${e.scene || ""}${tlabel ? " · " + tlabel : ""}</div>
+      `<div class="row1"><span class="uuid">${escapeHTML((e.uuid || "").slice(0, 13))}</span>
+         <span class="row1-right">${ptag}${badge}<button class="card-del" aria-label="删除该集结果" title="删除该集结果">×</button></span></div>
+       <div class="scene">${escapeHTML([e.scene, tlabel].filter(Boolean).join(" · "))}</div>
        <div class="meta"><span>NE ${fmt(e.final_ne, "m")}</span><span>步 ${e.steps ?? "—"}</span></div>`;
     div.querySelector(".card-del").onclick = (ev) => deleteEpisode(e.run, e.uuid, div, ev);
-    div.onclick = () => selectEpisode(e.uuid, e.run);
+    div.onclick = () => {
+      selectEpisode(e.uuid, e.run);
+      revealViewer();
+    };
     box.appendChild(div);
   }
+  box.scrollTop = scrollTop;
+}
+
+function setViewerTitle(title) {
+  const heading = $("epTitle");
+  heading.textContent = title;
+  heading.title = title;
+}
+
+function clearSelection() {
+  selectionRequest++;
+  state.selectedUuid = null;
+  state.run = null;
+  state.viewSaved = false;
+  state.viewDir = null;
+  state.traj = null;
+  setViewerTitle("轨迹与相机画面");
+  renderStats();
+  refreshCamView();
+  draw();
 }
 
 async function deleteEpisode(run, uuid, card, ev) {
   ev.stopPropagation();
   if (!confirm(`删除该集结果？\n${uuid}`)) return;
-  card.remove();                                  // 先从界面移除，立刻见效
-  if (state.selectedUuid === uuid && state.run === run) {
-    state.selectedUuid = null; state.run = null; state.traj = null;
-    $("epTitle").textContent = "选择左侧某个 episode";
-    $("epStats").innerHTML = "";
-    refreshCamView(); draw();
-  }
+  card.remove();
+  historySig = null;
+  if (state.selectedUuid === uuid && state.run === run) clearSelection();
   try { await postJSON("/api/episode/delete", { run, id: uuid }); }
   catch (e) { alert("删除失败：" + e.message); }
   await poll();                                   // 拉最新列表与重算后的指标
 }
 
 async function selectEpisode(uuid, run) {
+  const requestId = ++selectionRequest;
   state.viewSaved = false;
+  state.viewDir = null;
   state.selectedUuid = uuid;
   state.run = run || state.run;
-  if (state.history && state.history.length) renderCards(state.history);  // 立即高亮
-  $("epTitle").textContent = "Episode " + uuid.slice(0, 13);
-  try {
-    state.traj = await getJSON(`/api/traj?run=${encodeURIComponent(state.run)}&id=${encodeURIComponent(uuid)}`);
-  } catch (e) { state.traj = null; }
+  state.traj = null;
+  renderCards(state.history);
+  setViewerTitle("评测样本 " + uuid.slice(0, 13));
   updateFrame();
+  renderStats();
+  draw();
+  let traj = null;
+  try {
+    traj = await getJSON(`/api/traj?run=${encodeURIComponent(state.run)}&id=${encodeURIComponent(uuid)}`);
+  } catch (e) {}
+  if (requestId !== selectionRequest) return;
+  state.traj = traj;
   renderStats();
   draw();
 }
@@ -120,25 +185,22 @@ async function selectEpisode(uuid, run) {
 function refreshCamView() {
   const front = $("camFront"), down = $("camDown"), empty = $("camEmpty");
   const showEmpty = (text) => { empty.textContent = text; empty.hidden = false; };
+  front.hidden = true;
+  down.hidden = true;
   if (state.viewSaved) {
-    front.classList.add("hidden"); down.classList.add("hidden");
     showEmpty("该记录仅保存轨迹与指标，无画面");
     return;
   }
   if (!state.selectedUuid) {
-    front.classList.add("hidden"); down.classList.add("hidden");
-    empty.hidden = true;
+    showEmpty("选择一条评测结果查看画面");
     return;
   }
   const active = state.cam === "front" ? front : down;
-  const other = state.cam === "front" ? down : front;
-  other.classList.add("hidden");
-  if (active.dataset.ok === "0") {
-    active.classList.add("hidden");
-    showEmpty("此场景没有采集到画面");
-  } else {
-    active.classList.remove("hidden");
+  if (active.dataset.ok === "1") {
+    active.hidden = false;
     empty.hidden = true;
+  } else {
+    showEmpty(active.dataset.ok === "0" ? "未采集到此视角的画面" : "正在读取画面…");
   }
 }
 
@@ -154,7 +216,7 @@ function bindCamImages() {
 function updateFrame() {
   if (!state.selectedUuid) return;
   const img = state.cam === "front" ? $("camFront") : $("camDown");
-  img.dataset.ok = "";              // 新图未加载，先不显示占位
+  img.dataset.ok = "";
   refreshCamView();
   const url = `/api/frame?run=${encodeURIComponent(state.run)}&id=${encodeURIComponent(state.selectedUuid)}&cam=${state.cam}&t=${Date.now()}`;
   img.src = url;
@@ -205,13 +267,19 @@ function draw() {
   // 背景径向渐变（看着有纵深）
   ctx.clearRect(0, 0, W, H);
   const bg = ctx.createRadialGradient(W * 0.5, H * 0.40, 30, W * 0.5, H * 0.5, Math.max(W, H) * 0.8);
-  bg.addColorStop(0, "#151b25"); bg.addColorStop(1, "#0a0c11");
+  bg.addColorStop(0, chartColors.panel); bg.addColorStop(1, chartColors.background);
   ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
 
   const t = state.traj;
-  if (!t || !t.positions || t.positions.length === 0) {
-    ctx.fillStyle = "#4a5568"; ctx.font = "14px sans-serif";
-    ctx.fillText("尚无轨迹数据（点左侧卡片查看轨迹）", 20, 32);
+  const hasTrail = Boolean(t?.positions?.length);
+  $("trajLegend").hidden = !hasTrail;
+  $("trajTarget").hidden = !t?.target;
+  if (!hasTrail) {
+    ctx.fillStyle = chartColors.text;
+    ctx.font = "13px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("暂无轨迹", W / 2, H / 2);
+    ctx.textAlign = "start";
     return;
   }
   const pts = t.positions;
@@ -222,9 +290,27 @@ function draw() {
     mn[i] = Math.min(mn[i], p[i]); mx[i] = Math.max(mx[i], p[i]);
   }
   const center = [(mn[0] + mx[0]) / 2, (mn[1] + mx[1]) / 2, (mn[2] + mx[2]) / 2];
-  const span = Math.max(mx[0] - mn[0], mx[1] - mn[1], mx[2] - mn[2], 1);
-  const scale = Math.min(W, H) * 0.72 / span;
-  const proj = (p) => project(p, center, scale, W, H, state.az, state.el);
+  const unitProjection = (p) => project(p, center, 1, 0, 0, state.az, state.el);
+  const targetRing = t.target && t.radius != null
+    ? Array.from({ length: 64 }, (_, i) => {
+      const angle = i / 64 * Math.PI * 2;
+      return [t.target[0] + t.radius * Math.cos(angle), t.target[1] + t.radius * Math.sin(angle), t.target[2]];
+    })
+    : [];
+  let left = Infinity, right = -Infinity, top = Infinity, bottom = -Infinity;
+  for (const p of all.concat(targetRing)) {
+    const [x, y] = unitProjection(p);
+    left = Math.min(left, x); right = Math.max(right, x);
+    top = Math.min(top, y); bottom = Math.max(bottom, y);
+  }
+  const scale = Math.min(
+    Math.max(1, W - 84) / Math.max(1, right - left),
+    Math.max(1, H - 96) / Math.max(1, bottom - top),
+  );
+  const proj = (p) => {
+    const [x, y] = unitProjection(p);
+    return [W / 2 + (x - (left + right) / 2) * scale, H / 2 + 8 + (y - (top + bottom) / 2) * scale];
+  };
 
   // 地面参考面：取轨迹最低处 z（NED 里 z 越大越靠下）
   const zG = mx[2];
@@ -239,14 +325,14 @@ function draw() {
   for (let i = 1; i < 4; i++) ctx.lineTo(corners[i][0], corners[i][1]);
   ctx.closePath();
   const gg = ctx.createLinearGradient(corners[0][0], corners[0][1], corners[2][0], corners[2][1]);
-  gg.addColorStop(0, "rgba(60,90,150,0.12)");
-  gg.addColorStop(1, "rgba(60,90,150,0.02)");
+  gg.addColorStop(0, "rgba(76,194,165,0.10)");
+  gg.addColorStop(1, "rgba(76,194,165,0.02)");
   ctx.fillStyle = gg; ctx.fill();
   ctx.restore();
 
   // 地面网格
   const N = 8;
-  ctx.strokeStyle = "rgba(100,130,190,0.16)"; ctx.lineWidth = 1;
+  ctx.strokeStyle = "rgba(141,160,168,0.22)"; ctx.lineWidth = 1;
   for (let i = 0; i <= N; i++) {
     const fx = X0 + (X1 - X0) * i / N;
     const a = proj([fx, Y0, zG]), b = proj([fx, Y1, zG]);
@@ -258,7 +344,7 @@ function draw() {
 
   // 高度垂线（虚线，从轨迹点落到地面，体现高度）
   ctx.save();
-  ctx.strokeStyle = "rgba(91,141,239,0.14)"; ctx.setLineDash([3, 4]); ctx.lineWidth = 1;
+  ctx.strokeStyle = "rgba(76,194,165,0.18)"; ctx.setLineDash([3, 4]); ctx.lineWidth = 1;
   const stepN = Math.max(1, Math.floor(pts.length / 24));
   for (let i = 0; i < pts.length; i += stepN) {
     const p = pts[i]; const a = proj(p), b = proj([p[0], p[1], zG]);
@@ -267,24 +353,22 @@ function draw() {
   ctx.restore();
 
   // 成功半径球（水平圆）
-  if (t.target && t.radius != null) {
-    ctx.strokeStyle = "rgba(255,90,90,0.55)"; ctx.lineWidth = 1.5;
+  if (targetRing.length) {
+    ctx.strokeStyle = chartColors.target; ctx.lineWidth = 1.5;
     ctx.beginPath();
-    const seg = 64;
-    for (let i = 0; i <= seg; i++) {
-      const a = (i / seg) * Math.PI * 2;
-      const p = [t.target[0] + t.radius * Math.cos(a), t.target[1] + t.radius * Math.sin(a), t.target[2]];
-      const s = proj(p);
-      if (i === 0) ctx.moveTo(s[0], s[1]); else ctx.lineTo(s[0], s[1]);
-    }
+    targetRing.forEach((p, i) => {
+      const [x, y] = proj(p);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.closePath();
     ctx.stroke();
   }
 
   // 轨迹：先一道发光底线，再按进度叠彩色细线
   ctx.save();
   ctx.lineJoin = "round"; ctx.lineCap = "round";
-  ctx.shadowColor = "rgba(110,230,150,0.5)"; ctx.shadowBlur = 10;
-  ctx.strokeStyle = "rgba(120,235,160,0.22)"; ctx.lineWidth = 5;
+  ctx.shadowColor = chartColors.start; ctx.shadowBlur = 10;
+  ctx.strokeStyle = "rgba(76,194,165,0.22)"; ctx.lineWidth = 5;
   ctx.beginPath();
   const s0 = proj(pts[0]); ctx.moveTo(s0[0], s0[1]);
   for (let i = 1; i < pts.length; i++) { const s = proj(pts[i]); ctx.lineTo(s[0], s[1]); }
@@ -295,13 +379,13 @@ function draw() {
   for (let i = 1; i < pts.length; i++) {
     const a = proj(pts[i - 1]), b = proj(pts[i]);
     const f = i / pts.length;
-    ctx.strokeStyle = `hsl(${150 - 120 * f}, 85%, 60%)`;
+    ctx.strokeStyle = `hsl(${165 - 125 * f}, 52%, 58%)`;
     ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
   }
 
-  // 标记：光晕圆点 + 描边 + 标签
-  const marker = (p, color, r, label) => {
+  // 标记颜色与图例对应。
+  const marker = (p, color, r) => {
     const s = proj(p);
     ctx.save();
     ctx.shadowColor = color; ctx.shadowBlur = 12;
@@ -309,22 +393,10 @@ function draw() {
     ctx.restore();
     ctx.strokeStyle = "rgba(255,255,255,0.85)"; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.arc(s[0], s[1], r, 0, Math.PI * 2); ctx.stroke();
-    if (label) {
-      ctx.fillStyle = "rgba(232,234,240,0.92)"; ctx.font = "11px ui-sans-serif, sans-serif";
-      ctx.fillText(label, s[0] + r + 5, s[1] + 4);
-    }
   };
-  marker(pts[0], "#5b8def", 5, "起点");
-  marker(pts[pts.length - 1], "#ffcf5c", 4, "当前");
-  if (t.target) marker(t.target, "#ff5a5a", 6, "目标");
-
-  // 图例
-  ctx.font = "12px ui-sans-serif, sans-serif";
-  ctx.fillStyle = "#5b8def"; ctx.fillText("● 起点", 12, 20);
-  ctx.fillStyle = "#ffcf5c"; ctx.fillText("● 当前", 72, 20);
-  ctx.fillStyle = "#ff5a5a"; ctx.fillText("● 目标", 132, 20);
-  ctx.fillStyle = "rgba(150,160,180,0.6)";
-  ctx.fillText(`${pts.length} 点 · 拖动旋转`, 192, 20);
+  marker(pts[0], chartColors.start, 5);
+  marker(pts[pts.length - 1], chartColors.current, 4);
+  if (t.target) marker(t.target, chartColors.target, 6);
 }
 
 // 拖拽旋转
@@ -346,8 +418,10 @@ function bindDrag() {
 function bindCamTabs() {
   document.querySelectorAll(".cam-tabs button").forEach(btn => {
     btn.onclick = () => {
-      document.querySelectorAll(".cam-tabs button").forEach(b => b.classList.remove("active"));
-      btn.classList.add("active");
+      document.querySelectorAll(".cam-tabs button").forEach((item) => {
+        item.classList.toggle("active", item === btn);
+        item.setAttribute("aria-pressed", String(item === btn));
+      });
       state.cam = btn.dataset.cam;
       if (state.viewSaved || !state.selectedUuid) { refreshCamView(); return; }
       updateFrame();
@@ -376,7 +450,7 @@ function setRunState(text, on) {
 }
 
 function setLaunchDisabled(disabled) {
-  $("batchBtn").disabled = disabled;
+  $("batchBtn").disabled = disabled || !$("sceneSelect").value;
   document.querySelectorAll(".ep-test").forEach(b => b.disabled = disabled);
 }
 
@@ -394,6 +468,7 @@ async function loadPlannerProfile() {
   let p;
   try { p = await getJSON("/api/eval/profile"); }
   catch (e) { p = { online: false }; }
+  setPlannerLink(p.planner_port ?? 8000);
   if (!p.online) {
     if (lastProfileSig !== "offline") {
       sel.innerHTML = "";
@@ -436,7 +511,9 @@ async function loadDataset() {
     sel.appendChild(opt);
   }
   sel.onchange = () => loadEpisodes(sel.value);
-  if (data.scenes && data.scenes.length) await loadEpisodes(sel.value);
+  setLaunchDisabled(lastActive);
+  if (sel.value) await loadEpisodes(sel.value);
+  else $("epList").innerHTML = '<div class="stats">暂无可评测的场景。</div>';
 }
 
 async function loadEpisodes(scene) {
@@ -446,6 +523,7 @@ async function loadEpisodes(scene) {
   let data;
   try { data = await getJSON(`/api/episodes?scene=${encodeURIComponent(scene)}`); }
   catch (e) { return; }
+  if (scene !== $("sceneSelect").value) return;
   for (const ep of data.episodes || []) {
     const row = document.createElement("div");
     row.className = "ep";
@@ -461,6 +539,7 @@ async function loadEpisodes(scene) {
     info.appendChild(ins); info.appendChild(uid);
     const btn = document.createElement("button");
     btn.className = "ep-test"; btn.textContent = "测试";
+    btn.disabled = lastActive;
     btn.onclick = () => startRun(scene, [ep.uuid]);
     row.appendChild(info); row.appendChild(btn);
     box.appendChild(row);
@@ -512,10 +591,11 @@ async function loadSaved() {
   let data;
   try { data = await getJSON("/api/saved"); } catch (e) { return; }
   const records = data.records || [];
-  const sig = records.map((r) => r.dir).join("|");
+  const sig = JSON.stringify([records, state.viewDir, profileLabels]);
   if (sig === savedSig) return;   // 没有增删，不重建
   savedSig = sig;
   const box = $("savedList");
+  const scrollTop = box.scrollTop;
   box.innerHTML = "";
   if (!records.length) {
     const empty = document.createElement("div");
@@ -526,22 +606,27 @@ async function loadSaved() {
   }
   for (const r of records) {
     const div = document.createElement("div");
-    div.className = "card";
+    div.className = "card" + (r.dir === state.viewDir ? " active" : "");
     const sr = r.sr != null ? (r.sr * 100).toFixed(0) + "%" : "—";
     const pill = r.success
       ? '<span class="pill ok">成功</span>'
       : '<span class="pill fail">未成</span>';
     const ptxt = profileText(r.planner_profile);
-    const ptag = ptxt ? `<span class="pill model">${ptxt}</span>` : "";
+    const ptag = ptxt ? `<span class="pill model">${escapeHTML(ptxt)}</span>` : "";
     div.innerHTML =
-      `<div class="row1"><span class="uuid">${r.name || r.dir}</span>
-         <span class="row1-right">${ptag}${pill}<button class="card-del" title="删除该记录">×</button></span></div>
-       <div class="scene">${r.map || ""}</div>
+      `<div class="row1"><span class="uuid">${escapeHTML(r.name || r.dir)}</span>
+         <span class="row1-right">${ptag}${pill}<button class="card-del" aria-label="删除该记录" title="删除该记录">×</button></span></div>
+       <div class="scene">${escapeHTML(r.map || "")}</div>
        <div class="meta"><span>SR ${sr}</span><span>末距 ${r.final_distance_m != null ? r.final_distance_m.toFixed(2) + "m" : "—"}</span></div>`;
+    div.querySelector(".uuid").title = r.name || r.dir;
     div.querySelector(".card-del").onclick = (ev) => deleteSaved(r.dir, div, ev);
-    div.onclick = () => viewSaved(r.dir);
+    div.onclick = () => {
+      viewSaved(r.dir);
+      revealViewer();
+    };
     box.appendChild(div);
   }
+  box.scrollTop = scrollTop;
 }
 
 async function deleteSaved(dir, card, ev) {
@@ -550,11 +635,8 @@ async function deleteSaved(dir, card, ev) {
   card.remove();          // 先从界面移除，立刻见效（不等网络、不刷新）
   savedSig = null;        // 允许随后用服务器实际结果对齐重建
   if (state.viewSaved && state.viewDir === dir) {
-    state.viewSaved = false; state.viewDir = null; state.selectedUuid = null;
-    state.traj = null;
-    $("epTitle").textContent = "选择左侧某个 episode";
-    $("epStats").innerHTML = "";
-    refreshCamView(); draw();
+    clearSelection();
+    setSavedMetrics(null);
   }
   try { await postJSON("/api/saved/delete", { dir }); }
   catch (e) { alert("删除失败：" + e.message); }
@@ -562,19 +644,23 @@ async function deleteSaved(dir, card, ev) {
 }
 
 async function viewSaved(dir) {
+  const requestId = ++selectionRequest;
   let rec;
   try { rec = await getJSON(`/api/saved/traj?dir=${encodeURIComponent(dir)}`); }
   catch (e) { return; }
+  if (requestId !== selectionRequest) return;
   state.selectedUuid = null;
+  state.run = null;
   state.viewSaved = true;
   state.viewDir = dir;
-  $("epTitle").textContent = "已保存: " + (rec.name || dir);
+  loadSaved();
+  setViewerTitle("已保存: " + (rec.name || dir));
   state.traj = { positions: rec.positions || [], target: null, start: rec.start, radius: null };
   // 已保存记录只有轨迹+指标，没有相机帧
   refreshCamView();
   const pct = rec.sr != null ? (rec.sr * 100).toFixed(0) + "%" : "—";
   $("epStats").innerHTML =
-    `<div>目标: <b>${rec.target_description || "—"}</b></div>
+    `<div>目标: <b>${escapeHTML(rec.target_description || "—")}</b></div>
      <div>成功: <b>${rec.success ? "是" : "否"}</b> (SR ${pct})</div>
      <div>末距离: <b>${rec.final_distance_m != null ? rec.final_distance_m.toFixed(2) + " m" : "—"}</b></div>
      <div>轨迹点: <b>${(rec.positions || []).length}</b></div>`;
@@ -584,29 +670,39 @@ async function viewSaved(dir) {
 
 // 顶部指标改为显示所选「已保存记录」自身的值（切回历史 run 时 poll 会恢复）。
 function setSavedMetrics(rec) {
-  $("m-sr").textContent = rec.sr != null ? (rec.sr * 100).toFixed(1) + "%" : "—";
+  $("m-sr").textContent = rec?.sr != null ? (rec.sr * 100).toFixed(1) + "%" : "—";
   $("m-osr").textContent = "—";
-  $("m-ne").textContent = rec.final_distance_m != null ? rec.final_distance_m.toFixed(1) + "m" : "—";
+  $("m-ne").textContent = rec?.final_distance_m != null ? rec.final_distance_m.toFixed(1) + "m" : "—";
   $("m-spl").textContent = "—";
-  $("m-prog").textContent = "记录 1/1";
+  $("m-prog").textContent = rec ? "记录 1/1" : "—";
 }
 
 function bindResTabs() {
   document.querySelectorAll(".res-tab").forEach((btn) => {
     btn.onclick = () => {
-      document.querySelectorAll(".res-tab").forEach((b) => b.classList.remove("active"));
-      btn.classList.add("active");
       const showSaved = btn.dataset.tab === "saved";
+      if (state.savedTabVisible === showSaved) return;
+      document.querySelectorAll(".res-tab").forEach((item) => {
+        item.classList.toggle("active", item === btn);
+        item.setAttribute("aria-pressed", String(item === btn));
+      });
       state.savedTabVisible = showSaved;
-      $("savedList").style.display = showSaved ? "" : "none";
-      $("cards").style.display = showSaved ? "none" : "";
-      if (showSaved) loadSaved();
-      else { state.viewSaved = false; poll(); }   // 切回历史结果：顶部指标恢复显示 run
+      clearSelection();
+      $("savedList").hidden = !showSaved;
+      $("cards").hidden = showSaved;
+      if (showSaved) {
+        setSavedMetrics(null);
+        loadSaved();
+      } else {
+        poll();
+      }
     };
   });
 }
 
 async function main() {
+  setPlannerLink();
+  new ResizeObserver(draw).observe($("traj3d"));
   bindDrag();
   bindCamTabs();
   bindCamImages();

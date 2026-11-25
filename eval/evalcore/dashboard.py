@@ -26,6 +26,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+from .config import REPO_ROOT
 from .dataset import load_episodes
 
 _WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
@@ -49,15 +50,18 @@ _EPISODE_LOCK = threading.Lock()
 
 def _planner_profile() -> dict:
     """读主服务当前 profile（只读镜像）；连不上则 online=False，评测回退 default。"""
+    planner_port = None
     try:
+        planner_port = urlparse(_PLANNER_API).port
         req = urllib.request.Request(_PLANNER_API + "/api/profile", method="GET")
         with urllib.request.urlopen(req, timeout=2.0) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         return {"online": True,
+                "planner_port": planner_port,
                 "current": data.get("current"),
                 "profiles": data.get("profiles") or []}
     except Exception:
-        return {"online": False, "current": None, "profiles": []}
+        return {"online": False, "planner_port": planner_port, "current": None, "profiles": []}
 
 
 def _all_episodes(cfg):
@@ -424,6 +428,8 @@ class _Handler(BaseHTTPRequestHandler):
         cfg = self.cfg
         if u.path in ("/", "/index.html"):
             self._file(os.path.join(_WEB_DIR, "index.html"))
+        elif u.path == "/static/theme.css":
+            self._file(REPO_ROOT / "console" / "theme.css")
         elif u.path.startswith("/static/"):
             name = os.path.basename(u.path)
             self._file(os.path.join(_WEB_DIR, name))

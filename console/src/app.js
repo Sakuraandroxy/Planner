@@ -352,31 +352,26 @@ function init() {
   // address bar.
   $("world-model").href =
     `${location.protocol}//${location.hostname}:${WORLD_MODEL_PORT}/`;
-  $("eval-dash").href =
-    `${location.protocol}//${location.hostname}:${EVAL_PORT}/`;
-  // 点「评测」→ 先让规划器后端把评测仪表盘拉起来（没跑的话），再打开它。
-  $("eval-dash").addEventListener("click", (event) => {
+  const evalLink = $("eval-dash");
+  evalLink.href = `${location.protocol}//${location.hostname}:${EVAL_PORT}/`;
+  // 评测仪表盘按需启动，使用启动接口返回的端口在当前标签页打开。
+  evalLink.addEventListener("click", async (event) => {
     event.preventDefault();
-    // 同步开窗，避免 await 之后被浏览器当成非用户手势而拦截弹窗。
-    const win = window.open("", "_blank");
-    if (win) {
-      win.document.write(
-        "<!doctype html><title>评测</title>" +
-          "<p style='font-family:sans-serif;padding:2rem'>正在启动评测服务…</p>"
-      );
-      win.document.close();
+    if (evalLink.hasAttribute("aria-busy")) return;
+    evalLink.setAttribute("aria-busy", "true");
+    setFeedback("正在启动评测服务…");
+    try {
+      const { port } = await request("/api/eval/start", { method: "POST" });
+      const url = new URL(evalLink.href);
+      url.port = String(port);
+      url.searchParams.set("planner-port", location.port);
+      location.assign(url.href);
+      setFeedback("");
+    } catch (error) {
+      setFeedback("启动评测服务失败：" + error.message, "error");
+    } finally {
+      evalLink.removeAttribute("aria-busy");
     }
-    request("/api/eval/start", { method: "POST" })
-      .then(({ port }) => {
-        const url = new URL($("eval-dash").href);
-        url.port = String(port);
-        if (win) win.location = url.href;
-        else window.open(url.href, "_blank", "noopener");
-      })
-      .catch((error) => {
-        if (win) win.close();
-        setFeedback("启动评测服务失败：" + error.message, "error");
-      });
   });
   $("task-form").addEventListener("submit", submitTask);
   $("stop").addEventListener("click", stopTask);

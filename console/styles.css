@@ -1,55 +1,8 @@
-:root {
-  color-scheme: dark;
-  --bg: #0e1214;
-  --panel: #151b1e;
-  --panel-2: #1a2226;
-  --line: #263137;
-  --text: #e6eef1;
-  --muted: #8da0a8;
-  --accent: #4cc2a5;
-  --accent-weak: rgba(76, 194, 165, 0.14);
-  --danger: #e0665f;
-  --warning: #e0b45f;
-  --radius: 12px;
-  --mono: "SFMono-Regular", "JetBrains Mono", Consolas, "Liberation Mono", monospace;
-}
-
-* { box-sizing: border-box; }
-
 html, body { height: 100%; }
 
 /* One layout for every screen: below this width the page scrolls instead of
    reflowing, so a phone shows the desktop arrangement scaled down. */
 body { min-width: 1180px; }
-
-body {
-  margin: 0;
-  background:
-    radial-gradient(1200px 600px at 15% -10%, #17262b 0%, transparent 60%),
-    var(--bg);
-  color: var(--text);
-  font-family: "Inter", "Segoe UI", "Noto Sans SC", system-ui, sans-serif;
-  font-size: 14px;
-  line-height: 1.5;
-  display: flex;
-  flex-direction: column;
-}
-
-.topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 14px 24px 10px;
-}
-
-h1 { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: 0.2px; }
-
-.topbar-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-}
 
 .state-chip {
   display: inline-flex;
@@ -256,18 +209,6 @@ h1 { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: 0.2px; }
 
 #view-modes button { padding: 6px 9px; font-size: 12px; }
 
-a.ghost {
-  font-size: 12.5px;
-  border-radius: 8px;
-  padding: 7px 12px;
-  border: 1px solid var(--line);
-  background: transparent;
-  color: var(--text);
-  text-decoration: none;
-}
-a.ghost:hover { border-color: #3a4a51; }
-[hidden] { display: none !important; }
-
 .stack { display: flex; flex-direction: column; gap: 6px; }
 label { color: var(--muted); font-size: 12px; }
 
@@ -319,47 +260,6 @@ input:focus, textarea:focus, select:focus {
   align-items: center;
   gap: 8px;
   margin-top: 8px;
-}
-
-button {
-  font: inherit;
-  font-size: 12.5px;
-  border-radius: 8px;
-  padding: 7px 12px;
-  border: 1px solid var(--line);
-  background: var(--panel-2);
-  color: var(--text);
-  cursor: pointer;
-}
-button:hover:not(:disabled) { border-color: #3a4a51; }
-button:disabled { opacity: 0.42; cursor: not-allowed; }
-button.primary {
-  background: var(--accent);
-  border-color: transparent;
-  color: #072019;
-  font-weight: 650;
-}
-button.danger { border-color: rgba(224,102,95,.5); color: #f2a19c; }
-button.ghost { background: transparent; }
-
-.segmented {
-  display: inline-flex;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  overflow: hidden;
-}
-.segmented button {
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  padding: 7px 10px;
-  color: var(--muted);
-}
-.segmented button + button { border-left: 1px solid var(--line); }
-.segmented button:hover:not(:disabled) { color: var(--text); }
-.segmented button.active {
-  background: var(--accent-weak);
-  color: var(--accent);
 }
 
 .feedback {
