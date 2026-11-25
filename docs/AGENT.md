@@ -4,13 +4,13 @@
 
 ## 1 先读什么
 
-| 顺序 | 文件 | 拿什么 |
-|---|---|---|
-| 1 | `docs/ARCHITECTURE.md` | 分层、模块职责、能力从哪来。改结构前必读 |
-| 2 | `docs/DEPLOYMENT.md` | 配置字段归属、环境、换机器要动什么。上机前必读 |
-| 3 | 本文 | 约定与扩展步骤 |
-| 4 | `docs/TODO.md` | 现在缺什么，动手前看一眼避免撞车 |
-| 5 | `docs/archive/` | 查历史：某个设计为什么变成现在这样、某个坑的根因 |
+| 顺序 | 文件                   | 拿什么                                           |
+| ---- | ---------------------- | ------------------------------------------------ |
+| 1    | `docs/ARCHITECTURE.md` | 分层、模块职责、能力从哪来。改结构前必读         |
+| 2    | `docs/DEPLOYMENT.md`   | 配置字段归属、环境、换机器要动什么。上机前必读   |
+| 3    | 本文                   | 约定与扩展步骤                                   |
+| 4    | `docs/TODO.md`         | 现在缺什么，动手前看一眼避免撞车                 |
+| 5    | `docs/archive/`        | 查历史：某个设计为什么变成现在这样、某个坑的根因 |
 
 `docs/archive/` 里是历史记录，不是当前行为说明。与当前代码冲突时以代码为准。
 
@@ -97,7 +97,7 @@
 
 1. `planner/ports/capabilities.py` 写 Protocol，方法数控制在必要范围。
 2. `planner/simulator/ports.py`：`SimulatorPorts` 加字段（默认 `None`），`from_slots` 认这个槽。
-3. 需要暴露成控件就在 `ACTION_PORTS` 加映射；需要暴露成任务需求就加到 `TASK_REQUIREMENTS`。
+3. 任务能力需求加到 `TASK_REQUIREMENTS`，各导航执行方式所需的端口加到 `PIPELINE_REQUIREMENTS`，控件映射加到 `ACTION_PORTS`。
 4. 在仿真器包里实现，并加进那套仿真器的 `PORT_SLOTS`。
 5. HTTP 端点用 `require("<action>")` 门控；控制台按 `capabilities` 决定控件。
 6. 测试：`PORT_SLOTS` 与实际实现一致、缺端口时能力消失、501 的 `unsupported` 字段。
@@ -115,8 +115,9 @@
 - 任务解析规则在 `planner/adapters/task_parser/tasks/*.py`，按载具区分地面与空中两套。
 - 轨迹提示词在 `planner/adapters/trajectory_planner/prompts/`，`*_AERIAL_*` 是无人机版本。地面版本不谈升降，
   空中版本允许垂直运动。
-- 执行侧检查在解码器里：地面载荷没有竖直字段，带 `up_m` 的包在解码期即拒。不要在送仿真器那一层事后发现。
-- 改完跑 `tests/test_trajectory_prompts.py` 与 `tests/test_task_parser.py`。
+- 仿真器路径跟随使用 `prompts/bare.py` 中的视觉目标轨迹提示词。`build_visual_goal_planner()` 装配提示词，`parse_translation_trajectory()` 解析 `[dx, dy, dz]` 航点。相关测试在 `tests/test_bare_prompts.py`、`tests/test_bare_planner_wiring.py` 和 `tests/test_trajectory_parser.py`。
+- 地面任务指令带 `up_m` 时会在解码期被拒绝。仿真器路径跟随时，地面航点的 `dz = 0` 由提示词约定，解析器检查数组格式和数值是否有限。
+- 改任务解析或规划器执行的轨迹提示词时，核对 `tests/test_trajectory_prompts.py` 与 `tests/test_task_parser.py`。
 
 ### 3.7 新增一份配置
 
@@ -132,6 +133,7 @@
 - 共享的 `maps.yaml`、`simulators.yaml`、`scenes/` 只写一份在 `config/`；某份配置需要自己的副本时，
   放进它自己的目录里就优先。
 - 新功能和新参数先进 `default`，演示对照组那份配置按需跟随。
+- `visual_goal_navigation.execution` 选择视觉目标导航的执行方式。默认由规划器执行，「普通 VLM」档由仿真器跟随路径。具体取值见[部署文档](DEPLOYMENT.md#视觉目标导航配置)，装配测试见 `tests/test_pipeline_selection.py`。
 
 ## 4 测试与验收
 
@@ -147,7 +149,7 @@ python scripts/probe_ue4_env.py
   画面与标签一致"，验证方式就是点一下看截屏。
 - **单次验证控制在几十秒。** 不要跑几分钟的大循环。
 - **不要重启用户正在运行的服务或仿真器。** 需要新代码生效时先说明，由用户决定。
-- **实机脚本只覆盖 UE5。** `scripts/smoke_projectairsim*.py`；UE4 的验证走控制台或直连会话。
+- **实机验证。** `scripts/smoke_projectairsim*.py` 直连 UE5；`scripts/probe_flight.py` 通过规划器 API 验证 `vlm` 档，场景由服务管理。
 - 一个仿真器实例只能有一个客户端。跑冒烟前确认规划服务没有连着。
 
 ## 5 提交与文档

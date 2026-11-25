@@ -47,20 +47,20 @@
 
 ## 3 目录职责
 
-| 路径                         | 职责                                                                                               |
-| ---------------------------- | -------------------------------------------------------------------------------------------------- |
-| `planner/domain/`            | 位姿、任务、观测、轨迹、天气、机位、状态等纯数据与不变量校验                                       |
-| `planner/ports/`             | 载具、观测源、流式载具、相机、天气、机位、外观模型、帧流、解析器、检测器、完成判定、轨迹规划等协议 |
-| `planner/services/`          | 执行服务（运动段、停止检查点、预算）、同步与连续运动、滑窗、帧汇、轨迹汇、日志缓冲                 |
-| `planner/capabilities/`      | 不碰设备的算法：深度几何、目标关联、完成判定、几何规划器、滑窗调度                                 |
-| `planner/workflows/`         | 三类任务的阶段实现与生命周期（prepare/run）                                                        |
-| `planner/application/`       | 解析→校验→路由→执行，会话装配，服务控制器                                                          |
-| `planner/adapters/`          | 与推理服务、浏览器打交道；`http/` 是路由与 MJPEG                                                   |
-| `planner/simulator/`         | 两套仿真器共用的进程栈、注册表、worker、地图标记                                                   |
-| `planner/simulators/<name>/` | 每套仿真器一个包，只有这里有仿真器客户端库的 import                                                |
-| `console/`                   | 单页控制台，无构建步骤                                                                             |
-| `config/`                    | 服务配置、地图、仿真器配置、场景、任务规则                                                         |
-| `scripts/`                   | 启动、自检、机位标定、实机冒烟                                                                     |
+| 路径                         | 职责                                                                                                         |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `planner/domain/`            | 位姿、任务、观测、轨迹、天气、机位、状态等纯数据与不变量校验                                                 |
+| `planner/ports/`             | 载具、观测源、流式载具、路径跟随、相机、天气、机位、外观模型、帧流、解析器、检测器、完成判定、轨迹规划等协议 |
+| `planner/services/`          | 执行服务（运动段、停止检查点、预算）、同步与连续运动、滑窗、帧汇、轨迹汇、日志缓冲                           |
+| `planner/capabilities/`      | 不碰设备的算法：深度几何、目标关联、完成判定、几何规划器、滑窗调度                                           |
+| `planner/workflows/`         | 三类任务的阶段实现与生命周期（prepare/run）                                                                  |
+| `planner/application/`       | 解析→校验→路由→执行，会话装配，服务控制器                                                                    |
+| `planner/adapters/`          | 与推理服务、浏览器打交道；`http/` 是路由与 MJPEG                                                             |
+| `planner/simulator/`         | 两套仿真器共用的进程栈、注册表、worker、地图标记                                                             |
+| `planner/simulators/<name>/` | 每套仿真器一个包，只有这里有仿真器客户端库的 import                                                          |
+| `console/`                   | 单页控制台，无构建步骤                                                                                       |
+| `config/`                    | 服务配置、地图、仿真器配置、场景、任务规则                                                                   |
+| `scripts/`                   | 启动、自检、机位标定、实机冒烟                                                                               |
 
 `planner/simulator/` 与 `planner/simulators/` 是两个不同的东西：前者是进程与协议，后者是每个引擎的适配层。
 
@@ -71,26 +71,27 @@
 
 ### 4.1 端口清单
 
-| 端口                          | 语义                                   | 必需 |
-| ----------------------------- | -------------------------------------- | ---- |
-| `Vehicle`                     | 位姿、执行运动段、取消、悬停、碰撞状态 | 是   |
-| `ObservationSource`           | `capture()` 取一帧 RGB + 深度          | 是   |
-| `StreamingVehicle`            | 速度流与状态流，连续执行用             | 否   |
-| `ControlledObservationSource` | 暂停轨迹后按需采一帧                   | 否   |
-| `MovingObservationSource`     | 运动中取帧                             | 否   |
-| `CameraView`                  | 读写机体相机位姿（俯视）               | 否   |
-| `WeatherControl`              | 应用并描述天气参数                     | 否   |
-| `StreamingViews`              | 在固定相机之间循环机位                 | 否   |
-| `AppearanceModelControl`      | 切换载具外观网格                       | 否   |
-| `FramePublisher`              | 往帧汇发帧，`/api/video` 的门          | 否   |
-| `ReturnHome`                  | 回出生点                               | 否   |
+| 端口                          | 语义                                   | 必需               |
+| ----------------------------- | -------------------------------------- | ------------------ |
+| `Vehicle`                     | 位姿、执行运动段、取消、悬停、碰撞状态 | 是                 |
+| `ObservationSource`           | `capture()` 取一帧 RGB + 深度          | 是                 |
+| `StreamingVehicle`            | 速度流与状态流，连续执行用             | 否                 |
+| `PathVehicle`                 | `follow_path()` 接收一批世界坐标航点   | 仿真器路径跟随需要 |
+| `ControlledObservationSource` | 暂停轨迹后按需采一帧                   | 否                 |
+| `MovingObservationSource`     | 运动中取帧                             | 否                 |
+| `CameraView`                  | 读写机体相机位姿（俯视）               | 否                 |
+| `WeatherControl`              | 应用并描述天气参数                     | 否                 |
+| `StreamingViews`              | 在固定相机之间循环机位                 | 否                 |
+| `AppearanceModelControl`      | 切换载具外观网格                       | 否                 |
+| `FramePublisher`              | 往帧汇发帧，`/api/video` 的门          | 否                 |
+| `ReturnHome`                  | 回出生点                               | 否                 |
 
 `SimulatorPorts` 里还有两个非端口字段：
 `vehicles`（这台引擎真的生成哪些载具）与 `enabled_tasks`（实测跑过哪些任务）。
 
 ### 4.2 任务需求与控件映射
 
-`planner/simulator/ports.py` 的两张表是唯一的分支来源：
+`planner/simulator/ports.py` 用 `TASK_REQUIREMENTS` 和 `ACTION_PORTS` 推导任务与控件：
 
 ```python
 TASK_REQUIREMENTS = {
@@ -103,24 +104,25 @@ TASK_REQUIREMENTS = {
 ACTION_PORTS = {"home": "home", "models": "models", "video": "frames", "weather": "weather"}
 ```
 
-加一个任务就是加一行，不是加一个分支。
+`PIPELINE_REQUIREMENTS` 声明每种执行方式需要哪些端口。两种方式都需要载具端口 `vehicle` 和图像观测端口 `observation`。由仿真器跟随路径时，还需要能调用 `follow_path()` 的 `path_follow` 端口。所需端口缺失或方法不可调用时，会话装配报错。两种方式使用同一个任务标识 `visual_goal_navigation`。
 
 ### 4.3 两套仿真器的实现
 
-| 端口                      | projectairsim (UE5) | airsim (UE4)                                                  |
-| ------------------------- | ------------------- | ------------------------------------------------------------- |
-| `vehicle` / `observation` | 有                  | 有                                                            |
-| `streaming`               | 有                  | 有                                                            |
-| `controlled_capture`      | 有                  | —                                                             |
-| `moving_capture`          | 有                  | 有                                                            |
-| `camera_view`             | —                   | 有                                                            |
-| `weather`                 | 有                  | 有                                                            |
-| `views`                   | 有（4 个机位）      | —                                                             |
-| `models`                  | 有                  | —                                                             |
-| `frames`                  | 有                  | —                                                             |
-| `home`                    | 有                  | —                                                             |
-| `vehicles`                | `rover`, `drone`    | `drone`                                                       |
-| `enabled_tasks`           | 空（全部可跑）      | `basic_motion`、`visual_goal_navigation`、`visual_goal_above` |
+| 端口                      | projectairsim (UE5)  | airsim (UE4)                                                  |
+| ------------------------- | -------------------- | ------------------------------------------------------------- |
+| `vehicle` / `observation` | 有                   | 有                                                            |
+| `streaming`               | 有                   | 有                                                            |
+| `path_follow`             | 有（无人机、无人车） | 有（无人机）                                                  |
+| `controlled_capture`      | 有                   | —                                                             |
+| `moving_capture`          | 有                   | 有                                                            |
+| `camera_view`             | —                    | 有                                                            |
+| `weather`                 | 有                   | 有                                                            |
+| `views`                   | 有（4 个机位）       | —                                                             |
+| `models`                  | 有                   | —                                                             |
+| `frames`                  | 有                   | —                                                             |
+| `home`                    | 有                   | —                                                             |
+| `vehicles`                | `rover`, `drone`     | `drone`                                                       |
+| `enabled_tasks`           | 空（全部可跑）       | `basic_motion`、`visual_goal_navigation`、`visual_goal_above` |
 
 `enabled_tasks` 是验证状态，不是引擎上限。UE4 的 `free_navigation` 技术上是通的，但从没飞过，所以不在名单里。
 空表示"不需要额外限制"。
@@ -157,7 +159,7 @@ POST /api/tasks
        run      MissionRunner：按顺序跑，首个失败即停
   → Workflow.run(stage)
        basic_motion           直接构造运动段执行，不做观测
-       visual_goal_navigation 检测→规划→滑窗执行→到达→语义确认
+       visual_goal_navigation 按配置由规划器执行，或由仿真器跟随路径
        free_navigation        无界连续跟随，碰撞触发倒车重规划
   → StageResult（必须带 confirmed 完成证据，否则判失败）
 ```
@@ -167,6 +169,29 @@ POST /api/tasks
 工作流内部通过服务访问设备：`ExecutionService` 管运动段与停止检查点，
 `SynchronizedMotionPlanner` 生成五次多项式段，滑窗服务管队列续规划，`TrajectoryHub` 管剩余航点快照，
 `FrameHub` 管 MJPEG。
+
+### 视觉目标导航的执行方式
+
+`mission_assembly.py` 按 `visual_goal_navigation.execution` 选择执行方式。默认由规划器执行，「世界模型」档采用这个默认值。「普通 VLM」档把航点交给仿真器跟随。
+
+| 执行方式       | 轨迹模型                                                                | 执行和到达判定                                                                     |
+| -------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| 规划器执行     | 根据图像、指令和规划上下文，生成带航向的航点                            | 规划器校验航点，按配置分段执行或连续更新航点队列，到达后由模型查看图像确认是否完成 |
+| 仿真器路径跟随 | 根据指令原文、前视 RGB 图像和对齐的深度图，生成 `[dx, dy, dz]` 相对位移 | 每批取前 5 个航点交给仿真器，按实测距离判断是否到达                                |
+
+仿真器路径跟随每轮先采集新图像和载具位姿。首次定位目标后，规划器记下目标表面的世界坐标，供后续判断是否到达。若新图像里找不到目标，且已有上一批航点，规划器就复用上一批的相对位移，按当前载具的位置和朝向重新计算航点。
+
+载具与已记录目标表面点之间的最短水平距离小于或等于 `completion_rules_file` 中的 `radius_m` 时，该阶段完成。「普通 VLM」档的到达半径为 7 米。
+
+模型返回的航点须满足数组格式要求，数值须有限。工作流随后把航点交给 `PathVehicle`，省去规划器侧的航点安全校验、轨迹平滑和碰撞检查。阶段结果的路径长度按规划航点的折线计算。
+
+| 载具                 | `PathVehicle` 实现                                                                                                 |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| AirSim 无人机        | `moveOnPathAsync` 接收整批路径，保持批次起点航向，客户端和引擎都设路径超时                                         |
+| ProjectAirSim 无人车 | `MoveOnPath` 接收整批路径，由引擎跟随                                                                              |
+| ProjectAirSim 无人机 | 逐点调用 `MoveToPosition`。航点容差为 1 米，单点最多等待 20 秒，仍未到位时继续处理后续航点。批次退出时尝试恢复悬停 |
+
+运行参数见[部署文档](DEPLOYMENT.md#视觉目标导航配置)。
 
 ## 6 进程与生命周期
 
@@ -313,15 +338,15 @@ Xvfb 由 xpra 自己拉起。
 
 这些是设计选择，不是待修缺陷：
 
-| 边界                               | 原因                                       |
-| ---------------------------------- | ------------------------------------------ |
-| 一个仿真器实例只接一个客户端       | topic 链路是单消费者                       |
-| 一个引擎进程只加载一张 cooked 地图 | 引擎限制，因此换图 = 重启栈                |
-| 视角只能循环固定相机               | 服务端不报告当前机位，也没有自由观察者相机 |
-| 非活动载具被抬到 1 km 并钉住       | 客户端没有运行时删除机器人的接口           |
-| UE5 不做自由观察者、UE4 不做帧流   | 端口不同，能力位自动反映                   |
-| `free_navigation` 没有完成条件     | 任务定义就是无界的                         |
-| 模型端点是硬依赖                   | 解析、检测、规划、完成判定都没有确定性回退 |
+| 边界                               | 原因                                                             |
+| ---------------------------------- | ---------------------------------------------------------------- |
+| 一个仿真器实例只接一个客户端       | topic 链路是单消费者                                             |
+| 一个引擎进程只加载一张 cooked 地图 | 引擎限制，因此换图 = 重启栈                                      |
+| 视角只能循环固定相机               | 服务端不报告当前机位，也没有自由观察者相机                       |
+| 非活动载具被抬到 1 km 并钉住       | 客户端没有运行时删除机器人的接口                                 |
+| UE5 不做自由观察者、UE4 不做帧流   | 端口不同，能力位自动反映                                         |
+| `free_navigation` 没有完成条件     | 任务定义就是无界的                                               |
+| 模型端点是硬依赖                   | 两种执行方式的会话装配都需要完成确认端点，规划器执行时才会调用它 |
 
 ## 11 运动与航向控制
 

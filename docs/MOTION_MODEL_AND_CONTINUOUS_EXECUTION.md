@@ -7,20 +7,20 @@
 3. "越过航点→后退→原地空转卡死"的根因因果链到底是什么？
 4. 怎样保证不会再越过航点、不会后退，以及接口该怎样设计，从结构上杜绝"无人机能横移、无人车不能"这类错误？
 
-> 与 `docs/ARCHITECTURE.md` 第 4 节（端口与能力推导）、第 11 节（运动与航向控制）配套阅读。本文只讲**运动执行**这条线，把这条线上"共享/分叉"的边界讲清楚。
+> 与[架构文档](ARCHITECTURE.md)第 4 节和第 11 节配套阅读。本文讨论两类连续跟随：由规划器执行的视觉目标导航，以及自由导航。另一种视觉目标执行方式由仿真器接收整批航点并跟随，见[视觉目标导航的执行方式](ARCHITECTURE.md#视觉目标导航的执行方式)。
 
 ---
 
 ## 1 结论速览
 
-| 问题 | 结论 |
-| --- | --- |
-| 连续跟随逻辑是否共用？ | **共用一份。** `ContinuousExecution` + `ContinuousFollower` 同时服务无人机、无人车，也同时服务 `visual_goal_navigation` 与 `free_navigation` 两个工作流。 |
-| 不同仿真器接口是否相同？ | **相同。** 规划器只认 `StreamingVehicle` 端口（`stream_state` / `stream_velocity`）。具体"把速度变成轮胎/桨的动作"写在每个仿真器的载具类里。 |
-| 差异写在哪？ | 每个仿真器包里的 `stream_velocity` 实现。无人车走 `drive.py`（阿克曼），无人机走 `move_by_velocity_async(..., MaxDegreeOfFreedom)`（全向）。 |
-| 后退是不是 VLM 给的？ | **不是。** VLM 只给前进航点。后退来自连续跟随器：目标点落到车身后方时，`desired = 误差方向 × 速度` 指向后方，执行器前向投影为负→倒车。 |
-| 为什么会空转卡死？ | 倒车后残差几乎全在**侧向**。跟随器是全向的，命令一个纯横向速度；无人车执行器只取前向投影、丢掉横向→油门≈0→既不横移也不前进→航点的 0.3 m 判据永远满足不了→超时。 |
-| 结构上缺什么？ | 端口 `stream_velocity(world_velocity, yaw_rate)` 是**全向速度契约**，但没有声明载具的**运动模型**，无人车适配层把横向分量**静默丢弃**。这是"能横移/不能横移"错误能潜伏的根。 |
+| 问题                     | 结论                                                                                                                                                                         |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 连续跟随逻辑是否共用？   | **共用一份。** 规划器的视觉目标连续执行和自由导航都使用 `ContinuousExecution` 和 `ContinuousFollower`，无人机和无人车也是如此。                                              |
+| 不同仿真器接口是否相同？ | **相同。** 规划器只认 `StreamingVehicle` 端口（`stream_state` / `stream_velocity`）。具体"把速度变成轮胎/桨的动作"写在每个仿真器的载具类里。                                 |
+| 差异写在哪？             | 每个仿真器包里的 `stream_velocity` 实现。无人车走 `drive.py`（阿克曼），无人机走 `move_by_velocity_async(..., MaxDegreeOfFreedom)`（全向）。                                 |
+| 后退是不是 VLM 给的？    | **不是。** VLM 只给前进航点。后退来自连续跟随器：目标点落到车身后方时，`desired = 误差方向 × 速度` 指向后方，执行器前向投影为负→倒车。                                       |
+| 为什么会空转卡死？       | 倒车后残差几乎全在**侧向**。跟随器是全向的，命令一个纯横向速度；无人车执行器只取前向投影、丢掉横向→油门≈0→既不横移也不前进→航点的 0.3 m 判据永远满足不了→超时。              |
+| 结构上缺什么？           | 端口 `stream_velocity(world_velocity, yaw_rate)` 是**全向速度契约**，但没有声明载具的**运动模型**，无人车适配层把横向分量**静默丢弃**。这是"能横移/不能横移"错误能潜伏的根。 |
 
 ---
 
@@ -42,9 +42,11 @@
 所以"规划器→轨迹队列→跟随→下发"这整条链，**无人机与无人车、两种任务完全一致**。载具差异全部收敛到 `self.vehicle` 这个端口对象上。
 
 装配层确认这一点：`planner/application/mission_assembly.py:220`
+
 ```python
 execution = ExecutionService(vehicle) if execution is None else execution
 ```
+
 每个载具一套 `VehicleArm`（`mission_assembly.py:196`），`execution.vehicle` 就是当前活动载具的 `StreamingVehicle`。切载具即切 `vehicle`，上层代码不动。
 
 ---
@@ -64,11 +66,11 @@ class StreamingVehicle(Protocol):
 
 三种实现（都由 `stream_velocity` 落地）：
 
-| 实现 | 文件 | 底层驱动 | 运动约束 |
-| --- | --- | --- | --- |
+| 实现                 | 文件                                            | 底层驱动                                                                                   | 运动约束                                   |
+| -------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------ |
 | ProjectAirSim 无人车 | `planner/simulators/projectairsim/rover.py:235` | `controls_from_reference`（`drive.py`）→ `SetRoverControls(engine, steering_angle, brake)` | **阿克曼：只能前进/后退 + 转向，不能横移** |
-| ProjectAirSim 无人机 | `planner/simulators/projectairsim/drone.py:556` | `move_by_velocity_async(vx,vy,vz, MaxDegreeOfFreedom)` | **全向：任意方向速度** |
-| AirSim 无人机 | `planner/simulators/airsim/vehicle.py:208` | `moveByVelocityAsync(..., MaxDegreeOfFreedom)` | **全向：任意方向速度** |
+| ProjectAirSim 无人机 | `planner/simulators/projectairsim/drone.py:556` | `move_by_velocity_async(vx,vy,vz, MaxDegreeOfFreedom)`                                     | **全向：任意方向速度**                     |
+| AirSim 无人机        | `planner/simulators/airsim/vehicle.py:208`      | `moveByVelocityAsync(..., MaxDegreeOfFreedom)`                                             | **全向：任意方向速度**                     |
 
 ### 3.2 无人车的落地：横向被"投影掉"
 
@@ -107,10 +109,13 @@ task = await self._robot.move_by_velocity_async(
 ### 4.1 跟随器是全向的
 
 `planner/services/motion/continuous.py:70`：
+
 ```python
 error = tuple(v - p for v, p in zip(reference.position, (pose.x, pose.y, pose.z)))
 ```
+
 `planner/services/motion/continuous.py:87`：
+
 ```python
 desired = tuple(v/norm*speed for v in error) if norm else (0.0, 0.0, 0.0)
 ```
@@ -181,6 +186,7 @@ desired = tuple(v/norm*speed for v in error) if norm else (0.0, 0.0, 0.0)
 - **转向去贴合路径，而不是让速度向量拐到身后**。
 
 这样：
+
 - 目标不会变成"后方一个点需要倒着去够"——它始终在车头前方的前视弧上，**从结构上不会触发后退**；
 - 横向误差靠**转向**自然收掉（车头朝向前视点时，前进就同时减小横向误差），**不再出现"只差横向、前向为零"的死锁**；
 - 无人机继续用全向速度模式（它本来就该能横移/悬停对位）。
@@ -274,14 +280,14 @@ class CarCommand:            # 给 ACKERMANN / DIFFERENTIAL
 
 ## 7 无人机 vs 无人车：现在到底哪些不同、哪些相同
 
-| 维度 | 相同 | 不同 |
-| --- | --- | --- |
-| VLM 任务解析 / 阶段 | 同流程 | 提示词按 `aerial` 分叉（`factories.py:126-146`、`mission_assembly.py:316`） |
-| 轨迹规划出的航点格式 | `[dx,dy,dz,dyaw]` 同一协议 | 提示词 aerial/ground 不同 |
-| 滑窗队列 / 连续执行 | **完全同一份** `ContinuousExecution` | — |
-| `stream_velocity` 契约 | **同一签名** | 落地不同：阿克曼投影 vs 全向速度 |
-| 垂直运动 | — | `vertical_motion=is_drone`（`mission_assembly.py:260/308`） |
-| 观测源 / 跟踪限制 | — | 各载具端口对象不同（`vehicle.tracking_limits`） |
+| 维度                   | 相同                                 | 不同                                                                        |
+| ---------------------- | ------------------------------------ | --------------------------------------------------------------------------- |
+| VLM 任务解析 / 阶段    | 同流程                               | 提示词按 `aerial` 分叉（`factories.py:126-146`、`mission_assembly.py:316`） |
+| 轨迹规划出的航点格式   | `[dx,dy,dz,dyaw]` 同一协议           | 提示词 aerial/ground 不同                                                   |
+| 滑窗队列 / 连续执行    | **完全同一份** `ContinuousExecution` | —                                                                           |
+| `stream_velocity` 契约 | **同一签名**                         | 落地不同：阿克曼投影 vs 全向速度                                            |
+| 垂直运动               | —                                    | `vertical_motion=is_drone`（`mission_assembly.py:260/308`）                 |
+| 观测源 / 跟踪限制      | —                                    | 各载具端口对象不同（`vehicle.tracking_limits`）                             |
 
 一句话：**"规划到下发"共享，"下发到动作"按运动模型分叉。** 现在缺的正是"分叉点上的类型约束"。
 
