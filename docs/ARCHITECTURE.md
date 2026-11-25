@@ -350,6 +350,10 @@ Xvfb 由 xpra 自己拉起。
 
 ## 11 运动与航向控制
 
+视觉目标导航在采用规划器连续执行时，与自由导航共用 `ContinuousExecution` 和 `ContinuousFollower`。执行服务通过活动载具的 `StreamingVehicle` 读取状态，并逐拍下发世界坐标系速度和偏航角速度。采用仿真器路径跟随的视觉目标导航通过 `PathVehicle` 下发一批航点。
+
+无人机适配层执行三轴速度。ProjectAirSim 无人车采用阿克曼转向，适配层取速度沿车头方向的分量，并将偏航角速度换算成转向命令。两类载具共用速度接口，跟随器按载具提供的 `tracking_limits` 取跟踪限制，速度到具体动作的转换由适配层负责。相关故障见[郊区无人车越过航点后卡住](archive/MOTION_MODEL_AND_CONTINUOUS_EXECUTION.md)。
+
 航向只有一个实现：`planner/services/motion/heading_servo.py`。它收偏航误差与实测偏航角速度，给一个角速度，
 不认识仿真器，也不区分载具。
 

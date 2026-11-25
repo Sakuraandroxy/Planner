@@ -21,8 +21,12 @@ import time
 
 import numpy as np
 
-# --- 把 Planner 仓库放上 import 路径（vln-ue4 里没有安装成包） -----------------
-_PLANNER_ROOT = os.environ.get("AVLN_PLANNER_ROOT", "/data/sakura/AVLN/Planner")
+from .config import REPO_ROOT
+
+# UE4 环境直接从当前检出目录导入规划器。
+_PLANNER_ROOT = os.path.abspath(os.path.expanduser(
+    os.environ.get("AVLN_PLANNER_ROOT") or REPO_ROOT
+))
 if _PLANNER_ROOT not in sys.path:
     sys.path.insert(0, _PLANNER_ROOT)
 
@@ -235,13 +239,23 @@ def run_episode_real(scene, episode, cfg, out_root: str, on_step=None) -> dict:
     # episode 布置：清场 → 回起点 → 生成目标物。
     scene.clear_objects()
     scene.set_pose(episode.start_position, episode.start_orientation)
+    diag = {"after_set_pose": scene.collision_detail()}
     scene.spawn_object(episode.asset_name, episode.object_position,
                        episode.object_quat_xyzw, episode.object_scale)
+    diag["after_spawn"] = scene.collision_detail()
     # set_pose/spawn 用 simContinueForFrames 会暂停仿真；交给规划器前必须恢复。
     try:
         scene.client.simPause(False)
     except Exception:
         pass
+    # 瞬移会让飞控失去控制，恢复运行后无人机会直接下落撞地；须重新起飞进入悬停。
+    try:
+        scene.client.enableApiControl(True)
+        scene.client.armDisarm(True)
+        scene.client.takeoffAsync(timeout_sec=20).join()
+        scene.client.hoverAsync()
+    except Exception as exc:
+        _log(f"重新起飞失败（继续）: {exc}", "WARNING")
 
     writer = TrajectoryWriter(out_root, episode.uuid, episode.ori_traj_dir)
     sampler = _PoseSampler(scene, writer, hz=getattr(cfg.planner, "sampler_hz", 5.0))
@@ -276,6 +290,8 @@ def run_episode_real(scene, episode, cfg, out_root: str, on_step=None) -> dict:
         "planner_profile": cfg.planner.profile,
         "mission_success": mission_success,
         "mission_error": error,
+        "collision_diag": diag,
+        "expert_positions": episode.gt_positions,
     }
     out_dir = writer.finalize(success, summary)
     summary["dir"] = out_dir

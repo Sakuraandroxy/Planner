@@ -235,6 +235,22 @@ class Scene:
         except Exception:
             return False
 
+    def collision_detail(self) -> dict:
+        """只读诊断：返回最近一次碰撞的对象名、撞击点、穿透深度（不改变仿真状态）。"""
+        try:
+            info = self.client.simGetCollisionInfo()
+            return {
+                "has_collided": bool(info.has_collided),
+                "object_name": info.object_name,
+                "object_id": int(info.object_id),
+                "impact_point": [info.impact_point.x_val, info.impact_point.y_val,
+                                 info.impact_point.z_val],
+                "penetration_depth": float(info.penetration_depth),
+                "time_stamp": int(info.time_stamp),
+            }
+        except Exception as exc:
+            return {"error": repr(exc)}
+
     def get_rgb(self, cameras=("FrontCamera", "DownCamera")) -> list[np.ndarray]:
         reqs = [airsim.ImageRequest(c, airsim.ImageType.Scene, pixels_as_float=False, compress=False)
                 for c in cameras]

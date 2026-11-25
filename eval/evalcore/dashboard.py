@@ -26,13 +26,12 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+from .config import REPO_ROOT
 from .dataset import load_episodes
 
 _WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
 # run.py 所在目录（evalcore 的上一级），spawn 评测子进程时作 cwd。
 _EVAL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# 规划器「保存评测结果」写的记录目录（与 run 结果分开）。
-_SAVED_DIR = os.environ.get("AVLN_EVAL_SAVED", "/data/sakura/AVLN/Planner/eval/saved")
 _CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "application/javascript",
                   ".css": "text/css", ".png": "image/png", ".json": "application/json"}
 
@@ -51,15 +50,18 @@ _EPISODE_LOCK = threading.Lock()
 
 def _planner_profile() -> dict:
     """读主服务当前 profile（只读镜像）；连不上则 online=False，评测回退 default。"""
+    planner_port = None
     try:
+        planner_port = urlparse(_PLANNER_API).port
         req = urllib.request.Request(_PLANNER_API + "/api/profile", method="GET")
         with urllib.request.urlopen(req, timeout=2.0) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         return {"online": True,
+                "planner_port": planner_port,
                 "current": data.get("current"),
                 "profiles": data.get("profiles") or []}
     except Exception:
-        return {"online": False, "current": None, "profiles": []}
+        return {"online": False, "planner_port": planner_port, "current": None, "profiles": []}
 
 
 def _all_episodes(cfg):
@@ -127,18 +129,24 @@ def _start_run(cfg, scene: str, uuids: list[str], profile: str | None = None) ->
         proc = _ACTIVE["proc"]
         if proc is not None and proc.poll() is None:
             raise RuntimeError(f"已有评测在跑（scene={_ACTIVE['scene']}），先等它结束或停止")
-        profile = (profile or "").strip() or _planner_profile().get("current")
-        argv = [sys.executable, "-u", "run.py", "batch", "--scenes", scene]
+        profile = (profile or "").strip() or _planner_profile().get("current") or cfg.planner.profile
+        argv = [
+            sys.executable, "-u", "run.py", "batch", "--scenes", scene,
+            "--config", str(cfg.config_path),
+            "--root-path", cfg.root_path,
+            "--dataset-root", cfg.dataset_root,
+            "--output-dir", cfg.output_dir,
+        ]
         if profile:
             argv += ["--planner-profile", profile]
         if uuids:
             argv += ["--uuids", ",".join(uuids)]
         log_path = os.path.join(_EVAL_DIR, "served_run_last.log")
-        log = open(log_path, "ab")
-        proc = subprocess.Popen(
-            argv, cwd=_EVAL_DIR, stdout=log, stderr=subprocess.STDOUT,
-            env=os.environ.copy(), start_new_session=True,
-        )
+        with open(log_path, "ab") as log:
+            proc = subprocess.Popen(
+                argv, cwd=_EVAL_DIR, stdout=log, stderr=subprocess.STDOUT,
+                env=os.environ.copy(), start_new_session=True,
+            )
         _ACTIVE.update(proc=proc, scene=scene, uuids=uuids, profile=profile, log=log_path)
         return {"started": True, "pid": proc.pid, "scene": scene,
                 "uuids": uuids, "profile": profile, "log": log_path}
@@ -172,12 +180,12 @@ def _safe_run(cfg, run_name: str | None) -> str | None:
     return real if os.path.isdir(real) else None
 
 
-def _list_saved() -> list[dict]:
-    """已保存评测记录（规划器「保存评测结果」写入 eval/saved/）。"""
+def _list_saved(saved_dir: str) -> list[dict]:
+    """读取规划器保存的评测记录。"""
     out = []
-    if not os.path.isdir(_SAVED_DIR):
+    if not os.path.isdir(saved_dir):
         return out
-    for path in glob.glob(os.path.join(_SAVED_DIR, "*", "record.json")):
+    for path in glob.glob(os.path.join(saved_dir, "*", "record.json")):
         record = _read_json(path, {}) or {}
         out.append({
             "dir": os.path.basename(os.path.dirname(path)),
@@ -194,21 +202,21 @@ def _list_saved() -> list[dict]:
     return out
 
 
-def _saved_record(name: str):
-    base = os.path.realpath(_SAVED_DIR)
-    real = os.path.realpath(os.path.join(_SAVED_DIR, name or ""))
+def _saved_record(saved_dir: str, name: str):
+    base = os.path.realpath(saved_dir)
+    real = os.path.realpath(os.path.join(base, name or ""))
     if not real.startswith(base + os.sep):
         return None
     return _read_json(os.path.join(real, "record.json"), None)
 
 
-def _delete_saved(name: str) -> bool:
-    """删除一条已保存评测记录（_SAVED_DIR 下的子目录），带穿越防护。"""
+def _delete_saved(saved_dir: str, name: str) -> bool:
+    """删除保存目录中的一条评测记录。"""
     name = (name or "").strip()
     if not name:
         return False
-    base = os.path.realpath(_SAVED_DIR)
-    real = os.path.realpath(os.path.join(_SAVED_DIR, name))
+    base = os.path.realpath(saved_dir)
+    real = os.path.realpath(os.path.join(base, name))
     if real == base or not real.startswith(base + os.sep):
         return False
     if not os.path.isdir(real):
@@ -255,6 +263,63 @@ def _list_runs(cfg) -> list[dict]:
         })
     runs.sort(key=lambda r: r["mtime"], reverse=True)
     return runs
+
+
+def _run_summary(run_path: str, run: dict | None = None) -> dict:
+    """一个 run 的批次汇总（历史列表顶部的「批次卡片」用）。
+
+    SR / 碰撞数 / 成功数 / NE 一律由 episodes[] 的 success/collided/final_ne 现算：
+    旧 metrics.json 的 metrics.sr 有解析 bug（写成了 OSR），不可信。
+    OSR / SPL 仍取 metrics.metrics 里现成的值（可能为 None）。
+    run 还没写 metrics.json（运行中）时，回退扫各集 result.json。
+    """
+    run = run or {}
+    metrics = _read_json(os.path.join(run_path, "metrics.json"), {}) or {}
+    eps = metrics.get("episodes")
+    planner = metrics.get("planner")
+    if eps is None:                          # 运行中：尚无 metrics.json
+        eps = []
+        for uuid, d in _episode_dirs(run_path).items():
+            res = _read_json(os.path.join(d, "result.json"), {}) or {}
+            eps.append({"uuid": uuid, "scene": res.get("scene"),
+                        "success": res.get("success"), "collided": res.get("collided"),
+                        "final_ne": res.get("final_ne"), "steps": res.get("steps"),
+                        "planner_profile": res.get("planner_profile")})
+        if planner is None:
+            planner = next((e.get("planner_profile") for e in eps
+                            if e.get("planner_profile")), None)
+
+    n = len(eps)
+    num_success = sum(1 for e in eps if e.get("success"))
+    num_collided = sum(1 for e in eps if e.get("collided"))
+    sr = round(100.0 * num_success / n, 2) if n else 0.0   # 权威：由 success 现算
+    nes = []
+    for e in eps:
+        v = e.get("final_ne")
+        if isinstance(v, bool):
+            continue
+        if isinstance(v, (int, float)) and not math.isnan(v):
+            nes.append(float(v))
+    ne_mean = round(sum(nes) / len(nes), 2) if nes else None
+    mm = metrics.get("metrics") or {}
+    scenes = sorted({e.get("scene") for e in eps if e.get("scene")})
+    return {
+        "name": os.path.basename(run_path),
+        "state": run.get("state"),
+        "mtime": run.get("mtime") or os.path.getmtime(run_path),
+        "done": run.get("done"),
+        "total": run.get("total"),
+        "scenes": scenes,
+        "planner": planner,
+        "num_episodes": n,
+        "num_success": num_success,
+        "num_collided": num_collided,
+        "num_failed": n - num_success,
+        "sr": sr,
+        "osr": mm.get("osr"),
+        "ne_mean": ne_mean,
+        "spl": mm.get("spl"),
+    }
 
 
 def _episode_dirs(run_path: str) -> dict:
@@ -364,6 +429,18 @@ def _history(cfg, limit: int = 800) -> list[dict]:
     return out[:limit]
 
 
+def _expert_positions(log_dir):
+    """按帧序读专家轨迹位置（数据集录制轨迹）。"""
+    out = []
+    for fn in sorted(glob.glob(os.path.join(log_dir, "*.json"))):
+        try:
+            with open(fn, "r", encoding="utf-8") as f:
+                out.append(json.load(f)["sensors"]["state"]["position"])
+        except Exception:
+            pass
+    return out
+
+
 def _traj(run_path, uuid):
     dirs = _episode_dirs(run_path)
     d = dirs.get(uuid)
@@ -380,7 +457,15 @@ def _traj(run_path, uuid):
     result = _read_json(os.path.join(d, "result.json"), {}) or {}
     metrics = _read_json(os.path.join(run_path, "metrics.json"), {}) or {}
     radius = (metrics.get("dataset") or {}).get("success_radius_m", 10.0)
+    # 专家轨迹：新数据在 result.json；老数据回退读 ori_info.json 指向的原始 log/。
+    expert = result.get("expert_positions") or []
+    if not expert:
+        ori = _read_json(os.path.join(d, "ori_info.json"), {}) or {}
+        ori_dir = ori.get("ori_traj_dir")
+        if ori_dir and os.path.isdir(os.path.join(ori_dir, "log")):
+            expert = _expert_positions(os.path.join(ori_dir, "log"))
     return {"uuid": uuid, "positions": positions,
+            "expert": expert,
             "target": result.get("target_position"),
             "start": positions[0] if positions else None,
             "radius": radius}
@@ -420,14 +505,14 @@ class _Handler(BaseHTTPRequestHandler):
         cfg = self.cfg
         if u.path in ("/", "/index.html"):
             self._file(os.path.join(_WEB_DIR, "index.html"))
+        elif u.path == "/static/theme.css":
+            self._file(REPO_ROOT / "console" / "theme.css")
         elif u.path.startswith("/static/"):
             name = os.path.basename(u.path)
             self._file(os.path.join(_WEB_DIR, name))
         elif u.path == "/api/runs":
-            runs = _list_runs(cfg)
-            for r in runs:
-                r.pop("path", None)
-            self._send(200, {"runs": runs})
+            # 每个 run 附带批次汇总（SR 按 episodes[] 现算，见 _run_summary）。
+            self._send(200, {"runs": [_run_summary(r["path"], r) for r in _list_runs(cfg)]})
         elif u.path == "/api/state":
             run_path = _safe_run(cfg, (q.get("run") or [None])[0])
             if not run_path:
@@ -462,9 +547,9 @@ class _Handler(BaseHTTPRequestHandler):
             # 只读镜像：主服务当前 profile（世界模型/普通VLM）及其可选项。
             self._send(200, _planner_profile())
         elif u.path == "/api/saved":
-            self._send(200, {"records": _list_saved()})
+            self._send(200, {"records": _list_saved(cfg.saved_dir)})
         elif u.path == "/api/saved/traj":
-            rec = _saved_record((q.get("dir") or [""])[0])
+            rec = _saved_record(cfg.saved_dir, (q.get("dir") or [""])[0])
             if rec is None:
                 self._send(404, {"error": "record not found"})
             else:
@@ -496,7 +581,7 @@ class _Handler(BaseHTTPRequestHandler):
         elif u.path == "/api/stop":
             self._send(200, _stop_run())
         elif u.path == "/api/saved/delete":
-            ok = _delete_saved(str(body.get("dir") or ""))
+            ok = _delete_saved(self.cfg.saved_dir, str(body.get("dir") or ""))
             self._send(200 if ok else 404, {"deleted": ok})
         elif u.path == "/api/runs/delete":
             try:
@@ -518,14 +603,18 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(404, {"error": "not found"})
 
 
-def serve(cfg, host="127.0.0.1", port=None):
+def serve(cfg, host="127.0.0.1", port=None, *, parent_pipe=None):
     port = port or cfg.dashboard_port
     _Handler.cfg = cfg
-    httpd = ThreadingHTTPServer((host, port), _Handler)
-    print(f"[dashboard] http://{host}:{port}  (output_dir={cfg.output_dir})")
-    try:
-        httpd.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        httpd.server_close()
+    with ThreadingHTTPServer((host, port), _Handler) as httpd:
+        if parent_pipe is not None:
+            def wait_for_parent_exit():
+                parent_pipe.read(1)
+                httpd.shutdown()
+
+            threading.Thread(target=wait_for_parent_exit, daemon=True).start()
+        print(f"[dashboard] http://{host}:{port}  (output_dir={cfg.output_dir})")
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            pass

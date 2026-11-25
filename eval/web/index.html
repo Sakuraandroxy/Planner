@@ -3,57 +3,75 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#0e1214">
 <title>UAV-VLN 评测仪表盘</title>
+<link rel="stylesheet" href="/static/theme.css">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<header>
+<header class="topbar">
   <h1>UAV-VLN 在线评测</h1>
+  <div class="topbar-actions">
+    <a class="ghost" id="plannerLink" href="#">返回 Planner</a>
+  </div>
 </header>
 
-<section class="metrics" id="metrics">
-  <div class="metric"><span class="k">SR</span><span class="v" id="m-sr">—</span></div>
-  <div class="metric"><span class="k">OSR</span><span class="v" id="m-osr">—</span></div>
-  <div class="metric"><span class="k">NE</span><span class="v" id="m-ne">—</span></div>
-  <div class="metric"><span class="k">SPL</span><span class="v" id="m-spl">—</span></div>
+<section class="metrics" id="metrics" aria-label="评测指标">
+  <div class="metric"><span class="k" title="成功率：成功回合 / 全部回合">SR · 成功率</span><span class="v" id="m-sr">—</span></div>
+  <div class="metric"><span class="k" title="可达率：轨迹任一点进入成功半径的回合占比">OSR · 可达率</span><span class="v" id="m-osr">—</span></div>
+  <div class="metric"><span class="k" title="末端距离：终点到目标距离的均值（米）">NE · 末端距离</span><span class="v" id="m-ne">—</span></div>
+  <div class="metric"><span class="k" title="路径效率：按实际路径长度加权的成功率">SPL · 路径效率</span><span class="v" id="m-spl">—</span></div>
   <div class="metric"><span class="k">进度</span><span class="v" id="m-prog">—</span></div>
 </section>
 
 <main>
   <section class="side">
     <div class="block block-launch">
-      <div class="block-head">
-        <select id="sceneSelect" title="选择场景"></select>
-        <select id="modeSelect" title="规划器（世界模型 / 普通 VLM；默认跟随主界面，可改，仅影响评测）"></select>
-        <button id="batchBtn">批量测试本场景</button>
+      <div class="block-head launch-controls">
+        <label for="sceneSelect">场景</label>
+        <select id="sceneSelect"></select>
+        <label for="modeSelect">规划配置</label>
+        <select id="modeSelect"></select>
+        <button class="primary" id="batchBtn" disabled>批量测试本场景</button>
       </div>
-      <div class="runstate" id="runState">—</div>
+      <div class="runstate" id="runState" role="status"></div>
       <div class="ep-list" id="epList"></div>
     </div>
     <div class="block block-result">
       <div class="block-head">
-        <button class="res-tab active" data-tab="runs">历史结果</button>
-        <button class="res-tab" data-tab="saved">已保存评测</button>
-        <span class="hint">点卡片看轨迹</span>
+        <div class="segmented result-tabs" role="group" aria-label="结果来源">
+          <button class="res-tab active" data-tab="runs" aria-pressed="true">批量测试结果</button>
+          <button class="res-tab" data-tab="saved" aria-pressed="false">实飞结果</button>
+        </div>
       </div>
-      <aside class="cards" id="cards"></aside>
-      <aside class="cards" id="savedList" style="display:none"></aside>
+      <div class="cards" id="cards"></div>
+      <div class="cards" id="savedList" hidden></div>
     </div>
   </section>
   <section class="viewer">
     <div class="viewer-head">
-      <h2 id="epTitle">选择左侧某个 episode</h2>
-      <div class="cam-tabs">
-        <button data-cam="front" class="active">前视</button>
-        <button data-cam="down">下视</button>
+      <h2 id="epTitle">轨迹与相机画面</h2>
+      <div class="segmented cam-tabs" role="group" aria-label="相机视角">
+        <button data-cam="front" class="active" aria-pressed="true">前视</button>
+        <button data-cam="down" aria-pressed="false">下视</button>
       </div>
     </div>
     <div class="panes">
-      <canvas id="traj3d" width="640" height="440"></canvas>
+      <div class="trajectory">
+        <canvas id="traj3d" aria-label="评测轨迹"></canvas>
+        <div class="trajectory-legend" id="trajLegend" hidden>
+          <span class="legend-expert" id="trajExpert" hidden>专家</span>
+          <span class="legend-start">起点</span>
+          <span class="legend-current">末点</span>
+          <span class="legend-target" id="trajTarget">目标</span>
+        </div>
+      </div>
       <div class="imgs">
-        <img id="camFront" class="thumb hidden" alt=""/>
-        <img id="camDown" class="thumb hidden" alt=""/>
-        <div class="cam-empty" id="camEmpty" hidden></div>
+        <div class="camera">
+          <img id="camFront" class="thumb" alt="前视相机" hidden>
+          <img id="camDown" class="thumb" alt="下视相机" hidden>
+          <div class="cam-empty" id="camEmpty">选择一条评测结果查看画面</div>
+        </div>
         <div class="stats" id="epStats"></div>
       </div>
     </div>
