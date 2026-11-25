@@ -342,6 +342,16 @@ python scripts/probe_flight.py --host 127.0.0.1 --port 8000 \
 
 标准输出每秒记录一条 JSONL，摘要写入标准错误。位姿取自最近一次发布的轨迹快照，两个批次之间会重复。`distance` 是该快照的位姿到批次末航点的水平距离。任务是否到达以服务返回的阶段结果为准。
 
+### 评测配置
+
+命令行评测和控制台的评测仪表盘默认读取 `config/eval.yml`。换机器时按实际目录修改 `root`。`root` 的相对值以配置文件所在目录为基准。`root_path`、`dataset_root`、`metric_py` 分别指向场景包、数据集、评分脚本，相对值以 `root` 为基准。各字段也接受绝对路径。
+
+`output_dir` 和 `saved_dir` 的相对值以仓库根为基准，默认使用 `eval/output` 和 `eval/saved`。主服务保存的评测记录与仪表盘读取的记录共用 `saved_dir`。
+
+命令行可用 `--config` 指定另一份配置。`--root-path`、`--dataset-root` 和 `--output-dir` 优先于文件对应字段，相对值以调用时的工作目录为基准。仪表盘启动评测子进程时会传递配置文件和已解析的这三个路径。
+
+从控制台启动评测时，主服务默认用 `simulators.yaml` 的 `airsim.runtime_python`。可用 `AVLN_EVAL_PYTHON` 覆盖解释器，用 `AVLN_EVAL_CONFIG` 指定配置文件，用 `AVLN_EVAL_PORT` 或 `AVLN_EVAL_SAVED` 覆盖端口或保存目录。
+
 ### 手动起停仿真栈
 
 控制台之外的唯一入口，两套仿真器都是同一条命令：

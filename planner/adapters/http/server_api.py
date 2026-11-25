@@ -31,6 +31,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, field_validator
 from starlette.concurrency import run_in_threadpool
 
+from eval.evalcore.config import REPO_ROOT, load_config as load_eval_config
+
 from ...domain.server import BackendUnavailable, ServerState
 from ...domain.trajectory_telemetry import TrajectorySnapshot
 from ...domain.view import default_view_for
@@ -39,21 +41,9 @@ from .video import BOUNDARY, mjpeg_chunks
 
 CONSOLE_DIR = Path(__file__).resolve().parents[3] / "console"
 
-# --- 评测服务懒启动 ---------------------------------------------------------
-# 控制台的「评测」按钮点一下才拉起 UAV-VLN 评测仪表盘（:8010），所以只需一条命令
-# 启动规划器。评测仪表盘要在 vln-ue4 里跑（run.py 顶层 import 了 airsim，需要
-# msgpack 0.5.6），与规划器本体的 vln 环境隔离。三处路径可用环境变量覆盖。
-_EVAL_DIR = Path(os.environ.get("AVLN_EVAL_DIR", "/data/sakura/AVLN/Planner/eval"))
-_EVAL_PYTHON = os.environ.get(
-    "AVLN_EVAL_PYTHON", "/home/sakura/miniconda3/envs/vln-ue4/bin/python"
-)
-_EVAL_PORT = int(os.environ.get("AVLN_EVAL_PORT", "8010"))
+# 控制台点「评测」时，在 UE4 的 Python 环境中启动仪表盘。
+_EVAL_DIR = REPO_ROOT / Path(os.environ.get("AVLN_EVAL_DIR") or "eval").expanduser()
 _EVAL_PROC: subprocess.Popen | None = None
-
-# 保存的评测记录落在 eval/saved/ 下，每个"带目标的子任务"一条，按任务名索引。
-_EVAL_SAVED_DIR = Path(
-    os.environ.get("AVLN_EVAL_SAVED", "/data/sakura/AVLN/Planner/eval/saved")
-)
 
 
 def _slug(text: str) -> str:
@@ -96,13 +86,13 @@ def _pids_on_port(port: int) -> list[int]:
     return list(pids)
 
 
-def _kill_eval_service() -> None:
+def _kill_eval_service(port: int) -> None:
     """关掉当前占用评测端口的服务（本进程拉起的、或手动/旧实例拉起的都算）。"""
     global _EVAL_PROC
     proc = _EVAL_PROC
     tracked = proc.pid if (proc is not None and proc.poll() is None) else None
     _EVAL_PROC = None
-    pids: set[int] = set(_pids_on_port(_EVAL_PORT))
+    pids: set[int] = set(_pids_on_port(port))
     if tracked is not None:
         pids.add(tracked)
     if not pids:
@@ -125,17 +115,24 @@ def _kill_eval_service() -> None:
     for pid in pids:
         _term(pid, signal.SIGTERM)
     deadline = time.time() + 5.0
-    while time.time() < deadline and _port_open(_EVAL_PORT):
+    while time.time() < deadline and _port_open(port):
         time.sleep(0.15)
-    if _port_open(_EVAL_PORT):
-        for pid in _pids_on_port(_EVAL_PORT) or pids:
+    if _port_open(port):
+        for pid in _pids_on_port(port) or pids:
             _term(pid, signal.SIGKILL)
         deadline = time.time() + 3.0
-        while time.time() < deadline and _port_open(_EVAL_PORT):
+        while time.time() < deadline and _port_open(port):
             time.sleep(0.15)
 
 
-def _start_eval_service(planner_api_base: str) -> dict:
+def _eval_config():
+    try:
+        return load_eval_config()
+    except (OSError, TypeError, ValueError) as exc:
+        raise HTTPException(503, detail={"message": f"无法加载评测配置: {exc}"}) from exc
+
+
+def _start_eval_service(planner_api_base: str, runtime_python: str) -> dict:
     """关掉旧的评测仪表盘再拉起一个新的，返回 {"started": bool, "port": int}。
 
     每次点「评测」都重启：避免旧代码/旧进程残留（改完代码刷新即可生效）。
@@ -143,29 +140,36 @@ def _start_eval_service(planner_api_base: str) -> dict:
     评测因此始终复用主界面选择的规划器（世界模型/普通 VLM），没有独立的一套。
     """
     global _EVAL_PROC
-    _kill_eval_service()
+    cfg = _eval_config()
+    port = cfg.dashboard_port
     if not _EVAL_DIR.is_dir():
         raise HTTPException(
             503, detail={"message": f"评测目录不存在: {_EVAL_DIR}"}
         )
-    if not Path(_EVAL_PYTHON).exists():
+    interpreter = os.environ.get("AVLN_EVAL_PYTHON") or runtime_python
+    if not interpreter:
+        raise HTTPException(503, detail={"message": "请配置 simulators.yaml 的 airsim.runtime_python"})
+    python = REPO_ROOT / Path(interpreter).expanduser()
+    if not python.is_file():
         raise HTTPException(
-            503, detail={"message": f"评测解释器不存在: {_EVAL_PYTHON}"}
+            503, detail={"message": f"评测解释器不存在: {python}"}
         )
+    _kill_eval_service(port)
     log_path = _EVAL_DIR / "eval_serve.log"
-    log = open(log_path, "ab")
-    _EVAL_PROC = subprocess.Popen(
-        [_EVAL_PYTHON, "-u", "run.py", "serve", "--dashboard-port", str(_EVAL_PORT)],
-        cwd=str(_EVAL_DIR),
-        stdout=log,
-        stderr=subprocess.STDOUT,
-        env={**os.environ, "AVLN_PLANNER_API": planner_api_base},
-        start_new_session=True,  # 脱离规划器进程组，规划器退出也留着
-    )
+    with log_path.open("ab") as log:
+        _EVAL_PROC = subprocess.Popen(
+            [str(python), "-u", "run.py", "serve", "--config", str(cfg.config_path),
+             "--dashboard-port", str(port)],
+            cwd=_EVAL_DIR,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            env={**os.environ, "AVLN_PLANNER_API": planner_api_base},
+            start_new_session=True,
+        )
     deadline = time.time() + 30.0
     while time.time() < deadline:
-        if _port_open(_EVAL_PORT):
-            return {"started": True, "port": _EVAL_PORT}
+        if _port_open(port):
+            return {"started": True, "port": port}
         if _EVAL_PROC.poll() is not None:
             raise HTTPException(
                 500,
@@ -173,7 +177,7 @@ def _start_eval_service(planner_api_base: str) -> dict:
             )
         time.sleep(0.3)
     raise HTTPException(
-        504, detail={"message": f"评测服务未在 30s 内打开端口 {_EVAL_PORT}"}
+        504, detail={"message": f"评测服务未在 30s 内打开端口 {port}"}
     )
 
 
@@ -293,7 +297,7 @@ class ModelsRequest(BaseModel):
         return cleaned
 
 
-def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAPI:
+def create_api(controller, settings, frames=None, trajectory_hub=None, *, eval_runtime_python="") -> FastAPI:
     """Build the console API.
 
     Every optional control is gated on the active map's ``capabilities``: an
@@ -676,7 +680,8 @@ def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAP
         vehicle = controller.last_task_vehicle
         map_id = controller.status.map
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        _EVAL_SAVED_DIR.mkdir(parents=True, exist_ok=True)
+        saved_dir = Path(_eval_config().saved_dir)
+        saved_dir.mkdir(parents=True, exist_ok=True)
         saved = []
         for stage in goal:
             stage_id = stage.get("stage_id")
@@ -708,11 +713,11 @@ def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAP
                 "created": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             }
             slug = _slug(name)
-            rec_dir = _EVAL_SAVED_DIR / f"{stamp}_{slug}"
+            rec_dir = saved_dir / f"{stamp}_{slug}"
             suffix = 0
             while rec_dir.exists():
                 suffix += 1
-                rec_dir = _EVAL_SAVED_DIR / f"{stamp}_{slug}_{suffix}"
+                rec_dir = saved_dir / f"{stamp}_{slug}_{suffix}"
             rec_dir.mkdir(parents=True)
             (rec_dir / "record.json").write_text(
                 json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -727,7 +732,7 @@ def create_api(controller, settings, frames=None, trajectory_hub=None) -> FastAP
         host = settings.host
         if host in ("", "0.0.0.0"):
             host = "127.0.0.1"
-        return _start_eval_service(f"http://{host}:{settings.port}")
+        return _start_eval_service(f"http://{host}:{settings.port}", eval_runtime_python)
 
 
     if frames is not None:

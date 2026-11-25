@@ -31,8 +31,6 @@ from .dataset import load_episodes
 _WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
 # run.py 所在目录（evalcore 的上一级），spawn 评测子进程时作 cwd。
 _EVAL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# 规划器「保存评测结果」写的记录目录（与 run 结果分开）。
-_SAVED_DIR = os.environ.get("AVLN_EVAL_SAVED", "/data/sakura/AVLN/Planner/eval/saved")
 _CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "application/javascript",
                   ".css": "text/css", ".png": "image/png", ".json": "application/json"}
 
@@ -127,18 +125,24 @@ def _start_run(cfg, scene: str, uuids: list[str], profile: str | None = None) ->
         proc = _ACTIVE["proc"]
         if proc is not None and proc.poll() is None:
             raise RuntimeError(f"已有评测在跑（scene={_ACTIVE['scene']}），先等它结束或停止")
-        profile = (profile or "").strip() or _planner_profile().get("current")
-        argv = [sys.executable, "-u", "run.py", "batch", "--scenes", scene]
+        profile = (profile or "").strip() or _planner_profile().get("current") or cfg.planner.profile
+        argv = [
+            sys.executable, "-u", "run.py", "batch", "--scenes", scene,
+            "--config", str(cfg.config_path),
+            "--root-path", cfg.root_path,
+            "--dataset-root", cfg.dataset_root,
+            "--output-dir", cfg.output_dir,
+        ]
         if profile:
             argv += ["--planner-profile", profile]
         if uuids:
             argv += ["--uuids", ",".join(uuids)]
         log_path = os.path.join(_EVAL_DIR, "served_run_last.log")
-        log = open(log_path, "ab")
-        proc = subprocess.Popen(
-            argv, cwd=_EVAL_DIR, stdout=log, stderr=subprocess.STDOUT,
-            env=os.environ.copy(), start_new_session=True,
-        )
+        with open(log_path, "ab") as log:
+            proc = subprocess.Popen(
+                argv, cwd=_EVAL_DIR, stdout=log, stderr=subprocess.STDOUT,
+                env=os.environ.copy(), start_new_session=True,
+            )
         _ACTIVE.update(proc=proc, scene=scene, uuids=uuids, profile=profile, log=log_path)
         return {"started": True, "pid": proc.pid, "scene": scene,
                 "uuids": uuids, "profile": profile, "log": log_path}
@@ -172,12 +176,12 @@ def _safe_run(cfg, run_name: str | None) -> str | None:
     return real if os.path.isdir(real) else None
 
 
-def _list_saved() -> list[dict]:
-    """已保存评测记录（规划器「保存评测结果」写入 eval/saved/）。"""
+def _list_saved(saved_dir: str) -> list[dict]:
+    """读取规划器保存的评测记录。"""
     out = []
-    if not os.path.isdir(_SAVED_DIR):
+    if not os.path.isdir(saved_dir):
         return out
-    for path in glob.glob(os.path.join(_SAVED_DIR, "*", "record.json")):
+    for path in glob.glob(os.path.join(saved_dir, "*", "record.json")):
         record = _read_json(path, {}) or {}
         out.append({
             "dir": os.path.basename(os.path.dirname(path)),
@@ -194,21 +198,21 @@ def _list_saved() -> list[dict]:
     return out
 
 
-def _saved_record(name: str):
-    base = os.path.realpath(_SAVED_DIR)
-    real = os.path.realpath(os.path.join(_SAVED_DIR, name or ""))
+def _saved_record(saved_dir: str, name: str):
+    base = os.path.realpath(saved_dir)
+    real = os.path.realpath(os.path.join(base, name or ""))
     if not real.startswith(base + os.sep):
         return None
     return _read_json(os.path.join(real, "record.json"), None)
 
 
-def _delete_saved(name: str) -> bool:
-    """删除一条已保存评测记录（_SAVED_DIR 下的子目录），带穿越防护。"""
+def _delete_saved(saved_dir: str, name: str) -> bool:
+    """删除保存目录中的一条评测记录。"""
     name = (name or "").strip()
     if not name:
         return False
-    base = os.path.realpath(_SAVED_DIR)
-    real = os.path.realpath(os.path.join(_SAVED_DIR, name))
+    base = os.path.realpath(saved_dir)
+    real = os.path.realpath(os.path.join(base, name))
     if real == base or not real.startswith(base + os.sep):
         return False
     if not os.path.isdir(real):
@@ -462,9 +466,9 @@ class _Handler(BaseHTTPRequestHandler):
             # 只读镜像：主服务当前 profile（世界模型/普通VLM）及其可选项。
             self._send(200, _planner_profile())
         elif u.path == "/api/saved":
-            self._send(200, {"records": _list_saved()})
+            self._send(200, {"records": _list_saved(cfg.saved_dir)})
         elif u.path == "/api/saved/traj":
-            rec = _saved_record((q.get("dir") or [""])[0])
+            rec = _saved_record(cfg.saved_dir, (q.get("dir") or [""])[0])
             if rec is None:
                 self._send(404, {"error": "record not found"})
             else:
@@ -496,7 +500,7 @@ class _Handler(BaseHTTPRequestHandler):
         elif u.path == "/api/stop":
             self._send(200, _stop_run())
         elif u.path == "/api/saved/delete":
-            ok = _delete_saved(str(body.get("dir") or ""))
+            ok = _delete_saved(self.cfg.saved_dir, str(body.get("dir") or ""))
             self._send(200 if ok else 404, {"deleted": ok})
         elif u.path == "/api/runs/delete":
             try:

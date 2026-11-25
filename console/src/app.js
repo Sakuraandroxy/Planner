@@ -357,7 +357,6 @@ function init() {
   // 点「评测」→ 先让规划器后端把评测仪表盘拉起来（没跑的话），再打开它。
   $("eval-dash").addEventListener("click", (event) => {
     event.preventDefault();
-    const url = $("eval-dash").href;
     // 同步开窗，避免 await 之后被浏览器当成非用户手势而拦截弹窗。
     const win = window.open("", "_blank");
     if (win) {
@@ -368,9 +367,11 @@ function init() {
       win.document.close();
     }
     request("/api/eval/start", { method: "POST" })
-      .then(() => {
-        if (win) win.location = url;
-        else window.open(url, "_blank", "noopener");
+      .then(({ port }) => {
+        const url = new URL($("eval-dash").href);
+        url.port = String(port);
+        if (win) win.location = url.href;
+        else window.open(url.href, "_blank", "noopener");
       })
       .catch((error) => {
         if (win) win.close();

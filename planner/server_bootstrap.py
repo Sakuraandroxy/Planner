@@ -131,9 +131,11 @@ def build_server(config: AppConfig):
         # the remaining-trajectory panel still draws the previous run.
         session_reset=trajectory.clear,
     )
+    airsim = config.families.entry("airsim")
     return create_api(
         controller,
         config.server,
         frames=frames,
         trajectory_hub=trajectory,
+        eval_runtime_python=airsim.runtime_python if airsim else "",
     )

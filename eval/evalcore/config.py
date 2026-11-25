@@ -1,13 +1,14 @@
-"""评测子系统配置。
-
-完全独立于主 Planner 仓库：只用标准库 + 可选 pyyaml。默认值即可直接跑；
-需要覆盖时用命令行参数。config 文件（eval.yaml）仅在装了 pyyaml 时才解析。
-"""
+"""评测配置。默认读取 config/eval.yml，命令行参数可以覆盖文件值。"""
 from __future__ import annotations
 
 import argparse
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_CONFIG_PATH = REPO_ROOT / "config" / "eval.yml"
 
 
 # 场景名 -> 相对 root_path 的启动脚本（对照 3DG-VLN AirVLNSimulatorServerTool.env_exec_path_dict）
@@ -54,11 +55,13 @@ class PlannerSettings:
 
 @dataclass
 class Config:
-    # 环境
-    root_path: str = "/data/sakura/data/TravelUAV_env"
-    dataset_root: str = "/data/sakura/data/UAV-VLN-FOV"
+    # 外部资源相对 root，运行产物相对仓库根。
+    root: str = "."
+    root_path: str = "TravelUAV_env"
+    dataset_root: str = "UAV-VLN-FOV"
     split: str = "test"                # 数据集切分：test / unscene / unobject
-    output_dir: str = "/data/sakura/AVLN/Planner/eval/output"
+    output_dir: str = "eval/output"
+    saved_dir: str = "eval/saved"
     dashboard_port: int = 8010         # Phase 2 仪表盘端口
     # 0.0.0.0 = 局域网可访问（控制台用 LAN IP 打开时，跳转 location.hostname:port 才通）
     dashboard_host: str = "0.0.0.0"
@@ -82,7 +85,8 @@ class Config:
     lockstep: bool = False             # ClockSpeed=1 下实时运行即可
 
     # 官方打分脚本
-    metric_py: str = "/data/sakura/AVLN/3DG-VLN-main/utils/metric.py"
+    metric_py: str = "3DG-VLN-main/utils/metric.py"
+    config_path: Path = field(default=DEFAULT_CONFIG_PATH, init=False)
 
     # 控制器
     limit_episodes: int = 0            # 0 = 不限
@@ -103,13 +107,18 @@ class Config:
         return scene_launcher_map()
 
 
-def _apply_yaml(cfg: Config, path: str) -> None:
-    try:
-        import yaml  # type: ignore
-    except Exception as exc:  # pragma: no cover
-        raise SystemExit(f"--config 需要 pyyaml，但导入失败: {exc}")
-    with open(path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
+def _apply_yaml(cfg: Config, path: Path) -> None:
+    import yaml
+
+    with path.open(encoding="utf-8") as f:
+        try:
+            data = yaml.safe_load(f)
+        except yaml.YAMLError as exc:
+            raise ValueError(f"无法解析评测配置 {path}: {exc}") from exc
+    if data is None:
+        return
+    if not isinstance(data, dict):
+        raise ValueError(f"评测配置必须是 YAML 映射: {path}")
     for key, value in data.items():
         if key == "move" and isinstance(value, dict):
             for k, v in value.items():
@@ -120,13 +129,38 @@ def _apply_yaml(cfg: Config, path: str) -> None:
         elif key == "planner" and isinstance(value, dict):
             for k, v in value.items():
                 setattr(cfg.planner, k, v)
-        elif hasattr(cfg, key):
+        elif key != "config_path" and hasattr(cfg, key):
             setattr(cfg, key, value)
+
+
+def _absolute_path(value: str | Path, base: Path) -> Path:
+    return (base / Path(value).expanduser()).resolve()
+
+
+def load_config(path: str | Path | None = None) -> Config:
+    config_path = _absolute_path(
+        path or os.environ.get("AVLN_EVAL_CONFIG") or DEFAULT_CONFIG_PATH,
+        Path.cwd(),
+    )
+    cfg = Config()
+    _apply_yaml(cfg, config_path)
+    cfg.config_path = config_path
+    root = _absolute_path(cfg.root, config_path.parent)
+    cfg.root = str(root)
+    cfg.root_path = str(_absolute_path(cfg.root_path, root))
+    cfg.dataset_root = str(_absolute_path(cfg.dataset_root, root))
+    cfg.metric_py = str(_absolute_path(cfg.metric_py, root))
+    cfg.output_dir = str(_absolute_path(cfg.output_dir, REPO_ROOT))
+    cfg.saved_dir = str(_absolute_path(
+        os.environ.get("AVLN_EVAL_SAVED") or cfg.saved_dir, REPO_ROOT
+    ))
+    cfg.dashboard_port = int(os.environ.get("AVLN_EVAL_PORT") or cfg.dashboard_port)
+    return cfg
 
 
 def parse_args(argv=None) -> CoordinateArgs:
     p = argparse.ArgumentParser(description="UAV-VLN 评测子系统")
-    p.add_argument("--config", default=None, help="eval.yaml 路径（需 pyyaml）")
+    p.add_argument("--config", default=None, help="评测配置路径（默认 config/eval.yml）")
     p.add_argument("--root-path", default=None)
     p.add_argument("--dataset-root", default=None)
     p.add_argument("--output-dir", default=None)
@@ -146,15 +180,11 @@ def parse_args(argv=None) -> CoordinateArgs:
                    default="batch", help="one=单 episode；batch=批量；serve=只起仪表盘")
 
     ns = p.parse_args(argv)
-    cfg = Config()
-    if ns.config:
-        _apply_yaml(cfg, ns.config)
-    if ns.root_path:
-        cfg.root_path = ns.root_path
-    if ns.dataset_root:
-        cfg.dataset_root = ns.dataset_root
-    if ns.output_dir:
-        cfg.output_dir = ns.output_dir
+    cfg = load_config(ns.config)
+    for name in ("root_path", "dataset_root", "output_dir"):
+        value = getattr(ns, name)
+        if value:
+            setattr(cfg, name, str(_absolute_path(value, Path.cwd())))
     if ns.dashboard_port is not None:
         cfg.dashboard_port = ns.dashboard_port
     if ns.dashboard_host:

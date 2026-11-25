@@ -3,7 +3,7 @@
 用法（在 vln-ue4 环境）：
     python run.py one   --scenes TropicalIsland --limit-episodes 1
     python run.py batch --scenes TropicalIsland,ModularPark
-    python run.py serve                      # Phase 2 仪表盘（未实现）
+    python run.py serve                      # 启动评测仪表盘
 """
 from __future__ import annotations
 
@@ -18,7 +18,6 @@ from evalcore.dataset import load_episodes      # noqa: E402
 from evalcore.metrics import run_metric         # noqa: E402
 from evalcore.report import write_progress, write_reports  # noqa: E402
 from evalcore.runner import run_episode         # noqa: E402
-from evalcore.sim import open_scene             # noqa: E402
 
 
 def _group_by_scene(episodes):
@@ -36,6 +35,8 @@ def _new_run_dir(cfg) -> str:
 
 
 def run_batch(cfg, episodes, run_dir, gpu_for=None, total=None) -> list[dict]:
+    from evalcore.sim import open_scene
+
     results = []
     total = total or len(episodes)
     write_progress(run_dir, total=total, done=0, current=None, state="running")

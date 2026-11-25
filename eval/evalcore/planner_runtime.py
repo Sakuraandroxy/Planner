@@ -21,8 +21,12 @@ import time
 
 import numpy as np
 
-# --- 把 Planner 仓库放上 import 路径（vln-ue4 里没有安装成包） -----------------
-_PLANNER_ROOT = os.environ.get("AVLN_PLANNER_ROOT", "/data/sakura/AVLN/Planner")
+from .config import REPO_ROOT
+
+# UE4 环境直接从当前检出目录导入规划器。
+_PLANNER_ROOT = os.path.abspath(os.path.expanduser(
+    os.environ.get("AVLN_PLANNER_ROOT") or REPO_ROOT
+))
 if _PLANNER_ROOT not in sys.path:
     sys.path.insert(0, _PLANNER_ROOT)
 
