@@ -1,83 +1,174 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="theme-color" content="#0e1214">
-<title>UAV-VLN 评测仪表盘</title>
-<link rel="stylesheet" href="/static/theme.css">
-<link rel="stylesheet" href="/static/style.css">
-</head>
-<body>
-<header class="topbar">
-  <h1>UAV-VLN 在线评测</h1>
-  <div class="topbar-actions">
-    <a class="ghost" id="plannerLink" href="#">返回导航系统</a>
-  </div>
-</header>
-
-<section class="metrics" id="metrics" aria-label="评测指标">
-  <div class="metric"><span class="k" title="成功率：成功回合 / 全部回合">SR · 成功率</span><span class="v" id="m-sr">—</span></div>
-  <div class="metric"><span class="k" title="可达率：轨迹任一点进入成功半径的回合占比">OSR · 可达率</span><span class="v" id="m-osr">—</span></div>
-  <div class="metric"><span class="k" title="末端距离：终点到目标距离的均值（米）">NE · 末端距离</span><span class="v" id="m-ne">—</span></div>
-  <div class="metric"><span class="k" title="路径效率：按实际路径长度加权的成功率">SPL · 路径效率</span><span class="v" id="m-spl">—</span></div>
-  <div class="metric"><span class="k">进度</span><span class="v" id="m-prog">—</span></div>
-</section>
-
-<main>
-  <section class="side">
-    <div class="block block-launch">
-      <div class="block-head launch-controls">
-        <label for="sceneSelect">场景</label>
-        <select id="sceneSelect"></select>
-        <label for="modeSelect">规划配置</label>
-        <select id="modeSelect"></select>
-        <button class="primary" id="batchBtn" disabled>批量测试本场景</button>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0e1214" />
+    <title>UAV-VLN 评测仪表盘</title>
+    <link rel="stylesheet" href="/static/theme.css" />
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-brand"><h1>UAV-VLN 在线评测</h1></div>
+      <div class="topbar-actions">
+        <button class="report-btn" id="compareBtn">场景对比</button>
+        <a class="ghost" id="plannerLink" href="#">返回导航系统</a>
       </div>
-      <div class="runstate" id="runState" role="status"></div>
-      <div class="ep-list" id="epList"></div>
-    </div>
-    <div class="block block-result">
-      <div class="block-head">
-        <div class="segmented result-tabs" role="group" aria-label="结果来源">
-          <button class="res-tab active" data-tab="runs" aria-pressed="true">批量测试结果</button>
-          <button class="res-tab" data-tab="saved" aria-pressed="false">执行记录</button>
+    </header>
+
+    <main>
+      <section class="side">
+        <div class="block block-launch">
+          <div class="block-head launch-controls">
+            <label for="sceneSelect">场景</label>
+            <select id="sceneSelect"></select>
+            <label for="modeSelect">规划配置</label>
+            <select id="modeSelect"></select>
+            <button class="primary" id="batchBtn" disabled>
+              批量测试本场景
+            </button>
+          </div>
+          <div class="runstate" id="runState" role="status"></div>
+          <div class="run-progress" id="runProgress" hidden>
+            <div class="run-progress-head">
+              <span id="runProgressLabel">评测进度</span
+              ><b id="runProgressValue">0%</b>
+            </div>
+            <div class="progress-track"><span id="runProgressBar"></span></div>
+          </div>
+          <div class="ep-list" id="epList"></div>
+        </div>
+        <div class="block block-result">
+          <div class="block-head">
+            <div
+              class="segmented result-tabs"
+              role="group"
+              aria-label="结果来源"
+            >
+              <button
+                class="res-tab active"
+                data-tab="runs"
+                aria-pressed="true"
+              >
+                批量测试结果
+              </button>
+              <button class="res-tab" data-tab="saved" aria-pressed="false">
+                执行记录
+              </button>
+            </div>
+          </div>
+          <div class="cards" id="cards"></div>
+          <div class="cards" id="savedList" hidden></div>
+        </div>
+      </section>
+      <section class="viewer" id="viewer">
+        <div class="report-hero">
+          <div class="report-heading">
+            <div class="eyebrow" id="reportEyebrow">EVALUATION REPORT</div>
+            <h2 id="epTitle">批次评测报告</h2>
+            <div class="report-subtitle" id="reportSubtitle">
+              选择左侧批次查看指标与样例结果
+            </div>
+          </div>
+          <button
+            class="report-btn primary report-export"
+            id="exportReportBtn"
+            disabled
+          >
+            生成评测报告
+          </button>
+        </div>
+        <div class="report-kpis" id="reportKpis">
+          <div class="report-kpi">
+            <span>成功率 · SR</span><b id="m-sr">—</b>
+          </div>
+          <div class="report-kpi">
+            <span>可达率 · OSR</span><b id="m-osr">—</b>
+          </div>
+          <div class="report-kpi">
+            <span>末端距离 · NE</span><b id="m-ne">—</b>
+          </div>
+          <div class="report-kpi">
+            <span>路径效率 · SPL</span><b id="m-spl">—</b>
+          </div>
+        </div>
+        <div class="report-overview" id="reportOverview">
+          <div class="report-empty">
+            <span class="empty-mark">◎</span><b>等待评测批次</b>
+          </div>
+        </div>
+        <div class="viewer-detail" id="viewerDetail" hidden>
+          <div class="detail-topline">
+            <div>
+              <span class="section-kicker">SELECTED EPISODE</span>
+              <h3 id="episodeHeading">样例详情</h3>
+            </div>
+            <div class="segmented cam-tabs" role="group" aria-label="相机视角">
+              <button data-cam="front" class="active" aria-pressed="true">
+                前视
+              </button>
+              <button data-cam="down" aria-pressed="false">下视</button>
+            </div>
+          </div>
+          <div class="detail-body">
+            <div class="trajectory compact">
+              <canvas id="traj3d" aria-label="评测轨迹"></canvas>
+              <div class="trajectory-legend" id="trajLegend" hidden>
+                <span class="legend-expert" id="trajExpert" hidden>专家</span
+                ><span class="legend-start">起点</span
+                ><span class="legend-current">末点</span
+                ><span class="legend-target" id="trajTarget">目标</span>
+              </div>
+            </div>
+            <div class="detail-side">
+              <div class="camera">
+                <img id="camFront" class="thumb" alt="前视相机" hidden /><img
+                  id="camDown"
+                  class="thumb"
+                  alt="下视相机"
+                  hidden
+                />
+                <div class="cam-empty" id="camEmpty">选择样例查看画面</div>
+              </div>
+              <div class="stats" id="epStats"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+    <div id="reportPrint" hidden></div>
+    <dialog id="compareDialog" class="compare-dialog">
+      <div class="report-dialog-bar">
+        <span>UAV-VLN　/　场景规划配置对比</span
+        ><button id="closeCompareBtn" aria-label="关闭对比">关闭</button>
+      </div>
+      <div class="compare-dialog-content">
+        <div class="compare-title">
+          <span class="eyebrow">SCENE COMPARISON</span>
+          <h2>规划配置对比</h2>
+        </div>
+        <label class="compare-scene-label" for="compareScene">评测场景</label
+        ><select id="compareScene"></select>
+        <div id="compareChoices" class="compare-choices"></div>
+        <div id="compareResult">
+          <div
+            id="compareCharts"
+            class="compare-charts"
+            aria-label="规划配置指标对比图"
+          ></div>
+          <div id="compareResultTable" class="compare-result-table"></div>
         </div>
       </div>
-      <div class="cards" id="cards"></div>
-      <div class="cards" id="savedList" hidden></div>
-    </div>
-  </section>
-  <section class="viewer">
-    <div class="viewer-head">
-      <h2 id="epTitle">轨迹与相机画面</h2>
-      <div class="segmented cam-tabs" role="group" aria-label="相机视角">
-        <button data-cam="front" class="active" aria-pressed="true">前视</button>
-        <button data-cam="down" aria-pressed="false">下视</button>
+      <div class="report-dialog-footer">
+        <span id="compareSelectionCount">已选 0 个批次</span
+        ><button class="primary" id="exportCompareBtn" disabled>
+          导出对比 PDF
+        </button>
       </div>
-    </div>
-    <div class="panes">
-      <div class="trajectory">
-        <canvas id="traj3d" aria-label="评测轨迹"></canvas>
-        <div class="trajectory-legend" id="trajLegend" hidden>
-          <span class="legend-expert" id="trajExpert" hidden>专家</span>
-          <span class="legend-start">起点</span>
-          <span class="legend-current">末点</span>
-          <span class="legend-target" id="trajTarget">目标</span>
-        </div>
-      </div>
-      <div class="imgs">
-        <div class="camera">
-          <img id="camFront" class="thumb" alt="前视相机" hidden>
-          <img id="camDown" class="thumb" alt="下视相机" hidden>
-          <div class="cam-empty" id="camEmpty">选择一条评测结果查看画面</div>
-        </div>
-        <div class="stats" id="epStats"></div>
-      </div>
-    </div>
-  </section>
-</main>
+    </dialog>
 
-<script src="/static/app.js"></script>
-</body>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js"></script>
+    <script src="/static/app.js"></script>
+  </body>
 </html>

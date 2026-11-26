@@ -240,6 +240,16 @@ def _delete_run(cfg, run_name: str) -> bool:
     return not os.path.exists(run_path)
 
 
+def _json_safe(value):
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    return value
+
+
 def _read_json(path, default=None):
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -518,6 +528,16 @@ class _Handler(BaseHTTPRequestHandler):
             if not run_path:
                 self._send(404, {"error": "run not found"}); return
             self._send(200, _state(cfg, run_path))
+        elif u.path == "/api/report":
+            run_path = _safe_run(cfg, (q.get("run") or [None])[0])
+            if not run_path:
+                self._send(404, {"error": "run not found"}); return
+            report = _read_json(os.path.join(run_path, "metrics.json"), None)
+            if report is None:
+                self._send(404, {"error": "report not available"}); return
+            report["run"] = os.path.basename(run_path)
+            report["progress"] = _read_json(os.path.join(run_path, "progress.json"), {}) or {}
+            self._send(200, _json_safe(report))
         elif u.path == "/api/history":
             # 平铺时间线：所有 run 的每集结果，按时间新→旧。
             self._send(200, {"episodes": _history(cfg)})
