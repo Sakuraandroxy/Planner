@@ -1,8 +1,7 @@
-# root 相对本文件所在目录。三个外部资源字段相对 root，也可以填绝对路径。
-root: ../..
-root_path: ../data/TravelUAV_env
-dataset_root: ../data/UAV-VLN-FOV
-metric_py: 3DG-VLN-main/utils/metric.py
+# root 相对本文件所在目录。两个外部资源字段相对 root，也可以填绝对路径。
+root: /data/sakura/data
+root_path: TravelUAV_env
+dataset_root: UAV-VLN-FOV
 
 # 相对仓库根，保持已有运行结果和保存记录的位置。
 output_dir: eval/output

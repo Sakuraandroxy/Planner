@@ -1,6 +1,6 @@
-"""打分：直接调用官方 metric.py，并解析其 stdout。
+"""打分：直接调用随仓库携带的官方 metric.py，并解析其 stdout。
 
-官方口径（见 3DG-VLN-main/utils/metric.py）：
+官方口径（见 eval/vendor/metric.py，取自 3DG-VLN-main/utils/metric.py）：
   SR  = 目录名以 success_ 前缀的 episode 比例
   OSR = 轨迹任一点 ≤ success_radius 的比例
   NE  = 末帧距离均值（剔除 > max_ne_distance）
@@ -12,13 +12,16 @@ import os
 import re
 import subprocess
 import sys
+from pathlib import Path
+
+METRIC_SCRIPT = Path(__file__).resolve().parents[1] / "vendor" / "metric.py"
 
 
 def run_metric(cfg, eval_save_path: str) -> dict:
-    """调官方 metric.py，返回 {'ne_mean','osr','sr','spl','num'}。"""
+    """调仓库内置的 metric.py，返回 {'ne_mean','osr','sr','spl','num'}。"""
     ds = cfg.dataset_root
     cmd = [
-        sys.executable, cfg.metric_py,
+        sys.executable, str(METRIC_SCRIPT),
         "--eval_save_path", eval_save_path,
         "--eval_test_path", os.path.join(ds, "test"),
         "--eval_unscene_path", os.path.join(ds, "unscene"),

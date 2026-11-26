@@ -21,7 +21,7 @@
   evalcore/planner_runtime.py                      │   5. 末点距目标 ≤ success_radius 且无碰撞 → success
   _RealStack：仿真器端口 + 真实规划器栈             │   6. 按 success 与否改名 success_<uuid>/
         │                                          ▼
-        └────────────────────────────── evalcore/metrics.py → 官方 3DG-VLN-main/utils/metric.py
+        └────────────────────────────── evalcore/metrics.py → vendor/metric.py
                                          SR / OSR / NE / SPL
 ```
 
@@ -42,7 +42,8 @@
 | `eval/evalcore/sim.py` | 拉起/关闭 TravelUAV、生成 AirSim settings、瞬移、刷物、取状态/碰撞/RGB；`collision_detail()` 只读诊断 |
 | `eval/evalcore/planner_runtime.py` | 把活着的仿真器端口装成规划器的 `SimulatorFamily`，构建 `MissionResources`、装配 mission arm、跑任务；后台位姿采样 |
 | `eval/evalcore/writer.py` | 磁盘契约：`log/NNNNNN.json`、`ori_info.json`、`result.json`，成功时目录加 `success_` 前缀 |
-| `eval/evalcore/metrics.py` | 调官方 `metric.py` 并解析其 stdout（SR/OSR/NE/SPL） |
+| `eval/evalcore/metrics.py` | 调仓库内置的 `eval/vendor/metric.py` 并解析其 stdout（SR/OSR/NE/SPL） |
+| `eval/vendor/metric.py` | 官方打分脚本，取自 `3DG-VLN-main/utils/metric.py` 的原样副本，不随 `config/eval.yml` 配置 |
 | `eval/evalcore/report.py` | `per_episode.csv`、`metrics.json`、`progress.json` |
 | `eval/evalcore/runner.py` | 单集执行器（薄封装，指向 `run_episode_real`） |
 | `eval/evalcore/dashboard.py` | 仪表盘 HTTP 服务：结果浏览、发跑/停止、删除、保存记录 |
@@ -77,7 +78,6 @@ staged 管线还会在 `eval/output/visual_goal/<profile>/<时间戳>_<id>/` 写
 | --- | --- |
 | `root` / `root_path` | 仓库根与 TravelUAV 环境根（场景启动脚本相对它） |
 | `dataset_root` | `UAV-VLN-FOV`，含 `test/`、`unscene/`、`unobject/`、`meta/` |
-| `metric_py` | 官方打分脚本 |
 | `output_dir` / `saved_dir` | 批量结果与执行记录目录 |
 | `dashboard_port` | 仪表盘端口（默认 8010，可被 `AVLN_EVAL_PORT` 覆盖） |
 
@@ -112,7 +112,7 @@ python run.py batch --scenes TropicalIsland --planner-profile vlm
 
 评测自己的成功口径：末帧距目标 spawn-area 中心 ≤ `success_radius_m`（默认 10 m）**且**本次采样期间未发生碰撞。目标位置与官方脚本一致，取 `mark.target.position` 最近的 spawn-area `[9:12]`。
 
-官方 `metric.py`（[3DG-VLN-main/utils/metric.py](../../3DG-VLN-main/utils/metric.py)）：
+官方 `metric.py`（仓库内副本 [eval/vendor/metric.py](../eval/vendor/metric.py)，取自 `3DG-VLN-main/utils/metric.py`）：
 
 | 指标 | 口径 |
 | --- | --- |

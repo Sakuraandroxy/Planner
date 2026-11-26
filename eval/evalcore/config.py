@@ -84,8 +84,6 @@ class Config:
     clock_speed: int = 1               # >1 会让本 build 物理时间步失控（自由落体），保持 1
     lockstep: bool = False             # ClockSpeed=1 下实时运行即可
 
-    # 官方打分脚本
-    metric_py: str = "3DG-VLN-main/utils/metric.py"
     config_path: Path = field(default=DEFAULT_CONFIG_PATH, init=False)
 
     # 控制器
@@ -149,7 +147,6 @@ def load_config(path: str | Path | None = None) -> Config:
     cfg.root = str(root)
     cfg.root_path = str(_absolute_path(cfg.root_path, root))
     cfg.dataset_root = str(_absolute_path(cfg.dataset_root, root))
-    cfg.metric_py = str(_absolute_path(cfg.metric_py, root))
     cfg.output_dir = str(_absolute_path(cfg.output_dir, REPO_ROOT))
     cfg.saved_dir = str(_absolute_path(
         os.environ.get("AVLN_EVAL_SAVED") or cfg.saved_dir, REPO_ROOT
