@@ -103,3 +103,45 @@ maps:
     label: 校园 · 虚幻 4
     binary: airsim/Campus/LinuxNoEditor/Campus/Binaries/Linux/Campus
     map_name: Campus
+
+  # TravelUAV 的另外 8 张 UE4 图，包取自评测用的同一批数据，目录放在 root 下面。
+  - id: londonstreet
+    simulator: airsim
+    label: 伦敦街道 · 虚幻 4
+    binary: TravelUAV_env/London_Street/London_Street/Binaries/Linux/London_Street
+    map_name: London_Street
+  - id: brushifyurban
+    simulator: airsim
+    label: 城市街区 · 虚幻 4
+    binary: TravelUAV_env/BrushifyUrban/BrushifyUrban/Binaries/Linux/BrushifyUrban
+    map_name: BrushifyUrban
+  - id: brushifyforest
+    simulator: airsim
+    label: 森林 · 虚幻 4
+    binary: TravelUAV_env/BrushifyForestPack/BrushifyForestPack/Binaries/Linux/BrushifyForestPack
+    map_name: BrushifyForestPack
+  - id: countryroads
+    simulator: airsim
+    label: 乡村道路 · 虚幻 4
+    binary: TravelUAV_env/BrushifyCountryRoads/BrushifyCountryRoads/Binaries/Linux/BrushifyCountryRoads
+    map_name: BrushifyCountryRoads
+  - id: battlefielddesert
+    simulator: airsim
+    label: 沙漠战场 · 虚幻 4
+    binary: TravelUAV_env/BattlefieldKitDesert/BattlefieldKitDesert/Binaries/Linux/BattlefieldKitDesert-Linux-DebugGame
+    map_name: BattlefieldKitDesert
+  - id: nordicharbour
+    simulator: airsim
+    label: 北欧港口 · 虚幻 4
+    binary: TravelUAV_env/NordicHarbour/NordicHarbour/Binaries/Linux/NordicHarbour
+    map_name: NordicHarbour
+  - id: japanesestreet
+    simulator: airsim
+    label: 日本街道 · 虚幻 4
+    binary: TravelUAV_env/Japanese_Street/Japanese_Street/Binaries/Linux/Japanese_Street
+    map_name: Japanese_Street
+  - id: westertown
+    simulator: airsim
+    label: 西部小镇 · 虚幻 4
+    binary: TravelUAV_env/WesterTown/WesterTown/Binaries/Linux/WesterTown
+    map_name: WesterTown

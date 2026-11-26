@@ -421,10 +421,12 @@ def test_repository_catalog_lists_the_supported_maps():
     pas = tuple(e.id for e in config.maps.maps if e.simulator == "projectairsim")
     air = tuple(e.id for e in config.maps.maps if e.simulator == "airsim")
     assert pas == ("cityenviron", "neighborhood", "jiaoliucenter")
-    # AirSim UE4 binaries come from airsim-flight-console's scene table.
+    # AirSim UE4 binaries come from airsim-flight-console's scene table plus the
+    # eight TravelUAV packages.
     assert air == (
         "airsimnh", "abandonedpark", "msbuild2018", "trapcam", "blocks", "shanghai",
-        "campus",
+        "campus", "londonstreet", "brushifyurban", "brushifyforest", "countryroads",
+        "battlefielddesert", "nordicharbour", "japanesestreet", "westertown",
     )
     assert config.maps.default_map == "cityenviron"
     assert all(e.scene_file for e in config.maps.maps if e.simulator == "projectairsim")
