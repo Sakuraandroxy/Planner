@@ -49,6 +49,10 @@ main {
   min-width: 0;
   min-height: 0;
 }
+/* 结果面板只按自身内容撑高，不跟随右侧报告拉长留下空白 */
+.block-result {
+  align-self: start;
+}
 .block-head {
   padding: 13px 14px;
   border-bottom: 1px solid var(--line);
@@ -156,8 +160,9 @@ main {
   flex-direction: column;
   gap: 8px;
 }
-/* 场景用例多时列表内部滚动，不把整页拉高 */
-.ep-list {
+/* 场景用例、批次、执行记录多时列表内部滚动，不把整页拉高 */
+.ep-list,
+.cards {
   max-height: min(38vh, 400px);
 }
 .ep {
@@ -389,12 +394,11 @@ main {
   flex-direction: column;
 }
 .report-empty {
-  flex: 1;
-  display: grid;
-  align-content: center;
-  justify-items: start;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 9px;
-  padding: 28px 5%;
+  padding: 20px 2px;
   color: var(--muted);
 }
 .report-empty b {
@@ -534,8 +538,8 @@ main {
   padding: 26px !important;
 }
 .viewer.has-episode .report-overview {
-  flex: 1;
-  min-height: 250px;
+  flex: 0 1 auto;
+  min-height: 0;
 }
 .viewer.has-episode .report-table-wrap {
   flex: 1;
@@ -975,8 +979,8 @@ main {
   }
 }
 @media print {
+  /* 不写 size：写了纸型或方向，Chrome 会禁用打印预览里的纸张尺寸/布局控件 */
   @page {
-    size: A4 landscape;
     margin: 8mm;
   }
   html,
