@@ -375,6 +375,7 @@ function renderDemoOverview(run = DEMO_RUN) {
     .forEach((row) => {
       row.onclick = () => selectDemoEpisode(row.dataset.uuid, batch.name);
     });
+  syncAiState("run");
 }
 
 function selectDemoEpisode(uuid, run) {
@@ -711,14 +712,52 @@ const AI_LABEL = {
 };
 let aiTyping = null;
 
+const AI_STORE_PREFIX = "avln.ai-report.";
+
+function demoBatch(name) {
+  return DEMO_BATCHES.find((batch) => batch.name === name) || null;
+}
+
 function aiTarget(kind) {
   if (kind === "run") {
     const run = state.summaryRun || state.run;
-    return run ? { kind: "run", run } : null;
+    if (!run) return null;
+    const batch = demoBatch(run);
+    // 演示批次没有落盘记录，数据随请求带上，评语存浏览器本地。
+    return batch
+      ? { kind: "run", run, demo: true, report: batch.report }
+      : { kind: "run", run };
   }
-  const runs = comparisonSelection().map((run) => run.name);
-  if (runs.length < 2) return null;
-  return { kind: "compare", scene: $("compareScene").value, runs };
+  const selected = comparisonSelection();
+  if (selected.length < 2) return null;
+  const scene = $("compareScene").value;
+  const runs = selected.map((run) => run.name);
+  if (selected.every((run) => run.demo)) {
+    const reports = {};
+    for (const run of selected) reports[run.name] = run.report || demoBatch(run.name)?.report;
+    return { kind: "compare", scene, runs, demo: true, reports };
+  }
+  return { kind: "compare", scene, runs };
+}
+
+function aiStoreKey(target) {
+  if (target.kind === "run") return `${AI_STORE_PREFIX}run.${target.run}`;
+  return `${AI_STORE_PREFIX}compare.${target.scene}.${[...target.runs].sort().join(",")}`;
+}
+
+function readLocalAi(target) {
+  try {
+    const raw = localStorage.getItem(aiStoreKey(target));
+    return raw ? JSON.parse(raw) : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function writeLocalAi(target, record) {
+  try {
+    localStorage.setItem(aiStoreKey(target), JSON.stringify(record));
+  } catch (error) {}
 }
 
 function aiQuery(target) {
@@ -749,11 +788,15 @@ async function syncAiState(kind) {
     renderAiPanel("");
     return;
   }
-  try {
-    const data = await getJSON(`/api/ai-report?${aiQuery(target)}`);
-    state.aiReport = data.ai_report || null;
-  } catch (error) {
-    state.aiReport = null;
+  if (target.demo) {
+    state.aiReport = readLocalAi(target);
+  } else {
+    try {
+      const data = await getJSON(`/api/ai-report?${aiQuery(target)}`);
+      state.aiReport = data.ai_report || null;
+    } catch (error) {
+      state.aiReport = null;
+    }
   }
   markAiState(kind, !!state.aiReport);
   renderAiPanel(state.aiReport ? state.aiReport.text : "");
@@ -824,12 +867,24 @@ async function generateAiReport(kind) {
       const save = $("aiSaveBtn");
       save.disabled = true;
       try {
-        const saved = await postJSON("/api/ai-report/save", {
-          ...target,
-          text: data.text,
-          model: data.model,
-        });
-        state.aiReport = saved.ai_report;
+        if (target.demo) {
+          const record = {
+            text: data.text,
+            model: data.model,
+            created: new Date()
+              .toLocaleString("zh-CN", { hour12: false })
+              .replace(/\//g, "-"),
+          };
+          writeLocalAi(target, record);
+          state.aiReport = record;
+        } else {
+          const saved = await postJSON("/api/ai-report/save", {
+            ...target,
+            text: data.text,
+            model: data.model,
+          });
+          state.aiReport = saved.ai_report;
+        }
       } catch (error) {
         save.disabled = false;
         alert(`保存失败：${error.message}`);
@@ -847,12 +902,14 @@ async function generateAiReport(kind) {
 async function viewSavedAi(kind) {
   const target = aiTarget(kind);
   if (!target) return;
-  let record;
-  try {
-    record = (await getJSON(`/api/ai-report?${aiQuery(target)}`)).ai_report;
-  } catch (error) {
-    alert(`读取失败：${error.message}`);
-    return;
+  let record = target.demo ? readLocalAi(target) : null;
+  if (!record) {
+    try {
+      record = (await getJSON(`/api/ai-report?${aiQuery(target)}`)).ai_report;
+    } catch (error) {
+      alert(`读取失败：${error.message}`);
+      return;
+    }
   }
   state.aiReport = record;
   showAiDialog(record.text, {
@@ -869,11 +926,6 @@ async function viewSavedAi(kind) {
 async function exportReport() {
   const run = state.summaryRun || state.run;
   if (!run) return;
-  // 演示批次没有落盘数据，不调模型，直接打印内置报告。
-  if (DEMO_BATCHES.some((batch) => batch.name === run)) {
-    await printRunReport(run);
-    return;
-  }
   await generateAiReport("run");
 }
 
@@ -892,6 +944,7 @@ async function printRunReport(run) {
     );
     return;
   }
+  state.aiReport = report.ai_report || readLocalAi({ kind: "run", run }) || null;
   renderFullReport(report);
   printReportPage();
 }
@@ -936,7 +989,6 @@ function renderFullReport(report) {
   const planner = report.demo
     ? demoBatch?.label || "—"
     : profileText(report.planner) || report.planner || "—";
-  state.aiReport = report.ai_report || null;
   $("reportPrint").innerHTML =
     `<article class="print-report ${report.demo ? "is-demo" : ""}">
     <header class="print-report-head"><div><div class="print-brand">UAV-VLN <span>评测报告</span></div><div class="print-kicker">EVALUATION REPORT</div>
@@ -1254,11 +1306,6 @@ function comparisonSelection() {
 async function exportComparisonPdf() {
   const runs = comparisonSelection();
   if (runs.length < 2) return;
-  // 演示批次不调模型，直接打印内置对比页。
-  if (runs.every((run) => run.demo)) {
-    await printCompareReport();
-    return;
-  }
   await generateAiReport("compare");
 }
 
@@ -1266,6 +1313,8 @@ async function printCompareReport() {
   const scene = $("compareScene").value;
   const runs = comparisonSelection();
   if (runs.length < 2) return;
+  const target = aiTarget("compare");
+  if (target && target.demo) state.aiReport = readLocalAi(target);
   const episodesByRun = await Promise.all(runs.map(comparisonEpisodes));
   const metrics = [
     ["成功率 · SR", "sr", "%"],
@@ -1892,6 +1941,7 @@ async function viewSaved(dir) {
   $("viewerDetail").hidden = false;
   $("viewer").classList.add("has-episode");
   $("exportReportBtn").disabled = true;
+  renderAiPanel("");
   $("reportSubtitle").textContent =
     `${escapeHTML(rec.map || "")}　/　已保存执行记录`;
   state.traj = {

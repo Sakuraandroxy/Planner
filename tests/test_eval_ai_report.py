@@ -58,6 +58,23 @@ def test_ai_payload_normalizes_query_string_and_json_body():
     }
 
 
+def test_ai_payload_keeps_inline_demo_data():
+    report = {"episodes": [], "metrics": {}}
+    assert dashboard._ai_payload(
+        {"kind": "run", "run": "demo-a", "report": report}
+    ) == {"kind": "run", "run": "demo-a", "report": report}
+    payload = dashboard._ai_payload(
+        {
+            "kind": "compare",
+            "scene": "城市核心区（示例）",
+            "runs": ["demo-a", "demo-b"],
+            "reports": {"demo-a": report, "demo-b": report},
+        }
+    )
+    assert payload["reports"] == {"demo-a": report, "demo-b": report}
+    assert payload["runs"] == ["demo-a", "demo-b"]
+
+
 def test_run_report_is_saved_into_metrics_json_and_read_back(tmp_path):
     cfg = _cfg(tmp_path)
     payload = {"kind": "run", "run": "run_20250101_120000"}
@@ -98,6 +115,37 @@ def test_prompt_carries_metrics_and_failed_cases(tmp_path):
     assert "SR 50.00%" in prompt
     assert "u001" in prompt
     assert "约 500 字" in prompt
+    # 面向一般读者的学术语体要求，不是罗列指标
+    assert "自然段" in prompt
+    assert "按共性归因" in prompt
+
+
+def test_prompt_accepts_inline_reports_without_touching_disk(tmp_path):
+    cfg = _cfg(tmp_path)
+    report = {
+        "time": "2025-06-18 14:30",
+        "planner": "default",
+        "dataset": {"split": "test", "scenes": ["城市核心区"], "success_radius_m": 10},
+        "metrics": {"sr": 83.3, "osr": 100.0, "ne_mean": 6.42, "spl": 71.8},
+        "episodes": [{"uuid": "city-core-001", "success": True, "final_ne": 3.24}],
+    }
+    prompt = ai_report._run_prompt(
+        cfg, {"kind": "run", "run": "demo-city-core", "report": report}
+    )
+    assert "城市核心区" in prompt
+    assert "SR 83.30%" in prompt
+
+    compare = ai_report._compare_prompt(
+        cfg,
+        {
+            "kind": "compare",
+            "scene": "城市核心区",
+            "runs": ["demo-a", "demo-b"],
+            "reports": {"demo-a": report, "demo-b": report},
+        },
+    )
+    assert "逐用例结果" in compare
+    assert "city-core-001" in compare
 
 
 def test_missing_api_key_names_the_environment_variable(tmp_path, monkeypatch):

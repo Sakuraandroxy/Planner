@@ -21,15 +21,19 @@ from .config import REPO_ROOT
 INDEX_FILE = "_ai_reports.json"
 
 _SYSTEM = (
-    "你是无人机视觉语言导航（UAV-VLN）评测报告的撰写者，只输出中文纯文本。"
-    "不写标题、不写编号列表、不用 Markdown 标记、不排版成表格。"
+    "你是无人机视觉语言导航（UAV-VLN）的评测撰写者，读者是没有参与本项目的技术人员。"
+    "只输出中文纯文本，语体参考学术论文的实验分析章节：陈述事实、指出限制、给出下一步。"
+    "不写标题、不写编号列表、不用 Markdown 标记、不排版成表格、不用夸张的修饰词。"
 )
 
-_INSTRUCTIONS = """请基于以上数据写一段约 {words} 字的中文评述，放在评测报告末尾。要求：
-- 纯文本，一段到底，不要标题、编号、项目符号、Markdown 标记；
-- 提到整体表现、成功率与可达率的差距、末端距离反映的定位精度、路径效率、失败与碰撞的集中点；
-- 只使用上面给出的数据，不要编造数字、场景名或者不存在的对比；
-- 语气客观，最后给出可执行的改进方向，不要断言系统已经足够好。"""
+_INSTRUCTIONS = """请基于以上数据写一段约 {words} 字的中文评述，作为评测报告末尾的分析。要求：
+- 纯文本，一到两个自然段，不加标题、编号、项目符号、Markdown 标记；
+- 开头用一句话交代评测对象、样例规模与成功判定口径，随后给出总体结果；
+- 用陈述句报告结论，例如「本批次 30 个样例中成功 18 个」，只在必要处引用数字，不要把每个指标逐条复述；
+- 失败样例按共性归因，合并成一句或两句，不要逐个列举编号；
+- 结尾给出 1 到 2 条有数据支撑的改进建议，说明观察到的限制，不夸大结论；
+- 不使用「显著」「大幅」「全面」这类缺少数据支撑的修饰；
+- 只使用上面给出的数据，不编造数字、场景名或不存在的对比。"""
 
 
 def generate(cfg, kind: str, payload: dict) -> dict:
@@ -132,7 +136,10 @@ def _words(cfg) -> int:
 
 def _run_prompt(cfg, payload: dict) -> str:
     run = str(payload.get("run") or "").strip()
-    report = _read_json(os.path.join(_run_dir(cfg, run), "metrics.json"), {})
+    # 演示批次没有落盘记录，前端把数据直接带进来。
+    report = payload.get("report")
+    if not isinstance(report, dict) or not report:
+        report = _read_json(os.path.join(_run_dir(cfg, run), "metrics.json"), {})
     if not isinstance(report, dict) or not report:
         raise RuntimeError(f"批次还没有评测结果: {run}")
     facts = [_run_facts(run, report)]
@@ -144,10 +151,14 @@ def _compare_prompt(cfg, payload: dict) -> str:
     runs = [str(x) for x in payload.get("runs") or []]
     if len(runs) < 2:
         raise RuntimeError("对比报告至少要两个批次")
+    inline = payload.get("reports")
+    inline = inline if isinstance(inline, dict) else {}
     facts = [f"评测场景：{scene}", f"参与对比的批次：{len(runs)} 个"]
     episodes = {}
     for run in runs:
-        report = _read_json(os.path.join(_run_dir(cfg, run), "metrics.json"), {})
+        report = inline.get(run)
+        if not isinstance(report, dict) or not report:
+            report = _read_json(os.path.join(_run_dir(cfg, run), "metrics.json"), {})
         if not isinstance(report, dict) or not report:
             raise RuntimeError(f"批次还没有评测结果: {run}")
         facts.append("")

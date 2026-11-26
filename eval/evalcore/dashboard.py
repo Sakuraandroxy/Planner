@@ -295,8 +295,12 @@ def _ai_payload(source) -> dict:
         return str(value or "")
 
     kind = one("kind").strip() or "run"
+    # 演示批次没有落盘记录，前端把数据直接带进来，不读磁盘。
     if kind == "run":
-        return {"kind": "run", "run": one("run").strip()}
+        payload = {"kind": "run", "run": one("run").strip()}
+        if isinstance(source.get("report"), dict):
+            payload["report"] = source["report"]
+        return payload
     runs = source.get("runs")
     if runs is None:
         runs = []
@@ -308,11 +312,10 @@ def _ai_payload(source) -> dict:
             name = name.strip()
             if name:
                 names.append(name)
-    return {
-        "kind": "compare",
-        "scene": one("scene").strip(),
-        "runs": names,
-    }
+    payload = {"kind": "compare", "scene": one("scene").strip(), "runs": names}
+    if isinstance(source.get("reports"), dict):
+        payload["reports"] = source["reports"]
+    return payload
 
 
 def _read_json(path, default=None):
