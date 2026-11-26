@@ -60,7 +60,7 @@ eval/output/run_YYYYMMDD_HHMMSS/
     result.json                    # 评测附加元数据（metric.py 忽略）
   metrics.json                     # 聚合：SR/OSR/NE/SPL、逐集明细、profile、数据集信息
   per_episode.csv                  # uuid, scene, success, collided, final_ne, ...
-  progress.json                    # 仪表盘轮询用的轻量进度（写完原子替换）
+  progress.json                    # 仪表盘轮询用的轻量进度，state 取 running|done|stopped（写完原子替换）
 ```
 
 `result.json` 关键字段：`success`、`collided`、`final_ne`、`elapsed_s`、`target_position`、`planner_profile`、`mission_success`、`mission_error`、`collision_diag`（瞬移/刷物前后的 `simGetCollisionInfo` 快照）、`expert_positions`。
@@ -127,7 +127,10 @@ python run.py batch --scenes TropicalIsland --planner-profile vlm
 
 - 主控台「评测系统」按钮通过 `POST /api/eval/start` 按需启动并打开仪表盘。后续点击复用当前主服务启动的实例，子进程退出后可再次启动。端口被其他进程占用时，接口返回 `409`。也可直接运行 `python run.py serve`。改 Python 后端需重启，改 `eval/web` 静态文件刷新即可（`Cache-Control: no-store`）。
 - 主服务退出时，由它启动的仪表盘也会关闭。手动启动的仪表盘不受影响。
-- 「批量测试结果」：每次 run 一张批次汇总卡（SR/OSR/NE/SPL、成功/碰撞计数、逐集表），点击行切换样例；支持整批删除。轨迹图绘制实测轨迹与**专家轨迹（蓝色虚线）**，相机页签切换前视/下视。
+- 「批量测试结果」：每次 run 一张批次汇总卡（SR/OSR/NE/SPL、成功/碰撞计数、逐集表），点击行切换样例；支持整批删除。轨迹图绘制实测轨迹与**专家轨迹（蓝色虚线）**，相机页签切换前视/下视。被停止的批次卡片标「已停止」。
+- 演示批次（城市核心区，「世界模型」与「普通 VLM」两档）常驻批次列表末尾，有无真实数据、是否在跑评测都不隐藏；点开后不会被轮询自动切回真实批次。
+- 评测进行中，进度行右侧出现「停止」按钮。`POST /api/stop` 终止评测子进程，并把该 run 的 `progress.json` 置为 `stopped`；仪表盘重启后丢了子进程句柄时，同一接口把残留的 `running` 收尾为 `stopped`。
+- 「场景对比」按场景聚合同场景的多个批次，演示批次一并列出；没有 `metrics.json` 的未完成批次不参与对比。
 - 「执行记录」：主控台保存的单次任务记录，含指令、成功率、轨迹、地图与 profile。
 - HTTP 接口：
 
@@ -138,11 +141,12 @@ python run.py batch --scenes TropicalIsland --planner-profile vlm
 | GET | `/api/traj?run=&id=` | 某集实测轨迹 + 专家轨迹 + 目标 + 半径 |
 | GET | `/api/frame?run=&id=&cam=` | 前视/下视缩略图 |
 | GET | `/api/history`、`/api/dataset`、`/api/episodes`、`/api/runstatus`、`/api/eval/profile` | 历史、数据集、待测集、运行状态、profile 镜像 |
-| POST | `/api/start`、`/api/stop` | 发跑/停止 |
+| POST | `/api/start`、`/api/stop` | 发跑/停止；`/api/stop` 在没有活进程时把该 run 残留的 `running` 收尾为 `stopped` |
 | POST | `/api/runs/delete`、`/api/episode/delete`、`/api/saved/delete` | 删除批次/单集/保存记录 |
 
 ## 8 已知限制
 
+- **停止或中断的 run 没有 `metrics.json`**。仪表盘读不到它就不生成报告（点「生成评测报告」提示「未完成的评测无法生成报告」），该批次也不进场景对比；批次卡片与逐集明细仍按已有的 `result.json` 显示。
 - **中段碰撞仍是规划器侧问题**。评测只记录碰撞并判失败，`visual_goal_navigation.collision_check_enabled` 默认 `false`，工作流不会因碰撞中断。同一 episode 具有随机性（同集单独重跑可能不撞），原因在航点本身无障碍约束，以及位置保持阶段不感知碰撞，单集失败不应直接归因于评测器。
 - **位姿采样 5 Hz** 决定 `P` 的折线粒度，急弯路径长度会略微低估；所有集同口径。
 - **世界模型档未接入世界模型权重**，见第 5 节。
