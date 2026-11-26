@@ -86,6 +86,12 @@ def _public_episode(ep) -> dict:
     }
 
 
+def _scene_available(cfg, scene: str) -> bool:
+    """场景的启动脚本在磁盘上才可用；判据与 sim.open_scene 一致。"""
+    sh = cfg.resolve_scenes().get(scene)
+    return bool(sh) and os.path.isfile(os.path.join(cfg.root_path, sh))
+
+
 def _dataset_summary(cfg) -> dict:
     episodes = _all_episodes(cfg)
     counts: dict[str, int] = {}
@@ -96,6 +102,7 @@ def _dataset_summary(cfg) -> dict:
         "scenes": [
             {"id": scene, "num_episodes": n}
             for scene, n in sorted(counts.items())
+            if _scene_available(cfg, scene)
         ],
         "total": len(episodes),
     }
