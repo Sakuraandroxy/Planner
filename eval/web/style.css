@@ -1130,6 +1130,48 @@ main {
     font-family: var(--mono);
     font-size: 7.5pt;
   }
+  .print-compare-table th small {
+    display: block;
+    margin-top: 1mm;
+    color: #6e7f7b;
+    font-size: 7pt;
+    font-weight: 400;
+  }
+  .print-compare-table .cmp-uuid {
+    width: 22mm;
+    white-space: nowrap;
+  }
+  .print-compare-table td.cmp-cell {
+    white-space: nowrap;
+  }
+  .print-compare-table td.cmp-cell span {
+    font-weight: 650;
+  }
+  .print-compare-table td.cmp-cell b {
+    margin-left: 2.5mm;
+    color: #6e7f7b;
+    font: 500 7.5pt var(--mono);
+  }
+  .cmp-ok span {
+    color: #2c7a5f;
+  }
+  .cmp-collide span {
+    color: #9a6a1f;
+  }
+  .cmp-fail span {
+    color: #a34a44;
+  }
+  .print-compare-table td.cmp-none {
+    color: #9aa8a5;
+  }
+  .print-compare-table tr {
+    break-inside: avoid;
+  }
+  .print-compare-legend {
+    margin-top: 2mm;
+    color: #71817d;
+    font-size: 7pt;
+  }
   .print-report-footer {
     display: flex;
     justify-content: space-between;

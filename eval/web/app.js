@@ -81,7 +81,7 @@ const DEMO_VLM_REPORT = {
   metrics: { sr: 66.7, osr: 83.3, ne_mean: 9.18, spl: 54.6 },
   episodes: DEMO_REPORT.episodes.map((episode, index) => ({
     ...episode,
-    uuid: `vlm-${episode.uuid}`,
+    uuid: episode.uuid,
     success: index < 4,
     collided: index === 4,
     final_ne: [5.4, 7.2, 8.6, 9.8, 12.1, 11.4][index],
@@ -996,13 +996,77 @@ function renderComparisonCharts(selected, rows) {
   });
 }
 
-function exportComparisonPdf() {
+// 对比 PDF 用：取一个批次的逐用例结果，报告读不到时给空数组
+async function comparisonEpisodes(run) {
+  if (run.demo) {
+    const batch = DEMO_BATCHES.find((item) => item.name === run.name);
+    return batch?.report?.episodes || [];
+  }
+  try {
+    const report = await getJSON(
+      `/api/report?run=${encodeURIComponent(run.name)}`,
+    );
+    return report.episodes || [];
+  } catch (error) {
+    return [];
+  }
+}
+
+function comparisonEpisodeCell(ep) {
+  if (!ep) return '<td class="cmp-cell cmp-none">—</td>';
+  const status = ep.success ? "成功" : ep.collided ? "碰撞" : "未完成";
+  const cls = ep.success ? "cmp-ok" : ep.collided ? "cmp-collide" : "cmp-fail";
+  const ne =
+    ep.final_ne != null && Number.isFinite(Number(ep.final_ne))
+      ? `${Number(ep.final_ne).toFixed(2)} m`
+      : "—";
+  return `<td class="cmp-cell ${cls}"><span>${status}</span><b>${ne}</b></td>`;
+}
+
+function comparisonEpisodeTable(runs, episodesByRun) {
+  const uuids = [];
+  const seen = new Set();
+  for (const episodes of episodesByRun) {
+    for (const ep of episodes) {
+      if (ep && ep.uuid && !seen.has(ep.uuid)) {
+        seen.add(ep.uuid);
+        uuids.push(ep.uuid);
+      }
+    }
+  }
+  if (!uuids.length) return "";
+  const byRun = episodesByRun.map(
+    (episodes) => new Map(episodes.map((ep) => [ep.uuid, ep])),
+  );
+  const heads = runs
+    .map((run, index) => {
+      const episodes = episodesByRun[index];
+      const ok = episodes.filter((ep) => ep.success).length;
+      const label = profileText(run.planner) || run.planner || "未知配置";
+      return `<th>${escapeHTML(label)}<small>${escapeHTML(run.name)} · 成功 ${ok}/${episodes.length}</small></th>`;
+    })
+    .join("");
+  const rows = uuids
+    .map(
+      (uuid) =>
+        `<tr><td class="cmp-uuid mono">${escapeHTML(uuid.length > 16 ? uuid.slice(0, 8) : uuid)}</td>${byRun
+          .map((map) => comparisonEpisodeCell(map.get(uuid)))
+          .join("")}</tr>`,
+    )
+    .join("");
+  return `<section class="print-episodes"><div class="print-section-title"><span>逐用例对比</span><small>${uuids.length} 个用例　·　${runs.length} 种配置</small></div>
+    <table class="print-compare-table"><thead><tr><th class="cmp-uuid">用例</th>${heads}</tr></thead><tbody>${rows}</tbody></table>
+    <div class="print-compare-legend">结果列依次为判定与末端距离 NE，同一行是一个用例在各批次下的结果。</div></section>`;
+}
+
+async function exportComparisonPdf() {
   const scene = $("compareScene").value;
   const selectedIds = JSON.parse($("exportCompareBtn").dataset.runs || "[]");
   const runs = comparisonRunData().filter((run) =>
     selectedIds.includes(run.name),
   );
   if (runs.length < 2) return;
+  const episodesByRun = await Promise.all(runs.map(comparisonEpisodes));
   const metrics = [
     ["成功率 · SR", "sr", "%"],
     ["可达率 · OSR", "osr", "%"],
@@ -1032,8 +1096,7 @@ function exportComparisonPdf() {
       <div class="print-stamp">${demo ? "演示数据" : "对比报告"}</div></header>
     <section class="print-metrics compare-print-metrics">${runs.map((run) => `<div><span>${escapeHTML(profileText(run.planner) || run.planner || "未知配置")} · SR</span><b>${run.sr != null ? run.sr.toFixed(1) + "%" : "—"}</b></div>`).join("")}</section>
     <section class="print-chart-grid">${chartImages.map((chart) => `<figure><figcaption>${escapeHTML(chart.title)}</figcaption><img src="${chart.src}" alt="${escapeHTML(chart.title)}对比图"></figure>`).join("")}</section>
-    <section class="print-episodes"><div class="print-section-title"><span>指标对比</span></div><table><thead><tr><th>评测指标</th>${runs.map((run) => `<th>${escapeHTML(profileText(run.planner) || run.planner || "未知配置")}</th>`).join("")}</tr></thead>
-      <tbody>${metrics.map(([label, key, suffix]) => `<tr><th>${label}</th>${runs.map((run) => `<td>${run[key] != null ? Number(run[key]).toFixed(2) + suffix : "—"}</td>`).join("")}</tr>`).join("")}</tbody></table></section>
+    ${comparisonEpisodeTable(runs, episodesByRun)}
     <footer class="print-report-footer"><span>UAV-VLN · ${demo ? "演示数据" : "Evaluation System"}</span><span>${escapeHTML(new Date().toLocaleString("zh-CN"))}</span></footer></article>`;
   $("compareDialog").close();
   $("reportPrint").hidden = false;
