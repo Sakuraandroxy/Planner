@@ -32,8 +32,11 @@
           <div class="runstate" id="runState" role="status"></div>
           <div class="run-progress" id="runProgress" hidden>
             <div class="run-progress-head">
-              <span id="runProgressLabel">评测进度</span
-              ><b id="runProgressValue">0%</b>
+              <span id="runProgressLabel">评测进度</span>
+              <span class="run-progress-side">
+                <b id="runProgressValue">0%</b>
+                <button class="run-stop" id="stopBtn" hidden>停止</button>
+              </span>
             </div>
             <div class="progress-track"><span id="runProgressBar"></span></div>
           </div>

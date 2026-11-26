@@ -22,6 +22,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
@@ -152,19 +153,43 @@ def _start_run(cfg, scene: str, uuids: list[str], profile: str | None = None) ->
                 "uuids": uuids, "profile": profile, "log": log_path}
 
 
-def _stop_run() -> dict:
+def _mark_stopped(run_path: str) -> bool:
+    """把残留的 running 进度改成 stopped（评测进程已不在时收尾）。"""
+    prog = _read_json(os.path.join(run_path, "progress.json"), {}) or {}
+    if prog.get("state") != "running":
+        return False
+    prog["state"] = "stopped"
+    prog["updated"] = time.time()
+    tmp = os.path.join(run_path, "progress.json.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(prog, f, ensure_ascii=False)
+    os.replace(tmp, os.path.join(run_path, "progress.json"))
+    return True
+
+
+def _stop_run(cfg, run_name: str | None = None) -> dict:
+    """停掉本进程托管的评测；没有活进程时把残留的 running 状态收尾。"""
     with _ACTIVE_LOCK:
         proc = _ACTIVE["proc"]
-        if proc is None or proc.poll() is not None:
-            return {"stopped": False, "reason": "没有正在跑的评测"}
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-        except Exception:
+        live = proc is not None and proc.poll() is None
+        if live:
             try:
-                proc.terminate()
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
             except Exception:
-                pass
-        return {"stopped": True}
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+    if live:
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            pass
+    run_path = _safe_run(cfg, run_name)
+    marked = _mark_stopped(run_path) if run_path else False
+    if not live and not marked:
+        return {"stopped": False, "reason": "没有正在跑的评测"}
+    return {"stopped": True, "killed": live, "marked": marked}
 
 
 
@@ -599,7 +624,7 @@ class _Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._send(500, {"error": str(exc)})
         elif u.path == "/api/stop":
-            self._send(200, _stop_run())
+            self._send(200, _stop_run(self.cfg, str(body.get("run") or "") or None))
         elif u.path == "/api/saved/delete":
             ok = _delete_saved(self.cfg.saved_dir, str(body.get("dir") or ""))
             self._send(200 if ok else 404, {"deleted": ok})

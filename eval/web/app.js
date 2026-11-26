@@ -207,13 +207,15 @@ async function poll() {
   }
   const progressBox = $("runProgress");
   progressBox.hidden = !running && !total;
+  $("stopBtn").hidden = !running;
   if (!progressBox.hidden) {
     const percent = total ? Math.min(100, Math.round((done * 100) / total)) : 0;
-    $("runProgressLabel").textContent = progress.current
-      ? `正在测试 ${progress.current}`
-      : running
-        ? "批量评测进行中"
-        : "最近一次评测进度";
+    $("runProgressLabel").textContent =
+      running && progress.current
+        ? `正在测试 ${progress.current}`
+        : running
+          ? "批量评测进行中"
+          : "最近一次评测进度";
     $("runProgressValue").textContent = `${done}/${total || "—"} · ${percent}%`;
     $("runProgressBar").style.width = `${percent}%`;
   }
@@ -415,6 +417,7 @@ function runStatePill(sum) {
     return `<span class="pill run">运行中 ${prog}</span>`;
   }
   if (sum.state === "done") return `<span class="pill done">已完成</span>`;
+  if (sum.state === "stopped") return `<span class="pill fail">已停止</span>`;
   return "";
 }
 
@@ -1443,6 +1446,24 @@ async function startRun(scene, uuids) {
   }
 }
 
+async function stopRun() {
+  if (!confirm("停止当前评测批次？已完成的样例结果会保留。")) return;
+  const btn = $("stopBtn");
+  btn.disabled = true;
+  try {
+    const res = await postJSON("/api/stop", {
+      run: state.latestRun || state.summaryRun || "",
+    });
+    setRunState(res.stopped ? "已停止评测" : res.reason || "停止失败", false);
+  } catch (e) {
+    setRunState("停止失败: " + e.message, false);
+  } finally {
+    btn.disabled = false;
+  }
+  await pollRunStatusOnce();
+  await poll();
+}
+
 async function pollRunStatusOnce() {
   let s;
   try {
@@ -1622,6 +1643,7 @@ async function main() {
   bindCamImages();
   bindResTabs();
   $("batchBtn").onclick = () => startRun($("sceneSelect").value, null);
+  $("stopBtn").onclick = stopRun;
   $("exportReportBtn").onclick = exportReport;
   $("compareBtn").onclick = openCompare;
   $("closeCompareBtn").onclick = () => $("compareDialog").close();

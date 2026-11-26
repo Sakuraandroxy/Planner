@@ -98,6 +98,24 @@ main {
 .run-progress-head b {
   color: var(--accent);
   font: 600 12px var(--mono);
+  white-space: nowrap;
+}
+.run-progress-side {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.run-stop {
+  flex: none;
+  padding: 2px 9px;
+  border-color: rgba(224, 102, 95, 0.5);
+  background: transparent;
+  color: #f2a19c;
+  font-size: 11px;
+}
+.run-stop:hover:not(:disabled) {
+  border-color: var(--danger);
 }
 .progress-track {
   height: 5px;
