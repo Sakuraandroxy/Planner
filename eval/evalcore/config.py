@@ -11,7 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG_PATH = REPO_ROOT / "config" / "eval.yml"
 
 
-# 场景名 -> 相对 maps_path 的启动脚本（对照 3DG-VLN AirVLNSimulatorServerTool.env_exec_path_dict）
+# 数据集名 -> 相对 maps_path 的启动脚本（对照 3DG-VLN AirVLNSimulatorServerTool.env_exec_path_dict）
 _CLOSELOOP = ["NYCEnvironmentMegapa", "TropicalIsland", "NewYorkCity",
               "ModularPark", "ModularEuropean", "ModernCityMap"]
 _CARLA_TOWNS = ["Town01", "Town02", "Town03", "Town04", "Town05",
@@ -71,7 +71,7 @@ class AiReportSettings:
 @dataclass
 class Config:
     # 外部资源填绝对路径，或写相对本配置文件所在目录的路径；运行产物相对仓库根。
-    maps_path: str = "TravelUAV_env"      # 场景包根，含 closeloop_envs/、carla_town_envs/
+    maps_path: str = "TravelUAV_env"      # 数据集根，含 closeloop_envs/、carla_town_envs/
     dataset_path: str = "UAV-VLN-FOV"     # 数据集根，含 test/、unscene/、unobject/、meta/
     split: str = "test"                # 数据集切分：test / unscene / unobject
     output_dir: str = "eval/output"
@@ -79,7 +79,7 @@ class Config:
     dashboard_port: int = 8010         # Phase 2 仪表盘端口
     # 0.0.0.0 = 局域网可访问（控制台用 LAN IP 打开时，跳转 location.hostname:port 才通）
     dashboard_host: str = "0.0.0.0"
-    scenes: list[str] = field(default_factory=list)   # 空 = 数据集里全部场景
+    scenes: list[str] = field(default_factory=list)   # 空 = 全部数据集
     # 空 = 不按 uuid 过滤；否则只跑这些 episode（"点哪个跑哪个"）
     uuids: list[str] = field(default_factory=list)
     gpus: list[int] = field(default_factory=lambda: [0])
@@ -180,7 +180,7 @@ def parse_args(argv=None) -> CoordinateArgs:
     p.add_argument("--output-dir", default=None)
     p.add_argument("--dashboard-port", type=int, default=None, help="仪表盘 HTTP 端口（默认 8010）")
     p.add_argument("--dashboard-host", default=None, help="仪表盘绑定地址（默认 0.0.0.0，局域网可访问）")
-    p.add_argument("--scenes", default=None, help="逗号分隔；缺省=数据集全部场景")
+    p.add_argument("--scenes", default=None, help="逗号分隔；缺省=全部数据集")
     p.add_argument("--uuids", default=None, help="逗号分隔；只跑指定 episode（点哪个跑哪个）")
     p.add_argument("--gpus", default=None, help="逗号分隔，如 0 或 0,1")
     p.add_argument("--success-radius", type=float, default=None)

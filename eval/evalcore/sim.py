@@ -1,4 +1,4 @@
-"""AirSim-UE4 场景适配层（TravelUAV_env 数据集场景）。
+"""AirSim-UE4 数据集适配层（TravelUAV_env）。
 
 只依赖 airsim 客户端（vln-ue4 环境，msgpack 0.5.6）。一个进程顺序跑，
 一次拉起一张图：xvfb-run 无头 + GPU 渲染，等 ApiServerPort 就绪后连接。
@@ -113,14 +113,14 @@ class Scene:
         while time.time() - t0 < launch_timeout_s:
             if self.proc.poll() is not None:
                 self._dump_log_tail()
-                raise RuntimeError(f"场景 {self.scene_id} 进程提前退出")
+                raise RuntimeError(f"数据集 {self.scene_id} 进程提前退出")
             if _port_open(self.port):
                 break
             time.sleep(1.0)
         else:
             self._dump_log_tail()
             self.stop()
-            raise TimeoutError(f"场景 {self.scene_id} 端口 {self.port} 未在 {launch_timeout_s}s 内就绪")
+            raise TimeoutError(f"数据集 {self.scene_id} 端口 {self.port} 未在 {launch_timeout_s}s 内就绪")
 
         self.client = airsim.MultirotorClient(ip="127.0.0.1", port=self.port, timeout_value=30)
         for _ in range(30):
@@ -320,7 +320,7 @@ def open_scene(scene_id: str, cfg, gpu: int | None = None):
     launchers = cfg.resolve_scenes()
     sh = launchers.get(scene_id)
     if sh is None:
-        raise KeyError(f"未知场景 {scene_id}，无启动脚本映射")
+        raise KeyError(f"未知数据集 {scene_id}，无启动脚本映射")
     sh_path = os.path.join(cfg.maps_path, sh)
     if not os.path.isfile(sh_path):
         raise FileNotFoundError(f"启动脚本不存在: {sh_path}")

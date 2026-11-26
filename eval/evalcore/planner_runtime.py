@@ -2,7 +2,7 @@
 
 这与主 Planner 仓库对 UE4 的接法一致（``config/simulators.yaml`` 的 ``airsim`` 段本来就是
 把 mission session 跑在 vln-ue4 子进程里，因为 msgpack 0.5.6 与 1.2.4 冲突）。区别只是：
-- eval 负责拉起 TravelUAV 场景、spawn 目标物、teleport 起点（见 :mod:`evalcore.sim`）；
+- eval 负责拉起 TravelUAV 数据集、spawn 目标物、teleport 起点（见 :mod:`evalcore.sim`）；
 - 本模块把手里的活着的 AirSim（``scene.port``）交给 Planner 自己的
   ``AirSimMissionSession`` + ``assemble_missions``，装配出**完整** visual-goal 工作流
   （真检测 + 真VLM规划 + 完成判定 + 滑窗续规划），跑数据集的自然语言指令；
@@ -76,7 +76,7 @@ class _NullTelemetry:
 
 
 def build_family(scene) -> SimulatorFamily:
-    """把 eval 已拉起的 TravelUAV 场景，包成 Planner 认的 SimulatorFamily。"""
+    """把 eval 已拉起的 TravelUAV 数据集，包成 Planner 认的 SimulatorFamily。"""
     return SimulatorFamily(
         id="airsim-ue4",
         label="AirSim (UE4, TravelUAV eval)",
@@ -85,7 +85,7 @@ def build_family(scene) -> SimulatorFamily:
         vehicle_name=VEHICLE_NAME,
         camera_id=CAMERA_ID,
         timeout_s=15.0,
-        # 我们不通过这个 family 启动仿真（场景由 evalcore.sim 拉起，这里只连端口），
+        # 我们不通过这个 family 启动仿真（数据集由 evalcore.sim 拉起，这里只连端口），
         # 但 SimulatorFamily 的校验要求 argv/stop_argv 非空——给占位即可，永不渲染。
         argv=("true",),
         stop_argv=("true",),

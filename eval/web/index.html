@@ -12,7 +12,7 @@
     <header class="topbar">
       <div class="topbar-brand"><h1>UAV-VLN 在线评测</h1></div>
       <div class="topbar-actions">
-        <button class="report-btn" id="compareBtn">场景对比</button>
+        <button class="report-btn" id="compareBtn">数据集对比</button>
         <a class="ghost" id="plannerLink" href="#">返回导航系统</a>
       </div>
     </header>
@@ -21,12 +21,12 @@
       <section class="side">
         <div class="block block-launch">
           <div class="block-head launch-controls">
-            <label for="sceneSelect">场景</label>
+            <label for="sceneSelect">数据集</label>
             <select id="sceneSelect"></select>
             <label for="modeSelect">规划配置</label>
             <select id="modeSelect"></select>
             <button class="primary" id="batchBtn" disabled>
-              批量测试本场景
+              批量测试本数据集
             </button>
           </div>
           <div class="runstate" id="runState" role="status"></div>
@@ -174,7 +174,7 @@
 
     <dialog id="compareDialog" class="compare-dialog">
       <div class="report-dialog-bar">
-        <span>UAV-VLN　/　场景规划配置对比</span
+        <span>UAV-VLN　/　数据集规划配置对比</span
         ><button id="closeCompareBtn" aria-label="关闭对比">关闭</button>
       </div>
       <div class="compare-dialog-content">
@@ -182,7 +182,7 @@
           <span class="eyebrow">SCENE COMPARISON</span>
           <h2>规划配置对比</h2>
         </div>
-        <label class="compare-scene-label" for="compareScene">评测场景</label
+        <label class="compare-scene-label" for="compareScene">评测数据集</label
         ><select id="compareScene"></select>
         <div id="compareChoices" class="compare-choices"></div>
         <div id="compareResult">

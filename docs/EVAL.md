@@ -2,14 +2,14 @@
 
 本文说明 `eval/` 子系统：它怎么把数据集里的一个 episode 变成一次真实飞行、复用规划器的哪条链路、结果落盘成什么、以及仪表盘怎么读这些结果。
 
-评测**没有独立的规划器**。每个 episode 都在进程内构造与主服务相同的 `AirSimMissionSession`，复用同一份 `config/core/<profile>/base.yaml`、同一套工厂与 visual-goal 工作流。评测只负责三件主服务不管的事：拉起并布置 TravelUAV 场景、按频率采集无人机真实位姿、用真值距离与官方脚本打分。
+评测**没有独立的规划器**。每个 episode 都在进程内构造与主服务相同的 `AirSimMissionSession`，复用同一份 `config/core/<profile>/base.yaml`、同一套工厂与 visual-goal 工作流。评测只负责三件主服务不管的事：拉起并布置 TravelUAV 数据集、按频率采集无人机真实位姿、用真值距离与官方脚本打分。
 
 ## 1 一次批量评测的流程
 
 ```
 数据集 episode                       eval/run.py
   scene / uuid / instruction          run_batch()
-  start_pose / target / asset           └─ 按场景分组，open_scene() 拉起 AirSim
+  start_pose / target / asset           └─ 按数据集分组，open_scene() 拉起 AirSim
         │                               └─ run_episode() → run_episode_real()
         ▼                                         │
   evalcore/sim.py Scene                            │  每集：
@@ -27,7 +27,7 @@
 
 要点：
 
-- **场景进程与规划器进程内共存的一侧只有评测**。主服务把 UE4 会话放进子进程是为了隔离 `msgpack`；评测本身就跑在 `vln-ue4` 解释器里，所以 AirSim 客户端可以直接加载（[planner_runtime.py](../eval/evalcore/planner_runtime.py) 顶部有说明）。
+- **数据集进程与规划器进程内共存的一侧只有评测**。主服务把 UE4 会话放进子进程是为了隔离 `msgpack`；评测本身就跑在 `vln-ue4` 解释器里，所以 AirSim 客户端可以直接加载（[planner_runtime.py](../eval/evalcore/planner_runtime.py) 顶部有说明）。
 - **瞬移后必须重新起飞**。`simSetKinematics` 会把飞控置于失控状态，恢复仿真后无人机会自由落体撞地。`run_episode_real` 在 `simPause(False)` 之后显式执行 `enableApiControl → armDisarm → takeoffAsync → hoverAsync`，再交给规划器。
 - **成功率不采信模型自判**。模型判定记在 `result.json.mission_success`，评测的 `success` 只由真值距离与碰撞决定；目录名 `success_` 前缀由评测写，官方 metric.py 以它为 SR 口径。
 - **专家轨迹顺带记录**。数据集原 episode 的 `log/` 每帧位置即专家轨迹，构造 episode 时读入 `gt_positions`（[dataset.py:59-68](../eval/evalcore/dataset.py#L59-L68)），写进 `result.json.expert_positions` 供可视化。
@@ -36,8 +36,8 @@
 
 | 文件 | 职责 |
 | --- | --- |
-| `eval/run.py` | CLI 入口：`one` / `batch` / `serve`；分组、开场景、跑集、调打分、写报告 |
-| `eval/evalcore/config.py` | 评测配置（`config/eval.yml` + 命令行覆盖）、场景启动脚本表 |
+| `eval/run.py` | CLI 入口：`one` / `batch` / `serve`；分组、开数据集、跑集、调打分、写报告 |
+| `eval/evalcore/config.py` | 评测配置（`config/eval.yml` + 命令行覆盖）、数据集启动脚本表 |
 | `eval/evalcore/dataset.py` | 读 `UAV-VLN-FOV/<split>/`，复刻官方 `env_uav.py` 的 episode 构造（起点、目标 spawn-area、指令、专家轨迹） |
 | `eval/evalcore/sim.py` | 拉起/关闭 TravelUAV、生成 AirSim settings、瞬移、刷物、取状态/碰撞/RGB；`collision_detail()` 只读诊断 |
 | `eval/evalcore/planner_runtime.py` | 把活着的仿真器端口装成规划器的 `SimulatorFamily`，构建 `MissionResources`、装配 mission arm、跑任务；后台位姿采样 |
@@ -77,7 +77,7 @@ staged 管线还会在 `eval/output/visual_goal/<profile>/<时间戳>_<id>/` 写
 
 | 键 | 含义 |
 | --- | --- |
-| `maps_path` | 场景包根，含 `closeloop_envs/`、`carla_town_envs/`；填绝对路径或相对配置文件所在目录的路径 |
+| `maps_path` | 数据集根，含 `closeloop_envs/`、`carla_town_envs/`；填绝对路径或相对配置文件所在目录的路径 |
 | `dataset_path` | 数据集根，含 `test/`、`unscene/`、`unobject/`、`meta/`；路径规则同上 |
 | `output_dir` / `saved_dir` | 批量结果与执行记录目录 |
 | `dashboard_port` | 仪表盘端口（默认 8010，可被 `AVLN_EVAL_PORT` 覆盖） |
@@ -132,10 +132,10 @@ python run.py batch --scenes TropicalIsland --planner-profile vlm
 - 「批量测试结果」：每次 run 一张批次汇总卡（SR/OSR/NE/SPL、成功/碰撞计数、逐集表），点击行切换样例；支持整批删除。轨迹图绘制实测轨迹与**专家轨迹（蓝色虚线）**，相机页签切换前视/下视。被停止的批次卡片标「已停止」。
 - 演示批次（城市核心区，「世界模型」与「普通 VLM」两档）常驻批次列表末尾，有无真实数据、是否在跑评测都不隐藏；点开后不会被轮询自动切回真实批次。
 - 评测进行中，进度行右侧出现「停止」按钮。`POST /api/stop` 终止评测子进程，并把该 run 的 `progress.json` 置为 `stopped`；仪表盘重启后丢了子进程句柄时，同一接口把残留的 `running` 收尾为 `stopped`。
-- 「场景对比」按场景聚合同场景的多个批次，演示批次一并列出；没有 `metrics.json` 的未完成批次不参与对比。
+- 「数据集对比」按数据集聚合同数据集的多个批次，演示批次一并列出；没有 `metrics.json` 的未完成批次不参与对比。
 - 「执行记录」：主控台保存的单次任务记录，含指令、成功率、轨迹、地图与 profile。
 - 「生成评测报告」/「生成对比报告」：先按当前结果调 `ai_report` 段的模型，弹窗用打字机效果展示约 500 字纯文本评语；点「保存并导出 PDF」才落盘并打印。保存过之后按钮变成「重新生成…」，旁边出现「查看已保存报告」，可查看或直接导出，不再调模型。评语在页面报告区尾部与 PDF 末尾各出现一次，标题都是「AI 评测结果」。
-- 评语落地位置：单批次写进该 run 的 `metrics.json` 的 `ai_report` 字段；对比写进 `output_dir/_ai_reports.json`，键为「场景::排序后的批次名」。演示批次没有落盘记录，数据由前端随请求带上，评语只存浏览器 `localStorage`（键 `avln.ai-report.*`），换机器或清缓存就没了。模型调用失败时只弹提示，已保存的文案保持不变。
+- 评语落地位置：单批次写进该 run 的 `metrics.json` 的 `ai_report` 字段；对比写进 `output_dir/_ai_reports.json`，键为「数据集::排序后的批次名」。演示批次没有落盘记录，数据由前端随请求带上，评语只存浏览器 `localStorage`（键 `avln.ai-report.*`），换机器或清缓存就没了。模型调用失败时只弹提示，已保存的文案保持不变。
 - HTTP 接口：
 
 | 方法 | 路径 | 作用 |
@@ -153,8 +153,8 @@ python run.py batch --scenes TropicalIsland --planner-profile vlm
 
 ## 8 已知限制
 
-- **停止或中断的 run 没有 `metrics.json`**。仪表盘读不到它就不生成报告（点「生成评测报告」提示「未完成的评测无法生成报告」），该批次也不进场景对比；批次卡片与逐集明细仍按已有的 `result.json` 显示。
+- **停止或中断的 run 没有 `metrics.json`**。仪表盘读不到它就不生成报告（点「生成评测报告」提示「未完成的评测无法生成报告」），该批次也不进数据集对比；批次卡片与逐集明细仍按已有的 `result.json` 显示。
 - **中段碰撞仍是规划器侧问题**。评测只记录碰撞并判失败，`visual_goal_navigation.collision_check_enabled` 默认 `false`，工作流不会因碰撞中断。同一 episode 具有随机性（同集单独重跑可能不撞），原因在航点本身无障碍约束，以及位置保持阶段不感知碰撞，单集失败不应直接归因于评测器。
 - **位姿采样 5 Hz** 决定 `P` 的折线粒度，急弯路径长度会略微低估；所有集同口径。
 - **世界模型档未接入世界模型权重**，见第 5 节。
-- 数据集场景必须同时出现在 `UAV-VLN-FOV/meta/map_spawnarea_info.json` 与 `evalcore/config.py` 的启动脚本表里，否则该场景会被跳过。
+- 数据集必须同时出现在 `UAV-VLN-FOV/meta/map_spawnarea_info.json` 与 `evalcore/config.py` 的启动脚本表里，否则该数据集会被跳过。

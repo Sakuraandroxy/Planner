@@ -999,7 +999,7 @@ function renderFullReport(report) {
     <section class="print-metrics"><div><span>成功率　SR</span><b>${pct(metrics.sr)}</b></div><div><span>可达率　OSR</span><b>${pct(metrics.osr)}</b></div>
       <div><span>末端距离　NE</span><b>${num(metrics.ne_mean, " m")}</b></div><div><span>路径效率　SPL</span><b>${pct(metrics.spl)}</b></div></section>
     <section class="print-episodes"><div class="print-section-title"><span>逐样例结果</span><small>${episodes.length} 个样例</small></div>
-      <table><thead><tr><th>#</th><th>样例 ID</th><th>场景</th><th>结果</th><th>碰撞</th><th>NE</th><th>步数</th><th>路径长度</th><th>错误信息</th></tr></thead><tbody>${rows}</tbody></table></section>
+      <table><thead><tr><th>#</th><th>样例 ID</th><th>数据集</th><th>结果</th><th>碰撞</th><th>NE</th><th>步数</th><th>路径长度</th><th>错误信息</th></tr></thead><tbody>${rows}</tbody></table></section>
     ${aiPrintSection()}
     <footer class="print-report-footer"><span>UAV-VLN · Evaluation System</span><span>${escapeHTML(new Date().toLocaleString("zh-CN"))}</span></footer>
   </article>`;
@@ -1075,7 +1075,7 @@ function renderCompareChoices() {
     ${run.demo ? '<span class="pill demo-pill">演示</span>' : `<span class="compare-sr">SR ${run.sr != null ? run.sr.toFixed(1) + "%" : "—"}</span>`}
     </label>`,
       )
-      .join("") || '<div class="compare-empty">该场景暂无评测批次</div>';
+      .join("") || '<div class="compare-empty">该数据集暂无评测批次</div>';
   $("compareChoices")
     .querySelectorAll("input")
     .forEach((input) => (input.onchange = renderCompareResult));
@@ -1103,7 +1103,7 @@ function renderCompareResult() {
   if (!valid) {
     disposeComparisonCharts();
     $("compareResult").innerHTML =
-      '<div class="compare-empty">选择同一场景下至少两种规划配置</div>';
+      '<div class="compare-empty">选择同一数据集下至少两种规划配置</div>';
     return;
   }
   disposeComparisonCharts();
@@ -1111,7 +1111,7 @@ function renderCompareResult() {
   const tableMarkup = `<div class="compare-table-wrap"><table class="compare-table"><thead><tr><th>评测指标</th>${selected.map((run) => `<th>${escapeHTML(profileText(run.planner) || run.planner || "未知配置")}</th>`).join("")}</tr></thead>
       <tbody>${rows.map(([label, key, suffix]) => `<tr><th>${label}</th>${selected.map((run) => `<td>${run[key] != null ? Number(run[key]).toFixed(2) + suffix : "—"}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
   $("compareResult").innerHTML =
-    `<div class="compare-result-head"><div><span class="eyebrow">${selected.some((run) => run.demo) ? "演示数据" : "同场景批次对比"}</span><h3>${escapeHTML(scene)}</h3></div></div>${chartMarkup}${tableMarkup}
+    `<div class="compare-result-head"><div><span class="eyebrow">${selected.some((run) => run.demo) ? "演示数据" : "同数据集批次对比"}</span><h3>${escapeHTML(scene)}</h3></div></div>${chartMarkup}${tableMarkup}
     <div class="compare-runs">${selected.map((run) => `<span>${escapeHTML(runTimeLabel(run.name) || run.name)}　·　${run.num_episodes ?? 0} 样例</span>`).join("")}</div>`;
   renderComparisonCharts(selected, rows);
   $("exportCompareBtn").dataset.scene = scene;
@@ -1742,7 +1742,7 @@ async function loadDataset() {
   sel.onchange = () => loadEpisodes(sel.value);
   setLaunchDisabled(lastActive);
   if (sel.value) await loadEpisodes(sel.value);
-  else $("epList").innerHTML = '<div class="stats">暂无可评测的场景。</div>';
+  else $("epList").innerHTML = '<div class="stats">暂无可评测的数据集。</div>';
 }
 
 async function loadEpisodes(scene) {
@@ -1783,7 +1783,7 @@ async function loadEpisodes(scene) {
 
 async function startRun(scene, uuids) {
   if (!scene) {
-    setRunState("先选一个场景", false);
+    setRunState("先选一个数据集", false);
     return;
   }
   if (state.demoActive && !state.demoPinned) {
@@ -1793,12 +1793,12 @@ async function startRun(scene, uuids) {
   const profile = $("modeSelect").value || null;
   const label = ($("modeSelect").selectedOptions[0] || {}).textContent || "";
   setRunState(
-    `提交中: ${scene}${uuids ? " / 1集" : " / 全场景"}${label ? " (" + label + ")" : ""}…`,
+    `提交中: ${scene}${uuids ? " / 1集" : " / 全数据集"}${label ? " (" + label + ")" : ""}…`,
     false,
   );
   try {
     await postJSON("/api/start", { scene, uuids: uuids || null, profile });
-    setRunState(`已提交，场景 ${scene} 启动中…`, true);
+    setRunState(`已提交，数据集 ${scene} 启动中…`, true);
     await pollRunStatusOnce();
   } catch (e) {
     setRunState("启动失败: " + e.message, false);

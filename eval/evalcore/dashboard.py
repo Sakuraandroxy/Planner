@@ -70,7 +70,7 @@ def _planner_profile() -> dict:
 
 
 def _all_episodes(cfg):
-    """读取全部 episode 并按场景分组缓存（dataset 图不大，读一次即可）。"""
+    """读取全部 episode 并按数据集分组缓存（dataset 图不大，读一次即可）。"""
     global _EPISODE_CACHE
     with _EPISODE_LOCK:
         if _EPISODE_CACHE is None:
@@ -91,7 +91,7 @@ def _public_episode(ep) -> dict:
 
 
 def _scene_available(cfg, scene: str) -> bool:
-    """场景的启动脚本在磁盘上才可用；判据与 sim.open_scene 一致。"""
+    """数据集的启动脚本在磁盘上才可用；判据与 sim.open_scene 一致。"""
     sh = cfg.resolve_scenes().get(scene)
     return bool(sh) and os.path.isfile(os.path.join(cfg.maps_path, sh))
 
@@ -131,7 +131,7 @@ def _run_status() -> dict:
 
 
 def _start_run(cfg, scene: str, uuids: list[str], profile: str | None = None) -> dict:
-    """在 eval 目录起 `run.py batch` 跑一个场景（或其中若干 episode）。
+    """在 eval 目录起 `run.py batch` 跑一个数据集（或其中若干 episode）。
 
     profile 由前端下拉传入（可改，仅影响评测）；未指定时现读主服务当前 profile。
     """

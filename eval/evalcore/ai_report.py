@@ -5,7 +5,7 @@
 
 落盘位置：
 - 单批次：``<run>/metrics.json`` 的 ``ai_report`` 字段，跟该批次的评测记录同处一个文件；
-- 对比：``output_dir/_ai_reports.json`` 的索引，键为「场景::排序后的批次名」。
+- 对比：``output_dir/_ai_reports.json`` 的索引，键为「数据集::排序后的批次名」。
 """
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ _INSTRUCTIONS = """请基于以上数据写一段约 {words} 字的中文评述�
 - 失败样例按共性归因，合并成一句或两句，不要逐个列举编号；
 - 结尾给出 1 到 2 条有数据支撑的改进建议，说明观察到的限制，不夸大结论；
 - 不使用「显著」「大幅」「全面」这类缺少数据支撑的修饰；
-- 只使用上面给出的数据，不编造数字、场景名或不存在的对比。"""
+- 只使用上面给出的数据，不编造数字、数据集名或不存在的对比。"""
 
 
 def generate(cfg, kind: str, payload: dict) -> dict:
@@ -153,7 +153,7 @@ def _compare_prompt(cfg, payload: dict) -> str:
         raise RuntimeError("对比报告至少要两个批次")
     inline = payload.get("reports")
     inline = inline if isinstance(inline, dict) else {}
-    facts = [f"评测场景：{scene}", f"参与对比的批次：{len(runs)} 个"]
+    facts = [f"评测数据集：{scene}", f"参与对比的批次：{len(runs)} 个"]
     episodes = {}
     for run in runs:
         report = inline.get(run)
@@ -207,7 +207,7 @@ def _run_facts(run: str, report: dict) -> str:
         f"批次：{run}",
         f"评测时间：{report.get('time') or '未知'}",
         f"规划配置：{report.get('planner') or '未知'}",
-        f"数据集切分：{dataset.get('split') or '未知'}；场景：{scenes or '未知'}；"
+        f"数据集：{scenes or '未知'}；切分：{dataset.get('split') or '未知'}；"
         f"成功半径：{dataset.get('success_radius_m') or '未知'} 米",
         f"用例 {total} 个，成功 {success} 个，碰撞 {collided} 个",
         f"SR {_num(metrics.get('sr'))}%，OSR {_num(metrics.get('osr'))}%，"

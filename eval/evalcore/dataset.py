@@ -103,10 +103,10 @@ def load_episodes(cfg) -> list[Episode]:
     for scene in scenes:
         scene_dir = os.path.join(split_root, scene)
         if not os.path.isdir(scene_dir):
-            print(f"[dataset] 跳过不存在的场景: {scene}")
+            print(f"[dataset] 跳过不存在的数据集: {scene}")
             continue
         if scene not in map_area:
-            print(f"[dataset] 跳过无 spawn-area 的场景: {scene}")
+            print(f"[dataset] 跳过无 spawn-area 的数据集: {scene}")
             continue
         for uuid in sorted(os.listdir(scene_dir)):
             ep_dir = os.path.join(scene_dir, uuid)
