@@ -47,6 +47,7 @@
 | `eval/evalcore/report.py` | `per_episode.csv`、`metrics.json`、`progress.json` |
 | `eval/evalcore/runner.py` | 单集执行器（薄封装，指向 `run_episode_real`） |
 | `eval/evalcore/dashboard.py` | 仪表盘 HTTP 服务：结果浏览、发跑/停止、删除、保存记录 |
+| `eval/evalcore/ai_report.py` | 大模型评语：拼提示词、调模型、把文案写进批次记录 |
 | `eval/web/` | 无构建步骤的静态页面（`index.html` / `app.js` / `style.css`） |
 
 ## 3 磁盘契约（metric.py 能直接吃的格式）
@@ -80,6 +81,7 @@ staged 管线还会在 `eval/output/visual_goal/<profile>/<时间戳>_<id>/` 写
 | `dataset_root` | `UAV-VLN-FOV`，含 `test/`、`unscene/`、`unobject/`、`meta/` |
 | `output_dir` / `saved_dir` | 批量结果与执行记录目录 |
 | `dashboard_port` | 仪表盘端口（默认 8010，可被 `AVLN_EVAL_PORT` 覆盖） |
+| `ai_report` | AI 评语模型：`url` / `model` / `api_key_env`（默认 `VLN_API_KEY`，与规划器共用）/ `timeout_s` / `words`；`api_key` 非空时优先于环境变量 |
 
 运行环境：`vln-ue4`（带 `airsim`、`numpy`、`httpx`、`PIL`、`opencv`），并与规划器共用 `VLN_API_KEY`。主服务拉起仪表盘时会继承自己的环境，所以密钥跟着主服务走；从 CLI 直接跑则需自行导出。
 
@@ -132,6 +134,8 @@ python run.py batch --scenes TropicalIsland --planner-profile vlm
 - 评测进行中，进度行右侧出现「停止」按钮。`POST /api/stop` 终止评测子进程，并把该 run 的 `progress.json` 置为 `stopped`；仪表盘重启后丢了子进程句柄时，同一接口把残留的 `running` 收尾为 `stopped`。
 - 「场景对比」按场景聚合同场景的多个批次，演示批次一并列出；没有 `metrics.json` 的未完成批次不参与对比。
 - 「执行记录」：主控台保存的单次任务记录，含指令、成功率、轨迹、地图与 profile。
+- 「生成评测报告」/「生成对比报告」：先按当前结果调 `ai_report` 段的模型，弹窗用打字机效果展示约 500 字纯文本评语；点「保存并导出 PDF」才落盘并打印。保存过之后按钮变成「重新生成…」，旁边出现「查看已保存报告」，可查看或直接导出，不再调模型。评语在页面报告区尾部与 PDF 末尾各出现一次，标题都是「AI 评测结果」。
+- 评语落地位置：单批次写进该 run 的 `metrics.json` 的 `ai_report` 字段；对比写进 `output_dir/_ai_reports.json`，键为「场景::排序后的批次名」。模型调用失败时只弹提示，已保存的文案保持不变。演示批次不调模型，直接打印内置报告。
 - HTTP 接口：
 
 | 方法 | 路径 | 作用 |
@@ -143,6 +147,9 @@ python run.py batch --scenes TropicalIsland --planner-profile vlm
 | GET | `/api/history`、`/api/dataset`、`/api/episodes`、`/api/runstatus`、`/api/eval/profile` | 历史、数据集、待测集、运行状态、profile 镜像 |
 | POST | `/api/start`、`/api/stop` | 发跑/停止；`/api/stop` 在没有活进程时把该 run 残留的 `running` 收尾为 `stopped` |
 | POST | `/api/runs/delete`、`/api/episode/delete`、`/api/saved/delete` | 删除批次/单集/保存记录 |
+| GET | `/api/ai-report?kind=run&run=`、`?kind=compare&scene=&runs=` | 读已保存的 AI 评语 |
+| POST | `/api/ai-report` | 现场调模型生成评语，返回文本不落盘 |
+| POST | `/api/ai-report/save` | 保存评语：单批次进 `metrics.json`，对比进 `_ai_reports.json` |
 
 ## 8 已知限制
 

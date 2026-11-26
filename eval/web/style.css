@@ -658,6 +658,72 @@ main {
 .legend-expert {
   color: #82aee8;
 }
+.report-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.report-actions .report-export {
+  min-height: 40px;
+}
+.report-dialog-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+/* 页面尾部的 AI 评语段 */
+.ai-panel {
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.ai-panel h3 {
+  margin: 0 0 8px;
+  color: var(--accent);
+  font: 600 12px/1.4 var(--mono);
+  letter-spacing: 0.6px;
+}
+.ai-panel p {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.85;
+  white-space: pre-wrap;
+}
+.ai-dialog {
+  width: min(760px, calc(100% - 32px));
+  max-height: min(80dvh, 720px);
+  padding: 0;
+  border: 1px solid #40504f;
+  border-radius: 7px;
+  background: #11191b;
+  color: var(--text);
+  box-shadow: 0 30px 100px rgba(0, 0, 0, 0.55);
+}
+.ai-dialog::backdrop {
+  background: rgba(3, 8, 9, 0.76);
+  backdrop-filter: blur(4px);
+}
+.ai-dialog:not([open]) {
+  display: none;
+}
+.ai-dialog[open] {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.ai-dialog-body {
+  flex: 1;
+  min-height: 0;
+  padding: 20px 24px;
+  overflow: auto;
+}
+.ai-dialog-body p {
+  margin: 0;
+  font-size: 14.5px;
+  line-height: 1.9;
+  white-space: pre-wrap;
+}
 .compare-dialog {
   width: min(1020px, calc(100% - 32px));
   max-width: 1020px;
@@ -1166,6 +1232,15 @@ main {
   }
   .print-compare-table tr {
     break-inside: avoid;
+  }
+  .print-ai p {
+    margin: 0;
+    color: #253431;
+    font-size: 10pt;
+    line-height: 1.75;
+  }
+  .print-ai {
+    margin-top: 7mm;
   }
   .print-compare-legend {
     margin-top: 2mm;

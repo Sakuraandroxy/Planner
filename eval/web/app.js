@@ -104,6 +104,7 @@ const state = {
   runSummaries: {}, // run 名 -> 批次汇总（/api/runs，历史列表的批次卡片用）
   summaryRun: null, // 当前选中的批次（点了批次汇总卡片时；与 episode 选择互斥）
   selectedUuid: null,
+  aiReport: null, // 当前上下文已保存的 AI 评语 {text, model, created}
   traj: null, // {positions, target, start, radius}
   cam: "front",
   viewSaved: false, // 正在看已保存记录（无相机帧）
@@ -556,6 +557,7 @@ async function selectEpisode(uuid, run) {
   );
   $("viewerDetail").hidden = false;
   $("viewer").classList.add("has-episode");
+  renderAiPanel("");
   $("reportEyebrow").textContent = "EVALUATION REPORT";
   updateFrame();
   renderStats();
@@ -699,32 +701,212 @@ function renderRunSummaryStats(run) {
   overview.querySelectorAll(".report-episode-row").forEach((row) => {
     row.onclick = () => selectEpisode(row.dataset.uuid, run);
   });
+  syncAiState("run");
+}
+
+// ---------- AI 评测结果 ----------
+const AI_LABEL = {
+  run: ["生成评测报告", "重新生成评测报告"],
+  compare: ["生成对比报告", "重新生成对比报告"],
+};
+let aiTyping = null;
+
+function aiTarget(kind) {
+  if (kind === "run") {
+    const run = state.summaryRun || state.run;
+    return run ? { kind: "run", run } : null;
+  }
+  const runs = comparisonSelection().map((run) => run.name);
+  if (runs.length < 2) return null;
+  return { kind: "compare", scene: $("compareScene").value, runs };
+}
+
+function aiQuery(target) {
+  if (target.kind === "run") {
+    return `kind=run&run=${encodeURIComponent(target.run)}`;
+  }
+  return `kind=compare&scene=${encodeURIComponent(target.scene)}&runs=${encodeURIComponent(target.runs.join(","))}`;
+}
+
+function markAiState(kind, available) {
+  const [idle, again] = AI_LABEL[kind];
+  const main = kind === "run" ? $("exportReportBtn") : $("exportCompareBtn");
+  const view = kind === "run" ? $("viewAiBtn") : $("viewCompareAiBtn");
+  main.textContent = available ? again : idle;
+  view.hidden = !available;
+}
+
+function renderAiPanel(text) {
+  $("aiPanel").hidden = !text;
+  $("aiPanelText").textContent = text || "";
+}
+
+// 选中批次/对比组合时同步按钮文案与页面上的评语段。
+async function syncAiState(kind) {
+  const target = aiTarget(kind);
+  if (!target) {
+    state.aiReport = null;
+    renderAiPanel("");
+    return;
+  }
+  try {
+    const data = await getJSON(`/api/ai-report?${aiQuery(target)}`);
+    state.aiReport = data.ai_report || null;
+  } catch (error) {
+    state.aiReport = null;
+  }
+  markAiState(kind, !!state.aiReport);
+  renderAiPanel(state.aiReport ? state.aiReport.text : "");
+}
+
+function aiPrintSection() {
+  const text = state.aiReport && state.aiReport.text;
+  if (!text) return "";
+  return `<section class="print-ai"><div class="print-section-title"><span>AI 评测结果</span></div>
+    <p>${escapeHTML(text)}</p></section>`;
+}
+
+function showAiDialog(text, { typing, saveLabel, onSave }) {
+  if (aiTyping) {
+    clearInterval(aiTyping);
+    aiTyping = null;
+  }
+  const box = $("aiDialogText");
+  const save = $("aiSaveBtn");
+  box.textContent = "";
+  save.textContent = saveLabel || "保存并导出 PDF";
+  save.onclick = null;
+  save.disabled = true;
+  if (!typing) {
+    box.textContent = text;
+    save.disabled = false;
+    save.onclick = onSave || null;
+  } else {
+    let shown = 0;
+    aiTyping = setInterval(() => {
+      shown = Math.min(text.length, shown + 3);
+      box.textContent = text.slice(0, shown);
+      const body = box.parentElement;
+      body.scrollTop = body.scrollHeight;
+      if (shown >= text.length) {
+        clearInterval(aiTyping);
+        aiTyping = null;
+        save.disabled = false;
+        save.onclick = onSave || null;
+      }
+    }, 18);
+  }
+  if (!$("aiDialog").open) $("aiDialog").showModal();
+}
+
+async function generateAiReport(kind) {
+  const target = aiTarget(kind);
+  if (!target) return;
+  const main = kind === "run" ? $("exportReportBtn") : $("exportCompareBtn");
+  const label = main.textContent;
+  main.disabled = true;
+  main.textContent = "生成中…";
+  let data;
+  try {
+    data = await postJSON("/api/ai-report", target);
+  } catch (error) {
+    main.disabled = false;
+    main.textContent = label;
+    alert(`生成失败：${error.message}`);
+    return;
+  }
+  main.disabled = false;
+  main.textContent = label;
+  showAiDialog(data.text, {
+    typing: true,
+    saveLabel: "保存并导出 PDF",
+    onSave: async () => {
+      const save = $("aiSaveBtn");
+      save.disabled = true;
+      try {
+        const saved = await postJSON("/api/ai-report/save", {
+          ...target,
+          text: data.text,
+          model: data.model,
+        });
+        state.aiReport = saved.ai_report;
+      } catch (error) {
+        save.disabled = false;
+        alert(`保存失败：${error.message}`);
+        return;
+      }
+      $("aiDialog").close();
+      markAiState(kind, true);
+      renderAiPanel(state.aiReport.text);
+      if (kind === "run") await printRunReport(target.run);
+      else await printCompareReport();
+    },
+  });
+}
+
+async function viewSavedAi(kind) {
+  const target = aiTarget(kind);
+  if (!target) return;
+  let record;
+  try {
+    record = (await getJSON(`/api/ai-report?${aiQuery(target)}`)).ai_report;
+  } catch (error) {
+    alert(`读取失败：${error.message}`);
+    return;
+  }
+  state.aiReport = record;
+  showAiDialog(record.text, {
+    typing: false,
+    saveLabel: "导出 PDF",
+    onSave: async () => {
+      $("aiDialog").close();
+      if (kind === "run") await printRunReport(target.run);
+      else await printCompareReport();
+    },
+  });
 }
 
 async function exportReport() {
   const run = state.summaryRun || state.run;
   if (!run) return;
+  // 演示批次没有落盘数据，不调模型，直接打印内置报告。
+  if (DEMO_BATCHES.some((batch) => batch.name === run)) {
+    await printRunReport(run);
+    return;
+  }
+  await generateAiReport("run");
+}
+
+// 只负责渲染与前印，模型调用在 generateAiReport 里。
+async function printRunReport(run) {
+  let report;
   try {
-    const report =
+    report =
       DEMO_BATCHES.find((batch) => batch.name === run)?.report ||
       (await getJSON(`/api/report?run=${encodeURIComponent(run)}`));
-    renderFullReport(report);
-    $("reportPrint").hidden = false;
-    window.addEventListener(
-      "afterprint",
-      () => {
-        $("reportPrint").hidden = true;
-      },
-      { once: true },
-    );
-    window.print();
   } catch (error) {
     alert(
       error.message === "404"
         ? "未完成的评测无法生成报告"
         : "报告加载失败：" + error.message,
     );
+    return;
   }
+  renderFullReport(report);
+  printReportPage();
+}
+
+function printReportPage() {
+  if ($("compareDialog").open) $("compareDialog").close();
+  $("reportPrint").hidden = false;
+  window.addEventListener(
+    "afterprint",
+    () => {
+      $("reportPrint").hidden = true;
+    },
+    { once: true },
+  );
+  window.print();
 }
 
 function renderFullReport(report) {
@@ -754,6 +936,7 @@ function renderFullReport(report) {
   const planner = report.demo
     ? demoBatch?.label || "—"
     : profileText(report.planner) || report.planner || "—";
+  state.aiReport = report.ai_report || null;
   $("reportPrint").innerHTML =
     `<article class="print-report ${report.demo ? "is-demo" : ""}">
     <header class="print-report-head"><div><div class="print-brand">UAV-VLN <span>评测报告</span></div><div class="print-kicker">EVALUATION REPORT</div>
@@ -765,6 +948,7 @@ function renderFullReport(report) {
       <div><span>末端距离　NE</span><b>${num(metrics.ne_mean, " m")}</b></div><div><span>路径效率　SPL</span><b>${pct(metrics.spl)}</b></div></section>
     <section class="print-episodes"><div class="print-section-title"><span>逐样例结果</span><small>${episodes.length} 个样例</small></div>
       <table><thead><tr><th>#</th><th>样例 ID</th><th>场景</th><th>结果</th><th>碰撞</th><th>NE</th><th>步数</th><th>路径长度</th><th>错误信息</th></tr></thead><tbody>${rows}</tbody></table></section>
+    ${aiPrintSection()}
     <footer class="print-report-footer"><span>UAV-VLN · Evaluation System</span><span>${escapeHTML(new Date().toLocaleString("zh-CN"))}</span></footer>
   </article>`;
 }
@@ -880,6 +1064,7 @@ function renderCompareResult() {
   renderComparisonCharts(selected, rows);
   $("exportCompareBtn").dataset.scene = scene;
   $("exportCompareBtn").dataset.runs = JSON.stringify(selectedIds);
+  syncAiState("compare");
 }
 
 function disposeComparisonCharts() {
@@ -1059,12 +1244,27 @@ function comparisonEpisodeTable(runs, episodesByRun) {
     <div class="print-compare-legend">结果列依次为判定与末端距离 NE，同一行是一个用例在各批次下的结果。</div></section>`;
 }
 
-async function exportComparisonPdf() {
-  const scene = $("compareScene").value;
+function comparisonSelection() {
   const selectedIds = JSON.parse($("exportCompareBtn").dataset.runs || "[]");
-  const runs = comparisonRunData().filter((run) =>
+  return comparisonRunData().filter((run) =>
     selectedIds.includes(run.name),
   );
+}
+
+async function exportComparisonPdf() {
+  const runs = comparisonSelection();
+  if (runs.length < 2) return;
+  // 演示批次不调模型，直接打印内置对比页。
+  if (runs.every((run) => run.demo)) {
+    await printCompareReport();
+    return;
+  }
+  await generateAiReport("compare");
+}
+
+async function printCompareReport() {
+  const scene = $("compareScene").value;
+  const runs = comparisonSelection();
   if (runs.length < 2) return;
   const episodesByRun = await Promise.all(runs.map(comparisonEpisodes));
   const metrics = [
@@ -1097,17 +1297,9 @@ async function exportComparisonPdf() {
     <section class="print-metrics compare-print-metrics">${runs.map((run) => `<div><span>${escapeHTML(profileText(run.planner) || run.planner || "未知配置")} · SR</span><b>${run.sr != null ? run.sr.toFixed(1) + "%" : "—"}</b></div>`).join("")}</section>
     <section class="print-chart-grid">${chartImages.map((chart) => `<figure><figcaption>${escapeHTML(chart.title)}</figcaption><img src="${chart.src}" alt="${escapeHTML(chart.title)}对比图"></figure>`).join("")}</section>
     ${comparisonEpisodeTable(runs, episodesByRun)}
+    ${aiPrintSection()}
     <footer class="print-report-footer"><span>UAV-VLN · ${demo ? "演示数据" : "Evaluation System"}</span><span>${escapeHTML(new Date().toLocaleString("zh-CN"))}</span></footer></article>`;
-  $("compareDialog").close();
-  $("reportPrint").hidden = false;
-  window.addEventListener(
-    "afterprint",
-    () => {
-      $("reportPrint").hidden = true;
-    },
-    { once: true },
-  );
-  window.print();
+  printReportPage();
 }
 
 function dist(a, b) {
@@ -1763,6 +1955,10 @@ async function main() {
   $("batchBtn").onclick = () => startRun($("sceneSelect").value, null);
   $("stopBtn").onclick = stopRun;
   $("exportReportBtn").onclick = exportReport;
+  $("viewAiBtn").onclick = () => viewSavedAi("run");
+  $("viewCompareAiBtn").onclick = () => viewSavedAi("compare");
+  $("aiDialogClose").onclick = () => $("aiDialog").close();
+  $("aiCancelBtn").onclick = () => $("aiDialog").close();
   $("compareBtn").onclick = openCompare;
   $("closeCompareBtn").onclick = () => $("compareDialog").close();
   $("compareScene").onchange = renderCompareChoices;

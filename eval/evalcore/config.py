@@ -54,6 +54,21 @@ class PlannerSettings:
 
 
 @dataclass
+class AiReportSettings:
+    # 评测报告里那段 AI 评语用的模型。字段与 config/core/*/base.yaml 的模型段一致，
+    # 密钥默认读环境变量（与规划器共用 VLN_API_KEY）。
+    url: str = "https://api.deepseek.com/anthropic"
+    model: str = "deepseek-flash"
+    api_key: str = ""
+    api_key_env: str = "VLN_API_KEY"
+    timeout_s: float = 90.0
+    max_completion_tokens: int = 2048
+    reasoning_effort: str = "none"     # anthropic 格式只接受 none
+    request_format: str = "anthropic"  # openai / deepseek / anthropic
+    words: int = 500                   # 写进提示词的目标字数
+
+
+@dataclass
 class Config:
     # 外部资源相对 root，运行产物相对仓库根。
     root: str = "."
@@ -78,6 +93,7 @@ class Config:
     seconds_between_episodes: float = 0.0
 
     # 子配置
+    ai_report: AiReportSettings = field(default_factory=AiReportSettings)
     move: MoveSettings = field(default_factory=MoveSettings)
     capture: CaptureSettings = field(default_factory=CaptureSettings)
     planner: PlannerSettings = field(default_factory=PlannerSettings)
@@ -127,6 +143,9 @@ def _apply_yaml(cfg: Config, path: Path) -> None:
         elif key == "planner" and isinstance(value, dict):
             for k, v in value.items():
                 setattr(cfg.planner, k, v)
+        elif key == "ai_report" and isinstance(value, dict):
+            for k, v in value.items():
+                setattr(cfg.ai_report, k, v)
         elif key != "config_path" and hasattr(cfg, key):
             setattr(cfg, key, value)
 

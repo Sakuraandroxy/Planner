@@ -74,13 +74,23 @@
               选择左侧批次查看指标与样例结果
             </div>
           </div>
-          <button
-            class="report-btn primary report-export"
-            id="exportReportBtn"
-            disabled
-          >
-            生成评测报告
-          </button>
+          <div class="report-actions">
+            <button
+              class="ghost"
+              id="viewAiBtn"
+              hidden
+              title="查看已保存的 AI 评测结果"
+            >
+              查看已保存报告
+            </button>
+            <button
+              class="report-btn primary report-export"
+              id="exportReportBtn"
+              disabled
+            >
+              生成评测报告
+            </button>
+          </div>
         </div>
         <div class="report-kpis" id="reportKpis">
           <div class="report-kpi">
@@ -138,9 +148,30 @@
             </div>
           </div>
         </div>
+        <section class="ai-panel" id="aiPanel" hidden>
+          <h3>AI 评测结果</h3>
+          <p id="aiPanelText"></p>
+        </section>
       </section>
     </main>
     <div id="reportPrint" hidden></div>
+    <dialog id="aiDialog" class="ai-dialog">
+      <div class="report-dialog-bar">
+        <span>AI 评测结果</span>
+        <button id="aiDialogClose" aria-label="关闭">关闭</button>
+      </div>
+      <div class="ai-dialog-body">
+        <p id="aiDialogText"></p>
+      </div>
+      <div class="report-dialog-footer">
+        <span></span>
+        <span class="report-dialog-actions">
+          <button id="aiCancelBtn">取消</button>
+          <button class="primary" id="aiSaveBtn" disabled>保存并导出 PDF</button>
+        </span>
+      </div>
+    </dialog>
+
     <dialog id="compareDialog" class="compare-dialog">
       <div class="report-dialog-bar">
         <span>UAV-VLN　/　场景规划配置对比</span
@@ -164,10 +195,15 @@
         </div>
       </div>
       <div class="report-dialog-footer">
-        <span id="compareSelectionCount">已选 0 个批次</span
-        ><button class="primary" id="exportCompareBtn" disabled>
-          导出对比 PDF
-        </button>
+        <span id="compareSelectionCount">已选 0 个批次</span>
+        <span class="report-dialog-actions">
+          <button class="ghost" id="viewCompareAiBtn" hidden>
+            查看已保存报告
+          </button>
+          <button class="primary" id="exportCompareBtn" disabled>
+            生成对比报告
+          </button>
+        </span>
       </div>
     </dialog>
 

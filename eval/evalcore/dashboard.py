@@ -10,6 +10,9 @@
   GET /api/state?run=NAME       当前 run 的进度/指标/episode 列表
   GET /api/traj?run=&id=        某 episode 的预测轨迹 + 目标 + 成功半径
   GET /api/frame?run=&id=&cam=  某 episode 最新 front/down 缩略图 (png)
+  GET /api/ai-report?...       已保存的大模型评语
+  POST /api/ai-report         现场调模型生成评语（不落盘）
+  POST /api/ai-report/save    保存评语，单批次写进 metrics.json
 """
 from __future__ import annotations
 
@@ -29,6 +32,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .config import REPO_ROOT
 from .dataset import load_episodes
+from . import ai_report
 
 _WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
 # run.py 所在目录（evalcore 的上一级），spawn 评测子进程时作 cwd。
@@ -282,6 +286,35 @@ def _json_safe(value):
     return value
 
 
+def _ai_payload(source) -> dict:
+    """把 GET 的 parse_qs 结果或 POST 的 JSON body 归一成评语请求。"""
+    def one(name: str) -> str:
+        value = source.get(name)
+        if isinstance(value, list):
+            return str(value[0]) if value else ""
+        return str(value or "")
+
+    kind = one("kind").strip() or "run"
+    if kind == "run":
+        return {"kind": "run", "run": one("run").strip()}
+    runs = source.get("runs")
+    if runs is None:
+        runs = []
+    if isinstance(runs, str):
+        runs = [runs]
+    names = []
+    for item in runs:
+        for name in str(item).split(","):
+            name = name.strip()
+            if name:
+                names.append(name)
+    return {
+        "kind": "compare",
+        "scene": one("scene").strip(),
+        "runs": names,
+    }
+
+
 def _read_json(path, default=None):
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -361,6 +394,7 @@ def _run_summary(run_path: str, run: dict | None = None) -> dict:
         "osr": mm.get("osr"),
         "ne_mean": ne_mean,
         "spl": mm.get("spl"),
+        "has_ai_report": bool(metrics.get("ai_report")),
     }
 
 
@@ -590,6 +624,16 @@ class _Handler(BaseHTTPRequestHandler):
             self._file(os.path.join(d, fname))
         elif u.path == "/api/dataset":
             self._send(200, _dataset_summary(cfg))
+        elif u.path == "/api/ai-report":
+            payload = _ai_payload(q)
+            try:
+                record = ai_report.load(cfg, payload["kind"], payload)
+            except RuntimeError as exc:
+                self._send(404, {"error": str(exc)}); return
+            if record is None:
+                self._send(404, {"error": "no saved report"})
+            else:
+                self._send(200, {"ai_report": _json_safe(record)})
         elif u.path == "/api/episodes":
             scene = (q.get("scene") or [""])[0]
             self._send(200, {"scene": scene, "episodes": _scene_episodes(cfg, scene)})
@@ -651,6 +695,26 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send(409, {"error": str(exc)})
             else:
                 self._send(200 if ok else 404, {"deleted": ok})
+        elif u.path == "/api/ai-report":
+            payload = _ai_payload(body)
+            try:
+                self._send(200, ai_report.generate(self.cfg, payload["kind"], payload))
+            except Exception as exc:  # 模型/数据问题都归到 502，文案交给前端弹提示
+                self._send(502, {"error": str(exc)})
+        elif u.path == "/api/ai-report/save":
+            payload = _ai_payload(body)
+            text = str(body.get("text") or "").strip()
+            if not text:
+                self._send(400, {"error": "缺少评语正文"}); return
+            try:
+                record = ai_report.save(
+                    self.cfg, payload["kind"], payload, text,
+                    str(body.get("model") or ""),
+                )
+            except RuntimeError as exc:
+                self._send(404, {"error": str(exc)})
+            else:
+                self._send(200, {"ai_report": record})
         else:
             self._send(404, {"error": "not found"})
 
