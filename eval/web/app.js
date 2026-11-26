@@ -97,7 +97,7 @@ const DEMO_BATCHES = [
 
 const state = {
   demoActive: false,
-  demoSuppressed: false,
+  demoPinned: false, // 用户主动点开的演示批次，不被自动切回真实数据
   run: null, // 当前所选 episode 所属的 run（看轨迹/画面用）
   latestRun: null, // 最新一批 run 名（顶部指标来源）
   history: [], // 平铺时间线：所有 run 的每集结果
@@ -198,8 +198,7 @@ async function poll() {
     total = Number(progress.total || 0);
   const running = progress.state === "running";
   if (running) {
-    state.demoSuppressed = true;
-    if (state.demoActive) {
+    if (state.demoActive && !state.demoPinned) {
       state.demoActive = false;
       clearSelection();
       renderCards(state.history);
@@ -258,21 +257,8 @@ function revealViewer() {
 let historySig = null;
 function renderCards(entries) {
   const box = $("cards");
-  if (!entries.length) {
-    if (state.savedTabVisible) {
-      state.demoActive = false;
-      box.innerHTML = '<div class="stats">暂无批量测试结果。</div>';
-      return;
-    }
-    if (state.demoSuppressed) {
-      state.demoActive = false;
-      box.innerHTML = '<div class="stats">暂无批量测试结果。</div>';
-      return;
-    }
-    renderDemoBoard();
-    return;
-  }
-  if (state.demoActive) {
+  if (state.demoActive && entries.length && !state.demoPinned) {
+    // 真实批次出现且演示视图不是用户主动打开的，交回真实数据视图
     state.demoActive = false;
     clearSelection();
   }
@@ -284,47 +270,59 @@ function renderCards(entries) {
     state.runSummaries,
     profileLabels,
   ]);
-  if (sig === historySig) return;
-  historySig = sig;
-  const scrollTop = box.scrollTop;
-  box.innerHTML = "";
-  for (const run of [...new Set(entries.map((e) => e.run))]) {
-    box.appendChild(buildRunSummaryCard(run));
+  if (sig !== historySig) {
+    historySig = sig;
+    const scrollTop = box.scrollTop;
+    box.innerHTML = entries.length
+      ? ""
+      : '<div class="stats">暂无批量测试结果。</div>';
+    for (const run of [...new Set(entries.map((e) => e.run))]) {
+      box.appendChild(buildRunSummaryCard(run));
+    }
+    renderDemoCards();
+    box.scrollTop = scrollTop;
   }
-  box.scrollTop = scrollTop;
+  if (!entries.length && !state.demoActive && !state.savedTabVisible) {
+    renderDemoBoard();
+  }
 }
 
 function renderDemoBoard() {
   if (state.demoActive) return;
   state.demoActive = true;
+  state.demoPinned = false;
   state.selectedUuid = null;
   state.run = null;
   state.summaryRun = DEMO_RUN;
-  historySig = "demo-preview";
   renderDemoCards();
   renderDemoOverview(DEMO_RUN);
 }
 
+// 演示批次卡片常驻列表，真实批次和运行中都不会把它隐藏掉。
 function renderDemoCards() {
-  $("cards").innerHTML = DEMO_BATCHES.map(({ name, label, report }) => {
-    const active = state.summaryRun === name || state.run === name;
-    return `<div class="card card-run demo-run-card${active ? " active" : ""}" data-run="${name}">
+  const box = $("cards");
+  box.querySelectorAll(".demo-run-card").forEach((card) => card.remove());
+  box.insertAdjacentHTML(
+    "beforeend",
+    DEMO_BATCHES.map(({ name, label, report }) => {
+      const active = state.summaryRun === name || state.run === name;
+      return `<div class="card card-run demo-run-card${active ? " active" : ""}" data-run="${name}">
       <div class="row1"><span class="uuid run-title">城市核心区 · ${label}</span><span class="pill demo-pill">演示数据</span></div>
       <div class="scene">${label}　·　${report.num_episodes} 个样例</div>
       <div class="meta run-metrics"><span>SR <b>${report.metrics.sr.toFixed(1)}%</b></span><span>OSR <b>${report.metrics.osr.toFixed(1)}%</b></span><span>NE <b>${report.metrics.ne_mean.toFixed(2)}m</b></span><span>SPL <b>${report.metrics.spl.toFixed(1)}%</b></span></div>
     </div>`;
-  }).join("");
-  $("cards")
-    .querySelectorAll("[data-run]")
-    .forEach((card) => {
-      card.onclick = () => {
-        selectDemoRun(card.dataset.run);
-        revealViewer();
-      };
-    });
+    }).join(""),
+  );
+  box.querySelectorAll(".demo-run-card").forEach((card) => {
+    card.onclick = () => {
+      selectDemoRun(card.dataset.run);
+      revealViewer();
+    };
+  });
 }
 
 function selectDemoRun(run) {
+  state.demoPinned = true;
   state.summaryRun = run;
   state.selectedUuid = null;
   state.run = null;
@@ -471,6 +469,7 @@ function clearSelection() {
   state.viewSaved = false;
   state.viewDir = null;
   state.summaryRun = null;
+  state.demoPinned = false;
   state.traj = null;
   setViewerTitle("批次评测报告");
   $("reportEyebrow").textContent = "EVALUATION REPORT";
@@ -493,6 +492,8 @@ function clearSelection() {
 // 点批次汇总卡片：右侧统计面板显示该批次的指标 + 逐集明细（不选具体 episode）。
 function selectRunSummary(run) {
   selectionRequest++; // 取消可能在途的轨迹请求
+  state.demoActive = false;
+  state.demoPinned = false;
   state.selectedUuid = null;
   state.run = null;
   state.viewSaved = false;
@@ -542,6 +543,8 @@ async function selectEpisode(uuid, run) {
   state.viewSaved = false;
   state.viewDir = null;
   state.summaryRun = null; // 选具体 episode 时退出批次汇总视图
+  state.demoActive = false;
+  state.demoPinned = false;
   state.selectedUuid = uuid;
   state.run = run || state.run;
   state.traj = null;
@@ -763,23 +766,22 @@ function renderFullReport(report) {
 }
 
 function comparisonRunData() {
-  if (state.demoActive) {
-    return DEMO_BATCHES.map(({ name, label, report }) => ({
-      name,
-      scenes: report.dataset.scenes,
-      planner: label,
-      ...report.metrics,
-      num_episodes: report.num_episodes,
-      demo: true,
-    }));
-  }
+  const demoRuns = DEMO_BATCHES.map(({ name, label, report }) => ({
+    name,
+    scenes: report.dataset.scenes,
+    planner: label,
+    ...report.metrics,
+    num_episodes: report.num_episodes,
+    demo: true,
+  }));
   const visibleRuns = new Set(state.history.map((episode) => episode.run));
-  return Object.values(state.runSummaries).filter(
+  const realRuns = Object.values(state.runSummaries).filter(
     (run) =>
       visibleRuns.has(run.name) &&
       run.state !== "running" &&
       (run.scenes || []).length === 1,
   );
+  return [...realRuns, ...demoRuns];
 }
 
 function openCompare() {
@@ -1426,8 +1428,7 @@ async function startRun(scene, uuids) {
     setRunState("先选一个场景", false);
     return;
   }
-  state.demoSuppressed = true;
-  if (state.demoActive) {
+  if (state.demoActive && !state.demoPinned) {
     state.demoActive = false;
     clearSelection();
   }
