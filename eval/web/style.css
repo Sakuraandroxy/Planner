@@ -28,8 +28,10 @@ main {
 }
 .side {
   display: grid;
-  grid-template-rows: auto minmax(240px, 1fr);
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 12px;
+  min-width: 0;
   min-height: min(780px, calc(100dvh - 120px));
   contain: none;
 }
@@ -40,7 +42,11 @@ main {
   border-radius: 7px;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.12);
 }
-.block-launch {
+.block-launch,
+.block-result {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
   min-height: 0;
 }
 .block-head {
@@ -108,9 +114,6 @@ main {
   border-radius: inherit;
   transition: width 0.45s ease;
 }
-.block-result {
-  min-height: 0;
-}
 .block-result > .block-head {
   padding: 10px 12px;
 }
@@ -126,7 +129,7 @@ main {
 }
 .ep-list,
 .cards {
-  flex: 1 1 0;
+  flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
   scrollbar-width: thin;
@@ -134,6 +137,10 @@ main {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+/* 场景用例多时列表内部滚动，不把整页拉高 */
+.ep-list {
+  max-height: min(38vh, 400px);
 }
 .ep {
   display: flex;
@@ -541,8 +548,8 @@ main {
 }
 .trajectory.compact {
   position: relative;
-  height: 270px;
-  min-height: 0;
+  height: auto;
+  min-height: 260px;
   border: 1px solid var(--line);
   border-radius: 5px;
   overflow: hidden;
@@ -557,7 +564,7 @@ main {
 }
 .detail-side .camera {
   position: relative;
-  aspect-ratio: 16/10;
+  aspect-ratio: 1;
   border: 1px solid var(--line);
   border-radius: 5px;
   background: #101719;

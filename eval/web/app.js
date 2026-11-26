@@ -309,7 +309,7 @@ function renderDemoCards() {
     return `<div class="card card-run demo-run-card${active ? " active" : ""}" data-run="${name}">
       <div class="row1"><span class="uuid run-title">城市核心区 · ${label}</span><span class="pill demo-pill">演示数据</span></div>
       <div class="scene">${label}　·　${report.num_episodes} 个样例</div>
-      <div class="meta run-metrics"><span>SR <b>${report.metrics.sr.toFixed(1)}%</b></span><span>OSR ${report.metrics.osr.toFixed(1)}%</span><span>NE ${report.metrics.ne_mean.toFixed(2)}m</span><span>SPL ${report.metrics.spl.toFixed(1)}%</span></div>
+      <div class="meta run-metrics"><span>SR <b>${report.metrics.sr.toFixed(1)}%</b></span><span>OSR <b>${report.metrics.osr.toFixed(1)}%</b></span><span>NE <b>${report.metrics.ne_mean.toFixed(2)}m</b></span><span>SPL <b>${report.metrics.spl.toFixed(1)}%</b></span></div>
     </div>`;
   }).join("");
   $("cards")
@@ -443,8 +443,8 @@ function buildRunSummaryCard(run) {
   div.innerHTML = `<div class="row1"><span class="uuid run-title">批次 ${escapeHTML(runTimeLabel(run))}</span>
        <span class="row1-right">${ptag}${runStatePill(sum)}<button class="card-del" aria-label="删除该批次" title="删除该批次">×</button></span></div>
      <div class="scene">${escapeHTML(scene)}</div>
-     <div class="meta run-metrics"><span>SR <b>${sr}</b></span><span>OSR ${osr}</span>
-       <span>NE ${ne}</span><span>SPL ${spl}</span></div>
+     <div class="meta run-metrics"><span>SR <b>${sr}</b></span><span>OSR <b>${osr}</b></span>
+       <span>NE <b>${ne}</b></span><span>SPL <b>${spl}</b></span></div>
      <div class="meta run-counts">${counts}</div>`;
   div.querySelector(".card-del").onclick = (ev) => deleteRun(run, div, ev);
   div.onclick = () => {
@@ -544,7 +544,10 @@ async function selectEpisode(uuid, run) {
   state.traj = null;
   renderCards(state.history);
   $("episodeHeading").textContent = "评测样例 " + uuid.slice(0, 13);
-  $("reportOverview").hidden = false;
+  // 没有批次表格时收起概览区，不留下只有占位语的空白块
+  $("reportOverview").hidden = !$("reportOverview").querySelector(
+    ".overview-banner, .report-table-wrap",
+  );
   $("viewerDetail").hidden = false;
   $("viewer").classList.add("has-episode");
   $("reportEyebrow").textContent = "EVALUATION REPORT";
