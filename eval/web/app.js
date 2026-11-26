@@ -719,7 +719,11 @@ async function exportReport() {
     );
     window.print();
   } catch (error) {
-    alert("报告加载失败：" + error.message);
+    alert(
+      error.message === "404"
+        ? "未完成的评测无法生成报告"
+        : "报告加载失败：" + error.message,
+    );
   }
 }
 
