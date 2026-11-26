@@ -887,6 +887,45 @@ function disposeComparisonCharts() {
   comparisonCharts = [];
 }
 
+// 导出 PDF 用浅色，屏幕上的对比弹窗保持深色
+const COMPARE_CHART_THEMES = {
+  dark: {
+    axisLabel: "#8e9f9d",
+    categoryLabel: "#cbd6d4",
+    axisLine: "#354443",
+    splitLine: "#263433",
+    barBackground: "#202c2d",
+    valueLabel: "#dce6e3",
+    imageBackground: "#14201f",
+  },
+  light: {
+    axisLabel: "#6e7f7b",
+    categoryLabel: "#253431",
+    axisLine: "#c8d8d3",
+    splitLine: "#dce5e2",
+    barBackground: "#eef3f1",
+    valueLabel: "#253431",
+    imageBackground: "#ffffff",
+  },
+};
+
+function applyCompareChartTheme(chart, theme) {
+  chart.setOption({
+    xAxis: {
+      axisLabel: { color: theme.axisLabel },
+      axisLine: { lineStyle: { color: theme.axisLine } },
+      splitLine: { lineStyle: { color: theme.splitLine } },
+    },
+    yAxis: { axisLabel: { color: theme.categoryLabel } },
+    series: [
+      {
+        backgroundStyle: { color: theme.barBackground },
+        label: { color: theme.valueLabel },
+      },
+    ],
+  });
+}
+
 function renderComparisonCharts(selected, rows) {
   if (!window.echarts) return;
   const colors = ["#61d6b2", "#82b8ff", "#ffc86b", "#f18b86", "#b5a0ff"];
@@ -971,11 +1010,22 @@ function exportComparisonPdf() {
     ["路径效率 · SPL", "spl", "%"],
   ];
   const demo = runs.some((run) => run.demo);
-  comparisonCharts.forEach((chart) => chart.setOption({ animation: false }));
+  const theme = COMPARE_CHART_THEMES.light;
+  comparisonCharts.forEach((chart) => {
+    chart.setOption({ animation: false });
+    applyCompareChartTheme(chart, theme);
+  });
   const chartImages = comparisonCharts.map((chart, index) => ({
     title: metrics[index][0],
-    src: chart.getDataURL({ pixelRatio: 2, backgroundColor: "#14201f" }),
+    src: chart.getDataURL({
+      pixelRatio: 2,
+      backgroundColor: theme.imageBackground,
+    }),
   }));
+  // 截图之后再恢复屏幕上的深色
+  comparisonCharts.forEach((chart) =>
+    applyCompareChartTheme(chart, COMPARE_CHART_THEMES.dark),
+  );
   $("reportPrint").innerHTML =
     `<article class="print-report ${demo ? "is-demo" : ""}">
     <header class="print-report-head"><div><div class="print-brand">UAV-VLN <span>规划配置对比</span></div><div class="print-kicker">SCENE COMPARISON</div><h1>${escapeHTML(scene)}</h1><p>${runs.length} 个批次　·　${new Set(runs.map((run) => run.planner)).size} 种配置</p></div>

@@ -1162,13 +1162,13 @@ main {
     min-width: 0;
     margin: 0;
     overflow: hidden;
-    border: 1px solid #30403e;
-    background: #14201f !important;
+    border: 1px solid #d8e2df;
+    background: #fff !important;
     break-inside: avoid;
   }
   .print-chart-grid figcaption {
     padding: 2mm 3mm 0;
-    color: #dce6e3;
+    color: #234d45;
     font-size: 8pt;
     font-weight: 650;
   }
@@ -1178,9 +1178,9 @@ main {
     height: auto;
   }
   .compare-print-metrics > div {
-    border-top-color: #477b9a;
+    border-top-color: #3c8e79;
   }
   .compare-print-metrics b {
-    color: #315c78;
+    color: #1e5d50;
   }
 }
