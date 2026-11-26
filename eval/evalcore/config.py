@@ -11,7 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG_PATH = REPO_ROOT / "config" / "eval.yml"
 
 
-# 场景名 -> 相对 root_path 的启动脚本（对照 3DG-VLN AirVLNSimulatorServerTool.env_exec_path_dict）
+# 场景名 -> 相对 maps_path 的启动脚本（对照 3DG-VLN AirVLNSimulatorServerTool.env_exec_path_dict）
 _CLOSELOOP = ["NYCEnvironmentMegapa", "TropicalIsland", "NewYorkCity",
               "ModularPark", "ModularEuropean", "ModernCityMap"]
 _CARLA_TOWNS = ["Town01", "Town02", "Town03", "Town04", "Town05",
@@ -70,10 +70,9 @@ class AiReportSettings:
 
 @dataclass
 class Config:
-    # 外部资源相对 root，运行产物相对仓库根。
-    root: str = "."
-    root_path: str = "TravelUAV_env"
-    dataset_root: str = "UAV-VLN-FOV"
+    # 外部资源填绝对路径，或写相对本配置文件所在目录的路径；运行产物相对仓库根。
+    maps_path: str = "TravelUAV_env"      # 场景包根，含 closeloop_envs/、carla_town_envs/
+    dataset_path: str = "UAV-VLN-FOV"     # 数据集根，含 test/、unscene/、unobject/、meta/
     split: str = "test"                # 数据集切分：test / unscene / unobject
     output_dir: str = "eval/output"
     saved_dir: str = "eval/saved"
@@ -107,15 +106,15 @@ class Config:
 
     @property
     def meta_dir(self) -> str:
-        return str(Path(self.dataset_root) / "meta")
+        return str(Path(self.dataset_path) / "meta")
 
     @property
     def split_dir(self) -> str:
-        return str(Path(self.dataset_root) / self.split)
+        return str(Path(self.dataset_path) / self.split)
 
     @property
     def object_info_path(self) -> str:
-        return str(Path(self.dataset_root) / "meta" / "map_spawnarea_info.json")
+        return str(Path(self.dataset_path) / "meta" / "map_spawnarea_info.json")
 
     def resolve_scenes(self) -> dict[str, str]:
         return scene_launcher_map()
@@ -162,10 +161,9 @@ def load_config(path: str | Path | None = None) -> Config:
     cfg = Config()
     _apply_yaml(cfg, config_path)
     cfg.config_path = config_path
-    root = _absolute_path(cfg.root, config_path.parent)
-    cfg.root = str(root)
-    cfg.root_path = str(_absolute_path(cfg.root_path, root))
-    cfg.dataset_root = str(_absolute_path(cfg.dataset_root, root))
+    base = config_path.parent
+    cfg.maps_path = str(_absolute_path(cfg.maps_path, base))
+    cfg.dataset_path = str(_absolute_path(cfg.dataset_path, base))
     cfg.output_dir = str(_absolute_path(cfg.output_dir, REPO_ROOT))
     cfg.saved_dir = str(_absolute_path(
         os.environ.get("AVLN_EVAL_SAVED") or cfg.saved_dir, REPO_ROOT
@@ -177,8 +175,8 @@ def load_config(path: str | Path | None = None) -> Config:
 def parse_args(argv=None) -> CoordinateArgs:
     p = argparse.ArgumentParser(description="UAV-VLN 评测子系统")
     p.add_argument("--config", default=None, help="评测配置路径（默认 config/eval.yml）")
-    p.add_argument("--root-path", default=None)
-    p.add_argument("--dataset-root", default=None)
+    p.add_argument("--maps-path", default=None)
+    p.add_argument("--dataset-path", default=None)
     p.add_argument("--output-dir", default=None)
     p.add_argument("--dashboard-port", type=int, default=None, help="仪表盘 HTTP 端口（默认 8010）")
     p.add_argument("--dashboard-host", default=None, help="仪表盘绑定地址（默认 0.0.0.0，局域网可访问）")
@@ -197,7 +195,7 @@ def parse_args(argv=None) -> CoordinateArgs:
 
     ns = p.parse_args(argv)
     cfg = load_config(ns.config)
-    for name in ("root_path", "dataset_root", "output_dir"):
+    for name in ("maps_path", "dataset_path", "output_dir"):
         value = getattr(ns, name)
         if value:
             setattr(cfg, name, str(_absolute_path(value, Path.cwd())))

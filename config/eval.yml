@@ -1,7 +1,7 @@
-# root 相对本文件所在目录。两个外部资源字段相对 root，也可以填绝对路径。
-root: /data/sakura/data
-root_path: TravelUAV_env
-dataset_root: UAV-VLN-FOV
+# 场景包根（含 closeloop_envs/、carla_town_envs/）与数据集根（含 test/、unscene/、
+# unobject/、meta/）。填绝对路径，或相对本文件所在目录的路径。
+maps_path: /roxy/vln/TravelUAV_env
+dataset_path: /data/sakura/data/UAV-VLN-FOV
 
 # 相对仓库根，保持已有运行结果和保存记录的位置。
 output_dir: eval/output

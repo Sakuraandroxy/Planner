@@ -19,7 +19,7 @@ METRIC_SCRIPT = Path(__file__).resolve().parents[1] / "vendor" / "metric.py"
 
 def run_metric(cfg, eval_save_path: str) -> dict:
     """调仓库内置的 metric.py，返回 {'ne_mean','osr','sr','spl','num'}。"""
-    ds = cfg.dataset_root
+    ds = cfg.dataset_path
     cmd = [
         sys.executable, str(METRIC_SCRIPT),
         "--eval_save_path", eval_save_path,

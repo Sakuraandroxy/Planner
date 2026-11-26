@@ -77,8 +77,8 @@ staged 管线还会在 `eval/output/visual_goal/<profile>/<时间戳>_<id>/` 写
 
 | 键 | 含义 |
 | --- | --- |
-| `root` / `root_path` | 仓库根与 TravelUAV 环境根（场景启动脚本相对它） |
-| `dataset_root` | `UAV-VLN-FOV`，含 `test/`、`unscene/`、`unobject/`、`meta/` |
+| `maps_path` | 场景包根，含 `closeloop_envs/`、`carla_town_envs/`；填绝对路径或相对配置文件所在目录的路径 |
+| `dataset_path` | 数据集根，含 `test/`、`unscene/`、`unobject/`、`meta/`；路径规则同上 |
 | `output_dir` / `saved_dir` | 批量结果与执行记录目录 |
 | `dashboard_port` | 仪表盘端口（默认 8010，可被 `AVLN_EVAL_PORT` 覆盖） |
 | `ai_report` | AI 评语模型：`url` / `model` / `api_key_env`（默认 `VLN_API_KEY`，与规划器共用）/ `timeout_s` / `words`；`api_key` 非空时优先于环境变量 |

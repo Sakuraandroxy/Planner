@@ -93,7 +93,7 @@ def _public_episode(ep) -> dict:
 def _scene_available(cfg, scene: str) -> bool:
     """场景的启动脚本在磁盘上才可用；判据与 sim.open_scene 一致。"""
     sh = cfg.resolve_scenes().get(scene)
-    return bool(sh) and os.path.isfile(os.path.join(cfg.root_path, sh))
+    return bool(sh) and os.path.isfile(os.path.join(cfg.maps_path, sh))
 
 
 def _dataset_summary(cfg) -> dict:
@@ -145,8 +145,8 @@ def _start_run(cfg, scene: str, uuids: list[str], profile: str | None = None) ->
         argv = [
             sys.executable, "-u", "run.py", "batch", "--scenes", scene,
             "--config", str(cfg.config_path),
-            "--root-path", cfg.root_path,
-            "--dataset-root", cfg.dataset_root,
+            "--maps-path", cfg.maps_path,
+            "--dataset-path", cfg.dataset_path,
             "--output-dir", cfg.output_dir,
         ]
         if profile:

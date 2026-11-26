@@ -344,7 +344,7 @@ python scripts/probe_flight.py --host 127.0.0.1 --port 8000 \
 
 ### 评测配置
 
-命令行评测和控制台的评测仪表盘默认读取 `config/eval.yml`。换机器时按实际目录修改 `root`。`root` 的相对值以配置文件所在目录为基准。`root_path`、`dataset_root` 分别指向场景包、数据集，相对值以 `root` 为基准。各字段也接受绝对路径。打分脚本不走配置，固定用仓库内的 `eval/vendor/metric.py`。
+命令行评测和控制台的评测仪表盘默认读取 `config/eval.yml`。`maps_path`、`dataset_path` 分别指向场景包与数据集，填绝对路径或相对配置文件所在目录的路径。换机器时按实际目录改这两行。打分脚本不走配置，固定用仓库内的 `eval/vendor/metric.py`。
 
 `output_dir` 和 `saved_dir` 的相对值以仓库根为基准，默认使用 `eval/output` 和 `eval/saved`。主服务保存的执行记录与仪表盘读取的记录共用 `saved_dir`。
 

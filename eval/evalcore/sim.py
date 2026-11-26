@@ -321,7 +321,7 @@ def open_scene(scene_id: str, cfg, gpu: int | None = None):
     sh = launchers.get(scene_id)
     if sh is None:
         raise KeyError(f"未知场景 {scene_id}，无启动脚本映射")
-    sh_path = os.path.join(cfg.root_path, sh)
+    sh_path = os.path.join(cfg.maps_path, sh)
     if not os.path.isfile(sh_path):
         raise FileNotFoundError(f"启动脚本不存在: {sh_path}")
     gpu = cfg.gpus[0] if gpu is None else gpu
