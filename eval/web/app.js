@@ -347,7 +347,7 @@ function renderDemoOverview(run = DEMO_RUN) {
   $("reportOverview").hidden = false;
   $("exportReportBtn").disabled = false;
   $("reportEyebrow").textContent = "演示数据";
-  $("epTitle").textContent = "批次评测报告";
+  $("epTitle").textContent = "评测报告";
   $("reportSubtitle").textContent =
     `城市核心区（示例）　/　${batch.label}　/　${episodes.length} 个样例`;
   $("m-sr").textContent = `${report.metrics.sr.toFixed(1)}%`;
@@ -473,7 +473,7 @@ function clearSelection() {
   state.summaryRun = null;
   state.demoPinned = false;
   state.traj = null;
-  setViewerTitle("批次评测报告");
+  setViewerTitle("评测报告");
   $("reportEyebrow").textContent = "EVALUATION REPORT";
   $("reportSubtitle").textContent = "选择左侧批次查看评测摘要与逐样例结果";
   $("reportOverview").hidden = false;
@@ -505,7 +505,7 @@ function selectRunSummary(run) {
   $("viewerDetail").hidden = true;
   $("viewer").classList.remove("has-episode");
   $("reportOverview").hidden = false;
-  setViewerTitle("批次评测报告");
+  setViewerTitle("评测报告");
   refreshCamView();
   renderCards(state.history); // 更新卡片高亮
   renderRunSummaryStats(run);
@@ -684,7 +684,7 @@ function renderRunSummaryStats(run) {
   const scenes = (sum.scenes || []).join(", ") || "—";
   const profile = profileText(sum.planner) || sum.planner || "—";
   $("reportEyebrow").textContent = "EVALUATION REPORT";
-  $("epTitle").textContent = "批次评测报告";
+  $("epTitle").textContent = "评测报告";
   $("reportSubtitle").textContent =
     `${scenes}　/　${profile}　/　${runTimeLabel(run)}　/　${sum.num_episodes} 个样例`;
   $("m-sr").textContent = pct(sum.sr);
